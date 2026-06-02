@@ -959,6 +959,17 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     if (!target) return;
     void selectWorkspace(target.workspaceId);
   };
+  const handleManageSubagentProfiles = () => {
+    if (!ws || selectedWorkspaceId === ws.id) {
+      setSettingsPage("subagents");
+      return;
+    }
+    void selectWorkspace(ws.id)
+      .catch(() => undefined)
+      .then(() => {
+        setSettingsPage("subagents");
+      });
+  };
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
   const model = (ws?.defaultModel ?? "").trim();
@@ -1582,7 +1593,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                             variant="ghost"
                             size="sm"
                             className="h-7 px-2 text-xs"
-                            onClick={() => setSettingsPage("subagents")}
+                            onClick={handleManageSubagentProfiles}
                           >
                             Manage profiles
                           </Button>

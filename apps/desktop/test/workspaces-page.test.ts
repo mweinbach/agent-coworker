@@ -96,6 +96,12 @@ function setupWorkspacePageJsdom() {
   return setupJsdom({ includeAnimationFrame: true });
 }
 
+async function flushUi() {
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
+}
+
 describe("desktop workspaces page", () => {
   beforeEach(() => {
     workspacePickerEnabled = true;
@@ -581,6 +587,123 @@ describe("desktop workspaces page", () => {
       expect(container.textContent).toContain("Chats");
       expect(container.textContent).not.toContain("One-off chat");
       expect(container.textContent).toContain("ajax");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("opens subagent profiles for the workspace shown in shared model defaults", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: false,
+      settingsPage: "workspaces",
+      workspaces: [
+        {
+          id: "project-1",
+          name: "Project workspace",
+          path: "/tmp/project-workspace",
+          workspaceKind: "project",
+          createdAt: "2026-05-20T00:00:00.000Z",
+          lastOpenedAt: "2026-05-20T00:00:00.000Z",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "chat-1",
+          name: "One-off chat",
+          path: "/tmp/one-off-chat",
+          workspaceKind: "oneOffChat",
+          createdAt: "2026-05-20T00:00:00.000Z",
+          lastOpenedAt: "2026-05-20T00:00:00.000Z",
+          defaultProvider: "google",
+          defaultModel: "ajax",
+          defaultPreferredChildModel: "ajax",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:ajax",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "chat-1",
+      providerCatalog: [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3-flash-preview",
+          models: [
+            {
+              id: "gemini-3-flash-preview",
+              displayName: "Gemini 3 Flash Preview",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+      ],
+      providerConnected: ["google"],
+      providerStatusByName: {
+        google: { verified: true },
+      },
+      providerDefaultModelByProvider: {
+        google: "gemini-3-flash-preview",
+      },
+    }));
+
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(WorkspacesPage));
+      });
+
+      const modelsTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Models",
+      );
+      if (!(modelsTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Models tab");
+      }
+
+      await act(async () => {
+        modelsTab.click();
+      });
+
+      expect(container.textContent).toContain("gemini-3-flash-preview");
+      expect(container.textContent).not.toContain("ajax");
+
+      const manageProfilesButton = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Manage profiles",
+      );
+      if (!(manageProfilesButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Manage profiles button");
+      }
+
+      await act(async () => {
+        manageProfilesButton.click();
+        await flushUi();
+      });
+
+      const state = useAppStore.getState();
+      expect(state.selectedWorkspaceId).toBe("project-1");
+      expect(state.settingsPage).toBe("subagents");
     } finally {
       if (root) {
         await act(async () => {

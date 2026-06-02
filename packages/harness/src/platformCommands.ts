@@ -29,8 +29,7 @@ export function createHarnessPlatformCommands(
   return {
     runPythonScript: (scriptPath) => `python3 ${quotePosixShellValue(scriptPath)}`,
     printWorkingDirectory: () => "pwd",
-    listDirectory: (dirPath) =>
-      dirPath ? `ls -la ${quotePosixShellValue(dirPath)}` : "ls -la",
+    listDirectory: (dirPath) => (dirPath ? `ls -la ${quotePosixShellValue(dirPath)}` : "ls -la"),
     countLines: (filePath) => `wc -l ${quotePosixShellValue(filePath)}`,
   };
 }

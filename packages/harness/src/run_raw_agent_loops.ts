@@ -60,6 +60,7 @@ import type {
   TodoItem,
 } from "../../../src/types";
 import { isProviderName } from "../../../src/types";
+import { createHarnessPlatformCommands } from "./platformCommands";
 import {
   isoSafeNow,
   maskApiKey,
@@ -74,7 +75,6 @@ import {
   type ValidationIssue,
   validateWithOptionalRepair,
 } from "./rawLoopValidation";
-import { createHarnessPlatformCommands } from "./platformCommands";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 

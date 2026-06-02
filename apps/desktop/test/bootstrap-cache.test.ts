@@ -513,6 +513,21 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.settingsPage).toBe("remoteAccess");
   });
 
+  test("buildCachedDesktopStateSeed preserves the subagents settings page", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        settingsPage: "subagents",
+        lastNonSettingsView: "chat",
+      },
+    });
+
+    expect(seed?.view).toBe("settings");
+    expect(seed?.settingsPage).toBe("subagents");
+  });
+
   test("buildCachedDesktopStateSeed falls back from feature flags during packaged startup", () => {
     packagedApp = true;
     const seed = buildCachedDesktopStateSeed({

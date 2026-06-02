@@ -159,6 +159,7 @@ const normalizedSettingsPageSchema = z.preprocess(
   (value) => normalizeKnownSettingsPageId(value),
   z.enum([
     "models",
+    "subagents",
     "toolAccess",
     "defaults",
     "profileMemory",

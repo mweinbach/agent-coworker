@@ -19,6 +19,7 @@ import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -37,8 +38,12 @@ import { Textarea } from "../../../components/ui/textarea";
 import { cn } from "../../../lib/utils";
 import { SettingsEmptyState, SettingsSection, SettingsStatusPill } from "../SettingsPrimitives";
 
-type DraftProfile = AgentProfileDefinition & {
+export type DraftProfile = AgentProfileDefinition & {
   scope: AgentProfileScope;
+  originalRef?: {
+    scope: AgentProfileScope;
+    id: string;
+  };
 };
 
 const ROLE_LABELS: Record<AgentRole, string> = {
@@ -105,6 +110,10 @@ function draftFromEntry(entry: AgentProfileCatalogEntry): DraftProfile {
   return {
     ...entry.profile,
     scope: entry.scope,
+    originalRef: {
+      scope: entry.scope,
+      id: entry.profile.id,
+    },
     allowedBuiltInTools: [...entry.profile.allowedBuiltInTools],
     allowedMcpServers: [...entry.profile.allowedMcpServers],
     skillNames: [...entry.profile.skillNames],
@@ -130,6 +139,36 @@ function listIncludes(values: readonly string[], item: string): boolean {
 function toggleList(values: readonly string[], item: string, checked: boolean): string[] {
   if (checked) return sortedUnique([...values, item]);
   return values.filter((value) => value !== item);
+}
+
+export async function saveAgentProfileDraft(
+  draft: DraftProfile | null,
+  upsertAgentProfile: (
+    profile: AgentProfileDefinition & { scope: AgentProfileScope },
+  ) => Promise<boolean>,
+): Promise<"invalid" | "failed" | "saved"> {
+  if (!draft) return "invalid";
+  const id = draft.id.trim();
+  const displayName = draft.displayName.trim();
+  if (!id || !displayName) return "invalid";
+  const saved = await upsertAgentProfile({
+    version: draft.version,
+    id,
+    displayName,
+    description: draft.description.trim(),
+    enabled: draft.enabled,
+    baseRole: draft.baseRole,
+    prompt: draft.prompt.trim(),
+    allowedBuiltInTools: draft.allowedBuiltInTools,
+    allowedMcpServers: draft.allowedMcpServers,
+    skillNames: draft.skillNames,
+    model: draft.model?.trim() || undefined,
+    reasoningEffort: draft.reasoningEffort,
+    defaultTaskType: draft.defaultTaskType,
+    defaultContextMode: draft.defaultContextMode,
+    scope: draft.scope,
+  });
+  return saved ? "saved" : "failed";
 }
 
 export function SubagentsPage() {
@@ -194,19 +233,8 @@ export function SubagentsPage() {
   };
 
   const saveDraft = async () => {
-    if (!draft) return;
-    const id = draft.id.trim();
-    const displayName = draft.displayName.trim();
-    if (!id || !displayName) return;
-    await upsertAgentProfile({
-      ...draft,
-      id,
-      displayName,
-      description: draft.description.trim(),
-      prompt: draft.prompt.trim(),
-      model: draft.model?.trim() || undefined,
-    });
-    setDraft(null);
+    const result = await saveAgentProfileDraft(draft, upsertAgentProfile);
+    if (result === "saved") setDraft(null);
   };
 
   if (!workspace) {
@@ -372,7 +400,7 @@ function ProfileRow({
   );
 }
 
-function ProfileDialog({
+export function ProfileDialog({
   draft,
   setDraft,
   idTouched,
@@ -391,12 +419,14 @@ function ProfileDialog({
 }) {
   const tools = draft ? ROLE_TOOLS[draft.baseRole] : [];
   const canSave = !!draft?.id.trim() && !!draft.displayName.trim();
+  const editingExisting = draft?.originalRef !== undefined;
 
   return (
     <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
       <DialogContent className="max-h-[86vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{draft?.id ? "Edit subagent" : "New subagent"}</DialogTitle>
+          <DialogTitle>{editingExisting ? "Edit subagent" : "New subagent"}</DialogTitle>
+          <DialogDescription className="sr-only">Configure the subagent profile.</DialogDescription>
         </DialogHeader>
         {draft ? (
           <div className="space-y-5 py-2">
@@ -417,6 +447,7 @@ function ProfileDialog({
               <Field label="Profile id">
                 <Input
                   value={draft.id}
+                  disabled={editingExisting}
                   onChange={(event) => {
                     setIdTouched(true);
                     setDraft({ ...draft, id: slugify(event.target.value) });
@@ -429,6 +460,7 @@ function ProfileDialog({
               <Field label="Scope">
                 <Select
                   value={draft.scope}
+                  disabled={editingExisting}
                   onValueChange={(value) =>
                     setDraft({ ...draft, scope: value as AgentProfileScope })
                   }

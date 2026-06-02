@@ -81,7 +81,7 @@ export function createAgentProfileActions(
 
     upsertAgentProfile: async (profile) => {
       const workspaceId = resolveWorkspaceId();
-      if (!workspaceId) return;
+      if (!workspaceId) return false;
       const cwd = workspacePathFor(get, workspaceId);
       await prepareWorkspace(workspaceId);
       const rpcError: { message?: string } = {};
@@ -98,7 +98,9 @@ export function createAgentProfileActions(
           "Unable to save subagent profile",
           rpcError.message?.trim() || "The profile could not be saved.",
         );
+        return false;
       }
+      return true;
     },
 
     deleteAgentProfile: async (scope, id) => {

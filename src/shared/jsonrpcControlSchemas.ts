@@ -166,6 +166,8 @@ const sessionConfigEventSchema = z
         defaultBackupsEnabled: z.boolean().optional(),
         enableMemory: z.boolean().optional(),
         memoryRequireApproval: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        memoryGenerationModel: z.string().optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
@@ -1605,6 +1607,8 @@ const sessionDefaultsApplyRequestSchema = z
     config: z
       .object({
         backupsEnabled: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        memoryGenerationModel: z.string().optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         clearToolOutputOverflowChars: z.boolean().optional(),
         preferredChildModel: z.string().optional(),

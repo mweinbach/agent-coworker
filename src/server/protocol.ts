@@ -64,6 +64,8 @@ export type SessionConfigPatch = {
   enableA2ui?: boolean;
   enableMemory?: boolean;
   memoryRequireApproval?: boolean;
+  advancedMemory?: boolean;
+  memoryGenerationModel?: string;
   preferredChildModel?: string;
   childModelRoutingMode?: ChildModelRoutingMode;
   preferredChildModelRef?: string;
@@ -91,6 +93,8 @@ type SessionConfigState = {
   enableA2ui?: boolean;
   enableMemory: boolean;
   memoryRequireApproval: boolean;
+  advancedMemory: boolean;
+  memoryGenerationModel?: string;
   preferredChildModel: string;
   childModelRoutingMode: ChildModelRoutingMode;
   preferredChildModelRef: string;

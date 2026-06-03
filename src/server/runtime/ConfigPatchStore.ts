@@ -30,6 +30,8 @@ export type ProjectConfigPatch = Partial<
     | "enableA2ui"
     | "enableMemory"
     | "memoryRequireApproval"
+    | "advancedMemory"
+    | "memoryGenerationModel"
     | "observabilityEnabled"
     | "backupsEnabled"
     | "toolOutputOverflowChars"

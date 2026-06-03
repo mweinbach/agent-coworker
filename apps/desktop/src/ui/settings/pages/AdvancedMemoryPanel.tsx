@@ -1,4 +1,11 @@
-import { BrainIcon, ChevronDownIcon, ChevronRightIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import {
+  BrainIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  PencilIcon,
+  PlusIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -32,13 +39,7 @@ function emptyDraft(): DraftAdvancedMemory {
   return { slug: "", name: "", description: "", type: "note", body: "" };
 }
 
-export function AdvancedMemoryPanel({
-  workspaceId,
-  cwd,
-}: {
-  workspaceId: string;
-  cwd: string;
-}) {
+export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string; cwd: string }) {
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const requestAdvancedMemories = useAppStore((s) => s.requestAdvancedMemories);
   const upsertAdvancedMemory = useAppStore((s) => s.upsertAdvancedMemory);
@@ -140,7 +141,9 @@ export function AdvancedMemoryPanel({
         <div className="rounded-xl border border-border/70 bg-background/50 py-12 flex flex-col items-center justify-center gap-3">
           <BrainIcon className="w-10 h-10 text-muted-foreground/40" />
           <p className="text-sm text-muted-foreground">
-            {loading ? "Loading..." : "No memories yet. They are written automatically as you work."}
+            {loading
+              ? "Loading..."
+              : "No memories yet. They are written automatically as you work."}
           </p>
         </div>
       ) : (
@@ -150,7 +153,10 @@ export function AdvancedMemoryPanel({
             return (
               <div
                 key={entry.slug}
-                className={cn("border-b border-border/70 last:border-b-0", isExpanded && "bg-card/40")}
+                className={cn(
+                  "border-b border-border/70 last:border-b-0",
+                  isExpanded && "bg-card/40",
+                )}
               >
                 <button
                   type="button"

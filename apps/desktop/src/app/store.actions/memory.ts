@@ -233,6 +233,10 @@ export function createWorkspaceMemoryActions(
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
+      // Capture the prior value so a failed apply can be rolled back. The server
+      // is the source of truth; a successful apply re-syncs via session_config.
+      const previous = get().workspaces.find((w) => w.id === workspaceId)?.defaultAdvancedMemory;
+
       // Optimistic update so the toggle reflects immediately.
       set((s) => ({
         workspaces: s.workspaces.map((w) =>
@@ -252,6 +256,9 @@ export function createWorkspaceMemoryActions(
       );
       if (!ok) {
         set((s) => ({
+          workspaces: s.workspaces.map((w) =>
+            w.id === workspaceId ? { ...w, defaultAdvancedMemory: previous } : w,
+          ),
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -266,6 +273,10 @@ export function createWorkspaceMemoryActions(
     setWorkspaceMemoryGenerationModel: async (workspaceId, model, opts) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+
+      const previous = get().workspaces.find(
+        (w) => w.id === workspaceId,
+      )?.defaultMemoryGenerationModel;
 
       set((s) => ({
         workspaces: s.workspaces.map((w) =>
@@ -285,6 +296,9 @@ export function createWorkspaceMemoryActions(
       );
       if (!ok) {
         set((s) => ({
+          workspaces: s.workspaces.map((w) =>
+            w.id === workspaceId ? { ...w, defaultMemoryGenerationModel: previous } : w,
+          ),
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),

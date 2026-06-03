@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { AgentConfig } from "../types";
 import { getAiCoworkerPaths } from "../store/connections";
+import type { AgentConfig } from "../types";
 import { isPathInsideOneOffChatsRoot } from "../utils/oneOffChats";
 
 /**
@@ -69,9 +68,7 @@ export function resolveMemoryFolderName(config: AgentConfig): string {
     // fall through to project resolution
   }
   // `projectCoworkDir` is `<workspaceRoot>/.cowork`; the workspace root is its parent.
-  const workspaceRoot = config.projectCoworkDir
-    ? path.dirname(config.projectCoworkDir)
-    : cwd;
+  const workspaceRoot = config.projectCoworkDir ? path.dirname(config.projectCoworkDir) : cwd;
   return slugify(path.basename(workspaceRoot) || "workspace");
 }
 

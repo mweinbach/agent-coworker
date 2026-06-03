@@ -1,10 +1,9 @@
-import path from "node:path";
 import fs from "node:fs/promises";
-
+import path from "node:path";
+import { z } from "zod";
 import { normalizeModelIdForProvider } from "../models/metadata";
 import { createRuntime } from "../runtime";
 import type { AgentConfig, ModelMessage } from "../types";
-import { z } from "zod";
 
 import { AdvancedMemoryStore, resolveMemoriesDir, resolveMemoryFolderName } from "./store";
 
@@ -162,8 +161,7 @@ export class MemoryGenerator {
     const transcript = serializeTurnDelta(opts.deltaMessages);
     if (!transcript.trim()) return { ran: false };
 
-    const store =
-      opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
+    const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
     const folder = opts.folder ?? resolveMemoryFolderName(opts.config);
 
     const tools = this.buildTools(store, folder, opts.sessionId);

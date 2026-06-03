@@ -1,11 +1,11 @@
 import { z } from "zod";
 
 import { serializeTurnDelta } from "../advancedMemory/MemoryGenerator";
-import { getAiCoworkerPaths } from "../store/connections";
 import {
   listPersistedSessionSnapshots,
   readPersistedSessionSnapshot,
 } from "../server/sessionStore";
+import { getAiCoworkerPaths } from "../store/connections";
 import type { ModelMessage } from "../types";
 import { truncateText } from "../utils/paths";
 import type { ToolContext } from "./context";
@@ -22,7 +22,10 @@ export function createReadPastConversationTool(ctx: ToolContext) {
   return defineTool({
     description: `Read a prior conversation transcript by sessionId, or list recent sessions. Memory entries reference their originSessionId, which you can pass here.`,
     inputSchema: z.object({
-      sessionId: z.string().optional().describe("Session id to read; omit with list:true to browse"),
+      sessionId: z
+        .string()
+        .optional()
+        .describe("Session id to read; omit with list:true to browse"),
       list: z.boolean().optional().describe("List recent sessions instead of reading one"),
       limit: z.number().int().positive().max(50).optional().describe("Max sessions to list"),
     }),

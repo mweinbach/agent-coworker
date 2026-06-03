@@ -69,9 +69,7 @@ describe("createTools", () => {
 
   test("advanced memory swaps the memory tool for recall/readPastConversation", async () => {
     const dir = await tmpDir();
-    const tools = createTools(
-      makeCtx(dir, { config: makeConfig(dir, { advancedMemory: true }) }),
-    );
+    const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { advancedMemory: true }) }));
     expect(tools).not.toHaveProperty("memory");
     expect(tools).toHaveProperty("recallMemory");
     expect(tools).toHaveProperty("readPastConversation");

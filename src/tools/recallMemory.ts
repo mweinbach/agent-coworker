@@ -25,7 +25,9 @@ export function createRecallMemoryTool(ctx: ToolContext) {
       folder: z
         .string()
         .optional()
-        .describe(`Memory folder to read from (defaults to the active folder, then ${CHATS_FOLDER})`),
+        .describe(
+          `Memory folder to read from (defaults to the active folder, then ${CHATS_FOLDER})`,
+        ),
     }),
     execute: async ({ name, folder }: { name: string; folder?: string }) => {
       ctx.log(`tool> recallMemory ${JSON.stringify({ name, folder })}`);

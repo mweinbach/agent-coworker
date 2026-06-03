@@ -40,9 +40,7 @@ describe("serializeTurnDelta", () => {
       },
       {
         role: "tool",
-        content: [
-          { type: "tool-result", toolName: "bash", output: { value: "x".repeat(5000) } },
-        ],
+        content: [{ type: "tool-result", toolName: "bash", output: { value: "x".repeat(5000) } }],
       },
     ] as unknown as ModelMessage[];
     const out = serializeTurnDelta(messages);

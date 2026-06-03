@@ -66,6 +66,7 @@ export type SessionConfigPatch = {
   memoryRequireApproval?: boolean;
   advancedMemory?: boolean;
   memoryGenerationModel?: string;
+  clearMemoryGenerationModel?: boolean;
   preferredChildModel?: string;
   childModelRoutingMode?: ChildModelRoutingMode;
   preferredChildModelRef?: string;

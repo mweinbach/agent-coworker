@@ -119,8 +119,9 @@ export function MemoryPage() {
   const liveSessionConfig = runtime?.controlSessionConfig ?? null;
   const advancedMemoryEnabled =
     liveSessionConfig?.advancedMemory ?? activeWorkspace?.defaultAdvancedMemory ?? false;
-  const memoryGenerationModel =
-    liveSessionConfig?.memoryGenerationModel ?? activeWorkspace?.defaultMemoryGenerationModel ?? "";
+  const memoryGenerationModel = liveSessionConfig
+    ? (liveSessionConfig.memoryGenerationModel ?? "")
+    : (activeWorkspace?.defaultMemoryGenerationModel ?? "");
   const generationModelChoices = useMemo(() => {
     const provider = activeWorkspace?.defaultProvider;
     if (!provider) return [] as readonly string[];

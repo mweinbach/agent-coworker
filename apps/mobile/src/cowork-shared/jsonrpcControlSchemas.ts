@@ -151,6 +151,8 @@ export const sessionConfigEventSchema = z
         defaultBackupsEnabled: z.boolean().optional(),
         enableMemory: z.boolean().optional(),
         memoryRequireApproval: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        memoryGenerationModel: z.string().optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
@@ -560,6 +562,28 @@ export const memoryListEventSchema = z
     type: z.literal("memory_list"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
     memories: z.array(memoryEntrySchema),
+  })
+  .passthrough();
+
+export const advancedMemoryEntrySchema = z
+  .object({
+    slug: z.string(),
+    name: z.string(),
+    description: z.string(),
+    type: z.string(),
+    originSessionId: z.string().optional(),
+    body: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
+export const advancedMemoryListEventSchema = z
+  .object({
+    type: z.literal("advanced_memory_list"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    folder: z.string(),
+    folders: z.array(z.string()),
+    memories: z.array(advancedMemoryEntrySchema),
   })
   .passthrough();
 
@@ -1337,6 +1361,33 @@ export const memoryDeleteRequestSchema = z
   })
   .strict();
 
+export const advancedMemoryListRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+export const advancedMemoryUpsertRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: optionalNonEmptyTrimmedStringSchema,
+    slug: z.string().optional(),
+    name: z.string(),
+    description: z.string(),
+    type: z.string().optional(),
+    body: z.string(),
+  })
+  .strict();
+
+export const advancedMemoryDeleteRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: optionalNonEmptyTrimmedStringSchema,
+    slug: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 export const workspaceBackupsReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1397,6 +1448,9 @@ export const sessionDefaultsApplyRequestSchema = z
     config: z
       .object({
         backupsEnabled: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        memoryGenerationModel: z.string().optional(),
+        clearMemoryGenerationModel: z.boolean().optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         clearToolOutputOverflowChars: z.boolean().optional(),
         preferredChildModel: z.string().optional(),
@@ -1472,6 +1526,9 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
+  "cowork/memory/advanced/list": advancedMemoryListRequestSchema,
+  "cowork/memory/advanced/upsert": advancedMemoryUpsertRequestSchema,
+  "cowork/memory/advanced/delete": advancedMemoryDeleteRequestSchema,
   "cowork/backups/workspace/read": workspaceBackupsReadRequestSchema,
   "cowork/backups/workspace/delta/read": workspaceBackupsDeltaReadRequestSchema,
   "cowork/backups/workspace/checkpoint": workspaceBackupsCheckpointRequestSchema,
@@ -1541,6 +1598,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/memory/list": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": sessionEventEnvelope(memoryListEventSchema),
+  "cowork/memory/advanced/list": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/upsert": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/delete": sessionEventEnvelope(advancedMemoryListEventSchema),
   "cowork/backups/workspace/read": sessionEventEnvelope(workspaceBackupsEventSchema),
   "cowork/backups/workspace/delta/read": sessionEventEnvelope(workspaceBackupDeltaEventSchema),
   "cowork/backups/workspace/checkpoint": sessionEventEnvelope(workspaceBackupsEventSchema),

@@ -91,6 +91,9 @@ export class SessionMetadataManager {
     if (patch.advancedMemory !== undefined) {
       nextConfig = { ...nextConfig, advancedMemory: patch.advancedMemory };
     }
+    if (patch.clearMemoryGenerationModel) {
+      nextConfig = { ...nextConfig, memoryGenerationModel: undefined };
+    }
     if (patch.memoryGenerationModel !== undefined) {
       nextConfig = {
         ...nextConfig,
@@ -199,6 +202,9 @@ export class SessionMetadataManager {
     }
     if (patch.advancedMemory !== undefined) {
       persistPatch.advancedMemory = patch.advancedMemory;
+    }
+    if (patch.clearMemoryGenerationModel) {
+      persistPatch.clearMemoryGenerationModel = true;
     }
     if (patch.memoryGenerationModel !== undefined) {
       persistPatch.memoryGenerationModel = patch.memoryGenerationModel.trim() || undefined;
@@ -476,6 +482,14 @@ export class SessionMetadataManager {
     const baseConfig = opts?.baseConfig ?? this.context.state.config;
     const baseYolo = opts?.baseYolo ?? this.context.state.yolo;
     const baseMaxSteps = opts?.baseMaxSteps ?? this.context.state.maxSteps;
+    if (patch.memoryGenerationModel !== undefined && patch.clearMemoryGenerationModel) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "memoryGenerationModel cannot be combined with clearMemoryGenerationModel",
+      );
+      return null;
+    }
     if (patch.toolOutputOverflowChars !== undefined && patch.clearToolOutputOverflowChars) {
       this.context.emitError(
         "validation_failed",
@@ -560,6 +574,7 @@ export class SessionMetadataManager {
       (isA2uiExperimentActive(nextConfig) &&
         (patch.enableA2ui !== undefined || patch.featureFlags?.workspace !== undefined)) ||
       patch.enableMemory !== undefined ||
+      patch.advancedMemory !== undefined ||
       patch.providerOptions !== undefined
     ) {
       try {

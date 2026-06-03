@@ -260,6 +260,8 @@ export function makeSession(
           | "enableA2ui"
           | "enableMemory"
           | "memoryRequireApproval"
+          | "advancedMemory"
+          | "memoryGenerationModel"
           | "observabilityEnabled"
           | "backupsEnabled"
           | "toolOutputOverflowChars"
@@ -268,6 +270,7 @@ export function makeSession(
         >
       > & {
         userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
+        clearMemoryGenerationModel?: boolean;
         clearToolOutputOverflowChars?: boolean;
       },
     ) => Promise<void> | void;

@@ -271,10 +271,11 @@ export function createWorkspaceMemoryActions(
     setWorkspaceMemoryGenerationModel: async (workspaceId, model, opts) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+      const modelOverride = model.trim() || undefined;
 
       const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
-        record: { defaultMemoryGenerationModel: model },
-        sessionConfig: { memoryGenerationModel: model },
+        record: { defaultMemoryGenerationModel: modelOverride },
+        sessionConfig: { memoryGenerationModel: modelOverride },
       });
 
       const ok = await requestJsonRpcControlEvent(
@@ -284,7 +285,9 @@ export function createWorkspaceMemoryActions(
         "cowork/session/defaults/apply",
         {
           cwd: resolveMemoryCwd(workspaceId, opts),
-          config: { memoryGenerationModel: model },
+          config: modelOverride
+            ? { memoryGenerationModel: modelOverride }
+            : { clearMemoryGenerationModel: true },
         },
       );
       if (!ok) {
@@ -313,8 +316,11 @@ function applyOptimisticMemoryConfig(
   set: StoreSet,
   workspaceId: string,
   patch: {
-    record: Partial<{ defaultAdvancedMemory: boolean; defaultMemoryGenerationModel: string }>;
-    sessionConfig: Partial<{ advancedMemory: boolean; memoryGenerationModel: string }>;
+    record: Partial<{
+      defaultAdvancedMemory: boolean;
+      defaultMemoryGenerationModel: string | undefined;
+    }>;
+    sessionConfig: Partial<{ advancedMemory: boolean; memoryGenerationModel: string | undefined }>;
   },
 ): () => void {
   const state = get();
@@ -332,10 +338,10 @@ function applyOptimisticMemoryConfig(
       [workspaceId]: {
         ...s.workspaceRuntimeById[workspaceId],
         controlSessionConfig: s.workspaceRuntimeById[workspaceId]?.controlSessionConfig
-          ? {
-              ...s.workspaceRuntimeById[workspaceId].controlSessionConfig,
-              ...patch.sessionConfig,
-            }
+          ? applySessionConfigMemoryPatch(
+              s.workspaceRuntimeById[workspaceId].controlSessionConfig,
+              patch.sessionConfig,
+            )
           : (s.workspaceRuntimeById[workspaceId]?.controlSessionConfig ?? null),
       },
     },
@@ -353,4 +359,17 @@ function applyOptimisticMemoryConfig(
       },
     }));
   };
+}
+
+function applySessionConfigMemoryPatch<
+  T extends { advancedMemory?: boolean; memoryGenerationModel?: string },
+>(
+  current: T,
+  patch: Partial<{ advancedMemory: boolean; memoryGenerationModel: string | undefined }>,
+): T {
+  const next = { ...current, ...patch };
+  if (Object.hasOwn(patch, "memoryGenerationModel") && patch.memoryGenerationModel === undefined) {
+    delete next.memoryGenerationModel;
+  }
+  return next;
 }

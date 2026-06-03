@@ -9,7 +9,14 @@ function createState() {
   return {
     notifications: [],
     threads: [],
-    workspaces: [{ id: workspaceId, path: "/tmp/workspace" }],
+    workspaces: [
+      {
+        id: workspaceId,
+        path: "/tmp/workspace",
+        defaultAdvancedMemory: undefined as boolean | undefined,
+        defaultMemoryGenerationModel: undefined as string | undefined,
+      },
+    ],
     workspaceRuntimeById: {
       [workspaceId]: {
         ...defaultWorkspaceRuntime(),
@@ -159,5 +166,47 @@ describe("memory store actions", () => {
     expect(requests[0]?.method).toBe("cowork/session/defaults/apply");
     expect(requests[0]?.params).toMatchObject({ config: { advancedMemory: true } });
     expect(state.workspaces[0].defaultAdvancedMemory).toBe(true);
+  });
+
+  test("setWorkspaceMemoryGenerationModel clears the desktop fallback on reset", async () => {
+    const state = createState();
+    state.workspaces[0].defaultMemoryGenerationModel = "gemini-old";
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    state.workspaceRuntimeById[workspaceId].controlSessionConfig = {
+      advancedMemory: true,
+      memoryGenerationModel: "gemini-old",
+    };
+    const { get, set } = createStoreHarness(state);
+    const requests: Array<{ method: string; params: any }> = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        return {
+          event: {
+            type: "session_config",
+            sessionId: "control-session",
+            config: { advancedMemory: true },
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createWorkspaceMemoryActions(set as any, get as any).setWorkspaceMemoryGenerationModel(
+      workspaceId,
+      "",
+      { cwd: "/tmp/proj" },
+    );
+
+    expect(requests[0]?.method).toBe("cowork/session/defaults/apply");
+    expect(requests[0]?.params).toMatchObject({
+      config: { clearMemoryGenerationModel: true },
+    });
+    expect(state.workspaces[0].defaultMemoryGenerationModel).toBeUndefined();
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionConfig).toEqual({
+      advancedMemory: true,
+    });
   });
 });

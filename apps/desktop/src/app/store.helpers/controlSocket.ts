@@ -888,9 +888,9 @@ export function createControlSocketHelpers(
                 ...(sessionConfigHas("advancedMemory")
                   ? { defaultAdvancedMemory: evt.config.advancedMemory }
                   : {}),
-                ...(sessionConfigHas("memoryGenerationModel")
-                  ? { defaultMemoryGenerationModel: evt.config.memoryGenerationModel }
-                  : {}),
+                defaultMemoryGenerationModel: sessionConfigHas("memoryGenerationModel")
+                  ? evt.config.memoryGenerationModel
+                  : undefined,
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 ...(sessionConfigHasProviderOptions
                   ? {

@@ -282,6 +282,73 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("applyWorkspaceDefaultsToThread syncs advanced memory defaults and clears stale model overrides", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultAdvancedMemory: true,
+              defaultMemoryGenerationModel: undefined,
+            }
+          : workspace,
+      ),
+    }));
+    const { threadId } = seedConnectedThread({
+      sessionConfig: {
+        advancedMemory: false,
+        memoryGenerationModel: "gemini-old",
+      },
+    });
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId, "explicit");
+    await flushAsyncWork();
+
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: {
+        advancedMemory: true,
+        clearMemoryGenerationModel: true,
+      },
+    });
+  });
+
+  test("updateWorkspaceDefaults syncs advanced memory defaults to the control session", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
+        [workspaceId]: {
+          ...state.workspaceRuntimeById[workspaceId],
+          controlSessionId: `jsonrpc:${workspaceId}`,
+          controlSessionConfig: {
+            advancedMemory: false,
+          },
+          controlEnableMcp: true,
+        },
+      },
+    }));
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultAdvancedMemory: true,
+      defaultMemoryGenerationModel: "gemini-new",
+    });
+    await flushAsyncWork();
+
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: {
+        advancedMemory: true,
+        memoryGenerationModel: "gemini-new",
+      },
+    });
+  });
+
   test("updateWorkspaceDefaults keeps control runtime in sync after a workspace control apply", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({

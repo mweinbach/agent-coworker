@@ -40,6 +40,7 @@ export type ProjectConfigPatch = Partial<
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
+  clearMemoryGenerationModel?: boolean;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
@@ -145,12 +146,19 @@ export async function persistProjectConfigPatch(
   const a2uiExperimentEnabled = opts.a2uiExperimentEnabled === true || isA2uiExperimentEnabled();
   const entries = Object.entries(patch).filter(
     ([key, value]) =>
+      key !== "clearMemoryGenerationModel" &&
       key !== "clearToolOutputOverflowChars" &&
       value !== undefined &&
       (a2uiExperimentEnabled || (key !== "enableA2ui" && key !== "featureFlags")),
   );
+  const shouldClearMemoryGenerationModel = patch.clearMemoryGenerationModel === true;
   const shouldClearToolOutputOverflowChars = patch.clearToolOutputOverflowChars === true;
-  if (entries.length === 0 && !shouldClearToolOutputOverflowChars) return;
+  if (
+    entries.length === 0 &&
+    !shouldClearMemoryGenerationModel &&
+    !shouldClearToolOutputOverflowChars
+  )
+    return;
   const configPath = path.join(projectCoworkDir, "config.json");
   const current = await loadJsonObjectSafe(configPath);
   const next: Record<string, unknown> = { ...current };
@@ -218,6 +226,9 @@ export async function persistProjectConfigPatch(
   if (shouldClearToolOutputOverflowChars) {
     delete next.toolOutputOverflowChars;
   }
+  if (shouldClearMemoryGenerationModel) {
+    delete next.memoryGenerationModel;
+  }
   await fs.mkdir(projectCoworkDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
@@ -225,6 +236,7 @@ export async function persistProjectConfigPatch(
 
 export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch): AgentConfig {
   const {
+    clearMemoryGenerationModel: _clearMemoryGenerationModel,
     clearToolOutputOverflowChars: _clearToolOutputOverflowChars,
     enableA2ui: legacyEnableA2uiPatch,
     featureFlags: featureFlagsPatch,
@@ -253,6 +265,9 @@ export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch)
     next.toolOutputOverflowChars = config.inheritedToolOutputOverflowChars;
     next.projectConfigOverrides =
       Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined;
+  }
+  if (patch.clearMemoryGenerationModel) {
+    next.memoryGenerationModel = undefined;
   }
   if (patch.providerOptions !== undefined) {
     next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(

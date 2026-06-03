@@ -7,6 +7,7 @@ import {
   AdvancedMemoryStore,
   CHATS_FOLDER,
   MEMORY_INDEX_HEADING,
+  normalizeMemoryFolderName,
   resolveMemoryFolderName,
 } from "../src/advancedMemory/store";
 import type { AgentConfig } from "../src/types";
@@ -75,6 +76,18 @@ describe("AdvancedMemoryStore", () => {
     expect(indexRaw).toContain("(b.md)");
   });
 
+  test("rejects folder names that escape the memories root", async () => {
+    const outsideName = `outside-${path.basename(tmpDir)}`;
+    await expect(
+      store.writeMemory(`../${outsideName}`, {
+        name: "escaped",
+        description: "bad",
+        body: "should not be written",
+      }),
+    ).rejects.toThrow("Invalid memory folder");
+    await expect(fs.stat(path.join(path.dirname(tmpDir), outsideName))).rejects.toThrow();
+  });
+
   test("renderPromptSection surfaces active and chats indexes", async () => {
     await store.writeMemory("proj", { name: "p1", description: "proj memory", body: "x" });
     await store.writeMemory(CHATS_FOLDER, { name: "c1", description: "chat memory", body: "y" });
@@ -87,6 +100,16 @@ describe("AdvancedMemoryStore", () => {
 
   test("renderPromptSection is empty when no memories exist", async () => {
     expect(await store.renderPromptSection("proj")).toBe("");
+  });
+});
+
+describe("normalizeMemoryFolderName", () => {
+  test("accepts only a single memories directory segment", () => {
+    expect(normalizeMemoryFolderName(" proj ")).toBe("proj");
+    expect(normalizeMemoryFolderName(CHATS_FOLDER)).toBe(CHATS_FOLDER);
+    for (const folder of ["", ".", "..", "../project", "nested/project", "nested\\project"]) {
+      expect(() => normalizeMemoryFolderName(folder)).toThrow("Invalid memory folder");
+    }
   });
 });
 

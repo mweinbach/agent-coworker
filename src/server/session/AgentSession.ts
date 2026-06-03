@@ -1096,17 +1096,18 @@ export class AgentSession {
    */
   triggerMemoryGeneration(): void {
     if (!this.state.config.advancedMemory) return;
+    const targetMessageIndex = this.state.allMessages.length;
     this.memoryGenerationQueue = this.memoryGenerationQueue
-      .then(() => this.runMemoryGenerationOnce())
+      .then(() => this.runMemoryGenerationOnce(targetMessageIndex))
       .catch(() => {
         // Generation failures must never affect the user-facing turn or the queue.
       });
   }
 
-  private async runMemoryGenerationOnce(): Promise<void> {
+  private async runMemoryGenerationOnce(targetMessageIndex: number): Promise<void> {
     if (!this.state.config.advancedMemory) return;
     const start = this.state.lastMemoryGeneratedIndex;
-    const end = this.state.allMessages.length;
+    const end = Math.min(targetMessageIndex, this.state.allMessages.length);
     if (end <= start) return;
     const deltaMessages = this.state.allMessages.slice(start, end);
     const result = await this.memoryGenerator.run({
@@ -1121,6 +1122,9 @@ export class AgentSession {
     // the delta is retried on the next turn.
     if (result.ok) {
       this.state.lastMemoryGeneratedIndex = end;
+      if (result.ran) {
+        await this.refreshSystemPromptWithSkills("session.advanced_memory_generated");
+      }
     }
   }
 

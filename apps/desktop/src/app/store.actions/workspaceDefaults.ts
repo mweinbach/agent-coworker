@@ -171,6 +171,8 @@ export function createWorkspaceDefaultsActions(
       model?: string;
       enableMcp?: boolean;
       backupsEnabled?: boolean;
+      advancedMemory?: boolean;
+      memoryGenerationModel?: string | null;
       toolOutputOverflowChars?: number | null;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -186,6 +188,8 @@ export function createWorkspaceDefaultsActions(
     const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
     const currentSessionConfig = (opts.current.sessionConfig ?? {}) as {
       defaultBackupsEnabled?: boolean;
+      advancedMemory?: boolean;
+      memoryGenerationModel?: string;
       defaultToolOutputOverflowChars?: number | null;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -222,6 +226,26 @@ export function createWorkspaceDefaultsActions(
 
     if (typeof opts.desired.yolo === "boolean" && opts.desired.yolo !== currentSessionConfig.yolo) {
       configPatch.yolo = opts.desired.yolo;
+    }
+
+    if (
+      typeof opts.desired.advancedMemory === "boolean" &&
+      opts.desired.advancedMemory !== currentSessionConfig.advancedMemory
+    ) {
+      configPatch.advancedMemory = opts.desired.advancedMemory;
+    }
+
+    if (Object.hasOwn(opts.desired, "memoryGenerationModel")) {
+      const currentMemoryGenerationModel =
+        currentSessionConfig.memoryGenerationModel?.trim() || undefined;
+      const desiredMemoryGenerationModel = opts.desired.memoryGenerationModel?.trim() || undefined;
+      if (desiredMemoryGenerationModel !== currentMemoryGenerationModel) {
+        if (desiredMemoryGenerationModel) {
+          configPatch.memoryGenerationModel = desiredMemoryGenerationModel;
+        } else if (currentMemoryGenerationModel !== undefined) {
+          configPatch.clearMemoryGenerationModel = true;
+        }
+      }
     }
 
     const currentDefaultToolOutputOverflow = currentSessionConfig.defaultToolOutputOverflowChars;
@@ -365,6 +389,13 @@ export function createWorkspaceDefaultsActions(
       defaultToolOutputOverflowChars:
         controlSessionConfig?.defaultToolOutputOverflowChars ??
         workspace.defaultToolOutputOverflowChars,
+      defaultAdvancedMemory:
+        typeof controlSessionConfig?.advancedMemory === "boolean"
+          ? controlSessionConfig.advancedMemory
+          : workspace.defaultAdvancedMemory,
+      defaultMemoryGenerationModel: controlSessionConfig
+        ? controlSessionConfig.memoryGenerationModel?.trim() || undefined
+        : workspace.defaultMemoryGenerationModel,
       providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
         workspace.providerOptions,
         normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions),
@@ -437,6 +468,8 @@ export function createWorkspaceDefaultsActions(
     defaultPreferredChildModelRef: source.defaultPreferredChildModelRef,
     defaultAllowedChildModelRefs: [...(source.defaultAllowedChildModelRefs ?? [])],
     defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars,
+    defaultAdvancedMemory: source.defaultAdvancedMemory,
+    defaultMemoryGenerationModel: source.defaultMemoryGenerationModel,
     providerOptions: source.providerOptions,
     userName: source.userName,
     userProfile: source.userProfile ? normalizeWorkspaceUserProfile(source.userProfile) : undefined,
@@ -507,6 +540,7 @@ export function createWorkspaceDefaultsActions(
     const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
     const providerOptions = nextWorkspace.providerOptions;
     const userName = nextWorkspace.userName;
+    const memoryGenerationModel = nextWorkspace.defaultMemoryGenerationModel?.trim() || null;
     const userProfile = nextWorkspace.userProfile
       ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
       : undefined;
@@ -526,6 +560,8 @@ export function createWorkspaceDefaultsActions(
               model,
               enableMcp: nextWorkspace.defaultEnableMcp,
               backupsEnabled: nextWorkspace.defaultBackupsEnabled,
+              advancedMemory: nextWorkspace.defaultAdvancedMemory,
+              memoryGenerationModel,
               toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
               yolo: nextWorkspace.yolo,
               ...(preferredChildModel ? { preferredChildModel } : {}),
@@ -744,6 +780,7 @@ export function createWorkspaceDefaultsActions(
         : (ws.defaultAllowedChildModelRefs ?? rt.sessionConfig?.allowedChildModelRefs ?? []);
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
+      const memoryGenerationModel = ws.defaultMemoryGenerationModel?.trim() || null;
       const userProfile = ws.userProfile
         ? normalizeWorkspaceUserProfile(ws.userProfile)
         : undefined;
@@ -770,6 +807,8 @@ export function createWorkspaceDefaultsActions(
               }
             : {}),
           yolo: ws.yolo,
+          advancedMemory: ws.defaultAdvancedMemory,
+          memoryGenerationModel,
           ...(mode === "explicit"
             ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }
             : harnessToolOutputOverflowChars !== undefined
@@ -889,6 +928,8 @@ export function createWorkspaceDefaultsActions(
         workspacePatch.defaultAllowedChildModelRefs !== undefined ||
         workspacePatch.defaultToolOutputOverflowChars !== undefined ||
         clearDefaultToolOutputOverflowChars === true ||
+        workspacePatch.defaultAdvancedMemory !== undefined ||
+        workspacePatch.defaultMemoryGenerationModel !== undefined ||
         workspacePatch.defaultEnableMcp !== undefined ||
         workspacePatch.defaultBackupsEnabled !== undefined ||
         workspacePatch.providerOptions !== undefined ||

@@ -79,6 +79,7 @@ export type PersistedProjectConfigPatch = Partial<
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
+  clearMemoryGenerationModel?: boolean;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };

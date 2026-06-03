@@ -16,6 +16,7 @@ import { isPathInsideOneOffChatsRoot } from "../utils/oneOffChats";
 export const CHATS_FOLDER = "(chats)";
 export const MEMORY_INDEX_FILE = "MEMORY.md";
 export const MEMORY_INDEX_HEADING = "# Memory Index";
+const INVALID_FOLDER_CHARS = /[/\\\0]/;
 
 export type AdvancedMemoryEntry = {
   /** File name without the `.md` extension. */
@@ -54,6 +55,14 @@ function slugify(raw: string): string {
       .replace(/-+/g, "-")
       .replace(/^[-.]+|[-.]+$/g, "") || "memory"
   );
+}
+
+export function normalizeMemoryFolderName(raw: string): string {
+  const folder = raw.trim();
+  if (!folder || folder === "." || folder === ".." || INVALID_FOLDER_CHARS.test(folder)) {
+    throw new Error(`Invalid memory folder: ${JSON.stringify(raw)}`);
+  }
+  return folder;
 }
 
 /**
@@ -151,7 +160,7 @@ export class AdvancedMemoryStore {
   constructor(private readonly memoriesDir: string) {}
 
   folderPath(folder: string): string {
-    return path.join(this.memoriesDir, folder);
+    return path.join(this.memoriesDir, normalizeMemoryFolderName(folder));
   }
 
   private memoryFilePath(folder: string, slug: string): string {
@@ -168,6 +177,14 @@ export class AdvancedMemoryStore {
     return entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
+      .filter((name) => {
+        try {
+          normalizeMemoryFolderName(name);
+          return true;
+        } catch {
+          return false;
+        }
+      })
       .sort();
   }
 

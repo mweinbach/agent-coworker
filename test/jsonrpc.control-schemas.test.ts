@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { jsonRpcControlResultSchemas as mobileJsonRpcControlResultSchemas } from "../apps/mobile/src/cowork-shared/jsonrpcControlSchemas";
+import {
+  jsonRpcControlRequestSchemas as mobileJsonRpcControlRequestSchemas,
+  jsonRpcControlResultSchemas as mobileJsonRpcControlResultSchemas,
+} from "../apps/mobile/src/cowork-shared/jsonrpcControlSchemas";
 import {
   jsonRpcAgentNotificationSchemas,
   jsonRpcAgentRequestSchemas,
@@ -219,6 +222,78 @@ describe("shared JSON-RPC control schemas", () => {
     });
     expect(parsed.event.folder).toBe("proj");
     expect(parsed.event.memories[0]?.slug).toBe("rule");
+  });
+
+  test("keeps mobile advanced memory schemas aligned", () => {
+    const request = {
+      cwd: "/tmp/proj",
+      folder: "proj",
+      name: "rule",
+      description: "a rule",
+      type: "feedback",
+      body: "always do X",
+    };
+    const event = {
+      type: "advanced_memory_list",
+      sessionId: "session-1",
+      folder: "proj",
+      folders: ["proj", "(chats)"],
+      memories: [
+        {
+          slug: "rule",
+          name: "rule",
+          description: "a rule",
+          type: "feedback",
+          originSessionId: "session-1",
+          body: "always do X",
+          updatedAt: new Date(0).toISOString(),
+        },
+      ],
+    };
+
+    const parsed = jsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].parse(request);
+    const mobileParsed =
+      mobileJsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].parse(request);
+    const result = jsonRpcControlResultSchemas["cowork/memory/advanced/list"].parse({ event });
+    const mobileResult = mobileJsonRpcControlResultSchemas["cowork/memory/advanced/list"].parse({
+      event,
+    });
+
+    expect(mobileParsed).toEqual(parsed);
+    expect(mobileResult.event.memories[0]?.slug).toBe(result.event.memories[0]?.slug);
+  });
+
+  test("keeps mobile session default memory config schemas aligned", () => {
+    const request = {
+      cwd: "/tmp/proj",
+      config: {
+        advancedMemory: true,
+        memoryGenerationModel: "gpt-5.4",
+        clearMemoryGenerationModel: false,
+      },
+    };
+    const event = {
+      type: "session_config",
+      sessionId: "session-1",
+      config: {
+        advancedMemory: true,
+        memoryGenerationModel: "gpt-5.4",
+      },
+    };
+
+    const parsed = jsonRpcControlRequestSchemas["cowork/session/defaults/apply"].parse(request);
+    const mobileParsed =
+      mobileJsonRpcControlRequestSchemas["cowork/session/defaults/apply"].parse(request);
+    const result = jsonRpcControlResultSchemas["cowork/session/defaults/apply"].parse({ event });
+    const mobileResult = mobileJsonRpcControlResultSchemas["cowork/session/defaults/apply"].parse({
+      event,
+    });
+
+    expect(mobileParsed).toEqual(parsed);
+    expect(mobileResult.event.config.advancedMemory).toBe(result.event.config.advancedMemory);
+    expect(mobileResult.event.config.memoryGenerationModel).toBe(
+      result.event.config.memoryGenerationModel,
+    );
   });
 
   test("parses workspace backup envelopes", () => {

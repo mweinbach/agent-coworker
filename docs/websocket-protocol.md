@@ -360,7 +360,7 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/session/state/read` returns the current workspace control session state as a bundle of `config_updated`, `session_settings`, and `session_config` session events so JSON-RPC clients can hydrate provider/model defaults before diffing local settings.
 
-`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
+`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive.
 
 `cowork/session/delete` is workspace-scoped. The control session may delete sessions in the active workspace, but attempts to delete a live or persisted session from another workspace fail with a JSON-RPC error.
 
@@ -600,6 +600,7 @@ Changes in `7.35`:
 - `cowork/session/agent/spawn` and the `spawnAgent` tool now accept `profileRef`. Bare refs resolve by workspace-over-global precedence; scoped refs use `workspace:<id>` or `global:<id>`. `profileRef` wins over `role` when both are present.
 - Child agent session metadata now persists a resolved profile snapshot so resumed child agents keep the prompt, tool, MCP, skill, model, and reasoning policy that existed at spawn time.
 - Agent profile catalogs now include the five built-in subagent templates as editable global entries. The built-in `default` profile is labeled Main Agent and marked locked so clients keep it enabled.
+- `cowork/session/defaults/apply.config` now accepts `advancedMemory`, `memoryGenerationModel`, and `clearMemoryGenerationModel`; the clear flag removes the persisted generation-model override and resumes inheritance.
 
 Changes in `7.34`:
 
@@ -3397,6 +3398,8 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.backupsEnabled` | `boolean` | Whether advanced backups are enabled for the live session after applying any session-scoped override. Defaults to `false`. |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied. Defaults to `false`. |
+| `config.advancedMemory` | `boolean` | Whether file-based advanced memory is enabled for the live session. Defaults to `false`. |
+| `config.memoryGenerationModel` | `string` | Explicit model id used for advanced-memory generation; omitted when the session inherits the active model. |
 | `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.preferredChildModel` | `string` | Normalized same-provider fallback model identifier used for legacy/default suggestion state |

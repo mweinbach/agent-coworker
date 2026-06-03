@@ -1609,6 +1609,7 @@ const sessionDefaultsApplyRequestSchema = z
         backupsEnabled: z.boolean().optional(),
         advancedMemory: z.boolean().optional(),
         memoryGenerationModel: z.string().optional(),
+        clearMemoryGenerationModel: z.boolean().optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         clearToolOutputOverflowChars: z.boolean().optional(),
         preferredChildModel: z.string().optional(),

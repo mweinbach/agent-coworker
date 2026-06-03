@@ -18,7 +18,14 @@ import {
 } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import {
   Select,
@@ -641,71 +648,77 @@ export function MemoryPage() {
               if (!open) closeDialog();
             }}
           >
-            <DialogContent>
-              <DialogHeader>
+            <DialogContent className="flex max-h-[min(88vh,36rem)] w-[min(92vw,34rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+              <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4 pr-12">
                 <DialogTitle>
                   {editingEntry ? `Edit remembered fact` : "Add remembered fact"}
                 </DialogTitle>
+                <DialogDescription className="sr-only">
+                  Edit the remembered fact title, scope, and content.
+                </DialogDescription>
               </DialogHeader>
-              <div className="space-y-4 pt-2">
-                <div className="space-y-1.5">
-                  <label htmlFor="memory-title" className="text-xs font-medium text-foreground">
-                    Title
-                  </label>
-                  <Input
-                    id="memory-title"
-                    placeholder="Optional. Leave blank to always include it."
-                    value={draft.id}
-                    disabled={!!editingEntry}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, id: event.target.value }))}
-                  />
-                </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label htmlFor="memory-title" className="text-xs font-medium text-foreground">
+                      Title
+                    </label>
+                    <Input
+                      id="memory-title"
+                      placeholder="Optional. Leave blank to always include it."
+                      value={draft.id}
+                      disabled={!!editingEntry}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, id: event.target.value }))
+                      }
+                    />
+                  </div>
 
-                <div className="space-y-1.5">
-                  <label htmlFor="memory-scope" className="text-xs font-medium text-foreground">
-                    Scope
-                  </label>
-                  <Select
-                    value={draft.scope}
-                    disabled={!!editingEntry}
-                    onValueChange={(value) =>
-                      setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
-                    }
-                  >
-                    <SelectTrigger id="memory-scope" aria-label="Memory scope">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="workspace">{scopeLabel("workspace")}</SelectItem>
-                      <SelectItem value="user">Everywhere</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="memory-scope" className="text-xs font-medium text-foreground">
+                      Scope
+                    </label>
+                    <Select
+                      value={draft.scope}
+                      disabled={!!editingEntry}
+                      onValueChange={(value) =>
+                        setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
+                      }
+                    >
+                      <SelectTrigger id="memory-scope" aria-label="Memory scope">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="workspace">{scopeLabel("workspace")}</SelectItem>
+                        <SelectItem value="user">Everywhere</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                <div className="space-y-1.5">
-                  <label htmlFor="memory-content" className="text-xs font-medium text-foreground">
-                    Content
-                  </label>
-                  <Textarea
-                    id="memory-content"
-                    placeholder="What should Cowork remember?"
-                    className="min-h-[100px]"
-                    value={draft.content}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, content: event.target.value }))
-                    }
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <Button type="button" variant="outline" onClick={closeDialog}>
-                    Cancel
-                  </Button>
-                  <Button type="button" onClick={handleSave} disabled={!draft.content.trim()}>
-                    {editingEntry ? "Save changes" : "Add remembered fact"}
-                  </Button>
+                  <div className="space-y-1.5">
+                    <label htmlFor="memory-content" className="text-xs font-medium text-foreground">
+                      Content
+                    </label>
+                    <Textarea
+                      id="memory-content"
+                      placeholder="What should Cowork remember?"
+                      className="h-[min(32vh,16rem)] min-h-[8rem] resize-y overflow-auto [field-sizing:fixed]"
+                      value={draft.content}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, content: event.target.value }))
+                      }
+                    />
+                  </div>
                 </div>
               </div>
+              <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-4">
+                <Button type="button" variant="outline" onClick={closeDialog}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={handleSave} disabled={!draft.content.trim()}>
+                  {editingEntry ? "Save changes" : "Add remembered fact"}
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
         </>

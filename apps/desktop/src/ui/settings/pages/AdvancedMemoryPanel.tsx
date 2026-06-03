@@ -6,13 +6,27 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { useAppStore } from "../../../app/store";
 import type { AdvancedMemoryEntry } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import {
   Select,
@@ -25,7 +39,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 
-type DraftAdvancedMemory = {
+export type DraftAdvancedMemory = {
   slug: string;
   name: string;
   description: string;
@@ -37,6 +51,114 @@ const MEMORY_TYPES = ["feedback", "project", "note"] as const;
 
 function emptyDraft(): DraftAdvancedMemory {
   return { slug: "", name: "", description: "", type: "note", body: "" };
+}
+
+export function AdvancedMemoryEditorDialog({
+  open,
+  editingSlug,
+  draft,
+  saving,
+  setDraft,
+  onCancel,
+  onSave,
+}: {
+  open: boolean;
+  editingSlug: string | null;
+  draft: DraftAdvancedMemory;
+  saving: boolean;
+  setDraft: Dispatch<SetStateAction<DraftAdvancedMemory>>;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onCancel();
+      }}
+    >
+      <DialogContent className="flex max-h-[min(92vh,48rem)] w-[min(92vw,42rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+        <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4 pr-12">
+          <DialogTitle>{editingSlug ? "Edit memory" : "Add memory"}</DialogTitle>
+          <DialogDescription className="sr-only">
+            Edit the memory name, description, type, and content.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="adv-memory-name" className="text-xs font-medium text-foreground">
+                Name
+              </label>
+              <Input
+                id="adv-memory-name"
+                placeholder="Short topic title"
+                value={draft.name}
+                onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="adv-memory-desc" className="text-xs font-medium text-foreground">
+                Description
+              </label>
+              <Input
+                id="adv-memory-desc"
+                placeholder="One-line summary for the index"
+                value={draft.description}
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, description: event.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="adv-memory-type" className="text-xs font-medium text-foreground">
+                Type
+              </label>
+              <Select
+                value={draft.type}
+                onValueChange={(value) => setDraft((prev) => ({ ...prev, type: value }))}
+              >
+                <SelectTrigger id="adv-memory-type" aria-label="Memory type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MEMORY_TYPES.map((type) => (
+                    <SelectItem key={type} value={type}>
+                      {type}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="adv-memory-body" className="text-xs font-medium text-foreground">
+                Content
+              </label>
+              <Textarea
+                id="adv-memory-body"
+                placeholder="What should Cowork remember?"
+                className="h-[min(42vh,24rem)] min-h-[12rem] resize-y overflow-auto [field-sizing:fixed]"
+                value={draft.body}
+                onChange={(event) => setDraft((prev) => ({ ...prev, body: event.target.value }))}
+              />
+            </div>
+          </div>
+        </div>
+        <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-4">
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={onSave}
+            disabled={!draft.name.trim() || !draft.body.trim() || saving}
+          >
+            {saving ? "Saving..." : editingSlug ? "Save changes" : "Add memory"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string; cwd: string }) {
@@ -232,88 +354,15 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
         </div>
       )}
 
-      <Dialog
+      <AdvancedMemoryEditorDialog
         open={dialogOpen}
-        onOpenChange={(open) => {
-          if (!open) closeDialog();
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{editingSlug ? "Edit memory" : "Add memory"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="space-y-1.5">
-              <label htmlFor="adv-memory-name" className="text-xs font-medium text-foreground">
-                Name
-              </label>
-              <Input
-                id="adv-memory-name"
-                placeholder="Short topic title"
-                value={draft.name}
-                onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="adv-memory-desc" className="text-xs font-medium text-foreground">
-                Description
-              </label>
-              <Input
-                id="adv-memory-desc"
-                placeholder="One-line summary for the index"
-                value={draft.description}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, description: event.target.value }))
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="adv-memory-type" className="text-xs font-medium text-foreground">
-                Type
-              </label>
-              <Select
-                value={draft.type}
-                onValueChange={(value) => setDraft((prev) => ({ ...prev, type: value }))}
-              >
-                <SelectTrigger id="adv-memory-type" aria-label="Memory type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MEMORY_TYPES.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="adv-memory-body" className="text-xs font-medium text-foreground">
-                Content
-              </label>
-              <Textarea
-                id="adv-memory-body"
-                placeholder="What should Cowork remember?"
-                className="min-h-[140px]"
-                value={draft.body}
-                onChange={(event) => setDraft((prev) => ({ ...prev, body: event.target.value }))}
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={closeDialog}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={() => void handleSave()}
-                disabled={!draft.name.trim() || !draft.body.trim() || saving}
-              >
-                {saving ? "Saving..." : editingSlug ? "Save changes" : "Add memory"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+        editingSlug={editingSlug}
+        draft={draft}
+        saving={saving}
+        setDraft={setDraft}
+        onCancel={closeDialog}
+        onSave={() => void handleSave()}
+      />
     </div>
   );
 }

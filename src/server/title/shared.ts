@@ -116,17 +116,21 @@ export function tokenize(value: string): string[] {
 
 export function buildTitlePrompt(query: string, variationHint?: string): string {
   const lines = [
-    "Generate a brief title that would help the user find this conversation later.",
+    "Generate a brief task label that would help the user find this conversation later.",
     "",
     "Rules:",
     `- Single line, maximum ${TITLE_MAX_CHARS} characters`,
     "- No surrounding quotes or explanations",
     "- Grammatically correct",
     "- NEVER include tool names or technical jargon about the AI",
-    "- Focus on the main topic and user intent",
+    "- Describe the work the user is asking for, not the chat itself",
+    "- Prefer action-first labels when natural",
+    "- Start with concrete verbs like Fix, Add, Clean up, Investigate, Write, Build, or Update",
+    "- Preserve the specific object of the task, such as top bar, portal dashboard, dynamic tool errors, or passkey auth",
     "- Vary phrasing to avoid repetitive patterns",
-    "- Use a short noun phrase, not a sentence copied from the request",
-    "- Prefer distinctive topic words over generic starts like 'Use', 'Make', or 'How to'",
+    "- Use a short task label, not a sentence copied from the request",
+    "- Good examples: Fix merge conflicts; Add passkey auth support; Clean up top bar; Investigate dynamic tool errors",
+    "- Avoid generic titles like User request, Chat summary, Use tool, How to..., or vague topic-only labels",
     "- Do not invent files, images, PDFs, products, or actions not present in the request",
     "- When a file is mentioned, focus on WHAT the user wants to do WITH it",
   ];

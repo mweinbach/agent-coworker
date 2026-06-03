@@ -225,6 +225,15 @@ describe("sessionTitleService", () => {
     expect(typeof samplingOpts?.seed).toBe("number");
     expect(apple.respond).not.toHaveBeenCalled();
     expect(apple.respondWithJsonSchema).toHaveBeenCalledTimes(1);
+    const structuredPrompt = apple.respondWithJsonSchema.mock.calls[0]?.[0];
+    expect(structuredPrompt).toContain("brief task label options");
+    expect(structuredPrompt).toContain("Prefer action-first labels");
+    expect(structuredPrompt).toContain("Fix merge conflicts");
+    expect(structuredPrompt).toContain("Add passkey auth support");
+    expect(structuredPrompt).toContain("Clean up top bar");
+    expect(structuredPrompt).toContain("Investigate dynamic tool errors");
+    expect(structuredPrompt).toContain("Avoid generic titles like User request");
+    expect(structuredPrompt).not.toContain("noun-phrase");
     expect(apple.respondWithJsonSchema.mock.calls[0]?.[1]).toMatchObject({
       type: "object",
       properties: {
@@ -726,6 +735,40 @@ describe("sessionTitleService", () => {
         },
       },
     });
+  });
+
+  test("asks provider title models for action-first task labels", async () => {
+    let capturedPrompt = "";
+    const runTurn = mock(async (args: { messages: Array<{ content: string }> }) => {
+      capturedPrompt = args.messages[0]?.content ?? "";
+      return {
+        text: "Clean up top bar",
+        reasoningText: undefined,
+        responseMessages: [] as unknown[],
+        usage: undefined,
+      };
+    });
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createNonAppleTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+    });
+
+    await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "please clean up the top bar so it fits the portal dashboard",
+    });
+
+    expect(capturedPrompt).toContain("brief task label");
+    expect(capturedPrompt).toContain("Prefer action-first labels");
+    expect(capturedPrompt).toContain("Fix merge conflicts");
+    expect(capturedPrompt).toContain("Add passkey auth support");
+    expect(capturedPrompt).toContain("Clean up top bar");
+    expect(capturedPrompt).toContain("Investigate dynamic tool errors");
+    expect(capturedPrompt).toContain("Avoid generic titles like User request");
+    expect(capturedPrompt).not.toContain("short noun phrase");
   });
 
   test("falls back to provider default model when primary model attempt fails", async () => {

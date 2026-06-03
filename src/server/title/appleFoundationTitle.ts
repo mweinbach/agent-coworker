@@ -27,7 +27,7 @@ const APPLE_TITLE_JSON_SCHEMA: Record<string, unknown> = {
     titles: {
       type: "array",
       description:
-        "Distinct concise noun-phrase chat title options, each under 50 characters, with no prefixes, quotes, or invented task details.",
+        "Distinct concise action-first task label options, each under 50 characters, with no prefixes, quotes, or invented task details.",
       minItems: APPLE_TITLE_OPTION_COUNT,
       maxItems: APPLE_TITLE_OPTION_COUNT,
       items: {
@@ -129,14 +129,18 @@ function logAppleTitleIssue(message: string, detail?: string): void {
 function buildAppleTitleOptionsPrompt(query: string, variationHint: string): string {
   const keywords = tokenize(query).slice(0, 8);
   return [
-    `Generate ${APPLE_TITLE_OPTION_COUNT} distinct brief title options that would help the user find this conversation later.`,
+    `Generate ${APPLE_TITLE_OPTION_COUNT} distinct brief task label options that would help the user find this conversation later.`,
     "",
     "Rules:",
     `- Each title must be a single line, maximum ${TITLE_MAX_CHARS} characters`,
     "- No surrounding quotes or explanations",
     "- Each option should use a different phrasing angle",
     "- Titles must sound natural and polished, not like keyword piles",
-    "- Prefer distinctive topic words over generic starts like 'Use', 'Make', or 'How to'",
+    "- Prefer action-first labels when natural",
+    "- Start with concrete verbs like Fix, Add, Clean up, Investigate, Write, Build, or Update",
+    "- Preserve the specific object of the task, such as top bar, portal dashboard, dynamic tool errors, or passkey auth",
+    "- Good examples: Fix merge conflicts; Add passkey auth support; Clean up top bar; Investigate dynamic tool errors",
+    "- Avoid generic titles like User request, Chat summary, Use tool, How to..., or vague topic-only labels",
     keywords.length > 0
       ? `- Preserve at least one specific request keyword when natural: ${keywords.join(", ")}`
       : "",

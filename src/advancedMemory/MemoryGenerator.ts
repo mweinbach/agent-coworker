@@ -141,6 +141,7 @@ export function splitMessagesForMemoryBackfill(messages: ModelMessage[]): ModelM
 export type MemoryGeneratorDeps = {
   createRuntime: typeof createRuntime;
   loadGeneratorPrompt: (config: AgentConfig) => Promise<string>;
+  loadConsolidatorPrompt?: (config: AgentConfig) => Promise<string>;
 };
 
 async function defaultLoadGeneratorPrompt(config: AgentConfig): Promise<string> {
@@ -148,9 +149,15 @@ async function defaultLoadGeneratorPrompt(config: AgentConfig): Promise<string> 
   return (await fs.readFile(promptPath, "utf-8")).replace(/\r\n?/g, "\n");
 }
 
+async function defaultLoadConsolidatorPrompt(config: AgentConfig): Promise<string> {
+  const promptPath = path.join(config.builtInDir, "prompts", "memory-consolidator.md");
+  return (await fs.readFile(promptPath, "utf-8")).replace(/\r\n?/g, "\n");
+}
+
 const defaultMemoryGeneratorDeps: MemoryGeneratorDeps = {
   createRuntime,
   loadGeneratorPrompt: defaultLoadGeneratorPrompt,
+  loadConsolidatorPrompt: defaultLoadConsolidatorPrompt,
 };
 
 export type MemoryGeneratorRunOpts = {
@@ -164,6 +171,8 @@ export type MemoryGeneratorRunOpts = {
   /** Override the resolved folder (testing). */
   folder?: string;
 };
+
+export type MemoryConsolidatorRunOpts = Omit<MemoryGeneratorRunOpts, "deltaMessages">;
 
 /**
  * Headless agent that maintains the advanced (file-based) memory tree after each
@@ -233,8 +242,71 @@ export class MemoryGenerator {
     }
   }
 
-  private buildTools(store: AdvancedMemoryStore, folder: string, sessionId: string) {
+  /**
+   * Runs a reflective cleanup over the active memory folder. `ok` is false only
+   * when the runtime failed; empty folders resolve `{ ran: false, ok: true }`.
+   * Never throws.
+   */
+  async consolidate(opts: MemoryConsolidatorRunOpts): Promise<{ ran: boolean; ok: boolean }> {
+    const log = opts.log ?? (() => {});
+    const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
+    const folder = opts.folder ?? resolveMemoryFolderName(opts.config);
+    const memories = await store.listMemories(folder);
+    if (memories.length === 0) {
+      return { ran: false, ok: true };
+    }
+
+    const index = await store.renderIndex(folder);
+    const tools = this.buildTools(store, folder, opts.sessionId, {
+      includeConsolidationTools: true,
+    });
+    const system = await (this.deps.loadConsolidatorPrompt ?? defaultLoadConsolidatorPrompt)(
+      opts.config,
+    );
+    const genConfig = this.resolveTargetConfig(opts.config);
+    const userMessage = [
+      `Active memory folder: ${folder}`,
+      `Current MEMORY.md index:\n\n${index || "(empty)"}`,
+      `Memory file count: ${memories.length}`,
+      "Run one consolidation pass now.",
+    ].join("\n\n");
+
+    try {
+      const runtime = this.deps.createRuntime(genConfig);
+      await runtime.runTurn({
+        config: genConfig,
+        system,
+        messages: [{ role: "user", content: userMessage }] as ModelMessage[],
+        tools,
+        maxSteps: 20,
+        providerOptions: genConfig.providerOptions,
+        abortSignal: opts.abortSignal,
+        log: (line) => log(`[memory] ${line}`),
+        enableMcp: false,
+      } as Parameters<ReturnType<typeof createRuntime>["runTurn"]>[0]);
+      return { ran: true, ok: true };
+    } catch (error) {
+      log(`[memory] consolidation failed: ${String(error)}`);
+      return { ran: false, ok: false };
+    }
+  }
+
+  private buildTools(
+    store: AdvancedMemoryStore,
+    folder: string,
+    sessionId: string,
+    opts: { includeConsolidationTools?: boolean } = {},
+  ) {
     return {
+      ...(opts.includeConsolidationTools
+        ? {
+            read_index: {
+              description: "Read the generated MEMORY.md index for the active folder.",
+              inputSchema: z.object({}),
+              execute: async () => await store.renderIndex(folder),
+            },
+          }
+        : {}),
       list_memories: {
         description: "List existing memories in the active folder (slug, name, description, type).",
         inputSchema: z.object({}),
@@ -305,6 +377,17 @@ export class MemoryGenerator {
           return { ok: true, slug: entry.slug };
         },
       },
+      ...(opts.includeConsolidationTools
+        ? {
+            delete_memory: {
+              description: "Delete a stale or duplicate memory by slug.",
+              inputSchema: z.object({ slug: z.string() }),
+              execute: async ({ slug }: { slug: string }) => ({
+                ok: await store.deleteMemory(folder, slug),
+              }),
+            },
+          }
+        : {}),
       finish: {
         description: "Signal that memory maintenance is complete. Call this when done.",
         inputSchema: z.object({ note: z.string().optional() }),

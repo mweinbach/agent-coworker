@@ -133,6 +133,80 @@ describe("MemoryGenerator", () => {
     });
   });
 
+  test("consolidates a memory folder with index reads and stale-memory deletion", async () => {
+    let captured: { tools: Record<string, any>; system: string } | null = null;
+    let runtimeConfig: AgentConfig | null = null;
+    const store = new AdvancedMemoryStore(tmpDir);
+    await store.writeMemory("proj", {
+      name: "durable rule",
+      description: "keep this",
+      type: "feedback",
+      body: "Keep the durable rule.",
+    });
+    await store.writeMemory("proj", {
+      name: "stale task",
+      description: "delete this stale task",
+      type: "note",
+      body: "This was a one-off task.",
+    });
+
+    const fakeCreateRuntime = ((config: AgentConfig) => {
+      runtimeConfig = config;
+      return {
+        name: "fake" as const,
+        runTurn: async (params: any) => {
+          captured = { tools: params.tools, system: params.system };
+          const index = await params.tools.read_index.execute({});
+          expect(index).toContain("[durable rule](durable-rule.md)");
+          expect(index).toContain("[stale task](stale-task.md)");
+          const memories = await params.tools.list_memories.execute({});
+          expect(memories.map((entry: { slug: string }) => entry.slug).sort()).toEqual([
+            "durable-rule",
+            "stale-task",
+          ]);
+          const stale = await params.tools.read_memory.execute({ slug: "stale-task" });
+          expect(stale).toMatchObject({ found: true, name: "stale task" });
+          expect(await params.tools.delete_memory.execute({ slug: "stale-task" })).toEqual({
+            ok: true,
+          });
+          await params.tools.finish.execute({ note: "removed stale task" });
+          return { text: "", responseMessages: [] };
+        },
+      };
+    }) as unknown as typeof import("../src/runtime").createRuntime;
+
+    const generator = new MemoryGenerator({
+      createRuntime: fakeCreateRuntime,
+      loadGeneratorPrompt: async () => "GENERATOR PROMPT",
+      loadConsolidatorPrompt: async () => "CONSOLIDATOR PROMPT",
+    });
+
+    const result = await generator.consolidate({
+      config: {
+        ...baseConfig(),
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+      },
+      sessionId: "sess-42",
+      folder: "proj",
+    });
+
+    expect(result).toEqual({ ran: true, ok: true });
+    expect(captured?.system).toBe("CONSOLIDATOR PROMPT");
+    expect(captured?.tools.read_index).toBeDefined();
+    expect(captured?.tools.delete_memory).toBeDefined();
+    expect(runtimeConfig).toMatchObject({
+      provider: "together",
+      runtime: "pi",
+      model: "moonshotai/Kimi-K2.5",
+    });
+    expect(await store.readMemory("proj", "stale-task")).toBeNull();
+    expect((await store.listMemories("proj")).map((memory) => memory.slug)).toEqual([
+      "durable-rule",
+    ]);
+  });
+
   test("skips generation when the delta has no user/assistant content", async () => {
     let called = false;
     const generator = new MemoryGenerator({

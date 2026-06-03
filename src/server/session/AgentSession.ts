@@ -123,6 +123,8 @@ import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import type { SkillManager } from "./SkillManager";
 import type { TurnExecutionManager } from "./TurnExecutionManager";
 
+const MEMORY_GENERATIONS_PER_CONSOLIDATION = 5;
+
 function makeId(): string {
   return crypto.randomUUID();
 }
@@ -305,6 +307,7 @@ export class AgentSession {
       backupOperationQueue: Promise.resolve(),
       lastAutoCheckpointAt: 0,
       lastMemoryGeneratedIndex: seededMessages.length,
+      memoryGenerationsSinceConsolidation: 0,
       costTracker: null,
       turnReferenceInjectionCounter: 0,
     };
@@ -1144,9 +1147,43 @@ export class AgentSession {
     if (result.ok) {
       this.state.lastMemoryGeneratedIndex = end;
       if (result.ran) {
-        await this.refreshSystemPromptWithSkills("session.advanced_memory_generated");
+        this.state.memoryGenerationsSinceConsolidation += 1;
+        const consolidation = await this.maybeRunMemoryConsolidation();
+        await this.refreshSystemPromptWithSkills(
+          consolidation.ran
+            ? "session.advanced_memory_consolidated"
+            : "session.advanced_memory_generated",
+        );
       }
     }
+  }
+
+  private async maybeRunMemoryConsolidation(
+    folder = resolveMemoryFolderName(this.state.config),
+  ): Promise<{ ran: boolean; ok: boolean }> {
+    if (
+      !this.state.config.advancedMemory ||
+      this.state.memoryGenerationsSinceConsolidation < MEMORY_GENERATIONS_PER_CONSOLIDATION
+    ) {
+      return { ran: false, ok: true };
+    }
+
+    const result = await this.runMemoryConsolidation(folder);
+    if (result.ok) {
+      this.state.memoryGenerationsSinceConsolidation = 0;
+    }
+    return result;
+  }
+
+  private async runMemoryConsolidation(folder: string): Promise<{ ran: boolean; ok: boolean }> {
+    if (!this.state.config.advancedMemory) return { ran: false, ok: true };
+    return await this.memoryGenerator.consolidate({
+      config: this.state.config,
+      sessionId: this.id,
+      folder,
+      log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
+      abortSignal: undefined,
+    });
   }
 
   private async runMemoryBackfill(folder: string, messages: ModelMessage[]): Promise<void> {
@@ -1183,7 +1220,12 @@ export class AgentSession {
     }
 
     if (ranAny) {
-      await this.refreshSystemPromptWithSkills("session.advanced_memory_backfill");
+      const consolidation = await this.runMemoryConsolidation(folder);
+      await this.refreshSystemPromptWithSkills(
+        consolidation.ran
+          ? "session.advanced_memory_backfill_consolidated"
+          : "session.advanced_memory_backfill",
+      );
     }
     await this.emitAdvancedMemories(folder);
   }

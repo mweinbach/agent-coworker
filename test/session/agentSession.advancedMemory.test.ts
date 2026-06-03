@@ -6,11 +6,13 @@ import { makeConfig, makeSession } from "./agentSession.harness";
 type MemoryGenerationSessionInternals = {
   memoryGenerator: {
     run: (opts: { deltaMessages: ModelMessage[] }) => Promise<{ ran: boolean; ok: boolean }>;
+    consolidate: (opts: { folder?: string }) => Promise<{ ran: boolean; ok: boolean }>;
   };
   memoryGenerationQueue: Promise<void>;
   state: {
     allMessages: ModelMessage[];
     lastMemoryGeneratedIndex: number;
+    memoryGenerationsSinceConsolidation: number;
   };
 };
 
@@ -38,6 +40,9 @@ describe("AgentSession advanced memory generation", () => {
         resolveStarted();
         await unblockRun;
         return { ran: true, ok: true };
+      },
+      consolidate: async () => {
+        throw new Error("consolidation should not run before five generations");
       },
     };
 
@@ -75,6 +80,9 @@ describe("AgentSession advanced memory generation", () => {
     };
     internals.memoryGenerator = {
       run: async () => ({ ran: true, ok: true }),
+      consolidate: async () => {
+        throw new Error("consolidation should not run before five generations");
+      },
     };
 
     internals.state.allMessages.push({ role: "user", content: "remember this" } as ModelMessage);
@@ -93,10 +101,15 @@ describe("AgentSession advanced memory generation", () => {
     const { session } = makeSession({ config });
     const internals = session as unknown as MemoryGenerationSessionInternals;
     const deltas: ModelMessage[][] = [];
+    const consolidatedFolders: Array<string | undefined> = [];
 
     internals.memoryGenerator = {
       run: async ({ deltaMessages }) => {
         deltas.push(deltaMessages);
+        return { ran: true, ok: true };
+      },
+      consolidate: async ({ folder }) => {
+        consolidatedFolders.push(folder);
         return { ran: true, ok: true };
       },
     };
@@ -134,5 +147,138 @@ describe("AgentSession advanced memory generation", () => {
       "second follow-up",
       "third response",
     ]);
+    expect(consolidatedFolders).toEqual(["proj"]);
+  });
+
+  test("consolidates after five successful automatic memory generations", async () => {
+    let refreshCount = 0;
+    const config = {
+      ...makeConfig("/tmp/test-session"),
+      advancedMemory: true,
+    };
+    const { session } = makeSession({
+      config,
+      loadSystemPromptWithSkillsImpl: async () => {
+        refreshCount += 1;
+        return { prompt: `refreshed-${refreshCount}`, discoveredSkills: [] };
+      },
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    let runCount = 0;
+    let consolidateCount = 0;
+
+    internals.memoryGenerator = {
+      run: async () => {
+        runCount += 1;
+        return { ran: true, ok: true };
+      },
+      consolidate: async () => {
+        consolidateCount += 1;
+        return { ran: true, ok: true };
+      },
+    };
+
+    for (let i = 0; i < 4; i += 1) {
+      internals.state.allMessages.push(
+        { role: "user", content: `turn ${i}` } as ModelMessage,
+        { role: "assistant", content: `answer ${i}` } as ModelMessage,
+      );
+      session.triggerMemoryGeneration();
+      await internals.memoryGenerationQueue;
+    }
+
+    expect(runCount).toBe(4);
+    expect(consolidateCount).toBe(0);
+    expect(internals.state.memoryGenerationsSinceConsolidation).toBe(4);
+
+    internals.state.allMessages.push(
+      { role: "user", content: "turn 4" } as ModelMessage,
+      { role: "assistant", content: "answer 4" } as ModelMessage,
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(runCount).toBe(5);
+    expect(consolidateCount).toBe(1);
+    expect(internals.state.memoryGenerationsSinceConsolidation).toBe(0);
+    expect(refreshCount).toBe(5);
+  });
+
+  test("does not count no-op or failed generations toward consolidation", async () => {
+    const config = {
+      ...makeConfig("/tmp/test-session"),
+      advancedMemory: true,
+    };
+    const { session } = makeSession({ config });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const results = [
+      { ran: false, ok: true },
+      { ran: true, ok: false },
+      { ran: true, ok: true },
+      { ran: true, ok: true },
+      { ran: true, ok: true },
+      { ran: true, ok: true },
+      { ran: true, ok: true },
+    ];
+    let consolidateCount = 0;
+
+    internals.memoryGenerator = {
+      run: async () => results.shift() ?? { ran: true, ok: true },
+      consolidate: async () => {
+        consolidateCount += 1;
+        return { ran: true, ok: true };
+      },
+    };
+
+    for (let i = 0; i < 7; i += 1) {
+      internals.state.allMessages.push(
+        { role: "user", content: `turn ${i}` } as ModelMessage,
+        { role: "assistant", content: `answer ${i}` } as ModelMessage,
+      );
+      session.triggerMemoryGeneration();
+      await internals.memoryGenerationQueue;
+    }
+
+    expect(consolidateCount).toBe(1);
+    expect(internals.state.memoryGenerationsSinceConsolidation).toBe(0);
+  });
+
+  test("retries consolidation after a failed consolidation pass", async () => {
+    const config = {
+      ...makeConfig("/tmp/test-session"),
+      advancedMemory: true,
+    };
+    const { session } = makeSession({ config });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    internals.state.memoryGenerationsSinceConsolidation = 4;
+    let consolidateCount = 0;
+
+    internals.memoryGenerator = {
+      run: async () => ({ ran: true, ok: true }),
+      consolidate: async () => {
+        consolidateCount += 1;
+        return consolidateCount === 1 ? { ran: false, ok: false } : { ran: true, ok: true };
+      },
+    };
+
+    internals.state.allMessages.push(
+      { role: "user", content: "first retry" } as ModelMessage,
+      { role: "assistant", content: "first answer" } as ModelMessage,
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(consolidateCount).toBe(1);
+    expect(internals.state.memoryGenerationsSinceConsolidation).toBe(5);
+
+    internals.state.allMessages.push(
+      { role: "user", content: "second retry" } as ModelMessage,
+      { role: "assistant", content: "second answer" } as ModelMessage,
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(consolidateCount).toBe(2);
+    expect(internals.state.memoryGenerationsSinceConsolidation).toBe(0);
   });
 });

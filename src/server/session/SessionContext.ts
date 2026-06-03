@@ -155,6 +155,12 @@ export type SessionRuntimeState = {
    * `allMessages` keeps generation correct across runtime-view trimming.
    */
   lastMemoryGeneratedIndex: number;
+  /**
+   * Successful automatic advanced-memory generation passes since the last
+   * successful folder consolidation. In-memory only; resets when a live session
+   * is recreated.
+   */
+  memoryGenerationsSinceConsolidation: number;
   costTracker: SessionCostTracker | null;
   /**
    * Monotonic counter for synthetic referenced-skill tool calls within the active

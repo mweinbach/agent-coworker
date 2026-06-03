@@ -107,6 +107,35 @@ describe("AgentSession advanced memory generation", () => {
     expect(internals.state.system).toBe("refreshed-1");
   });
 
+  test("emits the refreshed advanced memory list after automatic generation", async () => {
+    const config = {
+      ...makeConfig("/tmp/test-session"),
+      advancedMemory: true,
+    };
+    const { session, events } = makeSession({
+      config,
+      loadSystemPromptWithSkillsImpl: async () => ({ prompt: "refreshed", discoveredSkills: [] }),
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    internals.memoryGenerator = {
+      run: async () => ({ ran: true, ok: true }),
+      consolidate: async () => {
+        throw new Error("consolidation should not run before five generations");
+      },
+    };
+
+    internals.state.allMessages.push(
+      { role: "user", content: "remember this" } as ModelMessage,
+      { role: "assistant", content: "remembered" } as ModelMessage,
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    const advancedMemoryEvents = events.filter((event) => event.type === "advanced_memory_list");
+    expect(advancedMemoryEvents).toHaveLength(1);
+    expect(advancedMemoryEvents[0]?.sessionId).toBe(session.id);
+  });
+
   test("persists the automatic generation checkpoint after a successful run", async () => {
     const snapshots: unknown[] = [];
     const writePersistedSessionSnapshotImpl = mock(async (opts: { snapshot: unknown }) => {
@@ -258,6 +287,68 @@ describe("AgentSession advanced memory generation", () => {
       "third response",
     ]);
     expect(consolidatedFolders).toEqual(["proj"]);
+  });
+
+  test("manual current-folder backfill checkpoints history before the next automatic generation", async () => {
+    const snapshots: unknown[] = [];
+    const writePersistedSessionSnapshotImpl = mock(async (opts: { snapshot: unknown }) => {
+      snapshots.push(opts.snapshot);
+      return "/tmp/test-session/.cowork/sessions/mock.json";
+    });
+    const config = {
+      ...makeConfig("/tmp/test-session"),
+      advancedMemory: true,
+    };
+    const { session } = makeSession({
+      config,
+      writePersistedSessionSnapshotImpl,
+      loadSystemPromptWithSkillsImpl: async () => ({ prompt: "refreshed", discoveredSkills: [] }),
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    await flushAsyncWork();
+    snapshots.length = 0;
+    const deltas: ModelMessage[][] = [];
+
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        return { ran: true, ok: true };
+      },
+      consolidate: async () => ({ ran: false, ok: true }),
+    };
+
+    internals.state.allMessages.push(
+      { role: "user", content: "old question" } as ModelMessage,
+      { role: "assistant", content: "old answer" } as ModelMessage,
+      { role: "user", content: "old follow-up" } as ModelMessage,
+      { role: "assistant", content: "old follow-up answer" } as ModelMessage,
+    );
+
+    await session.generateAdvancedMemoryForHistory();
+
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(4);
+    await waitForCondition(() =>
+      snapshots.some(
+        (snapshot) =>
+          (snapshot as PersistedMemoryCheckpointSnapshot).context.lastMemoryGeneratedIndex === 4,
+      ),
+    );
+    expect(deltas.map((chunk) => chunk.map((message) => message.content))).toEqual([
+      ["old question", "old answer"],
+      ["old follow-up", "old follow-up answer"],
+    ]);
+
+    deltas.length = 0;
+    internals.state.allMessages.push(
+      { role: "user", content: "fresh question" } as ModelMessage,
+      { role: "assistant", content: "fresh answer" } as ModelMessage,
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(deltas.map((chunk) => chunk.map((message) => message.content))).toEqual([
+      ["fresh question", "fresh answer"],
+    ]);
   });
 
   test("consolidates after five successful automatic memory generations", async () => {

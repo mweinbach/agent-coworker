@@ -84,6 +84,7 @@ const {
   __threadEventReducerInternal,
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
+  disposeAllJsonRpcState,
   ensureControlSocket,
   ensureThreadSocket,
 } = await import("../src/app/store.helpers");
@@ -263,6 +264,7 @@ describe("App JSON-RPC shutdown disposal", () => {
   });
 
   afterEach(() => {
+    disposeAllJsonRpcState();
     clearJsonRpcSocketOverride();
     jsonRpcSocketInternal.reset();
     __controlSocketInternal.reset();
@@ -274,7 +276,7 @@ describe("App JSON-RPC shutdown disposal", () => {
     useAppStore.setState(defaultStoreState);
   });
 
-  test("renderer shutdown disposes all workspace JSON-RPC listeners on unmount", async () => {
+  test("transient renderer unmount keeps workspace JSON-RPC listeners alive", async () => {
     const harness = setupAppJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -314,6 +316,77 @@ describe("App JSON-RPC shutdown disposal", () => {
         await flushAsyncWork();
       });
       root = null;
+
+      const socketState = jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId);
+      expect(socketState.isDisposed).toBe(false);
+      expect(socketState.hasStoreSetter).toBe(true);
+      expect(socketState.routerCount).toBeGreaterThan(0);
+      expect(socketState.lifecycleListenerCount).toBeGreaterThan(0);
+      expect(__controlSocketInternal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
+        isDisposed: false,
+        hasRouterCleanup: true,
+        hasLifecycleCleanup: true,
+        hasBootstrapPromise: false,
+        hasStoreGetter: true,
+        hasStoreSetter: true,
+      });
+      expect(__threadEventReducerInternal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
+        isDisposed: false,
+        hasRouterCleanup: true,
+        hasLifecycleCleanup: true,
+        reconnectThreadIds: [threadId],
+      });
+      expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(true);
+      expect(RUNTIME.workspaceJsonRpcSocketGenerations.has(workspaceId)).toBe(true);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("window unload disposes all workspace JSON-RPC listeners", async () => {
+    const harness = setupAppJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const { workspaceId, threadId } = seedWorkspaceState();
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(App)));
+      });
+
+      await act(async () => {
+        ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+        ensureThreadSocket(
+          useAppStore.getState as any,
+          useAppStore.setState as any,
+          threadId,
+          "ws://mock",
+        );
+        await flushAsyncWork();
+      });
+
+      expect(
+        jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).routerCount,
+      ).toBeGreaterThan(0);
+      expect(
+        jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).lifecycleListenerCount,
+      ).toBeGreaterThan(0);
+      expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(true);
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        await flushAsyncWork();
+      });
 
       expect(jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
         isDisposed: true,

@@ -97,27 +97,8 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
   );
 });
 
-let scheduledJsonRpcShutdownDisposal: number | null = null;
-
-function cancelScheduledJsonRpcShutdownDisposal() {
-  if (scheduledJsonRpcShutdownDisposal === null) {
-    return;
-  }
-  window.clearTimeout(scheduledJsonRpcShutdownDisposal);
-  scheduledJsonRpcShutdownDisposal = null;
-}
-
 function runJsonRpcShutdownDisposal() {
-  cancelScheduledJsonRpcShutdownDisposal();
   disposeAllJsonRpcState();
-}
-
-function scheduleJsonRpcShutdownDisposal() {
-  cancelScheduledJsonRpcShutdownDisposal();
-  scheduledJsonRpcShutdownDisposal = window.setTimeout(() => {
-    scheduledJsonRpcShutdownDisposal = null;
-    disposeAllJsonRpcState();
-  }, 0);
 }
 
 const ChatShell = memo(function ChatShell({
@@ -372,7 +353,6 @@ export default function App() {
   }, [bootstrapPending, init, ready]);
 
   useEffect(() => {
-    cancelScheduledJsonRpcShutdownDisposal();
     let disposed = false;
     const handleBeforeUnload = () => {
       if (disposed) {
@@ -385,10 +365,6 @@ export default function App() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (disposed) {
-        return;
-      }
-      scheduleJsonRpcShutdownDisposal();
     };
   }, []);
 

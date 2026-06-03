@@ -31,8 +31,24 @@ function toResolvedStaticModel(
   };
 }
 
-export function isDynamicModelProvider(provider: ProviderName): provider is "lmstudio" | "bedrock" {
-  return provider === "lmstudio" || provider === "bedrock";
+function buildCodexAppServerPlaceholderMetadata(modelId: string): ResolvedModelMetadata {
+  const fallback = defaultSupportedModel("codex-cli");
+  return {
+    id: modelId,
+    provider: "codex-cli",
+    displayName: modelId,
+    knowledgeCutoff: "Unknown",
+    supportsImageInput: false,
+    promptTemplate: fallback.promptTemplate,
+    providerOptionsDefaults: { ...fallback.providerOptionsDefaults },
+    source: "dynamic",
+  };
+}
+
+export function isDynamicModelProvider(
+  provider: ProviderName,
+): provider is "lmstudio" | "bedrock" | "codex-cli" {
+  return provider === "lmstudio" || provider === "bedrock" || provider === "codex-cli";
 }
 
 export function normalizeModelIdForProvider(
@@ -46,6 +62,9 @@ export function normalizeModelIdForProvider(
   }
   if (provider === "lmstudio" || provider === "bedrock") {
     return trimmed;
+  }
+  if (provider === "codex-cli") {
+    return getSupportedModel(provider, trimmed)?.id ?? trimmed;
   }
   return assertSupportedModel(provider, trimmed, source).id;
 }
@@ -65,6 +84,24 @@ export function getResolvedModelMetadataSync(
       }) ?? buildBedrockPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source))
     );
   }
+  if (provider === "codex-cli") {
+    const supported = getSupportedModel(provider, modelId);
+    if (supported) {
+      return {
+        id: supported.id,
+        provider: supported.provider,
+        displayName: supported.displayName,
+        knowledgeCutoff: supported.knowledgeCutoff,
+        supportsImageInput: supported.supportsImageInput,
+        promptTemplate: supported.promptTemplate,
+        providerOptionsDefaults: { ...supported.providerOptionsDefaults },
+        source: "static",
+      };
+    }
+    return buildCodexAppServerPlaceholderMetadata(
+      normalizeModelIdForProvider(provider, modelId, source),
+    );
+  }
   return toResolvedStaticModel(provider, modelId, source);
 }
 
@@ -81,6 +118,10 @@ export async function resolveModelMetadata(
     log?: (line: string) => void;
   } = {},
 ): Promise<ResolvedModelMetadata> {
+  if (provider === "codex-cli") {
+    return getResolvedModelMetadataSync(provider, modelId, opts.source);
+  }
+
   if (provider !== "lmstudio" && provider !== "bedrock") {
     return toResolvedStaticModel(provider, modelId, opts.source);
   }
@@ -151,6 +192,9 @@ export function getKnownResolvedModelMetadata(
   }
   if (provider === "bedrock") {
     return getKnownBedrockResolvedModelMetadataSync({ modelId });
+  }
+  if (provider === "codex-cli") {
+    return getResolvedModelMetadataSync(provider, modelId);
   }
   const model = getSupportedModel(provider, modelId);
   if (!model) return null;

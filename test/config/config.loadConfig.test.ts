@@ -525,6 +525,28 @@ describe("loadConfig", () => {
     expect(cfg.preferredChildModelRef).toBe("codex-cli:gpt-5.4");
   });
 
+  test("unknown Codex app-server model IDs load without static registry entries", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      provider: "codex-cli",
+      model: "future-model",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+    const model = getModel(cfg) as { modelId: string; provider: string };
+
+    expect(cfg.provider).toBe("codex-cli");
+    expect(cfg.model).toBe("future-model");
+    expect(model.modelId).toBe("future-model");
+    expect(model.provider).toBe("codex-app-server");
+  });
+
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {
     const { cwd, home } = await makeTmpDirs();
     const customDir = path.join(os.tmpdir(), "custom-working-dir");

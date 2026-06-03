@@ -433,6 +433,7 @@ describe("providers/connectionCatalog", () => {
           id: "future-model",
           model: "future-model",
           displayName: "Future Model",
+          supportsImageInput: true,
           isDefault: false,
         },
       ],
@@ -445,13 +446,27 @@ describe("providers/connectionCatalog", () => {
       "gpt-5.4",
       "gpt-5.4-mini",
       "gpt-5.3-codex-spark",
+      "gpt-5.3-codex",
+      "future-model",
     ]);
     expect(codex?.models.map((model) => model.displayName)).toEqual([
       "GPT-5.5 from app-server",
       "GPT-5.4 from app-server",
       "GPT-5.4 Mini from app-server",
       "GPT-5.3 Codex Spark from app-server",
+      "Unsupported alias",
+      "Future Model",
     ]);
+    expect(codex?.models.find((model) => model.id === "gpt-5.4")).toMatchObject({
+      knowledgeCutoff: "August 31, 2025",
+      supportsImageInput: true,
+    });
+    expect(codex?.models.find((model) => model.id === "future-model")).toEqual({
+      id: "future-model",
+      displayName: "Future Model",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: true,
+    });
     expect(payload.connected).toContain("codex-cli");
   });
 

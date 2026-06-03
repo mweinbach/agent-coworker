@@ -227,9 +227,6 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               if (!threadId || !startedTurnId) {
                 throw new Error("Codex app-server turn is not ready for steering.");
               }
-              if (steer.expectedTurnId !== startedTurnId) {
-                throw new Error("Codex app-server active turn mismatch.");
-              }
               const steerInput = buildCodexTurnInput(
                 [{ role: "user", content: steer.content ?? steer.text }],
                 { resumedThread: true },

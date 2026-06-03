@@ -921,6 +921,10 @@ Returned in `server_hello` and `config_updated`:
 }
 ```
 
+For `codex-cli`, a connected Codex app-server account uses live `model/list` results for
+`models` and `defaultModel`. Models known to Cowork's bundled registry are enriched with static
+metadata; newly available app-server model ids may appear with conservative fallback metadata.
+
 ### ProviderAuthMethod
 
 ```json

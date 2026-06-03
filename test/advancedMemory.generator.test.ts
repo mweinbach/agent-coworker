@@ -133,6 +133,47 @@ describe("MemoryGenerator", () => {
     });
   });
 
+  test("falls back to the canonical preferred child model ref for generation", async () => {
+    let runtimeConfig: AgentConfig | null = null;
+    const fakeCreateRuntime = ((config: AgentConfig) => {
+      runtimeConfig = config;
+      return {
+        name: "fake" as const,
+        runTurn: async (params: any) => {
+          await params.tools.finish.execute({});
+          return { text: "", responseMessages: [] };
+        },
+      };
+    }) as unknown as typeof import("../src/runtime").createRuntime;
+
+    const generator = new MemoryGenerator({
+      createRuntime: fakeCreateRuntime,
+      loadGeneratorPrompt: async () => "GENERATOR PROMPT",
+    });
+
+    const result = await generator.run({
+      config: {
+        ...baseConfig(),
+        provider: "openai",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        preferredChildModelRef: "anthropic:claude-opus-4-8",
+        childModelRoutingMode: "cross-provider-allowlist",
+        allowedChildModelRefs: ["anthropic:claude-opus-4-8"],
+      },
+      sessionId: "sess-42",
+      deltaMessages: [{ role: "user", content: "remember to do X" }] as ModelMessage[],
+      folder: "proj",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runtimeConfig).toMatchObject({
+      provider: "anthropic",
+      runtime: "pi",
+      model: "claude-opus-4-8",
+    });
+  });
+
   test("consolidates a memory folder with index reads and stale-memory deletion", async () => {
     let captured: { tools: Record<string, any>; system: string } | null = null;
     let runtimeConfig: AgentConfig | null = null;

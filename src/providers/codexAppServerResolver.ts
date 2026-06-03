@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 type CodexAppServerSource = "override" | "system" | "managed";
@@ -21,10 +20,8 @@ export type CodexAppServerInstallStatus = {
   command?: string;
   args?: string[];
   version?: string;
-  latestVersion?: string;
   pinnedVersion?: string;
   pinMatchesCurrent?: boolean;
-  updateAvailable?: boolean;
   managedPath?: string;
   message: string;
 };
@@ -73,6 +70,7 @@ const CODEX_RELEASES_LATEST_URL = "https://api.github.com/repos/openai/codex/rel
 const CODEX_RELEASE_TAG_URL = "https://api.github.com/repos/openai/codex/releases/tags";
 const CODEX_USER_AGENT = "agent-coworker-codex-app-server-runtime";
 const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+export const CODEX_APP_SERVER_MANAGED_VERSION = "0.136.0";
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
 
 function normalizeBuildArch(arch: string): string {
@@ -117,7 +115,7 @@ function normalizeCodexReleaseVersion(tagName: string): string {
 function normalizeCodexVersionInput(version: string): string {
   const normalized = normalizeCodexReleaseVersion(version.trim());
   if (!CODEX_VERSION_PATTERN.test(normalized)) {
-    throw new Error("Codex app-server version must look like 0.129.0.");
+    throw new Error("Codex app-server version must look like 0.136.0.");
   }
   return normalized;
 }
@@ -128,10 +126,6 @@ function codexReleaseTag(version: string): string {
 
 function managedRoot(homeDir: string): string {
   return path.join(homeDir, ".cowork", "codex-app-server");
-}
-
-function globalConfigPath(homeDir: string): string {
-  return path.join(homeDir, ".cowork", "config", "config.json");
 }
 
 function managedExecutablePath(homeDir: string, version: string, target: BuildTarget): string {
@@ -276,77 +270,6 @@ async function readVersionFile(executablePath: string): Promise<string | undefin
   } catch {
     return undefined;
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function readGlobalConfigObject(filePath: string): Promise<Record<string, unknown>> {
-  const raw = await fs.readFile(filePath, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
-  return isPlainObject(parsed) ? parsed : {};
-}
-
-async function loadGlobalConfigForRead(filePath: string): Promise<Record<string, unknown>> {
-  try {
-    return await readGlobalConfigObject(filePath);
-  } catch {
-    return {};
-  }
-}
-
-async function loadGlobalConfigForWrite(filePath: string): Promise<Record<string, unknown>> {
-  try {
-    return await readGlobalConfigObject(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return {};
-    throw error;
-  }
-}
-
-function versionPinFromConfig(config: Record<string, unknown>): string | undefined {
-  const section = config.codexAppServer;
-  if (!isPlainObject(section) || typeof section.versionPin !== "string") return undefined;
-  try {
-    return normalizeCodexVersionInput(section.versionPin);
-  } catch {
-    return undefined;
-  }
-}
-
-async function readCodexAppServerVersionPin(
-  overrides: CodexAppServerResolverOverrides = {},
-): Promise<string | undefined> {
-  const homeDir = overrides.homeDir ?? resolveAuthHomeDir();
-  return versionPinFromConfig(await loadGlobalConfigForRead(globalConfigPath(homeDir)));
-}
-
-async function writeCodexAppServerVersionPin(
-  version: string | undefined,
-  overrides: CodexAppServerResolverOverrides = {},
-): Promise<string | undefined> {
-  const homeDir = overrides.homeDir ?? resolveAuthHomeDir();
-  const configPath = globalConfigPath(homeDir);
-  const next = await loadGlobalConfigForWrite(configPath);
-  const currentSection = isPlainObject(next.codexAppServer) ? { ...next.codexAppServer } : {};
-  const normalizedVersion = version ? normalizeCodexVersionInput(version) : undefined;
-
-  if (normalizedVersion) {
-    currentSection.versionPin = normalizedVersion;
-    next.codexAppServer = currentSection;
-  } else {
-    delete currentSection.versionPin;
-    if (Object.keys(currentSection).length > 0) {
-      next.codexAppServer = currentSection;
-    } else {
-      delete next.codexAppServer;
-    }
-  }
-
-  await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
-  await writeTextFileAtomic(configPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  return normalizedVersion;
 }
 
 function splitArgs(raw: string): string[] {
@@ -711,99 +634,67 @@ export async function resolveCodexAppServerCommand(
 ): Promise<CodexAppServerCommand> {
   const override = await resolveOverrideCommand(overrides);
   if (override) return override;
-  const pinnedVersion = await readCodexAppServerVersionPin(overrides);
-  if (pinnedVersion) {
-    try {
-      return await resolvePinnedManagedCommand(pinnedVersion, overrides);
-    } catch (error) {
-      const system = await resolveSystemCommand(overrides);
-      if (system) return system;
-      throw error;
-    }
-  }
-  const managed = await resolveManagedCommand(overrides);
-  if (managed) return managed;
-  try {
-    return await installCodexAppServer({}, overrides);
-  } catch (error) {
-    const system = await resolveSystemCommand(overrides);
-    if (system) return system;
-    throw error;
-  }
+  return await resolvePinnedManagedCommand(CODEX_APP_SERVER_MANAGED_VERSION, overrides);
 }
 
 export async function getCodexAppServerInstallStatus(
-  opts: { checkLatest?: boolean } = {},
+  _opts: { checkLatest?: boolean } = {},
   overrides: CodexAppServerResolverOverrides = {},
 ): Promise<CodexAppServerInstallStatus> {
-  const latest = opts.checkLatest ? await fetchCodexRelease({}, overrides).catch(() => null) : null;
-  const pinnedVersion = await readCodexAppServerVersionPin(overrides);
+  const pinnedVersion = CODEX_APP_SERVER_MANAGED_VERSION;
   const command =
     (await resolveOverrideCommand(overrides)) ??
-    (pinnedVersion
-      ? await resolveInstalledManagedVersionCommand(pinnedVersion, overrides)
-      : ((await resolveManagedCommand(overrides)) ?? (await resolveSystemCommand(overrides))));
+    (await resolveInstalledManagedVersionCommand(pinnedVersion, overrides));
   if (!command) {
     return {
       available: false,
       source: "missing",
-      latestVersion: latest?.version,
-      ...(pinnedVersion ? { pinnedVersion, pinMatchesCurrent: false } : {}),
-      message: pinnedVersion
-        ? `Pinned Cowork-managed Codex app-server ${pinnedVersion} is not installed. Cowork will download it before first use.`
-        : "Codex app-server is not installed. Cowork will download it before first use.",
+      pinnedVersion,
+      pinMatchesCurrent: false,
+      message: `Cowork-managed Codex app-server ${pinnedVersion} is not installed. Cowork will download it before first use.`,
     };
   }
-  const updateAvailable = compareVersions(command.version, latest?.version) < 0;
-  const pinMatchesCurrent = pinnedVersion
-    ? command.source === "managed" && command.version === pinnedVersion
-    : undefined;
+  const pinMatchesCurrent = command.source === "managed" && command.version === pinnedVersion;
   return {
     available: true,
     source: command.source,
     command: command.command,
     args: command.args,
     version: command.version,
-    latestVersion: latest?.version,
-    ...(pinnedVersion ? { pinnedVersion, pinMatchesCurrent } : {}),
-    updateAvailable,
+    pinnedVersion,
+    pinMatchesCurrent,
     ...(command.source === "managed" ? { managedPath: command.command } : {}),
     message:
       command.source === "system"
         ? "Using the Codex installation on PATH."
         : command.source === "managed"
-          ? pinnedVersion
-            ? `Using pinned Cowork-managed Codex app-server ${pinnedVersion}.`
-            : "Using Cowork-managed Codex app-server."
+          ? `Using Cowork-managed Codex app-server ${pinnedVersion}.`
           : "Using explicit Codex app-server override.",
   };
 }
 
 export async function updateManagedCodexAppServer(
-  opts: { version?: string; force?: boolean; pin?: boolean; clearPin?: boolean } = {},
+  opts: { force?: boolean } = {},
   overrides: CodexAppServerResolverOverrides = {},
 ): Promise<CodexAppServerInstallStatus> {
-  if (opts.clearPin) {
-    await writeCodexAppServerVersionPin(undefined, overrides);
-    return {
-      ...(await getCodexAppServerInstallStatus({ checkLatest: true }, overrides)),
-      message: "Cleared the pinned Cowork-managed Codex app-server version.",
-    };
-  }
-
   const command = await installCodexAppServer(
-    { ...(opts.version ? { version: opts.version } : {}), force: opts.force },
+    { version: CODEX_APP_SERVER_MANAGED_VERSION, force: opts.force },
     overrides,
   );
-  if (opts.pin) {
-    await writeCodexAppServerVersionPin(command.version, overrides);
-  }
-  const status = await getCodexAppServerInstallStatus({ checkLatest: true }, overrides);
-  const pinnedVersion = await readCodexAppServerVersionPin(overrides);
-  const pinnedSuffix = opts.pin && pinnedVersion ? " and pinned it" : "";
+  const pinMatchesCurrent =
+    command.source === "managed" && command.version === CODEX_APP_SERVER_MANAGED_VERSION;
   return {
-    ...status,
-    message: `Installed Cowork-managed Codex app-server ${command.version ?? "latest"}${pinnedSuffix}.`,
+    available: true,
+    source: command.source,
+    command: command.command,
+    args: command.args,
+    version: command.version,
+    pinnedVersion: CODEX_APP_SERVER_MANAGED_VERSION,
+    pinMatchesCurrent,
+    ...(command.source === "managed" ? { managedPath: command.command } : {}),
+    message: `Installed Cowork-managed Codex app-server ${
+      command.version ?? CODEX_APP_SERVER_MANAGED_VERSION
+    }.`,
   };
 }
 
@@ -825,8 +716,6 @@ export const __internal = {
   managedExecutablePath,
   managedCurrentPath,
   installCodexAppServer,
-  readCodexAppServerVersionPin,
-  writeCodexAppServerVersionPin,
   resolveInstalledManagedVersionCommand,
   resolvePinnedManagedCommand,
   resolveSystemCodexCandidates,

@@ -28,6 +28,7 @@ export class TurnExecutionManager {
       metadataManager: SessionMetadataManager;
       backupController: SessionBackupController;
       flushPendingExternalSkillRefresh: () => Promise<void>;
+      triggerMemoryGeneration?: () => void;
       /**
        * Lazily yields the per-session A2UI surface manager. Returns a
        * structured result per envelope. Present even when the A2UI feature
@@ -72,6 +73,7 @@ export class TurnExecutionManager {
       buildUserMessageContent: attachmentHelpers.buildUserMessageContent,
       validateUploadedFileAttachments: attachmentHelpers.validateUploadedFileAttachments,
       getA2uiSurfaceManager: this.deps.getA2uiSurfaceManager,
+      triggerMemoryGeneration: this.deps.triggerMemoryGeneration,
     });
   }
 

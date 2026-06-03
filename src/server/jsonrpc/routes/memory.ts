@@ -63,5 +63,67 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       context.jsonrpc.sendResult(ws, message.id, { event });
     },
+
+    "cowork/memory/advanced/list": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const folder = typeof params.folder === "string" ? params.folder : undefined;
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.memory.listAdvanced(folder),
+        (event): event is Extract<SessionEvent, { type: "advanced_memory_list" }> =>
+          event.type === "advanced_memory_list",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
+    "cowork/memory/advanced/upsert": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const folder = typeof params.folder === "string" ? params.folder : undefined;
+      const slug =
+        typeof params.slug === "string" && params.slug.trim() ? params.slug.trim() : undefined;
+      const name = typeof params.name === "string" ? params.name : "";
+      const description = typeof params.description === "string" ? params.description : "";
+      const type = typeof params.type === "string" ? params.type : undefined;
+      const body = typeof params.body === "string" ? params.body : "";
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) =>
+          await runtime.memory.upsertAdvanced(folder, { slug, name, description, type, body }),
+        (event): event is Extract<SessionEvent, { type: "advanced_memory_list" }> =>
+          event.type === "advanced_memory_list",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
+    "cowork/memory/advanced/delete": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const folder = typeof params.folder === "string" ? params.folder : undefined;
+      const slug = typeof params.slug === "string" ? params.slug.trim() : "";
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.memory.deleteAdvanced(folder, slug),
+        (event): event is Extract<SessionEvent, { type: "advanced_memory_list" }> =>
+          event.type === "advanced_memory_list",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
   };
 }

@@ -285,10 +285,19 @@ Currently implemented `cowork/*` methods include:
   - `cowork/import/list`
   - `cowork/import/plugin`
   - `cowork/import/skill`
-- memory controls
+- memory controls (legacy SQLite hot-cache memory)
   - `cowork/memory/list`
   - `cowork/memory/upsert`
   - `cowork/memory/delete`
+- advanced memory controls (file-based, agent-driven memory under `~/.cowork/memories/<folder>/`;
+  active when `advancedMemory` is enabled). Each result returns an `advanced_memory_list` event with
+  the resolved `folder`, the list of `folders`, and the folder's `memories` (frontmatter-parsed
+  `{ slug, name, description, type, originSessionId?, body, updatedAt }`).
+  - `cowork/memory/advanced/list` — params `{ cwd?, folder? }`; lists folders + a folder's memories.
+  - `cowork/memory/advanced/upsert` — params `{ cwd?, folder?, slug?, name, description, type?, body }`;
+    creates/overwrites a memory and regenerates the folder's `MEMORY.md` index.
+  - `cowork/memory/advanced/delete` — params `{ cwd?, folder?, slug }`; removes a memory and
+    regenerates the index.
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`

@@ -578,6 +578,28 @@ const memoryListEventSchema = z
   })
   .passthrough();
 
+const advancedMemoryEntrySchema = z
+  .object({
+    slug: z.string(),
+    name: z.string(),
+    description: z.string(),
+    type: z.string(),
+    originSessionId: z.string().optional(),
+    body: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
+const advancedMemoryListEventSchema = z
+  .object({
+    type: z.literal("advanced_memory_list"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    folder: z.string(),
+    folders: z.array(z.string()),
+    memories: z.array(advancedMemoryEntrySchema),
+  })
+  .passthrough();
+
 const skillSourceSchema = z.enum(["project", "user", "global", "built-in"]);
 const skillInstallStateSchema = z.enum(["effective", "shadowed", "disabled", "invalid"]);
 const skillInstallOriginKindSchema = z.enum([
@@ -1496,6 +1518,33 @@ const memoryDeleteRequestSchema = z
   })
   .strict();
 
+const advancedMemoryListRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryUpsertRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: optionalNonEmptyTrimmedStringSchema,
+    slug: z.string().optional(),
+    name: z.string(),
+    description: z.string(),
+    type: z.string().optional(),
+    body: z.string(),
+  })
+  .strict();
+
+const advancedMemoryDeleteRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: optionalNonEmptyTrimmedStringSchema,
+    slug: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const workspaceBackupsReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1640,6 +1689,9 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
+  "cowork/memory/advanced/list": advancedMemoryListRequestSchema,
+  "cowork/memory/advanced/upsert": advancedMemoryUpsertRequestSchema,
+  "cowork/memory/advanced/delete": advancedMemoryDeleteRequestSchema,
   "cowork/backups/workspace/read": workspaceBackupsReadRequestSchema,
   "cowork/backups/workspace/delta/read": workspaceBackupsDeltaReadRequestSchema,
   "cowork/backups/workspace/checkpoint": workspaceBackupsCheckpointRequestSchema,
@@ -1718,6 +1770,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/memory/list": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": sessionEventEnvelope(memoryListEventSchema),
+  "cowork/memory/advanced/list": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/upsert": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/delete": sessionEventEnvelope(advancedMemoryListEventSchema),
   "cowork/backups/workspace/read": sessionEventEnvelope(workspaceBackupsEventSchema),
   "cowork/backups/workspace/delta/read": sessionEventEnvelope(workspaceBackupDeltaEventSchema),
   "cowork/backups/workspace/checkpoint": sessionEventEnvelope(workspaceBackupsEventSchema),

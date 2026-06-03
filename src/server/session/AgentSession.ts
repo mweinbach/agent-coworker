@@ -4,6 +4,12 @@ import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
 import { closeMcpServersForSession } from "../../mcp";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
+import { MemoryGenerator } from "../../advancedMemory/MemoryGenerator";
+import {
+  AdvancedMemoryStore,
+  resolveMemoriesDir,
+  resolveMemoryFolderName,
+} from "../../advancedMemory/store";
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
@@ -136,6 +142,8 @@ export class AgentSession {
   private readonly backupController: SessionBackupController;
   private pendingConfigMutation: Promise<void> = Promise.resolve();
   private readonly memoryStore: MemoryStore;
+  private readonly advancedMemoryStore: AdvancedMemoryStore;
+  private readonly memoryGenerator: MemoryGenerator;
   private systemPromptLoadPromise: Promise<boolean> | null = null;
   private skillCatalogMtimeSnapshot: string | null = null;
   private bufferDisconnectedEvents = false;
@@ -292,6 +300,7 @@ export class AgentSession {
       sessionBackupInit: null,
       backupOperationQueue: Promise.resolve(),
       lastAutoCheckpointAt: 0,
+      lastMemoryGeneratedIndex: seededMessages.length,
       costTracker: null,
       turnReferenceInjectionCounter: 0,
     };
@@ -300,6 +309,9 @@ export class AgentSession {
       opts.config.projectMemoryDbPath ?? `${opts.config.projectCoworkDir}/memory.sqlite`,
       `${opts.config.userCoworkDir}/memory.sqlite`,
     );
+
+    this.advancedMemoryStore = new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
+    this.memoryGenerator = new MemoryGenerator();
 
     this.deps = {
       connectProviderImpl: opts.connectProviderImpl ?? lazyConnectProvider,
@@ -492,6 +504,7 @@ export class AgentSession {
       sendUserMessage: (text, clientMessageId, displayText) =>
         this.sendUserMessage(text, clientMessageId, displayText),
       flushPendingExternalSkillRefresh: async () => await this.flushPendingExternalSkillRefresh(),
+      triggerMemoryGeneration: () => this.triggerMemoryGeneration(),
       getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
       guardBusy: () => this.guardBusy(),
@@ -989,6 +1002,96 @@ export class AgentSession {
     }
     await this.emitMemories();
     await this.refreshSystemPromptWithSkills("session.memory_delete");
+  }
+
+  private resolveAdvancedMemoryFolder(folder?: string): string {
+    return folder?.trim() || resolveMemoryFolderName(this.state.config);
+  }
+
+  async emitAdvancedMemories(folder?: string) {
+    try {
+      const resolvedFolder = this.resolveAdvancedMemoryFolder(folder);
+      const [folders, memories] = await Promise.all([
+        this.advancedMemoryStore.listFolders(),
+        this.advancedMemoryStore.listMemories(resolvedFolder),
+      ]);
+      this.context.emit({
+        type: "advanced_memory_list",
+        sessionId: this.id,
+        folder: resolvedFolder,
+        folders,
+        memories,
+      });
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list advanced memories: ${String(err)}`,
+      );
+    }
+  }
+
+  async upsertAdvancedMemory(
+    folder: string | undefined,
+    input: { slug?: string; name: string; description: string; type?: string; body: string },
+  ) {
+    const resolvedFolder = this.resolveAdvancedMemoryFolder(folder);
+    try {
+      await this.advancedMemoryStore.writeMemory(resolvedFolder, {
+        ...input,
+        originSessionId: input.slug ? undefined : this.id,
+      });
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to upsert advanced memory: ${String(err)}`,
+      );
+      return;
+    }
+    await this.emitAdvancedMemories(resolvedFolder);
+    await this.refreshSystemPromptWithSkills("session.advanced_memory_upsert");
+  }
+
+  async deleteAdvancedMemory(folder: string | undefined, slug: string) {
+    const resolvedFolder = this.resolveAdvancedMemoryFolder(folder);
+    try {
+      await this.advancedMemoryStore.deleteMemory(resolvedFolder, slug);
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to delete advanced memory: ${String(err)}`,
+      );
+      return;
+    }
+    await this.emitAdvancedMemories(resolvedFolder);
+    await this.refreshSystemPromptWithSkills("session.advanced_memory_delete");
+  }
+
+  /**
+   * Fire-and-forget advanced memory generation for the just-completed turn.
+   * Consumes the slice of `allMessages` since the last generation, advances the
+   * marker, and runs the headless generator. No-op unless advanced memory is on.
+   */
+  triggerMemoryGeneration(): void {
+    if (!this.state.config.advancedMemory) return;
+    const start = this.state.lastMemoryGeneratedIndex;
+    const end = this.state.allMessages.length;
+    if (end <= start) return;
+    const deltaMessages = this.state.allMessages.slice(start, end);
+    this.state.lastMemoryGeneratedIndex = end;
+    void this.memoryGenerator
+      .run({
+        config: this.state.config,
+        sessionId: this.id,
+        deltaMessages,
+        log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
+        abortSignal: undefined,
+      })
+      .catch(() => {
+        // Generation failures must never affect the user-facing turn.
+      });
   }
 
   private async ensureSystemPromptReady(): Promise<boolean> {

@@ -145,6 +145,13 @@ export type SessionRuntimeState = {
   sessionBackupInit: Promise<void> | null;
   backupOperationQueue: Promise<void>;
   lastAutoCheckpointAt: number;
+  /**
+   * Index into `allMessages` marking how far advanced-memory generation has
+   * consumed. After each completed turn the generator processes the slice from
+   * here to the end, then advances this marker. Reading from the untrimmed
+   * `allMessages` keeps generation correct across runtime-view trimming.
+   */
+  lastMemoryGeneratedIndex: number;
   costTracker: SessionCostTracker | null;
   /**
    * Monotonic counter for synthetic referenced-skill tool calls within the active

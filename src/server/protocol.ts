@@ -345,6 +345,21 @@ export type SessionEvent =
         updatedAt: string;
       }>;
     }
+  | {
+      type: "advanced_memory_list";
+      sessionId: string;
+      folder: string;
+      folders: string[];
+      memories: Array<{
+        slug: string;
+        name: string;
+        description: string;
+        type: string;
+        originSessionId?: string;
+        body: string;
+        updatedAt: string;
+      }>;
+    }
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }

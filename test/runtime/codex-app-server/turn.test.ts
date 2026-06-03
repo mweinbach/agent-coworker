@@ -24,6 +24,56 @@ type TestSteerHandler = (input: {
 }) => Promise<void>;
 
 describe("codex app-server turn lifecycle", () => {
+  test.serial(
+    "preserves diagnostics and continuation state when app-server disconnects mid-turn",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-disconnect-"));
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = "disconnect-mid-turn";
+
+      const runtime = createRuntime(makeConfig(dir));
+      let capturedError: unknown;
+      try {
+        await runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Say hi" }],
+          tools: {},
+          maxSteps: 1,
+        });
+      } catch (error) {
+        capturedError = error;
+      }
+
+      expect(capturedError).toBeInstanceOf(Error);
+      const error = capturedError as Error & {
+        usage?: unknown;
+        responseMessages?: unknown;
+        providerState?: unknown;
+      };
+      expect(error.message).toContain("Codex client disconnected during execution");
+      expect(error.message).toContain("code=42");
+      expect(error.message).toContain("stderrBytes=321");
+      expect(error.message).toContain("Codex app-server source=override");
+      expect(error.usage).toEqual({
+        promptTokens: 80,
+        completionTokens: 19,
+        totalTokens: 99,
+        cachedPromptTokens: 10,
+        reasoningOutputTokens: 3,
+      });
+      expect(error.responseMessages).toEqual([
+        { role: "assistant", content: "partial before crash" },
+      ]);
+      expect(error.providerState).toEqual(
+        expect.objectContaining({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          threadId: "thread_1",
+        }),
+      );
+    },
+  );
+
   test.serial("registers an active steer handler that sends turn/steer to app-server", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-steer-"));
     const script = await writeMockAppServer(dir);

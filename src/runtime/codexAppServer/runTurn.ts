@@ -7,7 +7,7 @@ import {
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { isCodexAppServerContinuationState } from "../../shared/providerContinuation";
 import { asRecord, asString } from "../../shared/recordParsing";
-import type { LlmRuntime, RuntimeRunTurnResult, RuntimeUsage } from "../types";
+import type { LlmRuntime, PartialTurnError, RuntimeRunTurnResult, RuntimeUsage } from "../types";
 import { startCodexAppServer } from "./clientLifecycle";
 import {
   codexApprovalPolicy,
@@ -67,6 +67,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
     runTurn: async (params): Promise<RuntimeRunTurnResult> => {
       let threadId: string | undefined;
       let startedTurnId: string | undefined;
+      let effectiveModelForContinuation: string | undefined;
       const activeTarget: ActiveCodexTurnTarget = {
         threadId: () => threadId,
         turnId: () => startedTurnId,
@@ -88,6 +89,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           params.config.model,
           params.log,
         );
+        effectiveModelForContinuation = effectiveModel;
         params.abortSignal?.throwIfAborted();
         const currentState = isCodexAppServerContinuationState(params.providerState)
           ? params.providerState
@@ -282,6 +284,20 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         }
       } catch (error) {
         const contextualError = withCodexAppServerDiagnostics(error, client.command);
+        if (threadId && effectiveModelForContinuation) {
+          (contextualError as PartialTurnError).providerState = {
+            provider: CODEX_APP_SERVER_PROVIDER,
+            model: effectiveModelForContinuation,
+            threadId,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        const partialText = notificationRouter?.assistantText().trim();
+        if (partialText) {
+          (contextualError as PartialTurnError).responseMessages = [
+            { role: "assistant", content: partialText },
+          ];
+        }
         const errorWithUsage = attachUsageToError(contextualError, usage);
         if (params.abortSignal?.aborted) {
           await params.onModelAbort?.();

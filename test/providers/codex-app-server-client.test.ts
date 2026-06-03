@@ -5,6 +5,10 @@ import path from "node:path";
 
 import {
   __internal,
+  type CodexAppServerClient,
+  type CodexAppServerCloseInfo,
+  closePooledCodexAppServerClients,
+  getPooledCodexAppServerClient,
   startCodexAppServerClient,
   UNHANDLED_CODEX_APP_SERVER_REQUEST,
 } from "../../src/providers/codexAppServerClient";
@@ -32,7 +36,9 @@ async function waitForFile(filePath: string): Promise<void> {
 }
 
 describe("codex app-server client", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closePooledCodexAppServerClients();
+    __internal.setClientFactoryForTests(undefined);
     if (originalHome === undefined) {
       delete process.env.HOME;
     } else {
@@ -53,6 +59,66 @@ describe("codex app-server client", () => {
     } else {
       process.env.CODEX_HOME = originalCodexHome;
     }
+  });
+
+  test("evicts pooled clients as soon as the app-server process exits", async () => {
+    const home = await makeTmpHome();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-client-pool-"));
+    process.env.HOME = home;
+
+    let starts = 0;
+    const clients: CodexAppServerClient[] = [];
+    const makeClient = (): CodexAppServerClient => {
+      starts += 1;
+      const closeListeners = new Set<
+        (code: number | null, signal: NodeJS.Signals | null) => void
+      >();
+      let closed = false;
+      let closeInfo: CodexAppServerCloseInfo | null = null;
+      const closeWithInfo = (code: number | null, signal: NodeJS.Signals | null) => {
+        closed = true;
+        closeInfo = { code, signal, stderrBytes: 0, closedAt: "2026-06-03T18:18:05.000Z" };
+        for (const listener of closeListeners) listener(code, signal);
+      };
+      const client: CodexAppServerClient = {
+        command: { command: "mock-codex-app-server", args: [], source: "override" },
+        isClosed: () => closed,
+        getLastCloseInfo: () => closeInfo,
+        request: async () => ({ userAgent: "mock" }),
+        notify: () => {},
+        interruptTurn: async () => {},
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+        onJsonRpcMessage: () => () => {},
+        onClose: (listener) => {
+          closeListeners.add(listener);
+          return () => closeListeners.delete(listener);
+        },
+        close: async () => closeWithInfo(null, "SIGTERM"),
+      };
+      clients.push(client);
+      return client;
+    };
+    __internal.setClientFactoryForTests(async () => makeClient());
+    const logLines: string[] = [];
+    const first = await getPooledCodexAppServerClient({
+      cwd: dir,
+      log: (line) => logLines.push(line),
+    });
+    await first.close();
+    expect(first.isClosed()).toBe(true);
+    expect(first.getLastCloseInfo?.()).toEqual(
+      expect.objectContaining({ code: null, signal: "SIGTERM", stderrBytes: 0 }),
+    );
+
+    const second = await getPooledCodexAppServerClient({
+      cwd: dir,
+      log: (line) => logLines.push(line),
+    });
+    expect(second).not.toBe(first);
+    expect(starts).toBe(2);
+    expect(clients).toHaveLength(2);
+    expect(logLines.some((line) => line.includes("pooled client closed"))).toBe(true);
   });
 
   test("starts app-server with Cowork-owned CODEX_HOME", async () => {

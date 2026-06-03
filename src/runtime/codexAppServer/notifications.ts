@@ -1,5 +1,6 @@
 import type {
   CodexAppServerClient,
+  CodexAppServerCloseInfo,
   CodexAppServerJsonRpcNotification,
 } from "../../providers/codexAppServerClient";
 import { asArray, asRecord, asString } from "../../shared/recordParsing";
@@ -13,6 +14,16 @@ import {
   coworkToolNameFromCodexDynamicName,
   targetsActiveCodexTurn,
 } from "./types";
+
+function formatCloseInfo(info: CodexAppServerCloseInfo | null | undefined): string {
+  if (!info) return "closeInfo=unavailable";
+  return [
+    `code=${info.code ?? "null"}`,
+    `signal=${info.signal ?? "null"}`,
+    `stderrBytes=${info.stderrBytes}`,
+    `closedAt=${info.closedAt}`,
+  ].join(", ");
+}
 
 function fileChangeOutput(value: unknown): unknown {
   const record = asRecord(value);
@@ -229,6 +240,13 @@ export function createCodexTurnNotificationRouter(
     completion.onUsage(pendingUsage);
   };
 
+  const flushOnlyPendingUsage = () => {
+    if (pendingUsageByTurnId.size !== 1) return;
+    const [[id, pendingUsage]] = [...pendingUsageByTurnId.entries()];
+    pendingUsageByTurnId.delete(id);
+    completion.onUsage(pendingUsage);
+  };
+
   const settleReject = (error: Error) => {
     if (completionSettled) return;
     completionSettled = true;
@@ -268,7 +286,20 @@ export function createCodexTurnNotificationRouter(
       completion.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
       const disposeClose = client.onClose?.(() => {
-        settleReject(new Error("Codex client disconnected during execution"));
+        const expectedTurnId =
+          typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
+        if (expectedTurnId) {
+          flushPendingUsage(expectedTurnId);
+        } else {
+          flushOnlyPendingUsage();
+        }
+        settleReject(
+          new Error(
+            `Codex client disconnected during execution (${formatCloseInfo(
+              client.getLastCloseInfo?.(),
+            )})`,
+          ),
+        );
       });
 
       completionDisposeExtras = () => {

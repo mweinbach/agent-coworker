@@ -79,6 +79,23 @@ describe("crash reporting wrapper", () => {
     expect(loaderCalls).toBe(0);
   });
 
+  test("sdk load failures report a sanitized detail", async () => {
+    const status = await initCrashReporting({
+      component: "electron-main",
+      enabled: true,
+      dsn: "https://public@sentry.example/1",
+      homeDir: "/Users/alice",
+      loadSdk: async () => {
+        throw new Error("Cannot find module /Users/alice/app.asar/@sentry/electron/main");
+      },
+    });
+
+    expect(status.initialized).toBe(false);
+    expect(status.reason).toBe("sdk_unavailable");
+    expect(status.detail).toContain("Cannot find module [LOCAL_PATH]/app.asar");
+    expect(status.detail).not.toContain("/Users/alice");
+  });
+
   test("enabled mode initializes, captures, and breadcrumbs through the loaded SDK", async () => {
     const fake = createFakeSdk();
     const status = await initCrashReporting({

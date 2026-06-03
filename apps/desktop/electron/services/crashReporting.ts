@@ -121,6 +121,7 @@ export async function initElectronMainCrashReporting(
   writeLocalLog("desktop-main.log", "info", "crash-reporting", "crash reporting status", {
     initialized: status.initialized,
     reason: status.reason,
+    detail: status.detail,
     enabled: status.enabled,
     dsnConfigured: status.dsnConfigured,
   });

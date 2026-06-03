@@ -97,6 +97,7 @@ export type ResolvedCrashReportingConfig = {
 export type CrashReportingStatus = ResolvedCrashReportingConfig & {
   initialized: boolean;
   reason: "enabled" | "disabled" | "not_configured" | "missing_loader" | "sdk_unavailable";
+  detail?: string;
 };
 
 type ScrubContext = {
@@ -209,8 +210,16 @@ function toStatus(
   config: ResolvedCrashReportingConfig,
   initialized: boolean,
   reason: CrashReportingStatus["reason"],
+  detail?: string,
 ): CrashReportingStatus {
-  return { ...config, initialized, reason };
+  return { ...config, initialized, reason, ...(detail ? { detail } : {}) };
+}
+
+function errorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    return scrubString(`${error.name}: ${error.message}`, activeScrubContext);
+  }
+  return scrubString(String(error), activeScrubContext);
 }
 
 function buildScrubContext(context: CrashReportingInitContext): ScrubContext {
@@ -336,10 +345,10 @@ export async function initCrashReporting(
       activeSdk = sdk;
       activeConfig = config;
       return toStatus(config, true, "enabled");
-    } catch {
+    } catch (error) {
       activeSdk = null;
       activeConfig = null;
-      return toStatus(config, false, "sdk_unavailable");
+      return toStatus(config, false, "sdk_unavailable", errorDetail(error));
     } finally {
       initPromise = null;
     }

@@ -42,9 +42,17 @@ export type CodexAppServerJsonRpcRequest = {
   params?: unknown;
 };
 
+export type CodexAppServerCloseInfo = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stderrBytes: number;
+  closedAt: string;
+};
+
 export type CodexAppServerClient = {
   command: CodexAppServerCommand;
   isClosed: () => boolean;
+  getLastCloseInfo?: () => CodexAppServerCloseInfo | null;
   request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
   notify: (method: string, params?: unknown) => void;
   interruptTurn: (params: { threadId: string; turnId?: string }) => Promise<void>;
@@ -121,6 +129,8 @@ export async function startCodexAppServerClient(
   const errorListeners = new Set<(err: Error) => void>();
   let nextId = 1;
   let closed = false;
+  let stderrBytes = 0;
+  let lastCloseInfo: CodexAppServerCloseInfo | null = null;
 
   if (opts.onServerRequest) serverRequestHandlers.add(opts.onServerRequest);
 
@@ -143,6 +153,15 @@ export async function startCodexAppServerClient(
   });
   child.once("exit", (code, signal) => {
     closed = true;
+    lastCloseInfo = {
+      code,
+      signal,
+      stderrBytes,
+      closedAt: new Date().toISOString(),
+    };
+    opts.log?.(
+      `[codex-app-server] process exited code=${code ?? "null"} signal=${signal ?? "null"} stderrBytes=${stderrBytes}`,
+    );
     if (pending.size > 0) {
       const pendingMethods = [...pending.values()].map((request) => request.method).join(", ");
       rejectAll(
@@ -154,8 +173,10 @@ export async function startCodexAppServerClient(
     for (const listener of closeListeners) listener(code, signal);
   });
   child.stderr.on("data", (chunk) => {
-    const text = String(chunk).trim();
-    if (text) opts.log?.(`[codex-app-server:stderr] ${text}`);
+    const text = String(chunk);
+    stderrBytes += Buffer.byteLength(text);
+    const trimmed = text.trim();
+    if (trimmed) opts.log?.(`[codex-app-server:stderr] ${trimmed}`);
   });
 
   const rl = readline.createInterface({ input: child.stdout });
@@ -249,6 +270,7 @@ export async function startCodexAppServerClient(
   return {
     command,
     isClosed: () => closed,
+    getLastCloseInfo: () => lastCloseInfo,
     request,
     notify: (method, params) => {
       write({ method, ...(params !== undefined ? { params } : {}) }, "client_notification");
@@ -434,6 +456,14 @@ export async function getPooledCodexAppServerClient(
     try {
       await client.request("initialize", codexAppServerInitializeParams());
       client.notify("initialized");
+      client.onClose?.((code, signal) => {
+        if (pooledClients.get(key) === created) {
+          pooledClients.delete(key);
+        }
+        opts.log?.(
+          `[codex-app-server] pooled client closed; evicted=true code=${code ?? "null"} signal=${signal ?? "null"}`,
+        );
+      });
       return client;
     } catch (error) {
       await client.close().catch(() => {});

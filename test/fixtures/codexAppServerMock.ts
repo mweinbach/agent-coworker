@@ -78,7 +78,9 @@ export function createMockClient(): CodexAppServerClient {
   const serverRequestHandlers = new Set<
     (request: { id: number; method: string; params?: unknown }) => unknown
   >();
+  const closeListeners = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>();
   let closed = false;
+  let lastCloseInfo: ReturnType<NonNullable<CodexAppServerClient["getLastCloseInfo"]>> = null;
   let nextTurnId = 1;
 
   const emitRaw = (message: CodexAppServerJsonRpcRawMessage) => {
@@ -101,6 +103,16 @@ export function createMockClient(): CodexAppServerClient {
     }
     emitRaw({ direction: "client_response", message: { id, result } });
     return result;
+  };
+  const closeWithInfo = (code: number | null, signal: NodeJS.Signals | null) => {
+    closed = true;
+    lastCloseInfo = {
+      code,
+      signal,
+      stderrBytes: 321,
+      closedAt: "2026-06-03T18:18:05.000Z",
+    };
+    for (const listener of closeListeners) listener(code, signal);
   };
   const capture = async (method: string, params: unknown) => {
     if (!process.env.CODEX_APP_SERVER_CAPTURE_PATH) return;
@@ -381,7 +393,52 @@ export function createMockClient(): CodexAppServerClient {
         });
       }
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
-      if (process.env.CODEX_APP_SERVER_DELAY_COMPLETION !== "1") {
+      if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("disconnect-mid-turn")) {
+        queueMicrotask(() => {
+          sendNotification({
+            method: "item/started",
+            params: {
+              threadId,
+              turnId,
+              item: {
+                type: "agentMessage",
+                id: "item_1",
+                text: "",
+                phase: null,
+                memoryCitation: null,
+              },
+            },
+          });
+          sendNotification({
+            method: "item/agentMessage/delta",
+            params: { threadId, turnId, itemId: "item_1", delta: "partial before crash" },
+          });
+          sendNotification({
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId,
+              turnId,
+              tokenUsage: {
+                total: {
+                  totalTokens: 99,
+                  inputTokens: 80,
+                  cachedInputTokens: 10,
+                  outputTokens: 19,
+                  reasoningOutputTokens: 3,
+                },
+                last: {
+                  totalTokens: 99,
+                  inputTokens: 80,
+                  cachedInputTokens: 10,
+                  outputTokens: 19,
+                  reasoningOutputTokens: 3,
+                },
+              },
+            },
+          });
+          closeWithInfo(42, null);
+        });
+      } else if (process.env.CODEX_APP_SERVER_DELAY_COMPLETION !== "1") {
         queueMicrotask(async () => {
           if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("dynamic-tool-call")) {
             await sendServerRequest("item/tool/call", {
@@ -509,6 +566,7 @@ export function createMockClient(): CodexAppServerClient {
   return {
     command: { command: "mock-codex-app-server", args: [], source: "override" },
     isClosed: () => closed,
+    getLastCloseInfo: () => lastCloseInfo,
     request,
     notify: (method, params) => {
       emitRaw({
@@ -533,8 +591,14 @@ export function createMockClient(): CodexAppServerClient {
       rawListeners.add(listener);
       return () => rawListeners.delete(listener);
     },
+    onClose: (listener) => {
+      closeListeners.add(listener);
+      return () => {
+        closeListeners.delete(listener);
+      };
+    },
     close: async () => {
-      closed = true;
+      closeWithInfo(null, "SIGTERM");
     },
   };
 }

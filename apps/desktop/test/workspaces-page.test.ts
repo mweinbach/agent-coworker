@@ -328,7 +328,7 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Background details");
   });
 
-  test("profile surface reads from the selected target even when settings are shared", async () => {
+  test("profile surface reads from shared profile context when settings are shared", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
     useAppStore.setState((state) => ({
       ...state,
@@ -350,11 +350,11 @@ describe("desktop workspaces page", () => {
           defaultAllowedChildModelRefs: [],
           defaultEnableMcp: true,
           defaultBackupsEnabled: true,
-          userName: "Cowork user",
+          userName: "",
           userProfile: {
-            instructions: "Cowork instructions",
-            work: "Cowork work",
-            details: "Cowork details",
+            instructions: "",
+            work: "",
+            details: "",
           },
           yolo: false,
         },
@@ -375,9 +375,32 @@ describe("desktop workspaces page", () => {
           defaultBackupsEnabled: true,
           userName: "Reports user",
           userProfile: {
-            instructions: "Reports instructions",
-            work: "Reports work",
-            details: "Reports details",
+            instructions: "",
+            work: "",
+            details: "",
+          },
+          yolo: false,
+        },
+        {
+          id: "googleio",
+          name: "GoogleIO",
+          path: "/tmp/googleio",
+          workspaceKind: "project",
+          createdAt: "2026-04-17T00:00:00.000Z",
+          lastOpenedAt: "2026-04-17T00:00:00.000Z",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          userName: "Shared user",
+          userProfile: {
+            instructions: "Shared instructions",
+            work: "Shared work",
+            details: "Shared details",
           },
           yolo: false,
         },
@@ -418,8 +441,10 @@ describe("desktop workspaces page", () => {
       if (!(nameInput instanceof harness.dom.window.HTMLInputElement)) {
         throw new Error("missing user name input");
       }
-      expect(nameInput.value).toBe("Reports user");
-      expect(container.textContent).not.toContain("Cowork instructions");
+      expect(nameInput.value).toBe("Shared user");
+      expect(container.textContent).toContain("Shared work");
+      expect(container.textContent).not.toContain("Reports instructions");
+
       expect(updateWorkspaceDefaults).not.toHaveBeenCalled();
     } finally {
       if (root) {

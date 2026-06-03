@@ -244,6 +244,15 @@ function useSharedUpdateWorkspaceDefaults() {
   return useAppStore((s) => s.updateWorkspaceDefaults);
 }
 
+function hasProfileDetails(workspace: Pick<WorkspaceRecord, "userProfile">): boolean {
+  const profile = normalizeWorkspaceUserProfile(workspace.userProfile);
+  return Boolean(profile.instructions.trim() || profile.work.trim() || profile.details.trim());
+}
+
+function hasProfileContext(workspace: Pick<WorkspaceRecord, "userName" | "userProfile">): boolean {
+  return Boolean(workspace.userName?.trim() || hasProfileDetails(workspace));
+}
+
 type OpenAiCompatibleModelSettingsCardProps = {
   workspace: Pick<WorkspaceRecord, "id" | "providerOptions">;
   updateWorkspaceDefaults: (
@@ -940,16 +949,27 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     [projectWorkspaces, workspaces],
   );
 
-  const targetScopedSettings = surface === "profile";
+  const sharedProfileWorkspace = useMemo(() => {
+    if (surface !== "profile" || perWorkspaceSettings) return null;
+    return (
+      projectWorkspaces.find(hasProfileDetails) ??
+      projectWorkspaces.find(hasProfileContext) ??
+      workspaces.find(hasProfileContext) ??
+      null
+    );
+  }, [perWorkspaceSettings, projectWorkspaces, surface, workspaces]);
   const ws = useMemo(() => {
     const selected = selectedWorkspaceId
       ? (workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null)
       : null;
-    if (targetScopedSettings || perWorkspaceSettings) {
+    if (perWorkspaceSettings) {
       return activeSettingsTarget
         ? (workspaces.find((workspace) => workspace.id === activeSettingsTarget.workspaceId) ??
             null)
         : null;
+    }
+    if (sharedProfileWorkspace) {
+      return sharedProfileWorkspace;
     }
     const selectedProject = selected && !isOneOffChatWorkspace(selected) ? selected : null;
     return selectedProject ?? projectWorkspaces[0] ?? defaultSettingsSourceWorkspaces[0] ?? null;
@@ -959,7 +979,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     perWorkspaceSettings,
     projectWorkspaces,
     selectedWorkspaceId,
-    targetScopedSettings,
+    sharedProfileWorkspace,
     workspaces,
   ]);
   const selectedSettingsTarget = perWorkspaceSettings ? activeSettingsTarget : null;
@@ -1813,7 +1833,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
             <WorkspaceUserProfileCard
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
-              scopedToTarget={targetScopedSettings}
             />
           </div>
 

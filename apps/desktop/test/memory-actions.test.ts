@@ -86,4 +86,77 @@ describe("memory store actions", () => {
     ]);
     expect(state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(false);
   });
+
+  test("advanced memory actions hit the advanced JSON-RPC methods", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const requests: Array<{ method: string; params: any }> = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        return {
+          event: {
+            type: "advanced_memory_list",
+            sessionId: "control-session",
+            folder: "proj",
+            folders: ["proj"],
+            memories: [],
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const actions = createWorkspaceMemoryActions(set as any, get as any);
+    await actions.requestAdvancedMemories(workspaceId, { cwd: "/tmp/proj", folder: "proj" });
+    await actions.upsertAdvancedMemory(
+      workspaceId,
+      { folder: "proj", name: "rule", description: "d", type: "feedback", body: "b" },
+      { cwd: "/tmp/proj" },
+    );
+    await actions.deleteAdvancedMemory(workspaceId, "proj", "rule", { cwd: "/tmp/proj" });
+
+    expect(requests.map((r) => r.method)).toEqual([
+      "cowork/memory/advanced/list",
+      "cowork/memory/advanced/upsert",
+      "cowork/memory/advanced/delete",
+    ]);
+    expect(requests[1]?.params).toMatchObject({ folder: "proj", name: "rule", body: "b" });
+    expect(state.workspaceRuntimeById[workspaceId].advancedMemoriesLoading).toBe(false);
+  });
+
+  test("setWorkspaceAdvancedMemory applies the config patch and updates the workspace", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const requests: Array<{ method: string; params: any }> = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        return {
+          event: {
+            type: "session_config",
+            sessionId: "control-session",
+            config: { advancedMemory: true },
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createWorkspaceMemoryActions(set as any, get as any).setWorkspaceAdvancedMemory(
+      workspaceId,
+      true,
+      { cwd: "/tmp/proj" },
+    );
+
+    expect(requests[0]?.method).toBe("cowork/session/defaults/apply");
+    expect(requests[0]?.params).toMatchObject({ config: { advancedMemory: true } });
+    expect(state.workspaces[0].defaultAdvancedMemory).toBe(true);
+  });
 });

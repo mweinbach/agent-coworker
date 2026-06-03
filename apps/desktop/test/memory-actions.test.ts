@@ -275,7 +275,7 @@ describe("memory store actions", () => {
       advancedMemory: true,
     });
     expect(state.workspaceRuntimeById["ws-other"].controlSessionConfig).toEqual({
-      advancedMemory: false,
+      advancedMemory: true,
     });
   });
 });

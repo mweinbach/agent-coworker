@@ -63,6 +63,25 @@ type RequestJsonRpcControlEventOptions = {
 
 const REQUEST_TIMEOUT_MS = 5_000;
 
+function applyMemorySessionConfigPatch(
+  current: Extract<SessionEvent, { type: "session_config" }>["config"],
+  patch: Partial<
+    Pick<
+      Extract<SessionEvent, { type: "session_config" }>["config"],
+      "advancedMemory" | "memoryGenerationModel"
+    >
+  >,
+): Extract<SessionEvent, { type: "session_config" }>["config"] {
+  const next = { ...current, ...patch };
+  if (!Object.hasOwn(patch, "memoryGenerationModel")) {
+    return next;
+  }
+  if (patch.memoryGenerationModel === undefined) {
+    delete next.memoryGenerationModel;
+  }
+  return next;
+}
+
 export function createControlSocketHelpers(
   deps: ControlSocketDeps,
   options: ControlSocketHelperOptions = {},
@@ -865,6 +884,18 @@ export function createControlSocketHelpers(
       const userProfile = evt.config.userProfile
         ? normalizeWorkspaceUserProfile(evt.config.userProfile)
         : undefined;
+      const memorySessionConfigPatch = {
+        ...(sessionConfigHas("advancedMemory")
+          ? { advancedMemory: evt.config.advancedMemory }
+          : {}),
+        ...(sessionConfigHas("memoryGenerationModel")
+          ? { memoryGenerationModel: evt.config.memoryGenerationModel }
+          : { memoryGenerationModel: undefined }),
+      };
+      const hasMemorySessionConfigPatch =
+        Object.hasOwn(memorySessionConfigPatch, "advancedMemory") ||
+        Object.hasOwn(memorySessionConfigPatch, "memoryGenerationModel");
+
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
           workspace.id === workspaceId
@@ -917,7 +948,21 @@ export function createControlSocketHelpers(
               },
         ),
         workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
+          ...Object.fromEntries(
+            Object.entries(s.workspaceRuntimeById).map(([runtimeWorkspaceId, runtime]) => [
+              runtimeWorkspaceId,
+              {
+                ...runtime,
+                controlSessionConfig:
+                  hasMemorySessionConfigPatch && runtime?.controlSessionConfig
+                    ? applyMemorySessionConfigPatch(
+                        runtime.controlSessionConfig,
+                        memorySessionConfigPatch,
+                      )
+                    : (runtime?.controlSessionConfig ?? null),
+              },
+            ]),
+          ),
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             controlSessionId: evt.sessionId,

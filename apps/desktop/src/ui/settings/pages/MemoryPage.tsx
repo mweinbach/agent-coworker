@@ -152,8 +152,11 @@ export function MemoryPage() {
     setEditingEntry(null);
     setDraft(emptyDraft());
     setDialogOpen(false);
+    // Advanced and legacy memory are mutually exclusive; don't fetch the legacy
+    // SQLite list when the advanced (file-based) view is active.
+    if (advancedMemoryEnabled) return;
     requestMemories(activeTarget);
-  }, [activeTarget, requestMemories]);
+  }, [activeTarget, requestMemories, advancedMemoryEnabled]);
 
   useEffect(() => {
     if (!memoriesLoading) {

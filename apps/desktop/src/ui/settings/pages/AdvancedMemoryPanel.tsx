@@ -49,6 +49,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
   const memories = useMemo(() => runtime?.advancedMemories ?? [], [runtime?.advancedMemories]);
   const folder = runtime?.advancedMemoryActiveFolder ?? null;
   const loading = runtime?.advancedMemoriesLoading ?? false;
+  const controlSessionId = runtime?.controlSessionId ?? null;
 
   const [draft, setDraft] = useState<DraftAdvancedMemory>(emptyDraft);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
@@ -59,9 +60,12 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
     void requestAdvancedMemories(workspaceId, { cwd });
   }, [requestAdvancedMemories, workspaceId, cwd]);
 
+  // Re-fetch on mount/cwd change and again once the control session connects:
+  // the initial request returns early while the session is still handshaking.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: controlSessionId is an intentional re-trigger
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, controlSessionId]);
 
   const openCreate = () => {
     setEditingSlug(null);

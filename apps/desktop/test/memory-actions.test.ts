@@ -8,6 +8,7 @@ const workspaceId = "ws-memory-actions";
 function createState() {
   return {
     notifications: [],
+    threads: [],
     workspaces: [{ id: workspaceId, path: "/tmp/workspace" }],
     workspaceRuntimeById: {
       [workspaceId]: {

@@ -505,6 +505,13 @@ describe("codex app-server turn lifecycle", () => {
     );
     expect(streamParts).toContainEqual(
       expect.objectContaining({
+        type: "tool-error",
+        toolName: "spawnAgent",
+        error: 'Dynamic tool "spawnAgent" failed: briefing is required when contextMode is "brief"',
+      }),
+    );
+    expect(streamParts).toContainEqual(
+      expect.objectContaining({
         type: "tool-result",
         toolName: "fileChange",
         output: expect.stringContaining("--- a/src/example.ts"),

@@ -48,6 +48,15 @@ function mergedFileChangePayload(
   };
 }
 
+function dynamicToolErrorText(item: Record<string, unknown>): string {
+  const explicitError = asString(item.error);
+  if (explicitError) return explicitError;
+  const contentText = asArray(item.contentItems)
+    .map((contentItem) => asString(asRecord(contentItem)?.text))
+    .find((text): text is string => typeof text === "string" && text.trim().length > 0);
+  return contentText ?? "dynamic tool failed";
+}
+
 async function routeStreamingNotification(
   notification: CodexAppServerJsonRpcNotification,
   params: RuntimeRunTurnParams,
@@ -173,7 +182,7 @@ async function routeStreamingNotification(
           toolCallId: asString(item.id) ?? asString(item.callId),
           toolName: toolName ? coworkToolNameFromCodexDynamicName(toolName) : "dynamicTool",
           output: item.result ?? item.contentItems ?? null,
-          error: statusFailed ? (item.error ?? "dynamic tool failed") : undefined,
+          error: statusFailed ? dynamicToolErrorText(item) : undefined,
         });
       } else if (item?.type === "fileChange") {
         await params.onModelStreamPart?.({

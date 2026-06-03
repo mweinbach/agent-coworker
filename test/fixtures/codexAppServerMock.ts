@@ -483,6 +483,27 @@ export function createMockClient(): CodexAppServerClient {
               options: ["yes"],
             });
             sendNotification({
+              method: "item/completed",
+              params: {
+                threadId: "thread_1",
+                turnId,
+                item: {
+                  type: "dynamicToolCall",
+                  id: "call_failed_dynamic",
+                  tool: "spawnAgent",
+                  arguments: { contextMode: "brief" },
+                  status: "failed",
+                  success: false,
+                  contentItems: [
+                    {
+                      type: "inputText",
+                      text: 'Dynamic tool "spawnAgent" failed: briefing is required when contextMode is "brief"',
+                    },
+                  ],
+                },
+              },
+            });
+            sendNotification({
               method: "todoList/updated",
               params: { todos: [{ content: "Wire app-server todos", status: "completed" }] },
             });

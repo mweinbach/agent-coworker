@@ -45,9 +45,17 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       contextMode: agentContextModeSchema
         .optional()
         .describe(
-          "Context handoff mode. Defaults to 'none' for compatibility: no parent conversation, files, history, or assumptions are included. Prefer 'brief' with briefing for most delegated tasks; use 'full' only when the transcript is required.",
+          "Context handoff mode. Defaults to 'none' for compatibility: no parent conversation, files, history, or assumptions are included. If set to 'brief', you must also provide briefing. Use 'full' only when the transcript is required.",
         ),
-      briefing: z.string().trim().min(1).max(20_000).optional(),
+      briefing: z
+        .string()
+        .trim()
+        .min(1)
+        .max(20_000)
+        .optional()
+        .describe(
+          "Required when contextMode is 'brief'. Summarize the parent context the child needs.",
+        ),
       includeParentTodos: z.boolean().optional(),
       includeHarnessContext: z.boolean().optional(),
       forkContext: z

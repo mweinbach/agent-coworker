@@ -328,6 +328,109 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Background details");
   });
 
+  test("profile surface reads from the selected target even when settings are shared", async () => {
+    const updateWorkspaceDefaults = mock(async () => {});
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: false,
+      selectedWorkspaceId: "reports",
+      workspaces: [
+        {
+          id: "cowork",
+          name: "Cowork",
+          path: "/tmp/cowork",
+          workspaceKind: "project",
+          createdAt: "2026-04-17T00:00:00.000Z",
+          lastOpenedAt: "2026-04-17T00:00:00.000Z",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          userName: "Cowork user",
+          userProfile: {
+            instructions: "Cowork instructions",
+            work: "Cowork work",
+            details: "Cowork details",
+          },
+          yolo: false,
+        },
+        {
+          id: "reports",
+          name: "Reports",
+          path: "/tmp/reports",
+          workspaceKind: "project",
+          createdAt: "2026-04-17T00:00:00.000Z",
+          lastOpenedAt: "2026-04-17T00:00:00.000Z",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          userName: "Reports user",
+          userProfile: {
+            instructions: "Reports instructions",
+            work: "Reports work",
+            details: "Reports details",
+          },
+          yolo: false,
+        },
+      ],
+      providerCatalog: [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3-flash-preview",
+          models: [
+            {
+              id: "gemini-3-flash-preview",
+              displayName: "Gemini 3 Flash Preview",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+      ],
+      providerConnected: ["google"],
+      providerStatusByName: { google: { authorized: true, verified: true } },
+      updateWorkspaceDefaults,
+    }));
+
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(WorkspacesPage, { surface: "profile" }));
+      });
+
+      const nameInput = container.querySelector('[aria-label="User name"]');
+      if (!(nameInput instanceof harness.dom.window.HTMLInputElement)) {
+        throw new Error("missing user name input");
+      }
+      expect(nameInput.value).toBe("Reports user");
+      expect(container.textContent).not.toContain("Cowork instructions");
+      expect(updateWorkspaceDefaults).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("keeps A2UI controls out of workspace behavior settings", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
     useAppStore.setState((state) => ({

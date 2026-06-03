@@ -841,8 +841,12 @@ export function createWorkspaceDefaultsActions(
       }
     },
 
-    updateWorkspaceDefaults: async (workspaceId, patch: WorkspaceDefaultsPatch) => {
-      const sharedSettings = !get().perWorkspaceSettings;
+    updateWorkspaceDefaults: async (
+      workspaceId,
+      patch: WorkspaceDefaultsPatch,
+      opts?: { scope?: "settings" | "target" },
+    ) => {
+      const sharedSettings = !get().perWorkspaceSettings && opts?.scope !== "target";
       const sourceWorkspace = sharedSettings
         ? resolveSharedSettingsSource(workspaceId)
         : (get().workspaces.find((workspace) => workspace.id === workspaceId) ?? null);

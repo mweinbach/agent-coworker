@@ -722,7 +722,9 @@ type WorkspaceUserProfileCardProps = {
   updateWorkspaceDefaults: (
     workspaceId: string,
     patch: { userName?: string; userProfile?: Partial<WorkspaceUserProfile> },
+    opts?: { scope?: "settings" | "target" },
   ) => Promise<unknown> | undefined;
+  scopedToTarget?: boolean;
 };
 
 function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspace"]) {
@@ -738,6 +740,7 @@ function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspa
 export function WorkspaceUserProfileCard({
   workspace,
   updateWorkspaceDefaults,
+  scopedToTarget = false,
 }: WorkspaceUserProfileCardProps) {
   const [draft, setDraft] = useState(() => buildUserProfileDraft(workspace));
   const [saving, setSaving] = useState(false);
@@ -761,14 +764,18 @@ export function WorkspaceUserProfileCard({
     setSaveSuccess(false);
 
     try {
-      await updateWorkspaceDefaults(workspace.id, {
-        userName: draft.userName.trim(),
-        userProfile: {
-          instructions: draft.instructions.trim(),
-          work: draft.work.trim(),
-          details: draft.details.trim(),
+      await updateWorkspaceDefaults(
+        workspace.id,
+        {
+          userName: draft.userName.trim(),
+          userProfile: {
+            instructions: draft.instructions.trim(),
+            work: draft.work.trim(),
+            details: draft.details.trim(),
+          },
         },
-      });
+        scopedToTarget ? { scope: "target" } : undefined,
+      );
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } finally {
@@ -933,11 +940,12 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     [projectWorkspaces, workspaces],
   );
 
+  const targetScopedSettings = surface === "profile";
   const ws = useMemo(() => {
     const selected = selectedWorkspaceId
       ? (workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null)
       : null;
-    if (perWorkspaceSettings) {
+    if (targetScopedSettings || perWorkspaceSettings) {
       return activeSettingsTarget
         ? (workspaces.find((workspace) => workspace.id === activeSettingsTarget.workspaceId) ??
             null)
@@ -951,6 +959,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     perWorkspaceSettings,
     projectWorkspaces,
     selectedWorkspaceId,
+    targetScopedSettings,
     workspaces,
   ]);
   const selectedSettingsTarget = perWorkspaceSettings ? activeSettingsTarget : null;
@@ -1804,6 +1813,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
             <WorkspaceUserProfileCard
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
+              scopedToTarget={targetScopedSettings}
             />
           </div>
 

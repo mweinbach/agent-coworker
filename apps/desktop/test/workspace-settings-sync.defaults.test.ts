@@ -213,6 +213,79 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("target-scoped profile updates do not fan out when shared settings are enabled", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: false,
+      selectedWorkspaceId: workspaceId,
+      workspaces: [
+        {
+          ...state.workspaces[0]!,
+          workspaceKind: "project",
+          userName: "Project user",
+          userProfile: {
+            instructions: "Project instructions",
+            work: "Project work",
+            details: "Project details",
+          },
+        },
+        {
+          id: "project-2",
+          name: "Second project",
+          path: "/tmp/second-project",
+          workspaceKind: "project",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastOpenedAt: "2026-06-02T00:00:00.000Z",
+          wsProtocol: "jsonrpc",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          userName: "Second user",
+          userProfile: {
+            instructions: "Second instructions",
+            work: "Second work",
+            details: "Second details",
+          },
+          yolo: false,
+        },
+      ],
+    }));
+
+    await useAppStore.getState().updateWorkspaceDefaults(
+      workspaceId,
+      {
+        userName: "Target user",
+        userProfile: {
+          instructions: "Target instructions",
+          work: "Target work",
+          details: "Target details",
+        },
+      },
+      { scope: "target" },
+    );
+
+    const state = useAppStore.getState();
+    const target = state.workspaces.find((entry) => entry.id === workspaceId);
+    const other = state.workspaces.find((entry) => entry.id === "project-2");
+    expect(target?.userName).toBe("Target user");
+    expect(target?.userProfile).toEqual({
+      instructions: "Target instructions",
+      work: "Target work",
+      details: "Target details",
+    });
+    expect(other?.userName).toBe("Second user");
+    expect(other?.userProfile).toEqual({
+      instructions: "Second instructions",
+      work: "Second work",
+      details: "Second details",
+    });
+  });
+
   test("per-target workspace defaults update grouped one-off chats", async () => {
     jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params: any) => ({
       event: {

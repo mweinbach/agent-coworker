@@ -395,7 +395,11 @@ export type AppStoreState = {
     draftModelSelection?: { provider: ProviderName; model: string } | null,
     opts?: { allowBeforeHydration?: boolean },
   ) => Promise<void>;
-  updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: WorkspaceDefaultsPatch,
+    opts?: { scope?: "settings" | "target" },
+  ) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
   upsertWorkspaceMcpServer: (

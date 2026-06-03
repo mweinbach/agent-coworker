@@ -200,6 +200,12 @@ describe("shared JSON-RPC control schemas", () => {
       body: "always do X",
     });
     expect(request.name).toBe("rule");
+    const generateRequest = jsonRpcControlRequestSchemas["cowork/memory/advanced/generate"].parse({
+      cwd: "/tmp/proj",
+      folder: "proj",
+      threadId: "session-1",
+    });
+    expect(generateRequest.threadId).toBe("session-1");
 
     const parsed = jsonRpcControlResultSchemas["cowork/memory/advanced/list"].parse({
       event: {
@@ -254,12 +260,22 @@ describe("shared JSON-RPC control schemas", () => {
     const parsed = jsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].parse(request);
     const mobileParsed =
       mobileJsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].parse(request);
+    const generateRequest = {
+      cwd: "/tmp/proj",
+      folder: "proj",
+      threadId: "session-1",
+    };
+    const parsedGenerate =
+      jsonRpcControlRequestSchemas["cowork/memory/advanced/generate"].parse(generateRequest);
+    const mobileParsedGenerate =
+      mobileJsonRpcControlRequestSchemas["cowork/memory/advanced/generate"].parse(generateRequest);
     const result = jsonRpcControlResultSchemas["cowork/memory/advanced/list"].parse({ event });
     const mobileResult = mobileJsonRpcControlResultSchemas["cowork/memory/advanced/list"].parse({
       event,
     });
 
     expect(mobileParsed).toEqual(parsed);
+    expect(mobileParsedGenerate).toEqual(parsedGenerate);
     expect(mobileResult.event.memories[0]?.slug).toBe(result.event.memories[0]?.slug);
   });
 

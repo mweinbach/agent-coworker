@@ -71,6 +71,34 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("advanced memory generate targets an existing thread", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.request("thread/start", {
+        cwd: tmpDir,
+      });
+      const generated = await rpc.request("cowork/memory/advanced/generate", {
+        cwd: tmpDir,
+        folder: "proj",
+        threadId: started.result.thread.id,
+      });
+
+      expect(generated.result.event).toEqual({
+        type: "advanced_memory_list",
+        sessionId: started.result.thread.id,
+        folder: "proj",
+        folders: [],
+        memories: [],
+      });
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("MCP servers read returns a session-event mcp_servers event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

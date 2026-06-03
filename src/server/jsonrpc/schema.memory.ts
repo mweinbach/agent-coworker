@@ -10,6 +10,8 @@ export const jsonRpcMemoryRequestSchemas = {
   "cowork/memory/advanced/list": jsonRpcControlRequestSchemas["cowork/memory/advanced/list"],
   "cowork/memory/advanced/upsert": jsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"],
   "cowork/memory/advanced/delete": jsonRpcControlRequestSchemas["cowork/memory/advanced/delete"],
+  "cowork/memory/advanced/generate":
+    jsonRpcControlRequestSchemas["cowork/memory/advanced/generate"],
 } as const;
 
 export const jsonRpcMemoryResultSchemas = {
@@ -19,4 +21,5 @@ export const jsonRpcMemoryResultSchemas = {
   "cowork/memory/advanced/list": jsonRpcControlResultSchemas["cowork/memory/advanced/list"],
   "cowork/memory/advanced/upsert": jsonRpcControlResultSchemas["cowork/memory/advanced/upsert"],
   "cowork/memory/advanced/delete": jsonRpcControlResultSchemas["cowork/memory/advanced/delete"],
+  "cowork/memory/advanced/generate": jsonRpcControlResultSchemas["cowork/memory/advanced/generate"],
 } as const;

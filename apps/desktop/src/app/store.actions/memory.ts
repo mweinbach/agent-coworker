@@ -21,6 +21,7 @@ export function createWorkspaceMemoryActions(
   | "requestAdvancedMemories"
   | "upsertAdvancedMemory"
   | "deleteAdvancedMemory"
+  | "generateAdvancedMemoryForThread"
   | "setWorkspaceAdvancedMemory"
   | "setWorkspaceMemoryGenerationModel"
 > {
@@ -228,6 +229,36 @@ export function createWorkspaceMemoryActions(
           detail: "Unable to delete memory.",
         }),
       }));
+    },
+
+    generateAdvancedMemoryForThread: async (workspaceId, threadId, opts) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/memory/advanced/generate",
+        {
+          cwd: resolveMemoryCwd(workspaceId, opts),
+          ...(opts?.folder ? { folder: opts.folder } : {}),
+          threadId,
+        },
+      );
+
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: ok ? "info" : "error",
+          title: ok ? "Memory generated" : "Unable to generate memory",
+          detail: ok
+            ? "The conversation was processed for advanced memory."
+            : "The conversation could not be processed.",
+        }),
+      }));
+      return ok;
     },
 
     setWorkspaceAdvancedMemory: async (workspaceId, advancedMemory, opts) => {

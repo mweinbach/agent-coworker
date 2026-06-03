@@ -108,6 +108,36 @@ function hasMeaningfulContent(messages: ModelMessage[]): boolean {
   });
 }
 
+function hasAssistantMessage(messages: ModelMessage[]): boolean {
+  return messages.some((message) => (message as { role?: string }).role === "assistant");
+}
+
+/**
+ * Split an existing transcript into the same shape the automatic generator sees
+ * after each completed assistant response. A follow-up begins with a user
+ * message after a previous assistant response; tool messages stay attached to
+ * the assistant turn that produced them.
+ */
+export function splitMessagesForMemoryBackfill(messages: ModelMessage[]): ModelMessage[][] {
+  const chunks: ModelMessage[][] = [];
+  let current: ModelMessage[] = [];
+
+  for (const message of messages) {
+    const role = (message as { role?: string }).role;
+    if (role === "user" && current.length > 0 && hasAssistantMessage(current)) {
+      chunks.push(current);
+      current = [message];
+      continue;
+    }
+    current.push(message);
+  }
+
+  if (hasAssistantMessage(current)) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
 export type MemoryGeneratorDeps = {
   createRuntime: typeof createRuntime;
   loadGeneratorPrompt: (config: AgentConfig) => Promise<string>;

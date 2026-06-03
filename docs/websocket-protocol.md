@@ -298,6 +298,9 @@ Currently implemented `cowork/*` methods include:
     creates/overwrites a memory and regenerates the folder's `MEMORY.md` index.
   - `cowork/memory/advanced/delete` — params `{ cwd?, folder?, slug }`; removes a memory and
     regenerates the index.
+  - `cowork/memory/advanced/generate` — params `{ cwd?, folder?, threadId }`; loads an existing
+    conversation and runs the advanced-memory generator over each completed assistant response in
+    order, returning the refreshed folder list.
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`

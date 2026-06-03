@@ -498,6 +498,11 @@ export type AppStoreState = {
     slug: string,
     opts?: { cwd?: string },
   ) => Promise<void>;
+  generateAdvancedMemoryForThread: (
+    workspaceId: string,
+    threadId: string,
+    opts?: { cwd?: string; folder?: string },
+  ) => Promise<boolean>;
   setWorkspaceAdvancedMemory: (
     workspaceId: string,
     advancedMemory: boolean,

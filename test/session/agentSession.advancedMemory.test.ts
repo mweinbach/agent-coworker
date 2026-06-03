@@ -84,4 +84,55 @@ describe("AgentSession advanced memory generation", () => {
     expect(refreshCount).toBe(1);
     expect(internals.state.system).toBe("refreshed-1");
   });
+
+  test("manual backfill replays completed assistant responses in order", async () => {
+    const config = {
+      ...makeConfig("/tmp/test-session"),
+      advancedMemory: true,
+    };
+    const { session } = makeSession({ config });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const deltas: ModelMessage[][] = [];
+
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        return { ran: true, ok: true };
+      },
+    };
+
+    internals.state.allMessages.push(
+      { role: "user", content: "first question" } as ModelMessage,
+      { role: "assistant", content: "first response" } as ModelMessage,
+      { role: "user", content: "first follow-up" } as ModelMessage,
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolName: "grep", input: { pattern: "memory" } }],
+      } as unknown as ModelMessage,
+      {
+        role: "tool",
+        content: [{ type: "tool-result", toolName: "grep", output: { value: "match" } }],
+      } as unknown as ModelMessage,
+      { role: "assistant", content: "second response" } as ModelMessage,
+      { role: "user", content: "second follow-up" } as ModelMessage,
+      { role: "assistant", content: "third response" } as ModelMessage,
+    );
+
+    await session.generateAdvancedMemoryForHistory("proj");
+
+    expect(deltas.map((chunk) => chunk.map((message) => message.role))).toEqual([
+      ["user", "assistant"],
+      ["user", "assistant", "tool", "assistant"],
+      ["user", "assistant"],
+    ]);
+    expect(deltas[0]?.map((message) => message.content)).toEqual([
+      "first question",
+      "first response",
+    ]);
+    expect(deltas[1]?.at(-1)?.content).toBe("second response");
+    expect(deltas[2]?.map((message) => message.content)).toEqual([
+      "second follow-up",
+      "third response",
+    ]);
+  });
 });

@@ -358,6 +358,10 @@ export class SessionMemoryService {
   async deleteAdvanced(folder: string | undefined, slug: string): Promise<void> {
     await this.session.deleteAdvancedMemory(folder, slug);
   }
+
+  async generateAdvancedFromHistory(folder?: string): Promise<void> {
+    await this.session.generateAdvancedMemoryForHistory(folder);
+  }
 }
 
 export class SessionSkillService {

@@ -136,6 +136,50 @@ describe("memory store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].advancedMemoriesLoading).toBe(false);
   });
 
+  test("generateAdvancedMemoryForThread targets the selected conversation", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const requests: Array<{ method: string; params: any }> = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        return {
+          event: {
+            type: "advanced_memory_list",
+            sessionId: "thread-1",
+            folder: "proj",
+            folders: ["proj"],
+            memories: [],
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const ok = await createWorkspaceMemoryActions(
+      set as any,
+      get as any,
+    ).generateAdvancedMemoryForThread(workspaceId, "thread-1", {
+      cwd: "/tmp/proj",
+      folder: "proj",
+    });
+
+    expect(ok).toBe(true);
+    expect(requests).toEqual([
+      {
+        method: "cowork/memory/advanced/generate",
+        params: { cwd: "/tmp/proj", folder: "proj", threadId: "thread-1" },
+      },
+    ]);
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "info",
+      title: "Memory generated",
+    });
+  });
+
   test("setWorkspaceAdvancedMemory applies the config patch and updates the workspace", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";

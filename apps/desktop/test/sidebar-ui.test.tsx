@@ -28,6 +28,9 @@ const MOCK_UPDATE_STATE = {
 };
 let workspacePickerEnabled = true;
 let workspaceLifecycleEnabled = true;
+let packagedDesktopApp = false;
+let contextMenuSelection: string | null = null;
+let lastContextMenuItems: { id: string; label: string; enabled?: boolean }[] = [];
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -42,7 +45,11 @@ mock.module("../src/lib/desktopCommands", () =>
     startWorkspaceServer: async () => ({ url: "ws://mock" }),
     stopWorkspaceServer: async () => {},
     confirmAction: async () => true,
-    showContextMenu: async () => null,
+    isPackagedDesktopApp: () => packagedDesktopApp,
+    showContextMenu: async (items) => {
+      lastContextMenuItems = items;
+      return contextMenuSelection;
+    },
     windowMinimize: async () => {},
     windowMaximize: async () => {},
     windowClose: async () => {},
@@ -197,6 +204,9 @@ describe("desktop sidebar", () => {
   beforeEach(() => {
     workspacePickerEnabled = true;
     workspaceLifecycleEnabled = true;
+    packagedDesktopApp = false;
+    contextMenuSelection = null;
+    lastContextMenuItems = [];
     useAppStore.setState(defaultStoreState);
   });
 
@@ -304,6 +314,101 @@ describe("desktop sidebar", () => {
       expect(scroller?.className).toContain("min-w-0");
       expect(threadRowWrapper?.className).toContain("min-w-0");
       expect(title?.className).toContain("truncate");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("offers dev-only memory generation from a thread context menu", async () => {
+    const harness = setupSidebarJsdom();
+    const generateAdvancedMemoryForThread = mock(async () => true);
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      contextMenuSelection = "generate_memory";
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-1",
+          generateAdvancedMemoryForThread,
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const threadButton = container.querySelector(".sidebar-thread-item");
+      if (!(threadButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing thread row");
+      }
+
+      await act(async () => {
+        threadButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("contextmenu", { bubbles: true }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(lastContextMenuItems[0]).toEqual({
+        id: "generate_memory",
+        label: "Generate memory from conversation",
+        enabled: true,
+      });
+      expect(generateAdvancedMemoryForThread).toHaveBeenCalledWith("ws-1", "thread-1", {
+        cwd: "/tmp/agent-coworker",
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("hides memory generation from thread menus in packaged builds", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      packagedDesktopApp = true;
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-1",
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const threadButton = container.querySelector(".sidebar-thread-item");
+      if (!(threadButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing thread row");
+      }
+
+      await act(async () => {
+        threadButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("contextmenu", { bubbles: true }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(lastContextMenuItems.map((item) => item.id)).toEqual(["delete_history"]);
     } finally {
       if (root) {
         await act(async () => {

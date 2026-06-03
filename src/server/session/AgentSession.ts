@@ -1,5 +1,8 @@
 import path from "node:path";
-import { MemoryGenerator } from "../../advancedMemory/MemoryGenerator";
+import {
+  MemoryGenerator,
+  splitMessagesForMemoryBackfill,
+} from "../../advancedMemory/MemoryGenerator";
 import {
   AdvancedMemoryStore,
   resolveMemoriesDir,
@@ -35,6 +38,7 @@ import type {
   AgentConfig,
   HarnessContextPayload,
   MCPServerConfig,
+  ModelMessage,
   ServerErrorCode,
   ServerErrorSource,
 } from "../../types";
@@ -1087,6 +1091,23 @@ export class AgentSession {
     await this.refreshSystemPromptWithSkills("session.advanced_memory_delete");
   }
 
+  async generateAdvancedMemoryForHistory(folder?: string) {
+    const resolvedFolder = this.resolveAdvancedMemoryFolder(folder);
+    const messages = [...this.state.allMessages];
+    this.memoryGenerationQueue = this.memoryGenerationQueue
+      .then(() => this.runMemoryBackfill(resolvedFolder, messages))
+      .catch((err) => {
+        // Manual generation failures are emitted as session errors and must not
+        // poison the per-session generation queue.
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to generate advanced memories from this conversation: ${String(err)}`,
+        );
+      });
+    await this.memoryGenerationQueue;
+  }
+
   /**
    * Fire-and-forget advanced memory generation for the just-completed turn.
    * Runs are serialized on a per-session queue so overlapping turns never
@@ -1126,6 +1147,45 @@ export class AgentSession {
         await this.refreshSystemPromptWithSkills("session.advanced_memory_generated");
       }
     }
+  }
+
+  private async runMemoryBackfill(folder: string, messages: ModelMessage[]): Promise<void> {
+    if (!this.state.config.advancedMemory) {
+      await this.emitAdvancedMemories(folder);
+      return;
+    }
+
+    const chunks = splitMessagesForMemoryBackfill(messages);
+    if (chunks.length === 0) {
+      await this.emitAdvancedMemories(folder);
+      return;
+    }
+
+    let ranAny = false;
+    for (const deltaMessages of chunks) {
+      const result = await this.memoryGenerator.run({
+        config: this.state.config,
+        sessionId: this.id,
+        deltaMessages,
+        folder,
+        log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
+        abortSignal: undefined,
+      });
+      if (!result.ok) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          "Failed to generate advanced memories from this conversation.",
+        );
+        return;
+      }
+      ranAny = ranAny || result.ran;
+    }
+
+    if (ranAny) {
+      await this.refreshSystemPromptWithSkills("session.advanced_memory_backfill");
+    }
+    await this.emitAdvancedMemories(folder);
   }
 
   private async ensureSystemPromptReady(): Promise<boolean> {

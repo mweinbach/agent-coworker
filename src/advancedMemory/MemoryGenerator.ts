@@ -184,7 +184,10 @@ export class MemoryGenerator {
 
   private resolveTargetConfig(config: AgentConfig): AgentConfig {
     const requested =
-      config.memoryGenerationModel?.trim() || config.preferredChildModel || config.model;
+      config.memoryGenerationModel?.trim() ||
+      config.preferredChildModelRef?.trim() ||
+      config.preferredChildModel ||
+      config.model;
     try {
       const parsed = parseChildModelRef(requested, config.provider, "memory generation model");
       return {

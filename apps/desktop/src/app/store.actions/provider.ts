@@ -612,10 +612,7 @@ export function createProviderActions(
           "cowork/provider/codexAppServer/update",
           {
             cwd: path,
-            ...(opts?.version ? { version: opts.version } : {}),
             ...(opts?.force !== undefined ? { force: opts.force } : {}),
-            ...(opts?.pin !== undefined ? { pin: opts.pin } : {}),
-            ...(opts?.clearPin !== undefined ? { clearPin: opts.clearPin } : {}),
           },
         )) as { status?: unknown };
         const status = result.status;

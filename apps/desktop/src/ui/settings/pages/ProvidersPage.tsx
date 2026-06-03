@@ -1,12 +1,5 @@
 import { motion } from "framer-motion";
-import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  DownloadIcon,
-  PinIcon,
-  PinOffIcon,
-  RefreshCcwIcon,
-} from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, RefreshCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -88,7 +81,6 @@ export function ProvidersPage({
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
   const checkCodexAppServerStatus = useAppStore((s) => s.checkCodexAppServerStatus);
-  const updateCodexAppServer = useAppStore((s) => s.updateCodexAppServer);
   const providerStatusByNameFromStore = useAppStore((s) => s.providerStatusByName);
   const providerStatusRefreshingFromStore = useAppStore((s) => s.providerStatusRefreshing);
   const codexAppServerStatusFromStore = useAppStore((s) => s.codexAppServerStatus);
@@ -139,7 +131,6 @@ export function ProvidersPage({
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(
     initialExpandedSectionId,
   );
-  const [codexPinnedVersionDraft, setCodexPinnedVersionDraft] = useState("");
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
 
@@ -209,10 +200,6 @@ export function ProvidersPage({
     if (!canConnectProvider) return;
     void checkCodexAppServerStatus({ checkLatest: false });
   }, [canConnectProvider, checkCodexAppServerStatus]);
-
-  useEffect(() => {
-    setCodexPinnedVersionDraft(codexAppServerStatus?.pinnedVersion ?? "");
-  }, [codexAppServerStatus?.pinnedVersion]);
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {
@@ -988,20 +975,10 @@ export function ProvidersPage({
                         </div>
                       </>
                     ) : null}
-                    {codexAppServerStatus?.latestVersion ? (
-                      <>
-                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Latest
-                        </div>
-                        <div className="text-sm text-foreground/95">
-                          {codexAppServerStatus.latestVersion}
-                        </div>
-                      </>
-                    ) : null}
                     {codexAppServerStatus?.pinnedVersion ? (
                       <>
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Pinned
+                          Required
                         </div>
                         <div className="text-sm text-foreground/95">
                           {codexAppServerStatus.pinnedVersion}
@@ -1015,50 +992,6 @@ export function ProvidersPage({
                       {codexAppServerStatus?.message ?? "Checking Codex app-server."}
                     </div>
                   </div>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <Input
-                      aria-label="Pinned Codex app-server version"
-                      className="h-8 min-w-0 sm:max-w-[11rem]"
-                      placeholder={codexAppServerStatus?.latestVersion ?? "0.129.0"}
-                      value={codexPinnedVersionDraft}
-                      onChange={(event) => setCodexPinnedVersionDraft(event.target.value)}
-                    />
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        type="button"
-                        disabled={
-                          codexAppServerUpdating ||
-                          codexAppServerChecking ||
-                          codexPinnedVersionDraft.trim().length === 0
-                        }
-                        onClick={() =>
-                          void updateCodexAppServer({
-                            version: codexPinnedVersionDraft.trim(),
-                            pin: true,
-                          })
-                        }
-                      >
-                        <PinIcon data-icon="inline-start" />
-                        Pin
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        type="button"
-                        disabled={
-                          codexAppServerUpdating ||
-                          codexAppServerChecking ||
-                          !codexAppServerStatus?.pinnedVersion
-                        }
-                        onClick={() => void updateCodexAppServer({ clearPin: true })}
-                      >
-                        <PinOffIcon data-icon="inline-start" />
-                        Clear
-                      </Button>
-                    </div>
-                  </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       variant="outline"
@@ -1068,14 +1001,6 @@ export function ProvidersPage({
                     >
                       <RefreshCcwIcon data-icon="inline-start" />
                       {codexAppServerChecking ? "Checking..." : "Check"}
-                    </Button>
-                    <Button
-                      type="button"
-                      disabled={codexAppServerUpdating || codexAppServerChecking}
-                      onClick={() => void updateCodexAppServer()}
-                    >
-                      <DownloadIcon data-icon="inline-start" />
-                      {codexAppServerUpdating ? "Updating..." : "Update"}
                     </Button>
                   </div>
                 </div>

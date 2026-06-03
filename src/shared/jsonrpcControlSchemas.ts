@@ -329,10 +329,8 @@ const codexAppServerInstallStatusSchema = z
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     version: z.string().optional(),
-    latestVersion: z.string().optional(),
     pinnedVersion: z.string().optional(),
     pinMatchesCurrent: z.boolean().optional(),
-    updateAvailable: z.boolean().optional(),
     managedPath: z.string().optional(),
     message: z.string(),
   })
@@ -1224,10 +1222,7 @@ const providerCodexAppServerStatusRequestSchema = z
 const providerCodexAppServerUpdateRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
-    version: z.string().optional(),
     force: z.boolean().optional(),
-    pin: z.boolean().optional(),
-    clearPin: z.boolean().optional(),
   })
   .strict();
 

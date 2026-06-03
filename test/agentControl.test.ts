@@ -1112,8 +1112,10 @@ describe("AgentControl persisted child control", () => {
       agentId: "child-1",
     });
 
-    expect(childSession.closeForHistory).toHaveBeenCalledTimes(1);
-    expect(disposeBinding).toHaveBeenCalledWith(expect.anything(), "parent closed child agent");
+    expect(childSession.closeForHistory).toHaveBeenCalledWith({ closeSharedCodexClient: false });
+    expect(disposeBinding).toHaveBeenCalledWith(expect.anything(), "parent closed child agent", {
+      closeSharedCodexClient: false,
+    });
     expect(summary.executionState).toBe("closed");
   });
 

@@ -401,8 +401,10 @@ export class AgentControl {
     }
     binding.session.cancel();
     await this.inFlightByAgentId.get(opts.agentId);
-    await binding.session.closeForHistory();
-    this.deps.disposeBinding(binding, "parent closed child agent");
+    await binding.session.closeForHistory({ closeSharedCodexClient: false });
+    this.deps.disposeBinding(binding, "parent closed child agent", {
+      closeSharedCodexClient: false,
+    });
     this.deps.sessionBindings.delete(binding.session.id);
     return this.publish(opts.parentSessionId, binding.session, { executionState: "closed" });
   }

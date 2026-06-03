@@ -667,8 +667,8 @@ export class SessionLifecycleService {
     this.session.handleApprovalResponse(requestId, approved);
   }
 
-  async closeForHistory(): Promise<void> {
-    await this.session.closeForHistory();
+  async closeForHistory(opts: { closeSharedCodexClient?: boolean } = {}): Promise<void> {
+    await this.session.closeForHistory(opts);
   }
 
   async waitForPersistenceIdle(): Promise<void> {
@@ -679,8 +679,8 @@ export class SessionLifecycleService {
     this.session.reopenForHistory();
   }
 
-  dispose(reason: string): void {
-    this.session.dispose(reason);
+  dispose(reason: string, opts: { closeSharedCodexClient?: boolean } = {}): void {
+    this.session.dispose(reason, opts);
   }
 
   getMessages(offset = 0, limit = 100): void {

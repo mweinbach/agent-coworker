@@ -664,6 +664,26 @@ describe("AgentSession", () => {
       expect(mockClosePooledCodexAppServerClient).toHaveBeenCalledTimes(1);
     });
 
+    test("dispose can keep a shared codex app-server client alive", () => {
+      const config = makeConfig("/tmp/test-session");
+      config.provider = "codex-cli";
+      const { session } = makeSession({ config });
+
+      session.dispose("child agent closed", { closeSharedCodexClient: false });
+
+      expect(mockClosePooledCodexAppServerClient).not.toHaveBeenCalled();
+    });
+
+    test("closeForHistory can keep a shared codex app-server client alive", async () => {
+      const config = makeConfig("/tmp/test-session");
+      config.provider = "codex-cli";
+      const { session } = makeSession({ config });
+
+      await session.closeForHistory({ closeSharedCodexClient: false });
+
+      expect(mockClosePooledCodexAppServerClient).not.toHaveBeenCalled();
+    });
+
     test("rejects both ask and approval requests simultaneously", async () => {
       const { session } = makeSession();
 

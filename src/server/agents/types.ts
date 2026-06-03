@@ -108,7 +108,11 @@ export type AgentControlDeps = {
     role: AgentRole,
     profile?: AgentProfileSnapshot,
   ) => Promise<string>;
-  disposeBinding: (binding: SessionBinding, reason: string) => void;
+  disposeBinding: (
+    binding: SessionBinding,
+    reason: string,
+    opts?: { closeSharedCodexClient?: boolean },
+  ) => void;
   emitParentAgentStatus: (parentSessionId: string, agent: PersistentAgentSummary) => void;
   emitParentLog: (parentSessionId: string, line: string) => void;
 };

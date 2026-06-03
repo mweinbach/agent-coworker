@@ -1489,9 +1489,9 @@ export class AgentSession {
     this.getTurnExecutionManager().cancel(opts);
   }
 
-  async closeForHistory(): Promise<void> {
+  async closeForHistory(opts: { closeSharedCodexClient?: boolean } = {}): Promise<void> {
     this.state.persistenceStatus = "closed";
-    if (this.state.config.provider === "codex-cli") {
+    if (this.state.config.provider === "codex-cli" && opts.closeSharedCodexClient !== false) {
       await closePooledCodexAppServerClient(
         this.state.config.workingDirectory,
         path.join(resolveAuthHomeDir(this.state.config), ".cowork", "auth", "codex-cli"),
@@ -1520,12 +1520,12 @@ export class AgentSession {
     this.queuePersistSessionSnapshot("session.reopened");
   }
 
-  dispose(reason: string) {
+  dispose(reason: string, opts: { closeSharedCodexClient?: boolean } = {}) {
     this.state.abortController?.abort();
     this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
     unsubscribeAgentSessionCostTracker(this.createCostTrackingHost());
     this.managers.disposeManagers();
-    if (this.state.config.provider === "codex-cli") {
+    if (this.state.config.provider === "codex-cli" && opts.closeSharedCodexClient !== false) {
       void closePooledCodexAppServerClient(
         this.state.config.workingDirectory,
         path.join(resolveAuthHomeDir(this.state.config), ".cowork", "auth", "codex-cli"),

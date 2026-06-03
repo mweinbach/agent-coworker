@@ -136,7 +136,11 @@ export class SessionRegistry {
     return [...binding.sinks.keys()].filter((sinkId) => !sinkId.startsWith("journal:")).length;
   }
 
-  disposeBinding(binding: SessionBinding, reason: string): void {
+  disposeBinding(
+    binding: SessionBinding,
+    reason: string,
+    opts: { closeSharedCodexClient?: boolean } = {},
+  ): void {
     if (!binding.runtime) return;
     try {
       binding.runtime.turns.cancel();
@@ -144,7 +148,7 @@ export class SessionRegistry {
       // ignore
     }
     try {
-      binding.runtime.lifecycle.dispose(reason);
+      binding.runtime.lifecycle.dispose(reason, opts);
     } catch {
       // ignore
     }

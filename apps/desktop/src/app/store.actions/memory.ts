@@ -266,10 +266,10 @@ export function createWorkspaceMemoryActions(
       ensureControlSocket(get, set, workspaceId);
 
       // The settings UI reads the live `controlSessionConfig` first (server's
-      // effective value), then falls back to the persisted workspace record.
-      // Update BOTH optimistically so the toggle reflects immediately, and
-      // capture both prior values for rollback. The server re-syncs via the
-      // subsequent `session_config` event.
+      // effective value), then falls back to the persisted workspace records.
+      // Advanced memory defaults are global, so mirror BOTH everywhere
+      // optimistically and capture prior values for rollback. The server
+      // re-syncs via the subsequent `session_config` event.
       const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
         record: { defaultAdvancedMemory: advancedMemory },
         sessionConfig: { advancedMemory },
@@ -296,7 +296,9 @@ export function createWorkspaceMemoryActions(
             detail: "Unable to update advanced memory setting.",
           }),
         }));
+        return;
       }
+      await syncAdvancedMemoryDefaultsAcrossThreads(get);
     },
 
     setWorkspaceMemoryGenerationModel: async (workspaceId, model, opts) => {
@@ -332,7 +334,9 @@ export function createWorkspaceMemoryActions(
             detail: "Unable to update memory generation model.",
           }),
         }));
+        return;
       }
+      await syncAdvancedMemoryDefaultsAcrossThreads(get);
     },
   };
 }
@@ -345,7 +349,7 @@ export function createWorkspaceMemoryActions(
 function applyOptimisticMemoryConfig(
   get: StoreGet,
   set: StoreSet,
-  workspaceId: string,
+  _workspaceId: string,
   patch: {
     record: Partial<{
       defaultAdvancedMemory: boolean;
@@ -355,41 +359,63 @@ function applyOptimisticMemoryConfig(
   },
 ): () => void {
   const state = get();
-  const prevWorkspace = state.workspaces.find((w) => w.id === workspaceId);
-  const prevRecord: Record<string, unknown> = {};
-  for (const key of Object.keys(patch.record)) {
-    prevRecord[key] = (prevWorkspace as Record<string, unknown> | undefined)?.[key];
+  const recordKeys = Object.keys(patch.record);
+  const prevRecordsByWorkspaceId = new Map<string, Record<string, unknown>>();
+  for (const workspace of state.workspaces) {
+    const prevRecord: Record<string, unknown> = {};
+    for (const key of recordKeys) {
+      prevRecord[key] = (workspace as Record<string, unknown>)[key];
+    }
+    prevRecordsByWorkspaceId.set(workspace.id, prevRecord);
   }
-  const prevSessionConfig = state.workspaceRuntimeById[workspaceId]?.controlSessionConfig ?? null;
+  const prevSessionConfigByWorkspaceId = new Map<string, unknown>();
+  for (const [runtimeWorkspaceId, runtime] of Object.entries(state.workspaceRuntimeById)) {
+    prevSessionConfigByWorkspaceId.set(runtimeWorkspaceId, runtime?.controlSessionConfig ?? null);
+  }
 
   set((s) => ({
-    workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, ...patch.record } : w)),
-    workspaceRuntimeById: {
-      ...s.workspaceRuntimeById,
-      [workspaceId]: {
-        ...s.workspaceRuntimeById[workspaceId],
-        controlSessionConfig: s.workspaceRuntimeById[workspaceId]?.controlSessionConfig
-          ? applySessionConfigMemoryPatch(
-              s.workspaceRuntimeById[workspaceId].controlSessionConfig,
-              patch.sessionConfig,
-            )
-          : (s.workspaceRuntimeById[workspaceId]?.controlSessionConfig ?? null),
-      },
-    },
+    workspaces: s.workspaces.map((w) => ({ ...w, ...patch.record })),
+    workspaceRuntimeById: Object.fromEntries(
+      Object.entries(s.workspaceRuntimeById).map(([runtimeWorkspaceId, runtime]) => [
+        runtimeWorkspaceId,
+        {
+          ...runtime,
+          controlSessionConfig: runtime?.controlSessionConfig
+            ? applySessionConfigMemoryPatch(runtime.controlSessionConfig, patch.sessionConfig)
+            : (runtime?.controlSessionConfig ?? null),
+        },
+      ]),
+    ) as typeof s.workspaceRuntimeById,
   }));
 
   return () => {
     set((s) => ({
-      workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, ...prevRecord } : w)),
-      workspaceRuntimeById: {
-        ...s.workspaceRuntimeById,
-        [workspaceId]: {
-          ...s.workspaceRuntimeById[workspaceId],
-          controlSessionConfig: prevSessionConfig,
-        },
-      },
+      workspaces: s.workspaces.map((w) => ({
+        ...w,
+        ...(prevRecordsByWorkspaceId.get(w.id) ?? {}),
+      })),
+      workspaceRuntimeById: Object.fromEntries(
+        Object.entries(s.workspaceRuntimeById).map(([runtimeWorkspaceId, runtime]) => [
+          runtimeWorkspaceId,
+          {
+            ...runtime,
+            controlSessionConfig:
+              prevSessionConfigByWorkspaceId.get(runtimeWorkspaceId) ??
+              runtime?.controlSessionConfig ??
+              null,
+          },
+        ]),
+      ) as typeof s.workspaceRuntimeById,
     }));
   };
+}
+
+async function syncAdvancedMemoryDefaultsAcrossThreads(get: StoreGet): Promise<void> {
+  const state = get();
+  const threadIds = state.threads.map((thread) => thread.id);
+  for (const threadId of threadIds) {
+    await state.applyWorkspaceDefaultsToThread(threadId, "explicit");
+  }
 }
 
 function applySessionConfigMemoryPatch<

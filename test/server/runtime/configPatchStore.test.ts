@@ -9,6 +9,36 @@ import {
 import { makeConfig } from "../../session/agentSession.harness";
 
 describe("ConfigPatchStore", () => {
+  test("persists advanced memory defaults to global config when provided", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
+    const projectCoworkDir = path.join(dir, "project", ".cowork");
+    const globalConfigDir = path.join(dir, "home", ".cowork", "config");
+
+    await persistProjectConfigPatch(
+      projectCoworkDir,
+      {
+        advancedMemory: true,
+        memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+        enableMemory: true,
+      },
+      undefined,
+      { globalConfigDir },
+    );
+
+    const projectConfig = JSON.parse(
+      await fs.readFile(path.join(projectCoworkDir, "config.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    const globalConfig = JSON.parse(
+      await fs.readFile(path.join(globalConfigDir, "config.json"), "utf-8"),
+    ) as Record<string, unknown>;
+
+    expect(projectConfig).toEqual({ enableMemory: true });
+    expect(globalConfig).toEqual({
+      advancedMemory: true,
+      memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+    });
+  });
+
   test("clears a persisted memory generation model override", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, ".cowork");

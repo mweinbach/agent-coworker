@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { normalizeModelIdForProvider } from "../models/metadata";
+import { parseChildModelRef } from "../models/childModelRouting";
 import { createRuntime } from "../runtime";
-import type { AgentConfig, ModelMessage } from "../types";
+import { type AgentConfig, defaultRuntimeNameForProvider, type ModelMessage } from "../types";
 
 import { AdvancedMemoryStore, resolveMemoriesDir, resolveMemoryFolderName } from "./store";
 
@@ -173,13 +173,19 @@ export type MemoryGeneratorRunOpts = {
 export class MemoryGenerator {
   constructor(private readonly deps: MemoryGeneratorDeps = defaultMemoryGeneratorDeps) {}
 
-  private resolveModel(config: AgentConfig): string {
+  private resolveTargetConfig(config: AgentConfig): AgentConfig {
     const requested =
       config.memoryGenerationModel?.trim() || config.preferredChildModel || config.model;
     try {
-      return normalizeModelIdForProvider(config.provider, requested, "memory generation model");
+      const parsed = parseChildModelRef(requested, config.provider, "memory generation model");
+      return {
+        ...config,
+        provider: parsed.provider,
+        runtime: defaultRuntimeNameForProvider(parsed.provider),
+        model: parsed.modelId,
+      };
     } catch {
-      return config.model;
+      return config;
     }
   }
 
@@ -201,8 +207,7 @@ export class MemoryGenerator {
 
     const tools = this.buildTools(store, folder, opts.sessionId);
     const system = await this.deps.loadGeneratorPrompt(opts.config);
-    const model = this.resolveModel(opts.config);
-    const genConfig: AgentConfig = { ...opts.config, model };
+    const genConfig = this.resolveTargetConfig(opts.config);
 
     const userMessage =
       `Active memory folder: ${folder}\n\n` +

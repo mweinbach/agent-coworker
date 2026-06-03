@@ -23,15 +23,27 @@ import { Input } from "../../../components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
 import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
-import { modelChoicesFromCatalog } from "../../../lib/modelChoices";
+import {
+  decodeProviderModelSelection,
+  encodeProviderModelSelection,
+  modelChoicesFromCatalog,
+  modelDisplayNamesFromCatalog,
+  resolveModelDisplayLabel,
+  UI_DISABLED_PROVIDERS,
+} from "../../../lib/modelChoices";
+import { displayProviderName } from "../../../lib/providerDisplayNames";
+import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
+import { PROVIDER_NAMES, type ProviderName, type SessionEvent } from "../../../lib/wsProtocol";
 import { AdvancedMemoryPanel } from "./AdvancedMemoryPanel";
 
 type DraftMemory = {
@@ -46,6 +58,19 @@ export const MEMORY_LOADING_STALL_MS = 1_500;
 export { parentDirectoryPath } from "../../../app/workspaceDisplayTargets";
 
 export type MemoryTarget = WorkspaceDisplayTarget;
+type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
+
+type MemoryGenerationModelOption = {
+  value: string;
+  label: string;
+  title: string;
+};
+
+type MemoryGenerationModelGroup = {
+  provider: ProviderName;
+  label: string;
+  options: MemoryGenerationModelOption[];
+};
 
 export function resolveDraftMemoryId(rawId: string): string {
   return rawId.trim() || HOT_MEMORY_ID;
@@ -66,6 +91,76 @@ function emptyDraft(): DraftMemory {
 }
 
 export const resolveMemoryTargets = resolveWorkspaceDisplayTargets;
+
+export function resolveMemoryGenerationModelSelection(
+  rawModel: string | undefined,
+  fallbackProvider: ProviderName | undefined,
+): string {
+  const raw = rawModel?.trim() ?? "";
+  if (!raw) return "";
+  const parsed = decodeProviderModelSelection(raw);
+  if (parsed) return encodeProviderModelSelection(parsed.provider, parsed.modelId);
+  return fallbackProvider ? encodeProviderModelSelection(fallbackProvider, raw) : raw;
+}
+
+export function buildMemoryGenerationModelGroups(
+  catalog: readonly ProviderCatalogEntry[],
+  currentSelection: string,
+): MemoryGenerationModelGroup[] {
+  const choices = modelChoicesFromCatalog(catalog);
+  const displayNames = modelDisplayNamesFromCatalog(catalog);
+  const groups = sortProviderEntriesForSettings(
+    PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+      .map((provider) => ({
+        provider,
+        label: displayProviderName(provider),
+        options: (choices[provider] ?? []).map((modelId) => ({
+          value: encodeProviderModelSelection(provider, modelId),
+          label: resolveModelDisplayLabel(provider, modelId, displayNames),
+          title: modelId,
+        })),
+      }))
+      .filter((group) => group.options.length > 0),
+  );
+
+  const current = currentSelection.trim();
+  if (!current) return groups;
+  const hasCurrent = groups.some((group) =>
+    group.options.some((option) => option.value === current),
+  );
+  if (hasCurrent) return groups;
+
+  const parsed = decodeProviderModelSelection(current);
+  const customOption = parsed
+    ? {
+        value: current,
+        label: `${resolveModelDisplayLabel(parsed.provider, parsed.modelId, displayNames)} (custom)`,
+        title: parsed.modelId,
+      }
+    : { value: current, label: `${current} (custom)`, title: current };
+  if (parsed) {
+    const existingGroup = groups.find((group) => group.provider === parsed.provider);
+    if (existingGroup) {
+      existingGroup.options = [customOption, ...existingGroup.options];
+      return groups;
+    }
+    return sortProviderEntriesForSettings([
+      ...groups,
+      {
+        provider: parsed.provider,
+        label: displayProviderName(parsed.provider),
+        options: [customOption],
+      },
+    ]);
+  }
+
+  const fallbackGroup = groups[0];
+  if (fallbackGroup) {
+    fallbackGroup.options = [customOption, ...fallbackGroup.options];
+    return groups;
+  }
+  return [{ provider: "google", label: "Custom", options: [customOption] }];
+}
 
 function relativeTime(isoString: string): string {
   const now = Date.now();
@@ -122,12 +217,25 @@ export function MemoryPage() {
   const memoryGenerationModel = liveSessionConfig
     ? (liveSessionConfig.memoryGenerationModel ?? "")
     : (activeWorkspace?.defaultMemoryGenerationModel ?? "");
-  const generationModelChoices = useMemo(() => {
-    const provider = activeWorkspace?.defaultProvider;
-    if (!provider) return [] as readonly string[];
-    return modelChoicesFromCatalog(providerCatalog)[provider] ?? [];
-  }, [providerCatalog, activeWorkspace?.defaultProvider]);
   const MEMORY_MODEL_DEFAULT_VALUE = "__default__";
+  const fallbackMemoryModelProvider =
+    activeWorkspace?.defaultProvider &&
+    (PROVIDER_NAMES as readonly string[]).includes(activeWorkspace.defaultProvider)
+      ? activeWorkspace.defaultProvider
+      : undefined;
+  const memoryGenerationModelSelection =
+    resolveMemoryGenerationModelSelection(memoryGenerationModel, fallbackMemoryModelProvider) ||
+    MEMORY_MODEL_DEFAULT_VALUE;
+  const generationModelGroups = useMemo(
+    () =>
+      buildMemoryGenerationModelGroups(
+        providerCatalog,
+        memoryGenerationModelSelection === MEMORY_MODEL_DEFAULT_VALUE
+          ? ""
+          : memoryGenerationModelSelection,
+      ),
+    [providerCatalog, memoryGenerationModelSelection],
+  );
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);
   const [editingEntry, setEditingEntry] = useState<MemoryListEntry | null>(null);
@@ -278,7 +386,7 @@ export function MemoryPage() {
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">Memory generation model</p>
             <Select
-              value={memoryGenerationModel || MEMORY_MODEL_DEFAULT_VALUE}
+              value={memoryGenerationModelSelection}
               onValueChange={(value) => {
                 if (!activeTarget) return;
                 void setWorkspaceMemoryGenerationModel(
@@ -288,15 +396,22 @@ export function MemoryPage() {
                 );
               }}
             >
-              <SelectTrigger className="max-w-64" aria-label="Memory generation model">
+              <SelectTrigger className="max-w-72" aria-label="Memory generation model">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>Default (economical)</SelectItem>
-                {generationModelChoices.map((model) => (
-                  <SelectItem key={model} value={model}>
-                    {model}
-                  </SelectItem>
+                {generationModelGroups.map((group) => (
+                  <SelectGroup key={group.provider}>
+                    <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
+                      {group.label}
+                    </SelectLabel>
+                    {group.options.map((option) => (
+                      <SelectItem key={option.value} value={option.value} className="pl-6">
+                        <span title={option.title}>{option.label}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 ))}
               </SelectContent>
             </Select>

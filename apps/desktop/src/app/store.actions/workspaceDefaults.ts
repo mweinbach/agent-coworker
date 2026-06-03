@@ -900,17 +900,29 @@ export function createWorkspaceDefaultsActions(
       }
 
       const nextWorkspace = applyWorkspacePatch(optimisticWorkspace, patch);
+      const globalMemoryPatch = {
+        ...(patch.defaultAdvancedMemory !== undefined
+          ? { defaultAdvancedMemory: nextWorkspace.defaultAdvancedMemory }
+          : {}),
+        ...(patch.defaultMemoryGenerationModel !== undefined
+          ? { defaultMemoryGenerationModel: nextWorkspace.defaultMemoryGenerationModel }
+          : {}),
+      };
+      const hasGlobalMemoryPatch = Object.keys(globalMemoryPatch).length > 0;
 
       set((s) => ({
-        workspaces: s.workspaces.map((workspace) =>
-          sharedSettings
+        workspaces: s.workspaces.map((workspace) => {
+          const patchedWorkspace = sharedSettings
             ? copyWorkspaceSettings(workspace, nextWorkspace)
             : chatSettingsTarget && isOneOffChatWorkspace(workspace)
               ? copyWorkspaceSettings(workspace, nextWorkspace)
               : workspace.id === sourceWorkspace.id
                 ? nextWorkspace
-                : workspace,
-        ),
+                : workspace;
+          return hasGlobalMemoryPatch
+            ? { ...patchedWorkspace, ...globalMemoryPatch }
+            : patchedWorkspace;
+        }),
       }));
       await persistNow(get);
 
@@ -937,6 +949,25 @@ export function createWorkspaceDefaultsActions(
         userProfilePatch !== undefined ||
         workspacePatch.yolo !== undefined;
       if (!shouldSyncCoreSettings) {
+        return;
+      }
+
+      if (hasGlobalMemoryPatch && !sharedSettings) {
+        const workspaceIds = get().workspaces.map((workspace) => workspace.id);
+        await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+          ensureControl: true,
+          notifyOnMissingControl: true,
+        });
+        await Promise.all(
+          workspaceIds
+            .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+            .map((targetWorkspaceId) =>
+              syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                ensureControl: false,
+                notifyOnMissingControl: false,
+              }),
+            ),
+        );
         return;
       }
 

@@ -72,9 +72,11 @@ const {
   CHATS_MEMORY_TARGET_ID,
   MEMORY_LOADING_STALL_MS,
   MemoryPage,
+  buildMemoryGenerationModelGroups,
   isMemoryLoadStalled,
   parentDirectoryPath,
   resolveDraftMemoryId,
+  resolveMemoryGenerationModelSelection,
   resolveMemoryTargets,
 } = await import("../src/ui/settings/pages/MemoryPage");
 const { useAppStore } = await import("../src/app/store");
@@ -171,6 +173,35 @@ describe("desktop memory page", () => {
     expect(isMemoryLoadStalled(true, null, Date.now())).toBe(false);
     expect(isMemoryLoadStalled(true, 1000, 1000 + MEMORY_LOADING_STALL_MS - 1)).toBe(false);
     expect(isMemoryLoadStalled(true, 1000, 1000 + MEMORY_LOADING_STALL_MS)).toBe(true);
+  });
+
+  test("memory model choices include provider-qualified models across providers", () => {
+    const groups = buildMemoryGenerationModelGroups(
+      [
+        {
+          id: "google",
+          name: "Google",
+          status: "connected",
+          models: [{ id: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro" }],
+        },
+        {
+          id: "together",
+          name: "Together AI",
+          status: "connected",
+          models: [{ id: "moonshotai/Kimi-K2.5", displayName: "Kimi K2.5" }],
+        },
+      ] as any,
+      "together:moonshotai/Kimi-K2.5",
+    );
+
+    expect(groups.map((group) => group.provider)).toContain("google");
+    expect(groups.map((group) => group.provider)).toContain("together");
+    expect(groups.flatMap((group) => group.options.map((option) => option.value))).toContain(
+      "together:moonshotai/Kimi-K2.5",
+    );
+    expect(resolveMemoryGenerationModelSelection("moonshotai/Kimi-K2.5", "together")).toBe(
+      "together:moonshotai/Kimi-K2.5",
+    );
   });
 
   test("memory targets collapse non-project chats while keeping projects individual", () => {

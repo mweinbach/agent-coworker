@@ -16,6 +16,12 @@ function createState() {
         defaultAdvancedMemory: undefined as boolean | undefined,
         defaultMemoryGenerationModel: undefined as string | undefined,
       },
+      {
+        id: "ws-other",
+        path: "/tmp/other",
+        defaultAdvancedMemory: false as boolean | undefined,
+        defaultMemoryGenerationModel: "together:moonshotai/Kimi-K2.5" as string | undefined,
+      },
     ],
     workspaceRuntimeById: {
       [workspaceId]: {
@@ -23,6 +29,16 @@ function createState() {
         serverUrl: "ws://mock",
         controlSessionId: null,
         memoriesLoading: false,
+      },
+      "ws-other": {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://mock-other",
+        controlSessionId: "other-control-session",
+        memoriesLoading: false,
+        controlSessionConfig: {
+          advancedMemory: false,
+          memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+        },
       },
     },
   };
@@ -180,7 +196,7 @@ describe("memory store actions", () => {
     });
   });
 
-  test("setWorkspaceAdvancedMemory applies the config patch and updates the workspace", async () => {
+  test("setWorkspaceAdvancedMemory applies the config patch globally", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
     const { get, set } = createStoreHarness(state);
@@ -210,11 +226,16 @@ describe("memory store actions", () => {
     expect(requests[0]?.method).toBe("cowork/session/defaults/apply");
     expect(requests[0]?.params).toMatchObject({ config: { advancedMemory: true } });
     expect(state.workspaces[0].defaultAdvancedMemory).toBe(true);
+    expect(state.workspaces[1].defaultAdvancedMemory).toBe(true);
+    expect(state.workspaceRuntimeById["ws-other"].controlSessionConfig).toMatchObject({
+      advancedMemory: true,
+    });
   });
 
   test("setWorkspaceMemoryGenerationModel clears the desktop fallback on reset", async () => {
     const state = createState();
     state.workspaces[0].defaultMemoryGenerationModel = "gemini-old";
+    state.workspaces[1].defaultMemoryGenerationModel = "together:moonshotai/Kimi-K2.5";
     state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
     state.workspaceRuntimeById[workspaceId].controlSessionConfig = {
       advancedMemory: true,
@@ -249,8 +270,12 @@ describe("memory store actions", () => {
       config: { clearMemoryGenerationModel: true },
     });
     expect(state.workspaces[0].defaultMemoryGenerationModel).toBeUndefined();
+    expect(state.workspaces[1].defaultMemoryGenerationModel).toBeUndefined();
     expect(state.workspaceRuntimeById[workspaceId].controlSessionConfig).toEqual({
       advancedMemory: true,
+    });
+    expect(state.workspaceRuntimeById["ws-other"].controlSessionConfig).toEqual({
+      advancedMemory: false,
     });
   });
 });

@@ -599,16 +599,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const advancedMemory =
     asBoolean(env.AGENT_ADVANCED_MEMORY) ??
-    asBoolean(projectConfig.advancedMemory) ??
     asBoolean(userConfig.advancedMemory) ??
     asBoolean(builtInDefaults.advancedMemory) ??
     false;
 
-  // Optional override for the headless memory-generation agent's model. When
-  // unset the generator falls back to the provider-aware `preferredChildModel`.
+  // Optional global override for the headless memory-generation agent's model.
+  // When unset the generator falls back to the provider-aware
+  // `preferredChildModel`.
   const memoryGenerationModel =
     asNonEmptyString(env.AGENT_MEMORY_MODEL) ||
-    asNonEmptyString(projectConfig.memoryGenerationModel) ||
     asNonEmptyString(userConfig.memoryGenerationModel) ||
     asNonEmptyString(builtInDefaults.memoryGenerationModel) ||
     undefined;

@@ -45,6 +45,11 @@ export type ProjectConfigPatch = Partial<
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
 
+type PersistConfigPatchOptions = {
+  a2uiExperimentEnabled?: boolean;
+  globalConfigDir?: string;
+};
+
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
 }
@@ -137,11 +142,11 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
   }
 }
 
-export async function persistProjectConfigPatch(
-  projectCoworkDir: string,
+async function persistConfigPatchFile(
+  configDir: string,
   patch: ProjectConfigPatch,
   runtimeProviderOptions?: AgentConfig["providerOptions"],
-  opts: { a2uiExperimentEnabled?: boolean } = {},
+  opts: PersistConfigPatchOptions = {},
 ): Promise<void> {
   const a2uiExperimentEnabled = opts.a2uiExperimentEnabled === true || isA2uiExperimentEnabled();
   const entries = Object.entries(patch).filter(
@@ -159,7 +164,7 @@ export async function persistProjectConfigPatch(
     !shouldClearToolOutputOverflowChars
   )
     return;
-  const configPath = path.join(projectCoworkDir, "config.json");
+  const configPath = path.join(configDir, "config.json");
   const current = await loadJsonObjectSafe(configPath);
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of entries) {
@@ -229,9 +234,40 @@ export async function persistProjectConfigPatch(
   if (shouldClearMemoryGenerationModel) {
     delete next.memoryGenerationModel;
   }
-  await fs.mkdir(projectCoworkDir, { recursive: true });
+  await fs.mkdir(configDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
+}
+
+export async function persistProjectConfigPatch(
+  projectCoworkDir: string,
+  patch: ProjectConfigPatch,
+  runtimeProviderOptions?: AgentConfig["providerOptions"],
+  opts: PersistConfigPatchOptions = {},
+): Promise<void> {
+  const projectPatch: ProjectConfigPatch = { ...patch };
+  const globalPatch: ProjectConfigPatch = {};
+  const globalConfigDir = opts.globalConfigDir?.trim();
+
+  if (globalConfigDir) {
+    if (patch.advancedMemory !== undefined) {
+      globalPatch.advancedMemory = patch.advancedMemory;
+      delete projectPatch.advancedMemory;
+    }
+    if (patch.memoryGenerationModel !== undefined) {
+      globalPatch.memoryGenerationModel = patch.memoryGenerationModel;
+      delete projectPatch.memoryGenerationModel;
+    }
+    if (patch.clearMemoryGenerationModel === true) {
+      globalPatch.clearMemoryGenerationModel = true;
+      delete projectPatch.clearMemoryGenerationModel;
+    }
+  }
+
+  await persistConfigPatchFile(projectCoworkDir, projectPatch, runtimeProviderOptions, opts);
+  if (globalConfigDir) {
+    await persistConfigPatchFile(globalConfigDir, globalPatch, runtimeProviderOptions, opts);
+  }
 }
 
 export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch): AgentConfig {

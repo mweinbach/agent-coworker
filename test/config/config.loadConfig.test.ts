@@ -57,6 +57,29 @@ describe("loadConfig", () => {
     expect(cfgFallback.model).toBe(defaultModelForProvider("google"));
   });
 
+  test("advanced memory defaults are global and ignore project overrides", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      advancedMemory: true,
+      memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+    });
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      advancedMemory: false,
+      memoryGenerationModel: "google:gemini-3.1-pro-preview",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.advancedMemory).toBe(true);
+    expect(cfg.memoryGenerationModel).toBe("together:moonshotai/Kimi-K2.5");
+  });
+
   test("provider override uses provider-default model when no model is set", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-"));
     const cwd = path.join(tmp, "project");

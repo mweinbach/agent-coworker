@@ -906,7 +906,15 @@ export function createControlSocketHelpers(
                   : {}),
                 ...(userProfile ? { userProfile } : {}),
               }
-            : workspace,
+            : {
+                ...workspace,
+                ...(sessionConfigHas("advancedMemory")
+                  ? { defaultAdvancedMemory: evt.config.advancedMemory }
+                  : {}),
+                ...(sessionConfigHas("memoryGenerationModel")
+                  ? { defaultMemoryGenerationModel: evt.config.memoryGenerationModel }
+                  : { defaultMemoryGenerationModel: undefined }),
+              },
         ),
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,

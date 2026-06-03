@@ -95,6 +95,44 @@ describe("MemoryGenerator", () => {
     expect(memories[0]?.originSessionId).toBe("sess-42");
   });
 
+  test("routes provider-qualified memory generation models independently of the agent model", async () => {
+    let runtimeConfig: AgentConfig | null = null;
+    const fakeCreateRuntime = ((config: AgentConfig) => {
+      runtimeConfig = config;
+      return {
+        name: "fake" as const,
+        runTurn: async (params: any) => {
+          await params.tools.finish.execute({});
+          return { text: "", responseMessages: [] };
+        },
+      };
+    }) as unknown as typeof import("../src/runtime").createRuntime;
+
+    const generator = new MemoryGenerator({
+      createRuntime: fakeCreateRuntime,
+      loadGeneratorPrompt: async () => "GENERATOR PROMPT",
+    });
+
+    const result = await generator.run({
+      config: {
+        ...baseConfig(),
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+      },
+      sessionId: "sess-42",
+      deltaMessages: [{ role: "user", content: "remember to do X" }] as ModelMessage[],
+      folder: "proj",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runtimeConfig).toMatchObject({
+      provider: "together",
+      runtime: "pi",
+      model: "moonshotai/Kimi-K2.5",
+    });
+  });
+
   test("skips generation when the delta has no user/assistant content", async () => {
     let called = false;
     const generator = new MemoryGenerator({

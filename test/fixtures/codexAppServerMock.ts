@@ -6,6 +6,7 @@ import type {
   CodexAppServerJsonRpcNotification,
   CodexAppServerJsonRpcRawMessage,
 } from "../../src/providers/codexAppServerClient";
+import { UNHANDLED_CODEX_APP_SERVER_REQUEST } from "../../src/providers/codexAppServerClient";
 
 export const mockInterrupts: Array<{ threadId: string; turnId?: string }> = [];
 
@@ -91,8 +92,13 @@ export function createMockClient(): CodexAppServerClient {
     const id = nextTurnId++;
     const request = { id, method, ...(params !== undefined ? { params } : {}) };
     emitRaw({ direction: "server_request", message: request });
-    const handler = [...serverRequestHandlers].at(-1);
-    const result = handler ? await handler(request) : {};
+    let result: unknown = {};
+    for (const handler of [...serverRequestHandlers].reverse()) {
+      const handlerResult = await handler(request);
+      if (handlerResult === UNHANDLED_CODEX_APP_SERVER_REQUEST) continue;
+      result = handlerResult;
+      break;
+    }
     emitRaw({ direction: "client_response", message: { id, result } });
     return result;
   };

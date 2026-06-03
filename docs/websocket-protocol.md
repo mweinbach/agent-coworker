@@ -285,10 +285,30 @@ Currently implemented `cowork/*` methods include:
   - `cowork/import/list`
   - `cowork/import/plugin`
   - `cowork/import/skill`
-- memory controls
+- memory controls (legacy SQLite hot-cache memory)
   - `cowork/memory/list`
   - `cowork/memory/upsert`
   - `cowork/memory/delete`
+- advanced memory controls (file-based, agent-driven memory under `~/.cowork/memories/<folder>/`;
+  active when `advancedMemory` is enabled). Each result returns an `advanced_memory_list` event with
+  the resolved `folder`, the list of `folders`, and the folder's `memories` (frontmatter-parsed
+  `{ slug, name, description, type, originSessionId?, body, updatedAt }`). The base routes always
+  target the current session/workspace folder and reject arbitrary `folder` params.
+  - `cowork/memory/advanced/list` — params `{ cwd? }`; lists folders + current-folder memories.
+  - `cowork/memory/advanced/upsert` — params `{ cwd?, slug?, name, description, type?, body }`;
+    creates/overwrites a current-folder memory and regenerates the folder's `MEMORY.md` index.
+  - `cowork/memory/advanced/delete` — params `{ cwd?, slug }`; removes a current-folder memory and
+    regenerates the index.
+  - `cowork/memory/advanced/generate` — params `{ cwd?, threadId }`; loads an existing conversation
+    and runs the advanced-memory generator for the thread's current folder.
+  - `cowork/memory/advanced/folder/list` — params `{ cwd?, folder }`; administrative explicit-folder
+    browse route.
+  - `cowork/memory/advanced/folder/upsert` — params `{ cwd?, folder, slug?, name, description, type?, body }`;
+    administrative explicit-folder create/overwrite route.
+  - `cowork/memory/advanced/folder/delete` — params `{ cwd?, folder, slug }`; administrative
+    explicit-folder delete route.
+  - `cowork/memory/advanced/folder/generate` — params `{ cwd?, folder, threadId }`; administrative
+    explicit-folder history-generation route.
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`
@@ -351,7 +371,7 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/session/state/read` returns the current workspace control session state as a bundle of `config_updated`, `session_settings`, and `session_config` session events so JSON-RPC clients can hydrate provider/model defaults before diffing local settings.
 
-`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
+`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive.
 
 `cowork/session/delete` is workspace-scoped. The control session may delete sessions in the active workspace, but attempts to delete a live or persisted session from another workspace fail with a JSON-RPC error.
 
@@ -591,6 +611,7 @@ Changes in `7.35`:
 - `cowork/session/agent/spawn` and the `spawnAgent` tool now accept `profileRef`. Bare refs resolve by workspace-over-global precedence; scoped refs use `workspace:<id>` or `global:<id>`. `profileRef` wins over `role` when both are present.
 - Child agent session metadata now persists a resolved profile snapshot so resumed child agents keep the prompt, tool, MCP, skill, model, and reasoning policy that existed at spawn time.
 - Agent profile catalogs now include the five built-in subagent templates as editable global entries. The built-in `default` profile is labeled Main Agent and marked locked so clients keep it enabled.
+- `cowork/session/defaults/apply.config` now accepts global advanced-memory defaults: `advancedMemory`, `memoryGenerationModel`, and `clearMemoryGenerationModel`. `memoryGenerationModel` may be a same-provider model id or a full `provider:modelId` ref; the clear flag removes the persisted generation-model override and resumes inheritance.
 
 Changes in `7.34`:
 
@@ -605,9 +626,9 @@ Changes in `7.33`:
 Changes in `7.32`:
 
 - Added JSON-RPC controls for the runtime-managed Codex app-server payload:
-  - `cowork/provider/codexAppServer/status` returns `{ status }` with source, version, latest version, and update availability.
-  - `cowork/provider/codexAppServer/update` downloads/promotes the latest Cowork-managed Codex app-server under `~/.cowork/codex-app-server`.
-- Desktop/runtime Codex app-server resolution now prefers explicit overrides, then an existing Cowork-managed install, downloads a managed latest release when missing, and falls back to a system `codex app-server` only if managed install fails and the system binary exposes the app-server subcommand.
+  - `cowork/provider/codexAppServer/status` returns `{ status }` with source, current version, app-pinned version, and whether the installed managed payload matches the app pin.
+  - `cowork/provider/codexAppServer/update` downloads/promotes the app-pinned Cowork-managed Codex app-server under `~/.cowork/codex-app-server`; callers cannot select or pin arbitrary versions.
+- Desktop/runtime Codex app-server resolution now downloads and uses the app-pinned Cowork-managed release. Updating the desktop app can bump the code pin so the next runtime use downloads the replacement payload.
 
 Changes in `7.31`:
 
@@ -899,6 +920,10 @@ Returned in `server_hello` and `config_updated`:
   "message": "LM Studio server reachable at http://localhost:1234."
 }
 ```
+
+For `codex-cli`, a connected Codex app-server account uses live `model/list` results for
+`models` and `defaultModel`. Models known to Cowork's bundled registry are enriched with static
+metadata; newly available app-server model ids may appear with conservative fallback metadata.
 
 ### ProviderAuthMethod
 
@@ -3388,6 +3413,8 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.backupsEnabled` | `boolean` | Whether advanced backups are enabled for the live session after applying any session-scoped override. Defaults to `false`. |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied. Defaults to `false`. |
+| `config.advancedMemory` | `boolean` | Whether file-based advanced memory is enabled for the live session. This is a global persisted default, not a per-workspace toggle. Defaults to `false`. |
+| `config.memoryGenerationModel` | `string` | Explicit model id or `provider:modelId` ref used for advanced-memory generation; omitted when the session inherits the active model. |
 | `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.preferredChildModel` | `string` | Normalized same-provider fallback model identifier used for legacy/default suggestion state |

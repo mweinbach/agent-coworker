@@ -18,6 +18,7 @@ describe("api-keys tool", () => {
       sessionsDir: path.join(tmpDir, "sessions"),
       logsDir: path.join(tmpDir, "logs"),
       skillsDir: path.join(tmpDir, "skills"),
+      memoriesDir: path.join(tmpDir, "memories"),
       connectionsFile: path.join(tmpDir, "connections.json"),
     };
   });

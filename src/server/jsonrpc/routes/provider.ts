@@ -77,13 +77,8 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/codexAppServer/update": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const version =
-        typeof params.version === "string" && params.version.trim()
-          ? params.version.trim()
-          : undefined;
       await closePooledCodexAppServerClients();
       const status = await updateManagedCodexAppServer({
-        ...(version ? { version } : {}),
         force: params.force === true,
       });
       context.jsonrpc.sendResult(ws, message.id, { status });

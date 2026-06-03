@@ -30,6 +30,8 @@ export type ProjectConfigPatch = Partial<
     | "enableA2ui"
     | "enableMemory"
     | "memoryRequireApproval"
+    | "advancedMemory"
+    | "memoryGenerationModel"
     | "observabilityEnabled"
     | "backupsEnabled"
     | "toolOutputOverflowChars"
@@ -38,8 +40,14 @@ export type ProjectConfigPatch = Partial<
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
+  clearMemoryGenerationModel?: boolean;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+};
+
+type PersistConfigPatchOptions = {
+  a2uiExperimentEnabled?: boolean;
+  globalConfigDir?: string;
 };
 
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -134,22 +142,29 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
   }
 }
 
-export async function persistProjectConfigPatch(
-  projectCoworkDir: string,
+async function persistConfigPatchFile(
+  configDir: string,
   patch: ProjectConfigPatch,
   runtimeProviderOptions?: AgentConfig["providerOptions"],
-  opts: { a2uiExperimentEnabled?: boolean } = {},
+  opts: PersistConfigPatchOptions = {},
 ): Promise<void> {
   const a2uiExperimentEnabled = opts.a2uiExperimentEnabled === true || isA2uiExperimentEnabled();
   const entries = Object.entries(patch).filter(
     ([key, value]) =>
+      key !== "clearMemoryGenerationModel" &&
       key !== "clearToolOutputOverflowChars" &&
       value !== undefined &&
       (a2uiExperimentEnabled || (key !== "enableA2ui" && key !== "featureFlags")),
   );
+  const shouldClearMemoryGenerationModel = patch.clearMemoryGenerationModel === true;
   const shouldClearToolOutputOverflowChars = patch.clearToolOutputOverflowChars === true;
-  if (entries.length === 0 && !shouldClearToolOutputOverflowChars) return;
-  const configPath = path.join(projectCoworkDir, "config.json");
+  if (
+    entries.length === 0 &&
+    !shouldClearMemoryGenerationModel &&
+    !shouldClearToolOutputOverflowChars
+  )
+    return;
+  const configPath = path.join(configDir, "config.json");
   const current = await loadJsonObjectSafe(configPath);
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of entries) {
@@ -216,13 +231,48 @@ export async function persistProjectConfigPatch(
   if (shouldClearToolOutputOverflowChars) {
     delete next.toolOutputOverflowChars;
   }
-  await fs.mkdir(projectCoworkDir, { recursive: true });
+  if (shouldClearMemoryGenerationModel) {
+    delete next.memoryGenerationModel;
+  }
+  await fs.mkdir(configDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
 }
 
+export async function persistProjectConfigPatch(
+  projectCoworkDir: string,
+  patch: ProjectConfigPatch,
+  runtimeProviderOptions?: AgentConfig["providerOptions"],
+  opts: PersistConfigPatchOptions = {},
+): Promise<void> {
+  const projectPatch: ProjectConfigPatch = { ...patch };
+  const globalPatch: ProjectConfigPatch = {};
+  const globalConfigDir = opts.globalConfigDir?.trim();
+
+  if (globalConfigDir) {
+    if (patch.advancedMemory !== undefined) {
+      globalPatch.advancedMemory = patch.advancedMemory;
+      delete projectPatch.advancedMemory;
+    }
+    if (patch.memoryGenerationModel !== undefined) {
+      globalPatch.memoryGenerationModel = patch.memoryGenerationModel;
+      delete projectPatch.memoryGenerationModel;
+    }
+    if (patch.clearMemoryGenerationModel === true) {
+      globalPatch.clearMemoryGenerationModel = true;
+      delete projectPatch.clearMemoryGenerationModel;
+    }
+  }
+
+  await persistConfigPatchFile(projectCoworkDir, projectPatch, runtimeProviderOptions, opts);
+  if (globalConfigDir) {
+    await persistConfigPatchFile(globalConfigDir, globalPatch, runtimeProviderOptions, opts);
+  }
+}
+
 export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch): AgentConfig {
   const {
+    clearMemoryGenerationModel: _clearMemoryGenerationModel,
     clearToolOutputOverflowChars: _clearToolOutputOverflowChars,
     enableA2ui: legacyEnableA2uiPatch,
     featureFlags: featureFlagsPatch,
@@ -251,6 +301,9 @@ export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch)
     next.toolOutputOverflowChars = config.inheritedToolOutputOverflowChars;
     next.projectConfigOverrides =
       Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined;
+  }
+  if (patch.clearMemoryGenerationModel) {
+    next.memoryGenerationModel = undefined;
   }
   if (patch.providerOptions !== undefined) {
     next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(

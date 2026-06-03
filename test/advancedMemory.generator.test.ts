@@ -1,0 +1,292 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { MemoryGenerator, serializeTurnDelta } from "../src/advancedMemory/MemoryGenerator";
+import { AdvancedMemoryStore } from "../src/advancedMemory/store";
+import type { AgentConfig, ModelMessage } from "../src/types";
+
+let tmpDir: string;
+
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "adv-mem-gen-"));
+});
+
+afterEach(async () => {
+  await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+function baseConfig(): AgentConfig {
+  return {
+    provider: "google",
+    model: "gemini-x",
+    memoriesDir: tmpDir,
+    workingDirectory: "/tmp/proj",
+    projectCoworkDir: "/tmp/proj/.cowork",
+  } as unknown as AgentConfig;
+}
+
+describe("serializeTurnDelta", () => {
+  test("renders user/assistant text, tool calls, and truncates tool results", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working" },
+          { type: "tool-call", toolName: "bash", input: { command: "ls" } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [{ type: "tool-result", toolName: "bash", output: { value: "x".repeat(5000) } }],
+      },
+    ] as unknown as ModelMessage[];
+    const out = serializeTurnDelta(messages);
+    expect(out).toContain("USER: do the thing");
+    expect(out).toContain("ASSISTANT: working");
+    expect(out).toContain("ASSISTANT → bash(");
+    expect(out).toContain("TOOL[bash]:");
+    // Tool result truncated well below its raw 5000 chars.
+    expect(out.length).toBeLessThan(2000);
+  });
+});
+
+describe("MemoryGenerator", () => {
+  test("runs the headless agent, which can write a memory via tools", async () => {
+    let captured: { tools: Record<string, any>; system: string } | null = null;
+    const fakeCreateRuntime = (() => ({
+      name: "fake" as const,
+      runTurn: async (params: any) => {
+        captured = { tools: params.tools, system: params.system };
+        // Simulate the model calling write_memory then finish.
+        await params.tools.write_memory.execute({
+          name: "remembered rule",
+          description: "a durable rule",
+          type: "feedback",
+          body: "always do X",
+        });
+        await params.tools.finish.execute({});
+        return { text: "", responseMessages: [] };
+      },
+    })) as unknown as typeof import("../src/runtime").createRuntime;
+
+    const generator = new MemoryGenerator({
+      createRuntime: fakeCreateRuntime,
+      loadGeneratorPrompt: async () => "GENERATOR PROMPT",
+    });
+
+    const result = await generator.run({
+      config: baseConfig(),
+      sessionId: "sess-42",
+      deltaMessages: [{ role: "user", content: "remember to do X" }] as ModelMessage[],
+      folder: "proj",
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(captured?.system).toBe("GENERATOR PROMPT");
+
+    const store = new AdvancedMemoryStore(tmpDir);
+    const memories = await store.listMemories("proj");
+    expect(memories).toHaveLength(1);
+    expect(memories[0]?.name).toBe("remembered rule");
+    expect(memories[0]?.originSessionId).toBe("sess-42");
+  });
+
+  test("routes provider-qualified memory generation models independently of the agent model", async () => {
+    let runtimeConfig: AgentConfig | null = null;
+    const fakeCreateRuntime = ((config: AgentConfig) => {
+      runtimeConfig = config;
+      return {
+        name: "fake" as const,
+        runTurn: async (params: any) => {
+          await params.tools.finish.execute({});
+          return { text: "", responseMessages: [] };
+        },
+      };
+    }) as unknown as typeof import("../src/runtime").createRuntime;
+
+    const generator = new MemoryGenerator({
+      createRuntime: fakeCreateRuntime,
+      loadGeneratorPrompt: async () => "GENERATOR PROMPT",
+    });
+
+    const result = await generator.run({
+      config: {
+        ...baseConfig(),
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+      },
+      sessionId: "sess-42",
+      deltaMessages: [{ role: "user", content: "remember to do X" }] as ModelMessage[],
+      folder: "proj",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runtimeConfig).toMatchObject({
+      provider: "together",
+      runtime: "pi",
+      model: "moonshotai/Kimi-K2.5",
+    });
+  });
+
+  test("falls back to the canonical preferred child model ref for generation", async () => {
+    let runtimeConfig: AgentConfig | null = null;
+    const fakeCreateRuntime = ((config: AgentConfig) => {
+      runtimeConfig = config;
+      return {
+        name: "fake" as const,
+        runTurn: async (params: any) => {
+          await params.tools.finish.execute({});
+          return { text: "", responseMessages: [] };
+        },
+      };
+    }) as unknown as typeof import("../src/runtime").createRuntime;
+
+    const generator = new MemoryGenerator({
+      createRuntime: fakeCreateRuntime,
+      loadGeneratorPrompt: async () => "GENERATOR PROMPT",
+    });
+
+    const result = await generator.run({
+      config: {
+        ...baseConfig(),
+        provider: "openai",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        preferredChildModelRef: "anthropic:claude-opus-4-8",
+        childModelRoutingMode: "cross-provider-allowlist",
+        allowedChildModelRefs: ["anthropic:claude-opus-4-8"],
+      },
+      sessionId: "sess-42",
+      deltaMessages: [{ role: "user", content: "remember to do X" }] as ModelMessage[],
+      folder: "proj",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runtimeConfig).toMatchObject({
+      provider: "anthropic",
+      runtime: "pi",
+      model: "claude-opus-4-8",
+    });
+  });
+
+  test("consolidates a memory folder with index reads and stale-memory deletion", async () => {
+    let captured: { tools: Record<string, any>; system: string } | null = null;
+    let runtimeConfig: AgentConfig | null = null;
+    const store = new AdvancedMemoryStore(tmpDir);
+    await store.writeMemory("proj", {
+      name: "durable rule",
+      description: "keep this",
+      type: "feedback",
+      body: "Keep the durable rule.",
+    });
+    await store.writeMemory("proj", {
+      name: "stale task",
+      description: "delete this stale task",
+      type: "note",
+      body: "This was a one-off task.",
+    });
+
+    const fakeCreateRuntime = ((config: AgentConfig) => {
+      runtimeConfig = config;
+      return {
+        name: "fake" as const,
+        runTurn: async (params: any) => {
+          captured = { tools: params.tools, system: params.system };
+          const index = await params.tools.read_index.execute({});
+          expect(index).toContain("[durable rule](durable-rule.md)");
+          expect(index).toContain("[stale task](stale-task.md)");
+          const memories = await params.tools.list_memories.execute({});
+          expect(memories.map((entry: { slug: string }) => entry.slug).sort()).toEqual([
+            "durable-rule",
+            "stale-task",
+          ]);
+          const stale = await params.tools.read_memory.execute({ slug: "stale-task" });
+          expect(stale).toMatchObject({ found: true, name: "stale task" });
+          expect(await params.tools.delete_memory.execute({ slug: "stale-task" })).toEqual({
+            ok: true,
+          });
+          await params.tools.finish.execute({ note: "removed stale task" });
+          return { text: "", responseMessages: [] };
+        },
+      };
+    }) as unknown as typeof import("../src/runtime").createRuntime;
+
+    const generator = new MemoryGenerator({
+      createRuntime: fakeCreateRuntime,
+      loadGeneratorPrompt: async () => "GENERATOR PROMPT",
+      loadConsolidatorPrompt: async () => "CONSOLIDATOR PROMPT",
+    });
+
+    const result = await generator.consolidate({
+      config: {
+        ...baseConfig(),
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+      },
+      sessionId: "sess-42",
+      folder: "proj",
+    });
+
+    expect(result).toEqual({ ran: true, ok: true });
+    expect(captured?.system).toBe("CONSOLIDATOR PROMPT");
+    expect(captured?.tools.read_index).toBeDefined();
+    expect(captured?.tools.delete_memory).toBeDefined();
+    expect(runtimeConfig).toMatchObject({
+      provider: "together",
+      runtime: "pi",
+      model: "moonshotai/Kimi-K2.5",
+    });
+    expect(await store.readMemory("proj", "stale-task")).toBeNull();
+    expect((await store.listMemories("proj")).map((memory) => memory.slug)).toEqual([
+      "durable-rule",
+    ]);
+  });
+
+  test("skips generation when the delta has no user/assistant content", async () => {
+    let called = false;
+    const generator = new MemoryGenerator({
+      createRuntime: (() => {
+        called = true;
+        return { name: "fake", runTurn: async () => ({ text: "", responseMessages: [] }) };
+      }) as unknown as typeof import("../src/runtime").createRuntime,
+      loadGeneratorPrompt: async () => "P",
+    });
+    const result = await generator.run({
+      config: baseConfig(),
+      sessionId: "s",
+      deltaMessages: [
+        { role: "tool", content: [{ type: "tool-result", toolName: "x", output: {} }] },
+      ] as unknown as ModelMessage[],
+      folder: "proj",
+    });
+    expect(result.ran).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(called).toBe(false);
+  });
+
+  test("swallows runtime errors and never throws", async () => {
+    const generator = new MemoryGenerator({
+      createRuntime: (() => ({
+        name: "fake",
+        runTurn: async () => {
+          throw new Error("boom");
+        },
+      })) as unknown as typeof import("../src/runtime").createRuntime,
+      loadGeneratorPrompt: async () => "P",
+    });
+    const result = await generator.run({
+      config: baseConfig(),
+      sessionId: "s",
+      deltaMessages: [{ role: "user", content: "hi" }] as ModelMessage[],
+      folder: "proj",
+    });
+    expect(result.ran).toBe(false);
+    expect(result.ok).toBe(false);
+  });
+});

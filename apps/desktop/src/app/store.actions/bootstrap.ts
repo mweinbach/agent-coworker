@@ -233,6 +233,8 @@ const persistedWorkspaceSchema = z
       (value) => (typeof value === "boolean" ? value : false),
       z.boolean(),
     ),
+    defaultAdvancedMemory: z.boolean().optional(),
+    defaultMemoryGenerationModel: z.string().optional(),
     yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   })
   .passthrough()
@@ -280,6 +282,8 @@ const persistedWorkspaceSchema = z
         : undefined,
       defaultEnableMcp: workspace.defaultEnableMcp,
       defaultBackupsEnabled: workspace.defaultBackupsEnabled,
+      defaultAdvancedMemory: workspace.defaultAdvancedMemory,
+      defaultMemoryGenerationModel: workspace.defaultMemoryGenerationModel,
       yolo: workspace.yolo,
     };
   });
@@ -1073,6 +1077,8 @@ export function createBootstrapActions(
             "userProfile",
             "defaultEnableMcp",
             "defaultBackupsEnabled",
+            "defaultAdvancedMemory",
+            "defaultMemoryGenerationModel",
             "yolo",
           ];
           const patch: Record<string, unknown> = {};

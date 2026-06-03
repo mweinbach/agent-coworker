@@ -72,9 +72,11 @@ const {
   CHATS_MEMORY_TARGET_ID,
   MEMORY_LOADING_STALL_MS,
   MemoryPage,
+  buildMemoryGenerationModelGroups,
   isMemoryLoadStalled,
   parentDirectoryPath,
   resolveDraftMemoryId,
+  resolveMemoryGenerationModelSelection,
   resolveMemoryTargets,
 } = await import("../src/ui/settings/pages/MemoryPage");
 const { useAppStore } = await import("../src/app/store");
@@ -171,6 +173,124 @@ describe("desktop memory page", () => {
     expect(isMemoryLoadStalled(true, null, Date.now())).toBe(false);
     expect(isMemoryLoadStalled(true, 1000, 1000 + MEMORY_LOADING_STALL_MS - 1)).toBe(false);
     expect(isMemoryLoadStalled(true, 1000, 1000 + MEMORY_LOADING_STALL_MS)).toBe(true);
+  });
+
+  test("memory model choices include provider-qualified models across providers", () => {
+    const groups = buildMemoryGenerationModelGroups(
+      [
+        {
+          id: "google",
+          name: "Google",
+          status: "connected",
+          models: [{ id: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro" }],
+        },
+        {
+          id: "together",
+          name: "Together AI",
+          status: "connected",
+          models: [{ id: "moonshotai/Kimi-K2.5", displayName: "Kimi K2.5" }],
+        },
+      ] as any,
+      "together:moonshotai/Kimi-K2.5",
+    );
+
+    expect(groups.map((group) => group.provider)).toContain("google");
+    expect(groups.map((group) => group.provider)).toContain("together");
+    expect(groups.flatMap((group) => group.options.map((option) => option.value))).toContain(
+      "together:moonshotai/Kimi-K2.5",
+    );
+    expect(resolveMemoryGenerationModelSelection("moonshotai/Kimi-K2.5", "together")).toBe(
+      "together:moonshotai/Kimi-K2.5",
+    );
+  });
+
+  test("memory model choices hide unconfigured provider catalogs", () => {
+    const groups = buildMemoryGenerationModelGroups(
+      [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3.5-flash",
+          models: [
+            {
+              id: "gemini-3.5-flash",
+              displayName: "Gemini 3.5 Flash",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+        {
+          id: "bedrock",
+          name: "Amazon Bedrock",
+          defaultModel: "amazon.nova-lite-v1:0",
+          models: [
+            {
+              id: "amazon.nova-lite-v1:0",
+              displayName: "Amazon Nova Lite",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
+        },
+      ],
+      "",
+      { includedProviders: ["google"] },
+    );
+
+    expect(groups.map((group) => group.provider)).toEqual(["google"]);
+    expect(JSON.stringify(groups)).not.toContain("Amazon Nova Lite");
+  });
+
+  test("memory model choices preserve the current unconfigured model as custom", () => {
+    const groups = buildMemoryGenerationModelGroups(
+      [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3.5-flash",
+          models: [
+            {
+              id: "gemini-3.5-flash",
+              displayName: "Gemini 3.5 Flash",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+        {
+          id: "bedrock",
+          name: "Amazon Bedrock",
+          defaultModel: "amazon.nova-lite-v1:0",
+          models: [
+            {
+              id: "amazon.nova-lite-v1:0",
+              displayName: "Amazon Nova Lite",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+            {
+              id: "amazon.nova-micro-v1:0",
+              displayName: "Amazon Nova Micro",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
+        },
+      ],
+      "bedrock:amazon.nova-lite-v1:0",
+      { includedProviders: ["google"] },
+    );
+
+    const bedrockGroup = groups.find((group) => group.provider === "bedrock");
+    expect(bedrockGroup?.options).toEqual([
+      {
+        value: "bedrock:amazon.nova-lite-v1:0",
+        label: "Amazon Nova Lite (custom)",
+        title: "amazon.nova-lite-v1:0",
+      },
+    ]);
+    expect(JSON.stringify(groups)).not.toContain("Amazon Nova Micro");
   });
 
   test("memory targets collapse non-project chats while keeping projects individual", () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { type AiCoworkerPaths, getAiCoworkerPaths, readConnectionStore } from "../connect";
 import {
   defaultSupportedModel,
+  getSupportedModel,
   listSupportedModels,
   type SupportedModel,
 } from "../models/registry";
@@ -124,16 +125,21 @@ async function codexCatalogEntry(opts: {
     };
   }
 
-  const supportedById = new Map(listSupportedModels("codex-cli").map((model) => [model.id, model]));
+  const resolveLiveModel = (model: (typeof appServerModels)[number]) => {
+    const supported =
+      getSupportedModel("codex-cli", model.model) ?? getSupportedModel("codex-cli", model.id);
+    const id = supported?.id ?? model.model ?? model.id;
+    return { id, supported };
+  };
   const modelsById = new Map<string, ProviderCatalogModelEntry>();
   for (const model of appServerModels) {
-    const supported = supportedById.get(model.model) ?? supportedById.get(model.id);
-    if (!supported || modelsById.has(supported.id)) continue;
-    modelsById.set(supported.id, {
-      id: supported.id,
-      displayName: model.displayName || supported.displayName,
-      knowledgeCutoff: supported.knowledgeCutoff,
-      supportsImageInput: supported.supportsImageInput,
+    const live = resolveLiveModel(model);
+    if (modelsById.has(live.id)) continue;
+    modelsById.set(live.id, {
+      id: live.id,
+      displayName: model.displayName || live.supported?.displayName || live.id,
+      knowledgeCutoff: live.supported?.knowledgeCutoff ?? "Unknown",
+      supportsImageInput: live.supported?.supportsImageInput ?? model.supportsImageInput ?? false,
     });
   }
   const models = [...modelsById.values()];
@@ -150,11 +156,7 @@ async function codexCatalogEntry(opts: {
 
   const defaultFromAppServer = appServerModels.find((model) => model.isDefault);
   const defaultModel =
-    (defaultFromAppServer
-      ? (supportedById.get(defaultFromAppServer.model) ??
-        supportedById.get(defaultFromAppServer.id))
-      : null
-    )?.id ??
+    (defaultFromAppServer ? resolveLiveModel(defaultFromAppServer).id : undefined) ??
     models[0]?.id ??
     "";
 

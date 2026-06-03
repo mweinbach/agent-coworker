@@ -263,3 +263,4 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - For Electron main-process CommonJS deps, use `createRequire` interop, not named ESM imports.
 - For dense desktop settings panels, prefer compact controls and separators over nested rounded subcards.
 - Make sure all platform-specific desktop behavior is properly handled and tested for that platform. When making changes with native elements, do not rely on platform defaults or implicit behavior — always specify explicit styles and behaviors.
+- For sidebar project new-chat affordances, open the new-chat landing with the clicked project preselected; do not immediately create a project draft unless the user explicitly asks for instant draft creation.

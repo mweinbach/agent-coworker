@@ -268,7 +268,10 @@ export type AppStoreState = {
     provider?: ProviderName;
     model?: string;
   }) => Promise<boolean>;
-  openNewChatLanding: (opts?: { defaultTargetKind?: "project" | "oneOff" }) => Promise<void>;
+  openNewChatLanding: (opts?: {
+    defaultTargetKind?: "project" | "oneOff";
+    target?: NewChatLandingTarget;
+  }) => Promise<void>;
   setNewChatLandingTarget: (target: NewChatLandingTarget) => void;
   removeThread: (threadId: string) => Promise<void>;
   archiveThread: (threadId: string) => Promise<void>;
@@ -395,7 +398,11 @@ export type AppStoreState = {
     draftModelSelection?: { provider: ProviderName; model: string } | null,
     opts?: { allowBeforeHydration?: boolean },
   ) => Promise<void>;
-  updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: WorkspaceDefaultsPatch,
+    opts?: { scope?: "settings" | "target" },
+  ) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
   upsertWorkspaceMcpServer: (
@@ -476,6 +483,44 @@ export type AppStoreState = {
     opts?: { cwd?: string },
   ) => Promise<void>;
 
+  requestAdvancedMemories: (
+    workspaceId: string,
+    opts?: { cwd?: string; folder?: string },
+  ) => Promise<void>;
+  upsertAdvancedMemory: (
+    workspaceId: string,
+    input: {
+      folder?: string;
+      slug?: string;
+      name: string;
+      description: string;
+      type?: string;
+      body: string;
+    },
+    opts?: { cwd?: string },
+  ) => Promise<boolean>;
+  deleteAdvancedMemory: (
+    workspaceId: string,
+    folder: string | undefined,
+    slug: string,
+    opts?: { cwd?: string },
+  ) => Promise<void>;
+  generateAdvancedMemoryForThread: (
+    workspaceId: string,
+    threadId: string,
+    opts?: { cwd?: string; folder?: string },
+  ) => Promise<boolean>;
+  setWorkspaceAdvancedMemory: (
+    workspaceId: string,
+    advancedMemory: boolean,
+    opts?: { cwd?: string },
+  ) => Promise<void>;
+  setWorkspaceMemoryGenerationModel: (
+    workspaceId: string,
+    model: string,
+    opts?: { cwd?: string },
+  ) => Promise<void>;
+
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
   setProviderConfig: (
@@ -494,7 +539,7 @@ export type AppStoreState = {
     workspaceId?: string;
   }) => Promise<void>;
   checkCodexAppServerStatus: (opts?: { checkLatest?: boolean }) => Promise<void>;
-  updateCodexAppServer: () => Promise<void>;
+  updateCodexAppServer: (opts?: { force?: boolean }) => Promise<void>;
   checkLibreOfficeRuntime: (opts?: {
     smoke?: boolean;
   }) => Promise<import("../lib/wsProtocol").LibreOfficeRuntimeDiagnostic | null>;

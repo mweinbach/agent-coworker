@@ -69,6 +69,8 @@ export type PersistedProjectConfigPatch = Partial<
     | "enableA2ui"
     | "enableMemory"
     | "memoryRequireApproval"
+    | "advancedMemory"
+    | "memoryGenerationModel"
     | "observabilityEnabled"
     | "backupsEnabled"
     | "toolOutputOverflowChars"
@@ -77,6 +79,7 @@ export type PersistedProjectConfigPatch = Partial<
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
+  clearMemoryGenerationModel?: boolean;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
@@ -92,6 +95,7 @@ export type HydratedSessionState = {
   status: SessionPersistenceStatus;
   hasGeneratedTitle: boolean;
   messages: ModelMessage[];
+  lastMemoryGeneratedIndex?: number;
   providerState: ProviderContinuationState | null;
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
@@ -145,6 +149,19 @@ export type SessionRuntimeState = {
   sessionBackupInit: Promise<void> | null;
   backupOperationQueue: Promise<void>;
   lastAutoCheckpointAt: number;
+  /**
+   * Index into `allMessages` marking how far advanced-memory generation has
+   * consumed. After each completed turn the generator processes the slice from
+   * here to the end, then advances this marker. Reading from the untrimmed
+   * `allMessages` keeps generation correct across runtime-view trimming.
+   */
+  lastMemoryGeneratedIndex: number;
+  /**
+   * Successful automatic advanced-memory generation passes since the last
+   * successful folder consolidation. In-memory only; resets when a live session
+   * is recreated.
+   */
+  memoryGenerationsSinceConsolidation: number;
   costTracker: SessionCostTracker | null;
   /**
    * Monotonic counter for synthetic referenced-skill tool calls within the active

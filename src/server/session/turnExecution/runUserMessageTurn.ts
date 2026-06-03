@@ -46,6 +46,7 @@ export type UserMessageTurnRunnerDeps = {
   backupController: SessionBackupController;
   interactionManager: InteractionManager;
   flushPendingExternalSkillRefresh: () => Promise<void>;
+  triggerMemoryGeneration?: () => void;
   steerCoordinator: SteerCoordinator;
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
   buildUserMessageContent: UserMessageAttachmentHelpers["buildUserMessageContent"];
@@ -83,6 +84,7 @@ export function createUserMessageTurnRunner(
     backupController,
     interactionManager,
     flushPendingExternalSkillRefresh,
+    triggerMemoryGeneration,
     steerCoordinator,
     classifyTurnError,
     buildUserMessageContent,
@@ -469,6 +471,11 @@ export function createUserMessageTurnRunner(
         void backupController.takeAutomaticSessionCheckpoint().catch(() => {
           // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.
         });
+      }
+      // Fire advanced memory generation for completed turns only. Fire-and-forget;
+      // never blocks the user-facing turn (no-op unless advanced memory is on).
+      if (context.state.currentTurnOutcome === "completed") {
+        triggerMemoryGeneration?.();
       }
     }
   };

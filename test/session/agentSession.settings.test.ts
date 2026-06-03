@@ -246,6 +246,32 @@ describe("AgentSession", () => {
       ]);
     });
 
+    test("setConfig refreshes the cached system prompt when advancedMemory changes", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
+        prompt: `prompt:advanced-memory-${String(config.advancedMemory ?? false)}`,
+        discoveredSkills: [{ name: "advanced-memory", description: "Advanced memory" }],
+      }));
+      const { session } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), advancedMemory: false },
+        persistProjectConfigPatchImpl,
+        loadSystemPromptWithSkillsImpl,
+        system: "prompt:advanced-memory-false",
+      });
+
+      await session.setConfig({ advancedMemory: true });
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({ advancedMemory: true });
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:advanced-memory-true");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "advanced-memory", description: "Advanced memory" },
+      ]);
+    });
+
     test("setConfig refreshes the cached system prompt when the A2UI feature flag changes", async () => {
       await withEnv("COWORK_EXPERIMENTAL_A2UI", "1", async () => {
         const persistProjectConfigPatchImpl = mock(async () => {});
@@ -532,11 +558,12 @@ describe("AgentSession", () => {
         discoveredSkills: [{ name: "native-web", description: "Native web" }],
       }));
       const { session } = makeSession({
-        config: makeConfig("/tmp/test-session", {
+        config: {
+          ...makeConfig("/tmp/test-session"),
           provider: "google",
           model: "gemini-3-flash-preview",
           preferredChildModel: "gemini-3-flash-preview",
-        }),
+        },
         persistProjectConfigPatchImpl,
         loadSystemPromptWithSkillsImpl,
         system: "prompt:false",
@@ -643,13 +670,14 @@ describe("AgentSession", () => {
     test("setConfig can clear the persisted toolOutputOverflowChars override and restore inheritance", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({
-        config: makeConfig("/tmp/test-session", {
+        config: {
+          ...makeConfig("/tmp/test-session"),
           toolOutputOverflowChars: 12000,
           inheritedToolOutputOverflowChars: 25000,
           projectConfigOverrides: {
             toolOutputOverflowChars: 12000,
           },
-        }),
+        },
         persistProjectConfigPatchImpl,
       });
 
@@ -664,6 +692,29 @@ describe("AgentSession", () => {
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
         clearToolOutputOverflowChars: true,
+      });
+    });
+
+    test("setConfig can clear the persisted memory generation model override", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          memoryGenerationModel: "gemini-old",
+        },
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setConfig({
+        clearMemoryGenerationModel: true,
+      });
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt).toBeDefined();
+      expect("memoryGenerationModel" in cfgEvt.config).toBe(false);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        clearMemoryGenerationModel: true,
       });
     });
 

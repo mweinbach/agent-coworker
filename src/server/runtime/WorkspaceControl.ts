@@ -197,6 +197,10 @@ export class WorkspaceControl {
           ...(a2uiExperimentEnabled ? { enableA2ui: workspaceA2ui } : {}),
           enableMemory: controlConfig.enableMemory ?? true,
           memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
+          advancedMemory: controlConfig.advancedMemory ?? false,
+          ...(controlConfig.memoryGenerationModel
+            ? { memoryGenerationModel: controlConfig.memoryGenerationModel }
+            : {}),
           preferredChildModel: controlConfig.preferredChildModel,
           childModelRoutingMode: controlConfig.childModelRoutingMode ?? "same-provider",
           preferredChildModelRef,

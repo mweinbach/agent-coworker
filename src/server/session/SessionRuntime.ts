@@ -343,6 +343,25 @@ export class SessionMemoryService {
   async delete(scope: MemoryScope, id: string): Promise<void> {
     await this.session.deleteMemory(scope, id);
   }
+
+  async listAdvanced(folder?: string): Promise<void> {
+    await this.session.emitAdvancedMemories(folder);
+  }
+
+  async upsertAdvanced(
+    folder: string | undefined,
+    input: { slug?: string; name: string; description: string; type?: string; body: string },
+  ): Promise<void> {
+    await this.session.upsertAdvancedMemory(folder, input);
+  }
+
+  async deleteAdvanced(folder: string | undefined, slug: string): Promise<void> {
+    await this.session.deleteAdvancedMemory(folder, slug);
+  }
+
+  async generateAdvancedFromHistory(folder?: string): Promise<void> {
+    await this.session.generateAdvancedMemoryForHistory(folder);
+  }
 }
 
 export class SessionSkillService {

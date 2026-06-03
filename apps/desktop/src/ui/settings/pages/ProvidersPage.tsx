@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ChevronDownIcon, ChevronRightIcon, DownloadIcon, RefreshCcwIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, RefreshCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -81,7 +81,6 @@ export function ProvidersPage({
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
   const checkCodexAppServerStatus = useAppStore((s) => s.checkCodexAppServerStatus);
-  const updateCodexAppServer = useAppStore((s) => s.updateCodexAppServer);
   const providerStatusByNameFromStore = useAppStore((s) => s.providerStatusByName);
   const providerStatusRefreshingFromStore = useAppStore((s) => s.providerStatusRefreshing);
   const codexAppServerStatusFromStore = useAppStore((s) => s.codexAppServerStatus);
@@ -976,13 +975,13 @@ export function ProvidersPage({
                         </div>
                       </>
                     ) : null}
-                    {codexAppServerStatus?.latestVersion ? (
+                    {codexAppServerStatus?.pinnedVersion ? (
                       <>
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Latest
+                          Required
                         </div>
                         <div className="text-sm text-foreground/95">
-                          {codexAppServerStatus.latestVersion}
+                          {codexAppServerStatus.pinnedVersion}
                         </div>
                       </>
                     ) : null}
@@ -1002,14 +1001,6 @@ export function ProvidersPage({
                     >
                       <RefreshCcwIcon data-icon="inline-start" />
                       {codexAppServerChecking ? "Checking..." : "Check"}
-                    </Button>
-                    <Button
-                      type="button"
-                      disabled={codexAppServerUpdating || codexAppServerChecking}
-                      onClick={() => void updateCodexAppServer()}
-                    >
-                      <DownloadIcon data-icon="inline-start" />
-                      {codexAppServerUpdating ? "Updating..." : "Update"}
                     </Button>
                   </div>
                 </div>

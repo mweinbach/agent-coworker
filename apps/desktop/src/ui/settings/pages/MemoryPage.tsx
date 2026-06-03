@@ -18,18 +18,42 @@ import {
 } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
+import {
+  type CatalogVisibilityOptions,
+  configuredProvidersForModelChoices,
+  decodeProviderModelSelection,
+  encodeProviderModelSelection,
+  modelChoicesFromCatalog,
+  modelDisplayNamesFromCatalog,
+  resolveModelDisplayLabel,
+  UI_DISABLED_PROVIDERS,
+} from "../../../lib/modelChoices";
+import { displayProviderName } from "../../../lib/providerDisplayNames";
+import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
+import { PROVIDER_NAMES, type ProviderName, type SessionEvent } from "../../../lib/wsProtocol";
+import { AdvancedMemoryPanel } from "./AdvancedMemoryPanel";
 
 type DraftMemory = {
   scope: "workspace" | "user";
@@ -43,6 +67,19 @@ export const MEMORY_LOADING_STALL_MS = 1_500;
 export { parentDirectoryPath } from "../../../app/workspaceDisplayTargets";
 
 export type MemoryTarget = WorkspaceDisplayTarget;
+type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
+
+type MemoryGenerationModelOption = {
+  value: string;
+  label: string;
+  title: string;
+};
+
+type MemoryGenerationModelGroup = {
+  provider: ProviderName;
+  label: string;
+  options: MemoryGenerationModelOption[];
+};
 
 export function resolveDraftMemoryId(rawId: string): string {
   return rawId.trim() || HOT_MEMORY_ID;
@@ -63,6 +100,82 @@ function emptyDraft(): DraftMemory {
 }
 
 export const resolveMemoryTargets = resolveWorkspaceDisplayTargets;
+
+export function resolveMemoryGenerationModelSelection(
+  rawModel: string | undefined,
+  fallbackProvider: ProviderName | undefined,
+): string {
+  const raw = rawModel?.trim() ?? "";
+  if (!raw) return "";
+  const parsed = decodeProviderModelSelection(raw);
+  if (parsed) return encodeProviderModelSelection(parsed.provider, parsed.modelId);
+  return fallbackProvider ? encodeProviderModelSelection(fallbackProvider, raw) : raw;
+}
+
+export function buildMemoryGenerationModelGroups(
+  catalog: readonly ProviderCatalogEntry[],
+  currentSelection: string,
+  visibility?: CatalogVisibilityOptions,
+): MemoryGenerationModelGroup[] {
+  const choices = modelChoicesFromCatalog(catalog, visibility);
+  const displayNames = modelDisplayNamesFromCatalog(catalog);
+  const groups = sortProviderEntriesForSettings(
+    PROVIDER_NAMES.filter(
+      (provider) =>
+        !UI_DISABLED_PROVIDERS.has(provider) &&
+        (visibility?.includedProviders ? visibility.includedProviders.includes(provider) : true) &&
+        !visibility?.hiddenProviders?.includes(provider),
+    )
+      .map((provider) => ({
+        provider,
+        label: displayProviderName(provider),
+        options: (choices[provider] ?? []).map((modelId) => ({
+          value: encodeProviderModelSelection(provider, modelId),
+          label: resolveModelDisplayLabel(provider, modelId, displayNames),
+          title: modelId,
+        })),
+      }))
+      .filter((group) => group.options.length > 0),
+  );
+
+  const current = currentSelection.trim();
+  if (!current) return groups;
+  const hasCurrent = groups.some((group) =>
+    group.options.some((option) => option.value === current),
+  );
+  if (hasCurrent) return groups;
+
+  const parsed = decodeProviderModelSelection(current);
+  const customOption = parsed
+    ? {
+        value: current,
+        label: `${resolveModelDisplayLabel(parsed.provider, parsed.modelId, displayNames)} (custom)`,
+        title: parsed.modelId,
+      }
+    : { value: current, label: `${current} (custom)`, title: current };
+  if (parsed) {
+    const existingGroup = groups.find((group) => group.provider === parsed.provider);
+    if (existingGroup) {
+      existingGroup.options = [customOption, ...existingGroup.options];
+      return groups;
+    }
+    return sortProviderEntriesForSettings([
+      ...groups,
+      {
+        provider: parsed.provider,
+        label: displayProviderName(parsed.provider),
+        options: [customOption],
+      },
+    ]);
+  }
+
+  const fallbackGroup = groups[0];
+  if (fallbackGroup) {
+    fallbackGroup.options = [customOption, ...fallbackGroup.options];
+    return groups;
+  }
+  return [{ provider: "google", label: "Custom", options: [customOption] }];
+}
 
 function relativeTime(isoString: string): string {
   const now = Date.now();
@@ -95,6 +208,12 @@ export function MemoryPage() {
   const requestWorkspaceMemories = useAppStore((s) => s.requestWorkspaceMemories);
   const upsertWorkspaceMemory = useAppStore((s) => s.upsertWorkspaceMemory);
   const deleteWorkspaceMemory = useAppStore((s) => s.deleteWorkspaceMemory);
+  const setWorkspaceAdvancedMemory = useAppStore((s) => s.setWorkspaceAdvancedMemory);
+  const setWorkspaceMemoryGenerationModel = useAppStore((s) => s.setWorkspaceMemoryGenerationModel);
+  const providerCatalog = useAppStore((s) => s.providerCatalog);
+  const providerConnected = useAppStore((s) => s.providerConnected);
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const providerUiState = useAppStore((s) => s.providerUiState);
 
   const { targets: memoryTargets, activeTarget } = useMemo(
     () => resolveMemoryTargets(workspaces, selectedWorkspaceId),
@@ -103,6 +222,66 @@ export function MemoryPage() {
   const runtime = activeTarget ? workspaceRuntimeById[activeTarget.workspaceId] : null;
   const memories = runtime?.memories ?? [];
   const memoriesLoading = runtime?.memoriesLoading ?? false;
+
+  const activeWorkspace = useMemo(
+    () => workspaces.find((w) => w.id === activeTarget?.workspaceId) ?? null,
+    [workspaces, activeTarget?.workspaceId],
+  );
+  // Prefer the live control-session config (server's effective setting) over the
+  // persisted workspace record so the toggle never disagrees with the server.
+  const liveSessionConfig = runtime?.controlSessionConfig ?? null;
+  const advancedMemoryEnabled =
+    liveSessionConfig?.advancedMemory ?? activeWorkspace?.defaultAdvancedMemory ?? false;
+  const memoryGenerationModel = liveSessionConfig
+    ? (liveSessionConfig.memoryGenerationModel ?? "")
+    : (activeWorkspace?.defaultMemoryGenerationModel ?? "");
+  const MEMORY_MODEL_DEFAULT_VALUE = "__default__";
+  const fallbackMemoryModelProvider =
+    activeWorkspace?.defaultProvider &&
+    (PROVIDER_NAMES as readonly string[]).includes(activeWorkspace.defaultProvider)
+      ? activeWorkspace.defaultProvider
+      : undefined;
+  const memoryGenerationModelSelection =
+    resolveMemoryGenerationModelSelection(memoryGenerationModel, fallbackMemoryModelProvider) ||
+    MEMORY_MODEL_DEFAULT_VALUE;
+  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+      hiddenModelsByProvider: {
+        lmstudio: providerUiState.lmstudio.hiddenModels,
+      },
+    }),
+    [providerUiState],
+  );
+  const configuredModelProviders = useMemo(
+    () =>
+      configuredProvidersForModelChoices({
+        catalog: providerCatalog,
+        connected: providerConnected,
+        providerStatusByName,
+        visibility: modelSelectorVisibility,
+      }),
+    [modelSelectorVisibility, providerCatalog, providerConnected, providerStatusByName],
+  );
+  const generationModelGroups = useMemo(
+    () =>
+      buildMemoryGenerationModelGroups(
+        providerCatalog,
+        memoryGenerationModelSelection === MEMORY_MODEL_DEFAULT_VALUE
+          ? ""
+          : memoryGenerationModelSelection,
+        {
+          ...modelSelectorVisibility,
+          includedProviders: configuredModelProviders,
+        },
+      ),
+    [
+      configuredModelProviders,
+      modelSelectorVisibility,
+      providerCatalog,
+      memoryGenerationModelSelection,
+    ],
+  );
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);
   const [editingEntry, setEditingEntry] = useState<MemoryListEntry | null>(null);
@@ -128,8 +307,11 @@ export function MemoryPage() {
     setEditingEntry(null);
     setDraft(emptyDraft());
     setDialogOpen(false);
+    // Advanced and legacy memory are mutually exclusive; don't fetch the legacy
+    // SQLite list when the advanced (file-based) view is active.
+    if (advancedMemoryEnabled) return;
     requestMemories(activeTarget);
-  }, [activeTarget, requestMemories]);
+  }, [activeTarget, requestMemories, advancedMemoryEnabled]);
 
   useEffect(() => {
     if (!memoriesLoading) {
@@ -226,9 +408,66 @@ export function MemoryPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
+      <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/40 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium text-foreground">Advanced memory</p>
+            <p className="text-xs text-muted-foreground">
+              Agent-driven memory that summarizes each turn into indexed files Cowork can recall.
+            </p>
+          </div>
+          <Switch
+            checked={advancedMemoryEnabled}
+            disabled={!activeTarget}
+            onCheckedChange={(value) => {
+              if (!activeTarget) return;
+              void setWorkspaceAdvancedMemory(activeTarget.workspaceId, value, {
+                cwd: activeTarget.targetPath,
+              });
+            }}
+            aria-label="Advanced memory"
+          />
+        </div>
+        {advancedMemoryEnabled ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Memory generation model</p>
+            <Select
+              value={memoryGenerationModelSelection}
+              onValueChange={(value) => {
+                if (!activeTarget) return;
+                void setWorkspaceMemoryGenerationModel(
+                  activeTarget.workspaceId,
+                  value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value,
+                  { cwd: activeTarget.targetPath },
+                );
+              }}
+            >
+              <SelectTrigger className="max-w-72" aria-label="Memory generation model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>Default (economical)</SelectItem>
+                {generationModelGroups.map((group) => (
+                  <SelectGroup key={group.provider}>
+                    <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
+                      {group.label}
+                    </SelectLabel>
+                    {group.options.map((option) => (
+                      <SelectItem key={option.value} value={option.value} className="pl-6">
+                        <span title={option.title}>{option.label}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+      </div>
+
+      {advancedMemoryEnabled && activeTarget ? (
+        <>
+          {workspacePickerEnabled && memoryTargets.length > 1 ? (
             <Select value={activeTarget.id} onValueChange={handleTargetChange}>
               <SelectTrigger className="max-w-48" aria-label="Memory target">
                 <SelectValue />
@@ -242,215 +481,248 @@ export function MemoryPage() {
               </SelectContent>
             </Select>
           ) : null}
-
-          <div className="flex rounded-md border border-border/70 overflow-hidden">
-            {(["all", "workspace", "user"] as const).map((scope) => (
-              <Button
-                key={scope}
-                className={cn(
-                  "h-auto rounded-none border-0 px-3 py-1.5 text-xs font-medium shadow-none transition-colors first:rounded-l-none last:rounded-r-none",
-                  filterScope === scope
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                )}
-                onClick={() => setFilterScope(scope)}
-                type="button"
-                variant="ghost"
-              >
-                {scope === "all" ? "All" : scopeLabel(scope)}
-              </Button>
-            ))}
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            disabled={showMemoryLoading}
-            onClick={() => activeTarget && requestMemories(activeTarget)}
-          >
-            {showMemoryLoading ? "Loading..." : "Refresh"}
-          </Button>
-        </div>
-
-        {activeTarget ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={openCreateDialog}
-          >
-            <PlusIcon className="w-4 h-4 mr-1.5" />
-            Add memory
-          </Button>
-        ) : null}
-      </div>
-
-      {filtered.length === 0 ? (
-        <div className="rounded-xl border border-border/70 bg-background/50 py-12 flex flex-col items-center justify-center gap-3">
-          <BrainIcon className="w-10 h-10 text-muted-foreground/40" />
-          <p className="text-sm text-muted-foreground">
-            {showMemoryLoading ? "Loading..." : "No remembered facts yet"}
-          </p>
-          {!showMemoryLoading && activeTarget ? (
-            <Button variant="outline" size="sm" onClick={openCreateDialog}>
-              Add your first memory
-            </Button>
-          ) : null}
-        </div>
+          <AdvancedMemoryPanel
+            workspaceId={activeTarget.workspaceId}
+            cwd={activeTarget.targetPath}
+          />
+        </>
       ) : (
-        <div
-          className="rounded-xl border border-border/70 overflow-hidden bg-background/50"
-          ref={parent}
-        >
-          {filtered.map((entry) => {
-            const key = entryKey(entry);
-            const isExpanded = expandedIds[key] ?? false;
+        <>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
+                <Select value={activeTarget.id} onValueChange={handleTargetChange}>
+                  <SelectTrigger className="max-w-48" aria-label="Memory target">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {memoryTargets.map((entry) => (
+                      <SelectItem key={entry.id} value={entry.id}>
+                        {entry.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
 
-            return (
-              <div
-                key={key}
-                className={cn(
-                  "border-b border-border/70 last:border-b-0",
-                  isExpanded && "bg-card/40",
-                )}
-              >
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
-                  onClick={() => toggleExpand(key)}
-                >
-                  <div className="flex items-center gap-3">
-                    {isExpanded ? (
-                      <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
+              <div className="flex rounded-md border border-border/70 overflow-hidden">
+                {(["all", "workspace", "user"] as const).map((scope) => (
+                  <Button
+                    key={scope}
+                    className={cn(
+                      "h-auto rounded-none border-0 px-3 py-1.5 text-xs font-medium shadow-none transition-colors first:rounded-l-none last:rounded-r-none",
+                      filterScope === scope
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                     )}
-                    <span className="font-medium text-foreground text-sm">
-                      {memoryTitle(entry)}
-                    </span>
-                    <Badge
-                      variant={entry.scope === "workspace" ? "default" : "secondary"}
-                      className="text-[10px] uppercase h-5"
-                    >
-                      {scopeLabel(entry.scope)}
-                    </Badge>
-                  </div>
-                  <span className="text-xs text-muted-foreground/60">
-                    Updated {relativeTime(entry.updatedAt)}
-                  </span>
-                </button>
-
-                {isExpanded && (
-                  <div className="px-10 pb-4 text-xs space-y-3">
-                    <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
-                      {entry.content}
-                    </pre>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openEditDialog(entry);
-                        }}
-                      >
-                        <PencilIcon className="w-3.5 h-3.5 mr-1" />
-                        Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void handleDelete(entry);
-                        }}
-                      >
-                        <Trash2Icon className="w-3.5 h-3.5 mr-1" />
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                    onClick={() => setFilterScope(scope)}
+                    type="button"
+                    variant="ghost"
+                  >
+                    {scope === "all" ? "All" : scopeLabel(scope)}
+                  </Button>
+                ))}
               </div>
-            );
-          })}
-        </div>
-      )}
 
-      <Dialog
-        open={dialogOpen}
-        onOpenChange={(open) => {
-          if (!open) closeDialog();
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {editingEntry ? `Edit remembered fact` : "Add remembered fact"}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="space-y-1.5">
-              <label htmlFor="memory-title" className="text-xs font-medium text-foreground">
-                Title
-              </label>
-              <Input
-                id="memory-title"
-                placeholder="Optional. Leave blank to always include it."
-                value={draft.id}
-                disabled={!!editingEntry}
-                onChange={(event) => setDraft((prev) => ({ ...prev, id: event.target.value }))}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="memory-scope" className="text-xs font-medium text-foreground">
-                Scope
-              </label>
-              <Select
-                value={draft.scope}
-                disabled={!!editingEntry}
-                onValueChange={(value) =>
-                  setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
-                }
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                disabled={showMemoryLoading}
+                onClick={() => activeTarget && requestMemories(activeTarget)}
               >
-                <SelectTrigger id="memory-scope" aria-label="Memory scope">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="workspace">{scopeLabel("workspace")}</SelectItem>
-                  <SelectItem value="user">Everywhere</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="memory-content" className="text-xs font-medium text-foreground">
-                Content
-              </label>
-              <Textarea
-                id="memory-content"
-                placeholder="What should Cowork remember?"
-                className="min-h-[100px]"
-                value={draft.content}
-                onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={closeDialog}>
-                Cancel
-              </Button>
-              <Button type="button" onClick={handleSave} disabled={!draft.content.trim()}>
-                {editingEntry ? "Save changes" : "Add remembered fact"}
+                {showMemoryLoading ? "Loading..." : "Refresh"}
               </Button>
             </div>
+
+            {activeTarget ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={openCreateDialog}
+              >
+                <PlusIcon className="w-4 h-4 mr-1.5" />
+                Add memory
+              </Button>
+            ) : null}
           </div>
-        </DialogContent>
-      </Dialog>
+
+          {filtered.length === 0 ? (
+            <div className="rounded-xl border border-border/70 bg-background/50 py-12 flex flex-col items-center justify-center gap-3">
+              <BrainIcon className="w-10 h-10 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground">
+                {showMemoryLoading ? "Loading..." : "No remembered facts yet"}
+              </p>
+              {!showMemoryLoading && activeTarget ? (
+                <Button variant="outline" size="sm" onClick={openCreateDialog}>
+                  Add your first memory
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <div
+              className="rounded-xl border border-border/70 overflow-hidden bg-background/50"
+              ref={parent}
+            >
+              {filtered.map((entry) => {
+                const key = entryKey(entry);
+                const isExpanded = expandedIds[key] ?? false;
+
+                return (
+                  <div
+                    key={key}
+                    className={cn(
+                      "border-b border-border/70 last:border-b-0",
+                      isExpanded && "bg-card/40",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
+                      onClick={() => toggleExpand(key)}
+                    >
+                      <div className="flex items-center gap-3">
+                        {isExpanded ? (
+                          <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
+                        )}
+                        <span className="font-medium text-foreground text-sm">
+                          {memoryTitle(entry)}
+                        </span>
+                        <Badge
+                          variant={entry.scope === "workspace" ? "default" : "secondary"}
+                          className="text-[10px] uppercase h-5"
+                        >
+                          {scopeLabel(entry.scope)}
+                        </Badge>
+                      </div>
+                      <span className="text-xs text-muted-foreground/60">
+                        Updated {relativeTime(entry.updatedAt)}
+                      </span>
+                    </button>
+
+                    {isExpanded && (
+                      <div className="px-10 pb-4 text-xs space-y-3">
+                        <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
+                          {entry.content}
+                        </pre>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openEditDialog(entry);
+                            }}
+                          >
+                            <PencilIcon className="w-3.5 h-3.5 mr-1" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleDelete(entry);
+                            }}
+                          >
+                            <Trash2Icon className="w-3.5 h-3.5 mr-1" />
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <Dialog
+            open={dialogOpen}
+            onOpenChange={(open) => {
+              if (!open) closeDialog();
+            }}
+          >
+            <DialogContent className="flex max-h-[min(88vh,36rem)] w-[min(92vw,34rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+              <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4 pr-12">
+                <DialogTitle>
+                  {editingEntry ? `Edit remembered fact` : "Add remembered fact"}
+                </DialogTitle>
+                <DialogDescription className="sr-only">
+                  Edit the remembered fact title, scope, and content.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label htmlFor="memory-title" className="text-xs font-medium text-foreground">
+                      Title
+                    </label>
+                    <Input
+                      id="memory-title"
+                      placeholder="Optional. Leave blank to always include it."
+                      value={draft.id}
+                      disabled={!!editingEntry}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, id: event.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="memory-scope" className="text-xs font-medium text-foreground">
+                      Scope
+                    </label>
+                    <Select
+                      value={draft.scope}
+                      disabled={!!editingEntry}
+                      onValueChange={(value) =>
+                        setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
+                      }
+                    >
+                      <SelectTrigger id="memory-scope" aria-label="Memory scope">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="workspace">{scopeLabel("workspace")}</SelectItem>
+                        <SelectItem value="user">Everywhere</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="memory-content" className="text-xs font-medium text-foreground">
+                      Content
+                    </label>
+                    <Textarea
+                      id="memory-content"
+                      placeholder="What should Cowork remember?"
+                      className="h-[min(32vh,16rem)] min-h-[8rem] resize-y overflow-auto [field-sizing:fixed]"
+                      value={draft.content}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, content: event.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+              <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-4">
+                <Button type="button" variant="outline" onClick={closeDialog}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={handleSave} disabled={!draft.content.trim()}>
+                  {editingEntry ? "Save changes" : "Add remembered fact"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </>
+      )}
     </div>
   );
 }

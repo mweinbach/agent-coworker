@@ -3,7 +3,6 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/o
 import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
-  mergeWorkspaceProviderOptions,
   mergeWorkspaceProviderOptionsPreservingSearchSettings,
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
@@ -36,6 +35,15 @@ import {
   type WorkspaceDefaultsPatch,
   type WorkspaceRecord,
 } from "../types";
+import { applyWorkspacePatch, copyWorkspaceSettings } from "./workspaceDefaultRecords";
+import {
+  applyGlobalMemoryDefaults,
+  buildGlobalMemoryDefaultsPatch,
+  hasGlobalMemoryDefaultsPatch,
+  resolveControlApplyMemoryDefaults,
+  resolveThreadApplyMemoryDefaults,
+  resolveWorkspaceMemoryDefaultsFromControl,
+} from "./workspaceMemoryDefaults";
 
 export function createWorkspaceDefaultsActions(
   set: StoreSet,
@@ -171,6 +179,8 @@ export function createWorkspaceDefaultsActions(
       model?: string;
       enableMcp?: boolean;
       backupsEnabled?: boolean;
+      advancedMemory?: boolean;
+      memoryGenerationModel?: string | null;
       toolOutputOverflowChars?: number | null;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -186,6 +196,8 @@ export function createWorkspaceDefaultsActions(
     const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
     const currentSessionConfig = (opts.current.sessionConfig ?? {}) as {
       defaultBackupsEnabled?: boolean;
+      advancedMemory?: boolean;
+      memoryGenerationModel?: string;
       defaultToolOutputOverflowChars?: number | null;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -222,6 +234,26 @@ export function createWorkspaceDefaultsActions(
 
     if (typeof opts.desired.yolo === "boolean" && opts.desired.yolo !== currentSessionConfig.yolo) {
       configPatch.yolo = opts.desired.yolo;
+    }
+
+    if (
+      typeof opts.desired.advancedMemory === "boolean" &&
+      opts.desired.advancedMemory !== currentSessionConfig.advancedMemory
+    ) {
+      configPatch.advancedMemory = opts.desired.advancedMemory;
+    }
+
+    if (Object.hasOwn(opts.desired, "memoryGenerationModel")) {
+      const currentMemoryGenerationModel =
+        currentSessionConfig.memoryGenerationModel?.trim() || undefined;
+      const desiredMemoryGenerationModel = opts.desired.memoryGenerationModel?.trim() || undefined;
+      if (desiredMemoryGenerationModel !== currentMemoryGenerationModel) {
+        if (desiredMemoryGenerationModel) {
+          configPatch.memoryGenerationModel = desiredMemoryGenerationModel;
+        } else if (currentMemoryGenerationModel !== undefined) {
+          configPatch.clearMemoryGenerationModel = true;
+        }
+      }
     }
 
     const currentDefaultToolOutputOverflow = currentSessionConfig.defaultToolOutputOverflowChars;
@@ -350,6 +382,11 @@ export function createWorkspaceDefaultsActions(
       workspace.defaultPreferredChildModelRef?.trim() ||
       (defaultPreferredChildModel ? `${provider}:${defaultPreferredChildModel}` : undefined);
 
+    const memoryDefaults = resolveWorkspaceMemoryDefaultsFromControl(
+      workspace,
+      controlSessionConfig,
+    );
+
     return {
       ...workspace,
       defaultProvider: provider,
@@ -365,6 +402,8 @@ export function createWorkspaceDefaultsActions(
       defaultToolOutputOverflowChars:
         controlSessionConfig?.defaultToolOutputOverflowChars ??
         workspace.defaultToolOutputOverflowChars,
+      defaultAdvancedMemory: memoryDefaults.defaultAdvancedMemory,
+      defaultMemoryGenerationModel: memoryDefaults.defaultMemoryGenerationModel,
       providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
         workspace.providerOptions,
         normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions),
@@ -392,58 +431,6 @@ export function createWorkspaceDefaultsActions(
           : workspace.yolo,
     };
   };
-
-  const applyWorkspacePatch = (
-    workspace: WorkspaceRecord,
-    patch: WorkspaceDefaultsPatch,
-  ): WorkspaceRecord => {
-    const {
-      clearDefaultToolOutputOverflowChars,
-      userProfile: userProfilePatch,
-      ...workspacePatch
-    } = patch;
-    return {
-      ...workspace,
-      ...workspacePatch,
-      ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
-      ...(workspacePatch.providerOptions !== undefined
-        ? {
-            providerOptions: mergeWorkspaceProviderOptions(
-              workspace.providerOptions,
-              workspacePatch.providerOptions,
-            ),
-          }
-        : {}),
-      ...(userProfilePatch !== undefined
-        ? {
-            userProfile: {
-              ...normalizeWorkspaceUserProfile(workspace.userProfile),
-              ...userProfilePatch,
-            },
-          }
-        : {}),
-    };
-  };
-
-  const copyWorkspaceSettings = (
-    target: WorkspaceRecord,
-    source: WorkspaceRecord,
-  ): WorkspaceRecord => ({
-    ...target,
-    defaultProvider: source.defaultProvider,
-    defaultModel: source.defaultModel,
-    defaultPreferredChildModel: source.defaultPreferredChildModel,
-    defaultChildModelRoutingMode: source.defaultChildModelRoutingMode,
-    defaultPreferredChildModelRef: source.defaultPreferredChildModelRef,
-    defaultAllowedChildModelRefs: [...(source.defaultAllowedChildModelRefs ?? [])],
-    defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars,
-    providerOptions: source.providerOptions,
-    userName: source.userName,
-    userProfile: source.userProfile ? normalizeWorkspaceUserProfile(source.userProfile) : undefined,
-    defaultEnableMcp: source.defaultEnableMcp,
-    defaultBackupsEnabled: source.defaultBackupsEnabled,
-    yolo: source.yolo,
-  });
 
   const resolveSharedSettingsSource = (preferredWorkspaceId: string): WorkspaceRecord | null => {
     const state = get();
@@ -507,6 +494,7 @@ export function createWorkspaceDefaultsActions(
     const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
     const providerOptions = nextWorkspace.providerOptions;
     const userName = nextWorkspace.userName;
+    const memoryDefaults = resolveControlApplyMemoryDefaults(nextWorkspace);
     const userProfile = nextWorkspace.userProfile
       ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
       : undefined;
@@ -526,6 +514,8 @@ export function createWorkspaceDefaultsActions(
               model,
               enableMcp: nextWorkspace.defaultEnableMcp,
               backupsEnabled: nextWorkspace.defaultBackupsEnabled,
+              advancedMemory: memoryDefaults.advancedMemory,
+              memoryGenerationModel: memoryDefaults.memoryGenerationModel,
               toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
               yolo: nextWorkspace.yolo,
               ...(preferredChildModel ? { preferredChildModel } : {}),
@@ -744,6 +734,10 @@ export function createWorkspaceDefaultsActions(
         : (ws.defaultAllowedChildModelRefs ?? rt.sessionConfig?.allowedChildModelRefs ?? []);
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
+      const memoryDefaults = resolveThreadApplyMemoryDefaults(
+        ws,
+        workspaceRuntime?.controlSessionConfig,
+      );
       const userProfile = ws.userProfile
         ? normalizeWorkspaceUserProfile(ws.userProfile)
         : undefined;
@@ -770,6 +764,8 @@ export function createWorkspaceDefaultsActions(
               }
             : {}),
           yolo: ws.yolo,
+          advancedMemory: memoryDefaults.advancedMemory,
+          memoryGenerationModel: memoryDefaults.memoryGenerationModel,
           ...(mode === "explicit"
             ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }
             : harnessToolOutputOverflowChars !== undefined
@@ -845,8 +841,12 @@ export function createWorkspaceDefaultsActions(
       }
     },
 
-    updateWorkspaceDefaults: async (workspaceId, patch: WorkspaceDefaultsPatch) => {
-      const sharedSettings = !get().perWorkspaceSettings;
+    updateWorkspaceDefaults: async (
+      workspaceId,
+      patch: WorkspaceDefaultsPatch,
+      opts?: { scope?: "settings" | "target" },
+    ) => {
+      const sharedSettings = !get().perWorkspaceSettings && opts?.scope !== "target";
       const sourceWorkspace = sharedSettings
         ? resolveSharedSettingsSource(workspaceId)
         : (get().workspaces.find((workspace) => workspace.id === workspaceId) ?? null);
@@ -861,17 +861,20 @@ export function createWorkspaceDefaultsActions(
       }
 
       const nextWorkspace = applyWorkspacePatch(optimisticWorkspace, patch);
+      const globalMemoryPatch = buildGlobalMemoryDefaultsPatch(patch, nextWorkspace);
+      const hasGlobalMemoryPatch = hasGlobalMemoryDefaultsPatch(globalMemoryPatch);
 
       set((s) => ({
-        workspaces: s.workspaces.map((workspace) =>
-          sharedSettings
+        workspaces: s.workspaces.map((workspace) => {
+          const patchedWorkspace = sharedSettings
             ? copyWorkspaceSettings(workspace, nextWorkspace)
             : chatSettingsTarget && isOneOffChatWorkspace(workspace)
               ? copyWorkspaceSettings(workspace, nextWorkspace)
               : workspace.id === sourceWorkspace.id
                 ? nextWorkspace
-                : workspace,
-        ),
+                : workspace;
+          return applyGlobalMemoryDefaults(patchedWorkspace, globalMemoryPatch);
+        }),
       }));
       await persistNow(get);
 
@@ -889,6 +892,8 @@ export function createWorkspaceDefaultsActions(
         workspacePatch.defaultAllowedChildModelRefs !== undefined ||
         workspacePatch.defaultToolOutputOverflowChars !== undefined ||
         clearDefaultToolOutputOverflowChars === true ||
+        workspacePatch.defaultAdvancedMemory !== undefined ||
+        workspacePatch.defaultMemoryGenerationModel !== undefined ||
         workspacePatch.defaultEnableMcp !== undefined ||
         workspacePatch.defaultBackupsEnabled !== undefined ||
         workspacePatch.providerOptions !== undefined ||
@@ -896,6 +901,25 @@ export function createWorkspaceDefaultsActions(
         userProfilePatch !== undefined ||
         workspacePatch.yolo !== undefined;
       if (!shouldSyncCoreSettings) {
+        return;
+      }
+
+      if (hasGlobalMemoryPatch && !sharedSettings) {
+        const workspaceIds = get().workspaces.map((workspace) => workspace.id);
+        await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+          ensureControl: true,
+          notifyOnMissingControl: true,
+        });
+        await Promise.all(
+          workspaceIds
+            .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+            .map((targetWorkspaceId) =>
+              syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                ensureControl: false,
+                notifyOnMissingControl: false,
+              }),
+            ),
+        );
         return;
       }
 

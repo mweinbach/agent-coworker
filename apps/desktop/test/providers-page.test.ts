@@ -565,11 +565,11 @@ describe("desktop providers page", () => {
       codexAppServerStatus: {
         available: true,
         source: "managed",
-        version: "0.128.0",
-        latestVersion: "0.129.0",
-        updateAvailable: true,
+        version: "0.136.0",
+        pinnedVersion: "0.136.0",
+        pinMatchesCurrent: true,
         managedPath: "/Users/max/.cowork/codex-app-server/current/darwin-arm64/codex-app-server",
-        message: "Using Cowork-managed Codex app-server.",
+        message: "Using Cowork-managed Codex app-server 0.136.0.",
       },
     });
 
@@ -702,9 +702,13 @@ describe("desktop providers page", () => {
     expect(html).toContain("42.13 remaining");
     expect(html).toContain("App server");
     expect(html).toContain("Cowork managed");
-    expect(html).toContain("0.128.0");
-    expect(html).toContain("0.129.0");
-    expect(html).toContain("Using Cowork-managed Codex app-server.");
+    expect(html).toContain("0.136.0");
+    expect(html).toContain("Required");
+    expect(html).toContain("Using Cowork-managed Codex app-server 0.136.0.");
+    expect(html).not.toContain("Latest");
+    expect(html).not.toContain("Pin");
+    expect(html).not.toContain("Clear");
+    expect(html).not.toContain("Update");
     expect(html).not.toContain("Allowed");
     expect(html).not.toContain("Limit reached");
     expect(html).not.toContain("Rate limited");

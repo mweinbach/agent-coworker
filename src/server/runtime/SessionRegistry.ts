@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
@@ -315,6 +316,7 @@ export class SessionRegistry {
     const a2uiSessionAdapter = isA2uiExperimentEnabled(this.options.env)
       ? loadA2uiSessionAdapterModule()
       : null;
+    const globalConfigDir = path.join(currentConfig.userCoworkDir, "config");
 
     return {
       discoveredSkills: this.options.discoveredSkills,
@@ -329,7 +331,10 @@ export class SessionRegistry {
                 currentConfig.projectCoworkDir,
                 selection,
                 currentConfig.providerOptions,
-                { a2uiExperimentEnabled: currentConfig.experimentalFeatures?.a2ui === true },
+                {
+                  a2uiExperimentEnabled: currentConfig.experimentalFeatures?.a2ui === true,
+                  globalConfigDir,
+                },
               );
               currentConfig = mergeConfigPatch(currentConfig, selection);
               syncConfig(currentConfig);
@@ -342,7 +347,10 @@ export class SessionRegistry {
                 currentConfig.projectCoworkDir,
                 patch,
                 currentConfig.providerOptions,
-                { a2uiExperimentEnabled: currentConfig.experimentalFeatures?.a2ui === true },
+                {
+                  a2uiExperimentEnabled: currentConfig.experimentalFeatures?.a2ui === true,
+                  globalConfigDir,
+                },
               );
               currentConfig = mergeConfigPatch(currentConfig, patch);
               syncConfig(currentConfig);

@@ -125,6 +125,7 @@ export function createAgentSessionFromPersisted(
     status: persisted.status,
     hasGeneratedTitle: persisted.titleSource !== "default" || persisted.messageCount > 0,
     messages: persisted.messages,
+    lastMemoryGeneratedIndex: persisted.lastMemoryGeneratedIndex,
     providerState: migratedLegacyModel ? null : persisted.providerState,
     todos: persisted.todos,
     harnessContext: persisted.harnessContext,

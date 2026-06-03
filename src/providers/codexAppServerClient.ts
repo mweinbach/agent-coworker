@@ -62,6 +62,8 @@ type CodexAppServerRequestHandler = (
   request: CodexAppServerJsonRpcRequest,
 ) => Promise<unknown> | unknown;
 
+export const UNHANDLED_CODEX_APP_SERVER_REQUEST = Symbol("unhandled codex app-server request");
+
 export type CodexAppServerClientOptions = {
   cwd?: string;
   codexHome?: string;
@@ -320,8 +322,12 @@ async function respondToServerRequest(
   };
   try {
     let result: unknown = {};
-    const handler = [...handlers].at(-1);
-    if (handler) result = await handler(request);
+    for (const handler of [...handlers].reverse()) {
+      const handlerResult = await handler(request);
+      if (handlerResult === UNHANDLED_CODEX_APP_SERVER_REQUEST) continue;
+      result = handlerResult;
+      break;
+    }
     const response = { id: request.id, result: result ?? {} };
     writeResponse(response);
   } catch (error) {
@@ -505,6 +511,7 @@ export async function closePooledCodexAppServerClient(
 
 export const __internal = {
   resolveCodexHome,
+  respondToServerRequest,
   setClientFactoryForTests(
     factory: ((opts: CodexAppServerClientOptions) => Promise<CodexAppServerClient>) | undefined,
   ): void {

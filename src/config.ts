@@ -597,6 +597,21 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.memoryRequireApproval) ??
     false;
 
+  const advancedMemory =
+    asBoolean(env.AGENT_ADVANCED_MEMORY) ??
+    asBoolean(userConfig.advancedMemory) ??
+    asBoolean(builtInDefaults.advancedMemory) ??
+    false;
+
+  // Optional global override for the headless memory-generation agent's model.
+  // When unset the generator falls back to the provider-aware
+  // `preferredChildModel`.
+  const memoryGenerationModel =
+    asNonEmptyString(env.AGENT_MEMORY_MODEL) ||
+    asNonEmptyString(userConfig.memoryGenerationModel) ||
+    asNonEmptyString(builtInDefaults.memoryGenerationModel) ||
+    undefined;
+
   const includeRawChunks =
     asBoolean(env.AGENT_INCLUDE_RAW_CHUNKS) ??
     asBoolean(projectConfig.includeRawChunks) ??
@@ -719,6 +734,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     projectCoworkDir,
     projectMemoryDir,
     projectMemoryDbPath,
+    memoriesDir: coworkPaths.memoriesDir,
     userCoworkDir,
     workspaceAgentsDir,
     userAgentsDir,
@@ -738,6 +754,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     enableMcp,
     enableMemory,
     memoryRequireApproval,
+    advancedMemory,
+    ...(memoryGenerationModel ? { memoryGenerationModel } : {}),
     includeRawChunks,
     experimentalFeatures: {
       a2ui: a2uiExperimentEnabled,

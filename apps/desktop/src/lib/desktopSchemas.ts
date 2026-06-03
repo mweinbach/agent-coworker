@@ -467,6 +467,8 @@ const persistedWorkspaceSchema = z
     defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
     defaultPreferredChildModelRef: optionalNonEmptyStringSchema,
     defaultAllowedChildModelRefs: z.array(nonEmptyStringSchema).optional(),
+    defaultAdvancedMemory: z.boolean().optional(),
+    defaultMemoryGenerationModel: optionalNonEmptyStringSchema,
     defaultToolOutputOverflowChars: z.preprocess((value) => {
       if (value === undefined) return undefined;
       if (value === null) return null;

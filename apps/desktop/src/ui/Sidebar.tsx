@@ -29,7 +29,7 @@ import {
   type WorkspaceRecord,
 } from "../app/types";
 import { Button } from "../components/ui/button";
-import { confirmAction, showContextMenu } from "../lib/desktopCommands";
+import { confirmAction, isPackagedDesktopApp, showContextMenu } from "../lib/desktopCommands";
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
@@ -73,6 +73,7 @@ export const Sidebar = memo(function Sidebar() {
   const newThread = useAppStore((s) => s.newThread);
   const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
+  const generateAdvancedMemoryForThread = useAppStore((s) => s.generateAdvancedMemoryForThread);
   const selectThread = useAppStore((s) => s.selectThread);
   const renameThread = useAppStore((s) => s.renameThread);
   const openSkills = useAppStore((s) => s.openSkills);
@@ -314,6 +315,13 @@ export const Sidebar = memo(function Sidebar() {
     [effectiveView, selectWorkspace, setPluginManagementWorkspace],
   );
 
+  const handleNewWorkspaceChat = useCallback(
+    (workspaceId: string) => {
+      void openNewChatLanding({ target: { kind: "project", workspaceId } });
+    },
+    [openNewChatLanding],
+  );
+
   const handleProjectSectionMenu = async (e: MouseEvent<HTMLElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -382,11 +390,33 @@ export const Sidebar = memo(function Sidebar() {
     e.preventDefault();
     e.stopPropagation();
 
+    const thread = threads.find((entry) => entry.id === tId);
+    const workspace = thread
+      ? workspaces.find((entry) => entry.id === thread.workspaceId)
+      : undefined;
+    const canGenerateMemory = Boolean(
+      thread && workspace && !thread.draft && thread.messageCount > 0,
+    );
     const result = await showContextMenu([
+      ...(!isPackagedDesktopApp()
+        ? [
+            {
+              id: "generate_memory",
+              label: "Generate memory from conversation",
+              enabled: canGenerateMemory,
+            },
+          ]
+        : []),
       { id: "delete_history", label: "Delete session history" },
     ]);
 
-    if (result === "delete_history") {
+    if (result === "generate_memory") {
+      if (thread && workspace) {
+        void generateAdvancedMemoryForThread(thread.workspaceId, thread.id, {
+          cwd: workspace.path,
+        });
+      }
+    } else if (result === "delete_history") {
       const confirmed = await confirmAction({
         title: "Delete session history",
         message: `Delete session history for "${tTitle}"?`,
@@ -432,6 +462,7 @@ export const Sidebar = memo(function Sidebar() {
         onCancelRename={cancelRename}
         onCommitRename={commitRename}
         onEditingTitleChange={setEditingTitle}
+        onNewWorkspaceChat={handleNewWorkspaceChat}
         onSelectWorkspace={handleSelectWorkspace}
         onStartEditing={startEditing}
         onThreadContextMenu={handleThreadContextMenu}

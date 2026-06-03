@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { defaultWorkspaceRuntime } from "../src/app/store.helpers/runtimeState";
 import {
   __controlSocketInternal,
   __threadEventReducerInternal,
@@ -367,5 +368,63 @@ describe("workspace settings sync", () => {
       "anthropic:claude-opus-4-8",
       "openai:gpt-5.4",
     ]);
+  });
+
+  test("control session_config mirrors global advanced memory into stale live snapshots", async () => {
+    primeWorkspaceConnection();
+    const otherWorkspaceId = "workspace-other-memory";
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: [
+        ...state.workspaces,
+        {
+          id: otherWorkspaceId,
+          name: "Workspace 2",
+          path: "/tmp/other-workspace",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultAdvancedMemory: false,
+          defaultMemoryGenerationModel: "openai:gpt-5-mini",
+          wsProtocol: "jsonrpc",
+          yolo: false,
+        },
+      ],
+      workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
+        [otherWorkspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          controlSessionId: "other-control",
+          controlSessionConfig: {
+            advancedMemory: false,
+            memoryGenerationModel: "openai:gpt-5-mini",
+          },
+        },
+      },
+    }));
+
+    setControlSessionConfigResponse({
+      advancedMemory: true,
+      memoryGenerationModel: "anthropic:claude-opus-4-8",
+    });
+
+    const ok = await requestJsonRpcControlEvent(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      "cowork/session/defaults/apply",
+      { cwd: "/tmp/workspace" },
+    );
+
+    expect(ok).toBe(true);
+    const state = useAppStore.getState();
+    const otherWorkspace = state.workspaces.find((entry) => entry.id === otherWorkspaceId);
+    expect(otherWorkspace?.defaultAdvancedMemory).toBe(true);
+    expect(otherWorkspace?.defaultMemoryGenerationModel).toBe("anthropic:claude-opus-4-8");
+    expect(state.workspaceRuntimeById[otherWorkspaceId].controlSessionConfig).toMatchObject({
+      advancedMemory: true,
+      memoryGenerationModel: "anthropic:claude-opus-4-8",
+    });
   });
 });

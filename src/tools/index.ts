@@ -22,6 +22,8 @@ import {
   createWaitForAgentTool,
 } from "./persistentAgents";
 import { createReadTool } from "./read";
+import { createReadPastConversationTool } from "./readPastConversation";
+import { createRecallMemoryTool } from "./recallMemory";
 import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
 import { createTodoWriteTool } from "./todoWrite";
@@ -60,7 +62,7 @@ type ListSessionToolNameOptions = {
 };
 
 export function listSessionToolNames(
-  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory"> &
+  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory" | "advancedMemory"> &
     Partial<Pick<AgentConfig, "enableA2ui" | "featureFlags" | "experimentalFeatures">>,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
@@ -84,7 +86,11 @@ export function listSessionToolNames(
     "AskUserQuestion",
     "todoWrite",
     "skill",
-    ...((config.enableMemory ?? true) ? ["memory"] : []),
+    ...(config.advancedMemory
+      ? ["recallMemory", "readPastConversation"]
+      : (config.enableMemory ?? true)
+        ? ["memory"]
+        : []),
     ...(resolveExperimentalA2uiConfig(config) ? ["a2ui"] : []),
     ...(opts.includeAgentControl
       ? [
@@ -124,7 +130,14 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     todoWrite: createTodoWriteTool(ctx),
     ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     skill: createSkillTool(ctx),
-    ...((ctx.config.enableMemory ?? true) ? { memory: createMemoryTool(ctx) } : {}),
+    ...(ctx.config.advancedMemory
+      ? {
+          recallMemory: createRecallMemoryTool(ctx),
+          readPastConversation: createReadPastConversationTool(ctx),
+        }
+      : (ctx.config.enableMemory ?? true)
+        ? { memory: createMemoryTool(ctx) }
+        : {}),
     ...(resolveExperimentalA2uiConfig(ctx.config) && ctx.applyA2uiEnvelope
       ? {
           a2ui: (

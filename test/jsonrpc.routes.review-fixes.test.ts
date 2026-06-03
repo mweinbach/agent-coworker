@@ -88,6 +88,13 @@ function createRuntimeDouble(session: Record<string, any>) {
       upsert: async (scope: string, id: string | undefined, content: string) =>
         await session.upsertMemory?.(scope, id, content),
       delete: async (scope: string, id: string) => await session.deleteMemory?.(scope, id),
+      listAdvanced: async (folder?: string) => await session.listAdvancedMemory?.(folder),
+      upsertAdvanced: async (folder: string | undefined, input: unknown) =>
+        await session.upsertAdvancedMemory?.(folder, input),
+      deleteAdvanced: async (folder: string | undefined, slug: string) =>
+        await session.deleteAdvancedMemory?.(folder, slug),
+      generateAdvancedFromHistory: async (folder?: string) =>
+        await session.generateAdvancedMemoryForHistory?.(folder),
     },
     skills: {
       getCatalog: async () => await session.getSkillsCatalog?.(),
@@ -1231,6 +1238,67 @@ describe("JSON-RPC extracted route review fixes", () => {
       expect(response.result).toBeUndefined();
     });
   }
+
+  test("current advanced memory routes reject explicit folder params", async () => {
+    const calls: Array<string | undefined> = [];
+    const harness = createRouteHarness({
+      listAdvancedMemory: async (folder?: string) => {
+        calls.push(folder);
+        harness.emitted.push({
+          type: "advanced_memory_list",
+          sessionId: "session-1",
+          folder: folder ?? "current-folder",
+          folders: [],
+          memories: [],
+        });
+      },
+    });
+
+    const handlers = createMemoryRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/memory/advanced/list", {
+      cwd: "C:/workspace",
+      folder: "other-project",
+    });
+
+    expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(response.error?.message).toContain("folder is not accepted");
+    expect(response.result).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
+  test("advanced memory folder routes require and forward explicit folders", async () => {
+    const calls: Array<string | undefined> = [];
+    const harness = createRouteHarness({
+      listAdvancedMemory: async (folder?: string) => {
+        calls.push(folder);
+        harness.emitted.push({
+          type: "advanced_memory_list",
+          sessionId: "session-1",
+          folder: folder ?? "current-folder",
+          folders: [folder ?? "current-folder"],
+          memories: [],
+        });
+      },
+    });
+    const handlers = createMemoryRouteHandlers(harness.context);
+
+    const missing = await harness.invoke(handlers, "cowork/memory/advanced/folder/list", {
+      cwd: "C:/workspace",
+    });
+    expect(missing.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(missing.error?.message).toContain("folder is required");
+
+    const response = await harness.invoke(handlers, "cowork/memory/advanced/folder/list", {
+      cwd: "C:/workspace",
+      folder: "proj",
+    });
+
+    expect(calls).toEqual(["proj"]);
+    expect((response.result as any).event).toMatchObject({
+      type: "advanced_memory_list",
+      folder: "proj",
+    });
+  });
 
   for (const scenario of [
     { method: "cowork/backups/workspace/read", sessionMethod: "listWorkspaceBackups", params: {} },

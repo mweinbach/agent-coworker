@@ -88,6 +88,18 @@ export class SessionMetadataManager {
     if (patch.memoryRequireApproval !== undefined) {
       nextConfig = { ...nextConfig, memoryRequireApproval: patch.memoryRequireApproval };
     }
+    if (patch.advancedMemory !== undefined) {
+      nextConfig = { ...nextConfig, advancedMemory: patch.advancedMemory };
+    }
+    if (patch.clearMemoryGenerationModel) {
+      nextConfig = { ...nextConfig, memoryGenerationModel: undefined };
+    }
+    if (patch.memoryGenerationModel !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        memoryGenerationModel: patch.memoryGenerationModel.trim() || undefined,
+      };
+    }
     if (normalizedChildRouting !== undefined) {
       nextConfig = {
         ...nextConfig,
@@ -188,6 +200,15 @@ export class SessionMetadataManager {
     if (patch.memoryRequireApproval !== undefined) {
       persistPatch.memoryRequireApproval = patch.memoryRequireApproval;
     }
+    if (patch.advancedMemory !== undefined) {
+      persistPatch.advancedMemory = patch.advancedMemory;
+    }
+    if (patch.clearMemoryGenerationModel) {
+      persistPatch.clearMemoryGenerationModel = true;
+    }
+    if (patch.memoryGenerationModel !== undefined) {
+      persistPatch.memoryGenerationModel = patch.memoryGenerationModel.trim() || undefined;
+    }
     if (patch.toolOutputOverflowChars !== undefined) {
       persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
     }
@@ -236,6 +257,8 @@ export class SessionMetadataManager {
         (baseConfig.enableA2ui ?? false) !== (nextConfig.enableA2ui ?? false)) ||
       (baseConfig.enableMemory ?? true) !== (nextConfig.enableMemory ?? true) ||
       (baseConfig.memoryRequireApproval ?? false) !== (nextConfig.memoryRequireApproval ?? false) ||
+      (baseConfig.advancedMemory ?? false) !== (nextConfig.advancedMemory ?? false) ||
+      (baseConfig.memoryGenerationModel ?? "") !== (nextConfig.memoryGenerationModel ?? "") ||
       baseConfig.preferredChildModel !== nextConfig.preferredChildModel ||
       (baseConfig.childModelRoutingMode ?? "same-provider") !==
         (nextConfig.childModelRoutingMode ?? "same-provider") ||
@@ -303,6 +326,10 @@ export class SessionMetadataManager {
         ...(a2uiExperimentEnabled ? { enableA2ui: workspaceA2ui } : {}),
         enableMemory: this.context.state.config.enableMemory ?? true,
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
+        advancedMemory: this.context.state.config.advancedMemory ?? false,
+        ...(this.context.state.config.memoryGenerationModel
+          ? { memoryGenerationModel: this.context.state.config.memoryGenerationModel }
+          : {}),
         defaultBackupsEnabled,
         preferredChildModel: this.context.state.config.preferredChildModel,
         childModelRoutingMode: this.context.state.config.childModelRoutingMode ?? "same-provider",
@@ -455,6 +482,14 @@ export class SessionMetadataManager {
     const baseConfig = opts?.baseConfig ?? this.context.state.config;
     const baseYolo = opts?.baseYolo ?? this.context.state.yolo;
     const baseMaxSteps = opts?.baseMaxSteps ?? this.context.state.maxSteps;
+    if (patch.memoryGenerationModel !== undefined && patch.clearMemoryGenerationModel) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "memoryGenerationModel cannot be combined with clearMemoryGenerationModel",
+      );
+      return null;
+    }
     if (patch.toolOutputOverflowChars !== undefined && patch.clearToolOutputOverflowChars) {
       this.context.emitError(
         "validation_failed",
@@ -539,6 +574,7 @@ export class SessionMetadataManager {
       (isA2uiExperimentActive(nextConfig) &&
         (patch.enableA2ui !== undefined || patch.featureFlags?.workspace !== undefined)) ||
       patch.enableMemory !== undefined ||
+      patch.advancedMemory !== undefined ||
       patch.providerOptions !== undefined
     ) {
       try {

@@ -57,6 +57,29 @@ describe("loadConfig", () => {
     expect(cfgFallback.model).toBe(defaultModelForProvider("google"));
   });
 
+  test("advanced memory defaults are global and ignore project overrides", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      advancedMemory: true,
+      memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+    });
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      advancedMemory: false,
+      memoryGenerationModel: "google:gemini-3.1-pro-preview",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.advancedMemory).toBe(true);
+    expect(cfg.memoryGenerationModel).toBe("together:moonshotai/Kimi-K2.5");
+  });
+
   test("provider override uses provider-default model when no model is set", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-"));
     const cwd = path.join(tmp, "project");
@@ -500,6 +523,28 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("gpt-5.4");
     expect(cfg.preferredChildModel).toBe("gpt-5.4");
     expect(cfg.preferredChildModelRef).toBe("codex-cli:gpt-5.4");
+  });
+
+  test("unknown Codex app-server model IDs load without static registry entries", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      provider: "codex-cli",
+      model: "future-model",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+    const model = getModel(cfg) as { modelId: string; provider: string };
+
+    expect(cfg.provider).toBe("codex-cli");
+    expect(cfg.model).toBe("future-model");
+    expect(model.modelId).toBe("future-model");
+    expect(model.provider).toBe("codex-app-server");
   });
 
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {

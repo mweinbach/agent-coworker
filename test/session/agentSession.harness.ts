@@ -105,6 +105,7 @@ export const mockGetAiCoworkerPaths = mock((opts?: { homedir?: string }) => {
     sessionsDir: path.join(rootDir, "sessions"),
     logsDir: path.join(rootDir, "logs"),
     skillsDir: path.join(rootDir, "skills"),
+    memoriesDir: path.join(rootDir, "memories"),
     connectionsFile: path.join(authDir, "connections.json"),
   };
 });
@@ -259,6 +260,8 @@ export function makeSession(
           | "enableA2ui"
           | "enableMemory"
           | "memoryRequireApproval"
+          | "advancedMemory"
+          | "memoryGenerationModel"
           | "observabilityEnabled"
           | "backupsEnabled"
           | "toolOutputOverflowChars"
@@ -267,6 +270,7 @@ export function makeSession(
         >
       > & {
         userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
+        clearMemoryGenerationModel?: boolean;
         clearToolOutputOverflowChars?: boolean;
       },
     ) => Promise<void> | void;
@@ -390,6 +394,7 @@ export async function resetAgentSessionMocks(): Promise<void> {
       sessionsDir: path.join(rootDir, "sessions"),
       logsDir: path.join(rootDir, "logs"),
       skillsDir: path.join(rootDir, "skills"),
+      memoriesDir: path.join(rootDir, "memories"),
       connectionsFile: path.join(authDir, "connections.json"),
     };
   });

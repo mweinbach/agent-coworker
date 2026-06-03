@@ -166,6 +166,8 @@ const sessionConfigEventSchema = z
         defaultBackupsEnabled: z.boolean().optional(),
         enableMemory: z.boolean().optional(),
         memoryRequireApproval: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        memoryGenerationModel: z.string().optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
@@ -327,8 +329,8 @@ const codexAppServerInstallStatusSchema = z
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     version: z.string().optional(),
-    latestVersion: z.string().optional(),
-    updateAvailable: z.boolean().optional(),
+    pinnedVersion: z.string().optional(),
+    pinMatchesCurrent: z.boolean().optional(),
     managedPath: z.string().optional(),
     message: z.string(),
   })
@@ -575,6 +577,28 @@ const memoryListEventSchema = z
     type: z.literal("memory_list"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
     memories: z.array(memoryEntrySchema),
+  })
+  .passthrough();
+
+const advancedMemoryEntrySchema = z
+  .object({
+    slug: z.string(),
+    name: z.string(),
+    description: z.string(),
+    type: z.string(),
+    originSessionId: z.string().optional(),
+    body: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
+const advancedMemoryListEventSchema = z
+  .object({
+    type: z.literal("advanced_memory_list"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    folder: z.string(),
+    folders: z.array(z.string()),
+    memories: z.array(advancedMemoryEntrySchema),
   })
   .passthrough();
 
@@ -1198,7 +1222,6 @@ const providerCodexAppServerStatusRequestSchema = z
 const providerCodexAppServerUpdateRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
-    version: z.string().optional(),
     force: z.boolean().optional(),
   })
   .strict();
@@ -1496,6 +1519,62 @@ const memoryDeleteRequestSchema = z
   })
   .strict();
 
+const advancedMemoryCurrentListRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryCurrentUpsertRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    slug: z.string().optional(),
+    name: z.string(),
+    description: z.string(),
+    type: z.string().optional(),
+    body: z.string(),
+  })
+  .strict();
+
+const advancedMemoryCurrentDeleteRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    slug: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryCurrentGenerateRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    threadId: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryFolderListRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryFolderUpsertRequestSchema = advancedMemoryCurrentUpsertRequestSchema
+  .extend({
+    folder: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryFolderDeleteRequestSchema = advancedMemoryCurrentDeleteRequestSchema
+  .extend({
+    folder: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryFolderGenerateRequestSchema = advancedMemoryCurrentGenerateRequestSchema
+  .extend({
+    folder: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const workspaceBackupsReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1556,6 +1635,9 @@ const sessionDefaultsApplyRequestSchema = z
     config: z
       .object({
         backupsEnabled: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        memoryGenerationModel: z.string().optional(),
+        clearMemoryGenerationModel: z.boolean().optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         clearToolOutputOverflowChars: z.boolean().optional(),
         preferredChildModel: z.string().optional(),
@@ -1640,6 +1722,14 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
+  "cowork/memory/advanced/list": advancedMemoryCurrentListRequestSchema,
+  "cowork/memory/advanced/upsert": advancedMemoryCurrentUpsertRequestSchema,
+  "cowork/memory/advanced/delete": advancedMemoryCurrentDeleteRequestSchema,
+  "cowork/memory/advanced/generate": advancedMemoryCurrentGenerateRequestSchema,
+  "cowork/memory/advanced/folder/list": advancedMemoryFolderListRequestSchema,
+  "cowork/memory/advanced/folder/upsert": advancedMemoryFolderUpsertRequestSchema,
+  "cowork/memory/advanced/folder/delete": advancedMemoryFolderDeleteRequestSchema,
+  "cowork/memory/advanced/folder/generate": advancedMemoryFolderGenerateRequestSchema,
   "cowork/backups/workspace/read": workspaceBackupsReadRequestSchema,
   "cowork/backups/workspace/delta/read": workspaceBackupsDeltaReadRequestSchema,
   "cowork/backups/workspace/checkpoint": workspaceBackupsCheckpointRequestSchema,
@@ -1718,6 +1808,14 @@ export const jsonRpcControlResultSchemas = {
   "cowork/memory/list": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": sessionEventEnvelope(memoryListEventSchema),
+  "cowork/memory/advanced/list": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/upsert": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/delete": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/generate": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/list": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/upsert": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/delete": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/generate": sessionEventEnvelope(advancedMemoryListEventSchema),
   "cowork/backups/workspace/read": sessionEventEnvelope(workspaceBackupsEventSchema),
   "cowork/backups/workspace/delta/read": sessionEventEnvelope(workspaceBackupDeltaEventSchema),
   "cowork/backups/workspace/checkpoint": sessionEventEnvelope(workspaceBackupsEventSchema),

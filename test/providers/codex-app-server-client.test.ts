@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { __internal, startCodexAppServerClient } from "../../src/providers/codexAppServerClient";
+import {
+  __internal,
+  startCodexAppServerClient,
+  UNHANDLED_CODEX_APP_SERVER_REQUEST,
+} from "../../src/providers/codexAppServerClient";
 
 const originalHome = process.env.HOME;
 const originalCommand = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
@@ -93,5 +97,53 @@ setInterval(() => {}, 1000);
       COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
     });
     expect((await fs.stat(expectedCodexHome)).isDirectory()).toBe(true);
+  });
+
+  test("falls back to older request handlers when newest handler declines request", async () => {
+    const writes: string[] = [];
+    const rawMessages: unknown[] = [];
+    const calls: string[] = [];
+    const child = {
+      stdin: {
+        write: (value: string) => {
+          writes.push(value);
+          return true;
+        },
+      },
+    } as Parameters<typeof __internal.respondToServerRequest>[0];
+    const handlers: Parameters<typeof __internal.respondToServerRequest>[2] = new Set([
+      () => {
+        calls.push("parent");
+        return { handledBy: "parent" };
+      },
+      () => {
+        calls.push("child");
+        return UNHANDLED_CODEX_APP_SERVER_REQUEST;
+      },
+    ]);
+
+    await __internal.respondToServerRequest(
+      child,
+      {
+        id: "srv-parent",
+        method: "item/tool/call",
+        params: { threadId: "parent-thread", turnId: "parent-turn" },
+      },
+      handlers,
+      (message) => rawMessages.push(message),
+    );
+
+    expect(calls).toEqual(["child", "parent"]);
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0] ?? "")).toEqual({
+      id: "srv-parent",
+      result: { handledBy: "parent" },
+    });
+    expect(rawMessages).toEqual([
+      {
+        direction: "client_response",
+        message: { id: "srv-parent", result: { handledBy: "parent" } },
+      },
+    ]);
   });
 });

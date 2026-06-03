@@ -199,6 +199,8 @@ export interface AgentConfig {
   projectCoworkDir: string;
   projectMemoryDir?: string;
   projectMemoryDbPath?: string;
+  /** Root of the user-level advanced (file-based) memory tree (`~/.cowork/memories`). */
+  memoriesDir?: string;
   userCoworkDir: string;
   workspaceAgentsDir?: string;
   userAgentsDir?: string;
@@ -238,6 +240,20 @@ export interface AgentConfig {
    * Defaults to false when not specified.
    */
   memoryRequireApproval?: boolean;
+
+  /**
+   * Whether the agent-driven advanced (file-based) memory system is enabled.
+   * When true it replaces the legacy `memory` tool + hot-cache injection
+   * with the `recallMemory`/`readPastConversation` tools, MEMORY.md index
+   * injection, and post-turn memory generation. Defaults to false.
+   */
+  advancedMemory?: boolean;
+
+  /**
+   * Model id used by the headless memory-generation agent. Falls back to a
+   * fixed economical default when unset. Overridable per workspace.
+   */
+  memoryGenerationModel?: string;
 
   /**
    * Whether to include raw model stream chunks in emitted stream events.

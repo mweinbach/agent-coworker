@@ -64,6 +64,9 @@ export type SessionConfigPatch = {
   enableA2ui?: boolean;
   enableMemory?: boolean;
   memoryRequireApproval?: boolean;
+  advancedMemory?: boolean;
+  memoryGenerationModel?: string;
+  clearMemoryGenerationModel?: boolean;
   preferredChildModel?: string;
   childModelRoutingMode?: ChildModelRoutingMode;
   preferredChildModelRef?: string;
@@ -91,6 +94,8 @@ type SessionConfigState = {
   enableA2ui?: boolean;
   enableMemory: boolean;
   memoryRequireApproval: boolean;
+  advancedMemory: boolean;
+  memoryGenerationModel?: string;
   preferredChildModel: string;
   childModelRoutingMode: ChildModelRoutingMode;
   preferredChildModelRef: string;
@@ -342,6 +347,21 @@ export type SessionEvent =
         scope: "workspace" | "user";
         content: string;
         createdAt: string;
+        updatedAt: string;
+      }>;
+    }
+  | {
+      type: "advanced_memory_list";
+      sessionId: string;
+      folder: string;
+      folders: string[];
+      memories: Array<{
+        slug: string;
+        name: string;
+        description: string;
+        type: string;
+        originSessionId?: string;
+        body: string;
         updatedAt: string;
       }>;
     }

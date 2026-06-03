@@ -18,6 +18,7 @@ const RESEARCH_TABLE_MIGRATION = 13;
 const RESEARCH_PLAN_COLUMNS_MIGRATION = 14;
 const RESEARCH_WORKSPACE_COLUMN_MIGRATION = 15;
 const AGENT_PROFILE_METADATA_MIGRATION = 16;
+const LAST_MEMORY_GENERATED_INDEX_MIGRATION = 17;
 
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
@@ -44,6 +45,7 @@ type BootstrapSessionDbOptions = {
     | "addResearchPlanColumns"
     | "addResearchWorkspaceColumn"
     | "addAgentProfileMetadataColumn"
+    | "addLastMemoryGeneratedIndexColumn"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -138,6 +140,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(AGENT_PROFILE_METADATA_MIGRATION)) {
     opts.repository.addAgentProfileMetadataColumn();
     opts.repository.markMigration(AGENT_PROFILE_METADATA_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(LAST_MEMORY_GENERATED_INDEX_MIGRATION)) {
+    opts.repository.addLastMemoryGeneratedIndexColumn();
+    opts.repository.markMigration(LAST_MEMORY_GENERATED_INDEX_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

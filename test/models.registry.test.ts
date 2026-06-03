@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listMissingChildAgentModelInfo } from "../src/models/childAgentModelInfo";
 import { parseChildModelRef } from "../src/models/childModelRouting";
-import { normalizeModelIdForProvider } from "../src/models/metadata";
+import { getResolvedModelMetadataSync, normalizeModelIdForProvider } from "../src/models/metadata";
 import {
   assertSupportedModel,
   defaultSupportedModel,
@@ -155,6 +155,18 @@ describe("model registry helpers", () => {
 
   test("providerOptionsDefaultsForModel returns an empty object for unknown models", () => {
     expect(providerOptionsDefaultsForModel("anthropic", "missing-model")).toEqual({});
+  });
+
+  test("Codex CLI preserves unknown live app-server model IDs", () => {
+    expect(normalizeModelIdForProvider("codex-cli", "future-model")).toBe("future-model");
+    expect(getResolvedModelMetadataSync("codex-cli", "future-model")).toMatchObject({
+      id: "future-model",
+      provider: "codex-cli",
+      displayName: "future-model",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+      source: "dynamic",
+    });
   });
 
   test("Claude Opus 4.7 and 4.8 use adaptive thinking defaults", () => {

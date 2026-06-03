@@ -118,6 +118,7 @@ describe("sessionDb", () => {
           hasPendingApproval: false,
           systemPrompt: "system",
           messages: [{ role: "user", content: "hello" }],
+          lastMemoryGeneratedIndex: 1,
           providerState: {
             provider: "openai",
             model: "gpt-5.2",
@@ -174,6 +175,7 @@ describe("sessionDb", () => {
           reasoningSummary: "detailed",
         },
       });
+      expect(persisted?.lastMemoryGeneratedIndex).toBe(1);
       expect(persisted?.costTracker).toEqual({
         sessionId: "s-1",
         totalTurns: 1,

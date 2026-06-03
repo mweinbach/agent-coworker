@@ -315,6 +315,32 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("{{modelName}}");
   });
 
+  test("advanced memory injects the Memory Index and suppresses the legacy hot cache", async () => {
+    const memTmp = await fs.mkdtemp(path.join(os.tmpdir(), "adv-mem-prompt-"));
+    const { AdvancedMemoryStore, resolveMemoryFolderName } = await import(
+      "../src/advancedMemory/store"
+    );
+    const store = new AdvancedMemoryStore(memTmp);
+    const config = makeConfig({ advancedMemory: true, memoriesDir: memTmp });
+    await store.writeMemory(resolveMemoryFolderName(config), {
+      name: "remembered-rule",
+      description: "a durable rule to recall",
+      type: "feedback",
+      body: "always do X",
+    });
+
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("recallMemory");
+    expect(prompt).toContain("remembered-rule");
+    expect(prompt).toContain("a durable rule to recall");
+    // Legacy hot-cache guidance must not appear in advanced mode.
+    expect(prompt).not.toContain("Use the `memory` tool to read, write, search");
+
+    await fs.rm(memTmp, { recursive: true, force: true });
+  });
+
   test("falls back to the generic system prompt for dynamic LM Studio models", async () => {
     const config = makeConfig({
       provider: "lmstudio",

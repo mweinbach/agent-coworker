@@ -44,7 +44,7 @@ describe("codex app-server turn lifecycle", () => {
       registerSteerHandler: (handler) => {
         steerHandler = handler;
         queueMicrotask(() => {
-          void handler({ text: "also mention steering", expectedTurnId: "turn_1" });
+          void handler({ text: "also mention steering", expectedTurnId: "cowork-turn-1" });
         });
         return () => {
           if (steerHandler === handler) steerHandler = undefined;
@@ -86,7 +86,7 @@ describe("codex app-server turn lifecycle", () => {
         queueMicrotask(() => {
           void handler({
             text: "inspect this steer image",
-            expectedTurnId: "turn_1",
+            expectedTurnId: "cowork-turn-1",
             content: [
               { type: "text", text: "inspect this steer image" },
               {

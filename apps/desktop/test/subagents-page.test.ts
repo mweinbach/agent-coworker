@@ -162,10 +162,14 @@ function profilesCatalog(entries: AgentProfileCatalogEntry[]) {
   };
 }
 
-function providerCatalogEntry(provider: "google" | "openai", modelId: string, displayName: string) {
+function providerCatalogEntry(
+  provider: "google" | "openai" | "bedrock",
+  modelId: string,
+  displayName: string,
+) {
   return {
     id: provider,
-    name: provider === "openai" ? "OpenAI" : "Google",
+    name: provider === "openai" ? "OpenAI" : provider === "bedrock" ? "Amazon Bedrock" : "Google",
     defaultModel: modelId,
     models: [
       {
@@ -590,6 +594,39 @@ describe("subagents settings page", () => {
         ],
       }),
     );
+  });
+
+  test("profile model picker hides unconfigured provider catalogs", () => {
+    const result = buildProfileModelGroups(
+      [
+        providerCatalogEntry("google", "gemini-3.5-flash", "Gemini 3.5 Flash"),
+        providerCatalogEntry("bedrock", "amazon.nova-lite-v1:0", "Amazon Nova Lite"),
+      ],
+      undefined,
+      { includedProviders: ["google"] },
+    );
+
+    expect(result.groups.map((group) => group.provider)).toEqual(["google"]);
+    expect(JSON.stringify(result)).not.toContain("Amazon Nova Lite");
+  });
+
+  test("profile model picker preserves the current unconfigured model as custom", () => {
+    const result = buildProfileModelGroups(
+      [
+        providerCatalogEntry("google", "gemini-3.5-flash", "Gemini 3.5 Flash"),
+        providerCatalogEntry("bedrock", "amazon.nova-lite-v1:0", "Amazon Nova Lite"),
+      ],
+      "bedrock:amazon.nova-lite-v1:0",
+      { includedProviders: ["google"] },
+    );
+
+    const bedrockGroup = result.groups.find((group) => group.provider === "bedrock");
+    expect(bedrockGroup?.options).toEqual([
+      {
+        value: "bedrock:amazon.nova-lite-v1:0",
+        label: "Amazon Nova Lite (custom)",
+      },
+    ]);
   });
 
   test("uses the selected profile workspace provider catalog for model choices", async () => {

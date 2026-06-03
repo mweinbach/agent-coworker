@@ -3,7 +3,7 @@ import {
   renderArtifactRuntimeInstructions,
 } from "../../artifactRuntime";
 import { renderManagedSofficeRuntimeInstructions } from "../../managedSofficeRuntime";
-import { getSupportedModel, listSupportedModels } from "../../models/registry";
+import { getSupportedModel } from "../../models/registry";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
@@ -207,28 +207,29 @@ export async function resolveEffectiveCodexModel(
   log?: (line: string) => void,
 ): Promise<string> {
   const appServerModels = await listAppServerModels(client);
-  const supportedById = new Map(
-    listSupportedModels(CODEX_APP_SERVER_PROVIDER).map((model) => [model.id, model.id]),
-  );
-  const availableSupportedIds: string[] = [];
+  const resolveLiveModelId = (model: CodexAppServerModelListEntry): string => {
+    const supported =
+      getSupportedModel(CODEX_APP_SERVER_PROVIDER, model.model) ??
+      getSupportedModel(CODEX_APP_SERVER_PROVIDER, model.id);
+    return supported?.id ?? model.model ?? model.id;
+  };
+  const availableIds: string[] = [];
   for (const model of appServerModels) {
-    const supportedId = supportedById.get(model.model) ?? supportedById.get(model.id);
-    if (supportedId && !availableSupportedIds.includes(supportedId)) {
-      availableSupportedIds.push(supportedId);
+    const liveId = resolveLiveModelId(model);
+    if (!availableIds.includes(liveId)) {
+      availableIds.push(liveId);
     }
   }
 
-  if (availableSupportedIds.includes(configuredModel)) return configuredModel;
+  if (availableIds.includes(configuredModel)) return configuredModel;
 
   const defaultFromAppServer = appServerModels.find((model) => model.isDefault);
   const fallback =
-    (defaultFromAppServer
-      ? (supportedById.get(defaultFromAppServer.model) ??
-        supportedById.get(defaultFromAppServer.id))
-      : undefined) ?? availableSupportedIds[0];
+    (defaultFromAppServer ? resolveLiveModelId(defaultFromAppServer) : undefined) ??
+    availableIds[0];
   if (!fallback) {
     throw new Error(
-      `Codex app-server did not report any Cowork-supported models. Reported models: ${
+      `Codex app-server did not report any available models. Reported models: ${
         appServerModels.map((model) => model.model).join(", ") || "none"
       }`,
     );

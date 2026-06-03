@@ -40,6 +40,7 @@ export type CodexAppServerModel = {
   model: string;
   displayName: string;
   description?: string;
+  supportsImageInput?: boolean;
   isDefault: boolean;
 };
 
@@ -145,11 +146,18 @@ function normalizeModel(value: unknown): CodexAppServerModel | null {
   const canonicalId = modelId || id;
   if (!canonicalId) return null;
   const description = asString(model?.description);
+  const supportsImageInput =
+    typeof model?.supportsImageInput === "boolean"
+      ? model.supportsImageInput
+      : typeof model?.supports_image_input === "boolean"
+        ? model.supports_image_input
+        : undefined;
   return {
     id: canonicalId,
     model: modelId || canonicalId,
     displayName: asString(model?.displayName) || canonicalId,
     ...(description ? { description } : {}),
+    ...(supportsImageInput !== undefined ? { supportsImageInput } : {}),
     isDefault: model?.isDefault === true,
   };
 }

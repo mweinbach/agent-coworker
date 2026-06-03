@@ -244,6 +244,15 @@ function useSharedUpdateWorkspaceDefaults() {
   return useAppStore((s) => s.updateWorkspaceDefaults);
 }
 
+function hasProfileDetails(workspace: Pick<WorkspaceRecord, "userProfile">): boolean {
+  const profile = normalizeWorkspaceUserProfile(workspace.userProfile);
+  return Boolean(profile.instructions.trim() || profile.work.trim() || profile.details.trim());
+}
+
+function hasProfileContext(workspace: Pick<WorkspaceRecord, "userName" | "userProfile">): boolean {
+  return Boolean(workspace.userName?.trim() || hasProfileDetails(workspace));
+}
+
 type OpenAiCompatibleModelSettingsCardProps = {
   workspace: Pick<WorkspaceRecord, "id" | "providerOptions">;
   updateWorkspaceDefaults: (
@@ -722,7 +731,9 @@ type WorkspaceUserProfileCardProps = {
   updateWorkspaceDefaults: (
     workspaceId: string,
     patch: { userName?: string; userProfile?: Partial<WorkspaceUserProfile> },
+    opts?: { scope?: "settings" | "target" },
   ) => Promise<unknown> | undefined;
+  scopedToTarget?: boolean;
 };
 
 function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspace"]) {
@@ -738,6 +749,7 @@ function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspa
 export function WorkspaceUserProfileCard({
   workspace,
   updateWorkspaceDefaults,
+  scopedToTarget = false,
 }: WorkspaceUserProfileCardProps) {
   const [draft, setDraft] = useState(() => buildUserProfileDraft(workspace));
   const [saving, setSaving] = useState(false);
@@ -761,14 +773,18 @@ export function WorkspaceUserProfileCard({
     setSaveSuccess(false);
 
     try {
-      await updateWorkspaceDefaults(workspace.id, {
-        userName: draft.userName.trim(),
-        userProfile: {
-          instructions: draft.instructions.trim(),
-          work: draft.work.trim(),
-          details: draft.details.trim(),
+      await updateWorkspaceDefaults(
+        workspace.id,
+        {
+          userName: draft.userName.trim(),
+          userProfile: {
+            instructions: draft.instructions.trim(),
+            work: draft.work.trim(),
+            details: draft.details.trim(),
+          },
         },
-      });
+        scopedToTarget ? { scope: "target" } : undefined,
+      );
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } finally {
@@ -933,6 +949,15 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     [projectWorkspaces, workspaces],
   );
 
+  const sharedProfileWorkspace = useMemo(() => {
+    if (surface !== "profile" || perWorkspaceSettings) return null;
+    return (
+      projectWorkspaces.find(hasProfileDetails) ??
+      projectWorkspaces.find(hasProfileContext) ??
+      workspaces.find(hasProfileContext) ??
+      null
+    );
+  }, [perWorkspaceSettings, projectWorkspaces, surface, workspaces]);
   const ws = useMemo(() => {
     const selected = selectedWorkspaceId
       ? (workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null)
@@ -943,6 +968,9 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
             null)
         : null;
     }
+    if (sharedProfileWorkspace) {
+      return sharedProfileWorkspace;
+    }
     const selectedProject = selected && !isOneOffChatWorkspace(selected) ? selected : null;
     return selectedProject ?? projectWorkspaces[0] ?? defaultSettingsSourceWorkspaces[0] ?? null;
   }, [
@@ -951,6 +979,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     perWorkspaceSettings,
     projectWorkspaces,
     selectedWorkspaceId,
+    sharedProfileWorkspace,
     workspaces,
   ]);
   const selectedSettingsTarget = perWorkspaceSettings ? activeSettingsTarget : null;

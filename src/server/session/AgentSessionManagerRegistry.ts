@@ -30,6 +30,7 @@ export type AgentSessionManagerHost = {
   readonly sessionSnapshotProjector: SessionSnapshotProjector;
   sendUserMessage(text: string, clientMessageId?: string, displayText?: string): Promise<void>;
   flushPendingExternalSkillRefresh(): Promise<void>;
+  triggerMemoryGeneration(): void;
   getGlobalAuthPaths(): ReturnType<SessionContext["getCoworkPaths"]>;
   runProviderConnect(
     opts: Parameters<typeof connectModelProvider>[0],
@@ -99,6 +100,7 @@ export class AgentSessionManagerRegistry {
         backupController: this.host.backupController,
         flushPendingExternalSkillRefresh: async () =>
           await this.host.flushPendingExternalSkillRefresh(),
+        triggerMemoryGeneration: () => this.host.triggerMemoryGeneration(),
         ...(this.host.deps.createA2uiSurfaceManagerImpl
           ? { getA2uiSurfaceManager: () => this.getA2uiSurfaceManager() }
           : {}),

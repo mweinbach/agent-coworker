@@ -43,6 +43,8 @@ import {
 import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
 import {
+  type CatalogVisibilityOptions,
+  configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
   modelChoicesFromCatalog,
@@ -230,12 +232,18 @@ export function profileModelSupportsReasoning(model: string | undefined): boolea
 export function buildProfileModelGroups(
   providerCatalog: readonly ProviderCatalogEntry[],
   currentModel?: string | null,
+  visibility?: CatalogVisibilityOptions,
 ): { groups: ProfileModelGroup[]; customOptions: ProfileModelOption[] } {
-  const modelChoices = modelChoicesFromCatalog(providerCatalog);
+  const modelChoices = modelChoicesFromCatalog(providerCatalog, visibility);
   const displayNames = modelDisplayNamesFromCatalog(providerCatalog);
   const current = currentModel?.trim() || "";
   const groups = sortProviderEntriesForSettings(
-    PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+    PROVIDER_NAMES.filter(
+      (provider) =>
+        !UI_DISABLED_PROVIDERS.has(provider) &&
+        (visibility?.includedProviders ? visibility.includedProviders.includes(provider) : true) &&
+        !visibility?.hiddenProviders?.includes(provider),
+    )
       .map((provider) => {
         const options = (modelChoices[provider] ?? []).map((modelId) => ({
           value: encodeProviderModelSelection(provider, modelId),
@@ -334,6 +342,9 @@ export function SubagentsPage() {
   const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
+  const providerConnected = useAppStore((s) => s.providerConnected);
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const providerUiState = useAppStore((s) => s.providerUiState);
 
   const workspaceChoices = useMemo(() => listSubagentProfileWorkspaces(workspaces), [workspaces]);
   const [profileWorkspaceId, setProfileWorkspaceId] = useState<string | null>(null);
@@ -344,6 +355,32 @@ export function SubagentsPage() {
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const catalog = runtime?.agentProfilesCatalog ?? null;
   const providerCatalog = providerCatalogForSubagentWorkspace(runtime);
+  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+      hiddenModelsByProvider: {
+        lmstudio: providerUiState.lmstudio.hiddenModels,
+      },
+    }),
+    [providerUiState],
+  );
+  const configuredModelProviders = useMemo(
+    () =>
+      configuredProvidersForModelChoices({
+        catalog: providerCatalog,
+        connected: providerConnected,
+        providerStatusByName,
+        visibility: modelSelectorVisibility,
+      }),
+    [modelSelectorVisibility, providerCatalog, providerConnected, providerStatusByName],
+  );
+  const modelVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      ...modelSelectorVisibility,
+      includedProviders: configuredModelProviders,
+    }),
+    [configuredModelProviders, modelSelectorVisibility],
+  );
   const profilesLoading = runtime?.agentProfilesLoading ?? false;
   const [scope, setScope] = useState<AgentProfileScope>("workspace");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
@@ -553,6 +590,7 @@ export function SubagentsPage() {
         mcpServerNames={mcpServerNames}
         skillNames={skillNames}
         providerCatalog={providerCatalog}
+        modelVisibility={modelVisibility}
         rolePromptDefaults={rolePromptDefaults}
         workspace={workspace}
         workspaceChoices={workspaceChoices}
@@ -671,6 +709,7 @@ export function ProfileDialog({
   mcpServerNames,
   skillNames,
   providerCatalog = [],
+  modelVisibility,
   rolePromptDefaults = {},
   workspace,
   workspaceChoices,
@@ -682,6 +721,7 @@ export function ProfileDialog({
   mcpServerNames: string[];
   skillNames: string[];
   providerCatalog?: ProviderCatalogEntry[];
+  modelVisibility?: CatalogVisibilityOptions;
   rolePromptDefaults?: RolePromptDefaults;
   workspace: WorkspaceRecord | null;
   workspaceChoices: WorkspaceRecord[];
@@ -690,8 +730,8 @@ export function ProfileDialog({
 }) {
   const tools = ALL_BUILT_IN_TOOLS;
   const { groups: modelGroups, customOptions } = useMemo(
-    () => buildProfileModelGroups(providerCatalog, draft?.model),
-    [draft?.model, providerCatalog],
+    () => buildProfileModelGroups(providerCatalog, draft?.model, modelVisibility),
+    [draft?.model, modelVisibility, providerCatalog],
   );
   const modelSupportsReasoning = profileModelSupportsReasoning(draft?.model);
   const canSave = !!draft?.id.trim() && !!draft.displayName.trim();

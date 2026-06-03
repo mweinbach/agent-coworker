@@ -67,6 +67,44 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(11);
   });
 
+  test("advanced memory swaps the memory tool for recall/readPastConversation", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, { config: makeConfig(dir, { advancedMemory: true }) }),
+    );
+    expect(tools).not.toHaveProperty("memory");
+    expect(tools).toHaveProperty("recallMemory");
+    expect(tools).toHaveProperty("readPastConversation");
+  });
+
+  test("default (advanced memory off) keeps the legacy memory tool", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(makeCtx(dir));
+    expect(tools).toHaveProperty("memory");
+    expect(tools).not.toHaveProperty("recallMemory");
+    expect(tools).not.toHaveProperty("readPastConversation");
+  });
+
+  test("listSessionToolNames reflects advanced memory swap", () => {
+    const advanced = listSessionToolNames({
+      provider: "google",
+      providerOptions: {},
+      enableMemory: true,
+      advancedMemory: true,
+    });
+    expect(advanced).toContain("recallMemory");
+    expect(advanced).toContain("readPastConversation");
+    expect(advanced).not.toContain("memory");
+
+    const legacy = listSessionToolNames({
+      provider: "google",
+      providerOptions: {},
+      enableMemory: true,
+    });
+    expect(legacy).toContain("memory");
+    expect(legacy).not.toContain("recallMemory");
+  });
+
   test("hides legacy webSearch for codex-cli by default", async () => {
     const dir = await tmpDir();
     const tools = createTools(

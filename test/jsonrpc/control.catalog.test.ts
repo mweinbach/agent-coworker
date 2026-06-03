@@ -32,6 +32,45 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("advanced memory upsert/list/delete round-trips via JSON-RPC", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+
+      const upserted = await rpc.request("cowork/memory/advanced/upsert", {
+        cwd: tmpDir,
+        folder: "proj",
+        name: "remembered rule",
+        description: "a durable rule",
+        type: "feedback",
+        body: "always do X",
+      });
+      expect(upserted.result.event.type).toBe("advanced_memory_list");
+      expect(upserted.result.event.folder).toBe("proj");
+      expect(upserted.result.event.memories).toHaveLength(1);
+      expect(upserted.result.event.memories[0].slug).toBe("remembered-rule");
+
+      const listed = await rpc.request("cowork/memory/advanced/list", {
+        cwd: tmpDir,
+        folder: "proj",
+      });
+      expect(listed.result.event.memories[0].name).toBe("remembered rule");
+
+      const deleted = await rpc.request("cowork/memory/advanced/delete", {
+        cwd: tmpDir,
+        folder: "proj",
+        slug: "remembered-rule",
+      });
+      expect(deleted.result.event.memories).toHaveLength(0);
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("MCP servers read returns a session-event mcp_servers event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

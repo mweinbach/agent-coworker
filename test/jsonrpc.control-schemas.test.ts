@@ -187,6 +187,40 @@ describe("shared JSON-RPC control schemas", () => {
     expect(parsed.event.memories[0]?.id).toBe("hot");
   });
 
+  test("parses advanced memory request and result envelopes", () => {
+    const request = jsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].parse({
+      cwd: "/tmp/proj",
+      folder: "proj",
+      name: "rule",
+      description: "a rule",
+      type: "feedback",
+      body: "always do X",
+    });
+    expect(request.name).toBe("rule");
+
+    const parsed = jsonRpcControlResultSchemas["cowork/memory/advanced/list"].parse({
+      event: {
+        type: "advanced_memory_list",
+        sessionId: "session-1",
+        folder: "proj",
+        folders: ["proj", "(chats)"],
+        memories: [
+          {
+            slug: "rule",
+            name: "rule",
+            description: "a rule",
+            type: "feedback",
+            originSessionId: "session-1",
+            body: "always do X",
+            updatedAt: new Date(0).toISOString(),
+          },
+        ],
+      },
+    });
+    expect(parsed.event.folder).toBe("proj");
+    expect(parsed.event.memories[0]?.slug).toBe("rule");
+  });
+
   test("parses workspace backup envelopes", () => {
     const parsed = jsonRpcControlResultSchemas["cowork/backups/workspace/read"].parse({
       event: {

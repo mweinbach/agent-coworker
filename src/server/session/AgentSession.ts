@@ -143,6 +143,7 @@ export class AgentSession {
   private readonly memoryStore: MemoryStore;
   private readonly advancedMemoryStore: AdvancedMemoryStore;
   private readonly memoryGenerator: MemoryGenerator;
+  private memoryGenerationQueue: Promise<void> = Promise.resolve();
   private systemPromptLoadPromise: Promise<boolean> | null = null;
   private skillCatalogMtimeSnapshot: string | null = null;
   private bufferDisconnectedEvents = false;
@@ -1036,10 +1037,28 @@ export class AgentSession {
   ) {
     const resolvedFolder = this.resolveAdvancedMemoryFolder(folder);
     try {
-      await this.advancedMemoryStore.writeMemory(resolvedFolder, {
-        ...input,
-        originSessionId: input.slug ? undefined : this.id,
-      });
+      if (input.slug) {
+        // Edit: preserve the existing memory's originSessionId (and any other
+        // untouched fields) instead of clobbering it. Fall back to a create if
+        // the target no longer exists.
+        const edited = await this.advancedMemoryStore.editMemory(resolvedFolder, input.slug, {
+          name: input.name,
+          description: input.description,
+          type: input.type,
+          body: input.body,
+        });
+        if (!edited) {
+          await this.advancedMemoryStore.writeMemory(resolvedFolder, {
+            ...input,
+            originSessionId: this.id,
+          });
+        }
+      } else {
+        await this.advancedMemoryStore.writeMemory(resolvedFolder, {
+          ...input,
+          originSessionId: this.id,
+        });
+      }
     } catch (err) {
       this.context.emitError(
         "internal_error",
@@ -1070,27 +1089,39 @@ export class AgentSession {
 
   /**
    * Fire-and-forget advanced memory generation for the just-completed turn.
-   * Consumes the slice of `allMessages` since the last generation, advances the
-   * marker, and runs the headless generator. No-op unless advanced memory is on.
+   * Runs are serialized on a per-session queue so overlapping turns never
+   * interleave reads/writes against the same memory folder. The delta marker is
+   * advanced only after a run completes successfully, so a failed run leaves its
+   * messages to be reprocessed by the next turn. No-op unless advanced memory is on.
    */
   triggerMemoryGeneration(): void {
+    if (!this.state.config.advancedMemory) return;
+    this.memoryGenerationQueue = this.memoryGenerationQueue
+      .then(() => this.runMemoryGenerationOnce())
+      .catch(() => {
+        // Generation failures must never affect the user-facing turn or the queue.
+      });
+  }
+
+  private async runMemoryGenerationOnce(): Promise<void> {
     if (!this.state.config.advancedMemory) return;
     const start = this.state.lastMemoryGeneratedIndex;
     const end = this.state.allMessages.length;
     if (end <= start) return;
     const deltaMessages = this.state.allMessages.slice(start, end);
-    this.state.lastMemoryGeneratedIndex = end;
-    void this.memoryGenerator
-      .run({
-        config: this.state.config,
-        sessionId: this.id,
-        deltaMessages,
-        log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
-        abortSignal: undefined,
-      })
-      .catch(() => {
-        // Generation failures must never affect the user-facing turn.
-      });
+    const result = await this.memoryGenerator.run({
+      config: this.state.config,
+      sessionId: this.id,
+      deltaMessages,
+      log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
+      abortSignal: undefined,
+    });
+    // Advance only when the generator completed its pass (including an
+    // intentional no-op). On runtime failure (`ok: false`) the marker stays so
+    // the delta is retried on the next turn.
+    if (result.ok) {
+      this.state.lastMemoryGeneratedIndex = end;
+    }
   }
 
   private async ensureSystemPromptReady(): Promise<boolean> {

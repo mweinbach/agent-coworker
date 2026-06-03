@@ -153,13 +153,18 @@ export class MemoryGenerator {
     }
   }
 
-  async run(opts: MemoryGeneratorRunOpts): Promise<{ ran: boolean }> {
+  /**
+   * Runs the headless memory pass. `ok` is false only on a runtime failure (so
+   * the caller can avoid advancing its delta marker and retry later); empty
+   * deltas resolve `{ ran: false, ok: true }`. Never throws.
+   */
+  async run(opts: MemoryGeneratorRunOpts): Promise<{ ran: boolean; ok: boolean }> {
     const log = opts.log ?? (() => {});
     if (!hasMeaningfulContent(opts.deltaMessages)) {
-      return { ran: false };
+      return { ran: false, ok: true };
     }
     const transcript = serializeTurnDelta(opts.deltaMessages);
-    if (!transcript.trim()) return { ran: false };
+    if (!transcript.trim()) return { ran: false, ok: true };
 
     const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
     const folder = opts.folder ?? resolveMemoryFolderName(opts.config);
@@ -186,10 +191,10 @@ export class MemoryGenerator {
         log: (line) => log(`[memory] ${line}`),
         enableMcp: false,
       } as Parameters<ReturnType<typeof createRuntime>["runTurn"]>[0]);
-      return { ran: true };
+      return { ran: true, ok: true };
     } catch (error) {
       log(`[memory] generation failed: ${String(error)}`);
-      return { ran: false };
+      return { ran: false, ok: false };
     }
   }
 

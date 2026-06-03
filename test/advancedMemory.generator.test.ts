@@ -85,6 +85,7 @@ describe("MemoryGenerator", () => {
     });
 
     expect(result.ran).toBe(true);
+    expect(result.ok).toBe(true);
     expect(captured?.system).toBe("GENERATOR PROMPT");
 
     const store = new AdvancedMemoryStore(tmpDir);
@@ -112,6 +113,7 @@ describe("MemoryGenerator", () => {
       folder: "proj",
     });
     expect(result.ran).toBe(false);
+    expect(result.ok).toBe(true);
     expect(called).toBe(false);
   });
 
@@ -132,5 +134,6 @@ describe("MemoryGenerator", () => {
       folder: "proj",
     });
     expect(result.ran).toBe(false);
+    expect(result.ok).toBe(false);
   });
 });

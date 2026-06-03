@@ -53,12 +53,15 @@ describe("AdvancedMemoryStore", () => {
       name: "rule",
       description: "first",
       type: "feedback",
+      originSessionId: "sess-orig",
       body: "original",
     });
     const edited = await store.editMemory("proj", "rule", { body: "updated body" });
     expect(edited?.body).toBe("updated body");
     expect(edited?.description).toBe("first");
     expect(edited?.type).toBe("feedback");
+    // originSessionId must survive an edit that doesn't supply one.
+    expect(edited?.originSessionId).toBe("sess-orig");
   });
 
   test("delete removes the file and regenerates the index", async () => {

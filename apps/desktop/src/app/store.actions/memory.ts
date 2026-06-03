@@ -188,7 +188,7 @@ export function createWorkspaceMemoryActions(
           body: input.body,
         },
       );
-      if (ok) return;
+      if (ok) return true;
 
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -199,6 +199,7 @@ export function createWorkspaceMemoryActions(
           detail: "Unable to save memory.",
         }),
       }));
+      return false;
     },
 
     deleteAdvancedMemory: async (workspaceId, folder, slug, opts) => {
@@ -233,16 +234,15 @@ export function createWorkspaceMemoryActions(
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      // Capture the prior value so a failed apply can be rolled back. The server
-      // is the source of truth; a successful apply re-syncs via session_config.
-      const previous = get().workspaces.find((w) => w.id === workspaceId)?.defaultAdvancedMemory;
-
-      // Optimistic update so the toggle reflects immediately.
-      set((s) => ({
-        workspaces: s.workspaces.map((w) =>
-          w.id === workspaceId ? { ...w, defaultAdvancedMemory: advancedMemory } : w,
-        ),
-      }));
+      // The settings UI reads the live `controlSessionConfig` first (server's
+      // effective value), then falls back to the persisted workspace record.
+      // Update BOTH optimistically so the toggle reflects immediately, and
+      // capture both prior values for rollback. The server re-syncs via the
+      // subsequent `session_config` event.
+      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
+        record: { defaultAdvancedMemory: advancedMemory },
+        sessionConfig: { advancedMemory },
+      });
 
       const ok = await requestJsonRpcControlEvent(
         get,
@@ -255,10 +255,8 @@ export function createWorkspaceMemoryActions(
         },
       );
       if (!ok) {
+        restore();
         set((s) => ({
-          workspaces: s.workspaces.map((w) =>
-            w.id === workspaceId ? { ...w, defaultAdvancedMemory: previous } : w,
-          ),
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -274,15 +272,10 @@ export function createWorkspaceMemoryActions(
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      const previous = get().workspaces.find(
-        (w) => w.id === workspaceId,
-      )?.defaultMemoryGenerationModel;
-
-      set((s) => ({
-        workspaces: s.workspaces.map((w) =>
-          w.id === workspaceId ? { ...w, defaultMemoryGenerationModel: model } : w,
-        ),
-      }));
+      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
+        record: { defaultMemoryGenerationModel: model },
+        sessionConfig: { memoryGenerationModel: model },
+      });
 
       const ok = await requestJsonRpcControlEvent(
         get,
@@ -295,10 +288,8 @@ export function createWorkspaceMemoryActions(
         },
       );
       if (!ok) {
+        restore();
         set((s) => ({
-          workspaces: s.workspaces.map((w) =>
-            w.id === workspaceId ? { ...w, defaultMemoryGenerationModel: previous } : w,
-          ),
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -309,5 +300,57 @@ export function createWorkspaceMemoryActions(
         }));
       }
     },
+  };
+}
+
+/**
+ * Optimistically patch the workspace record and the live control-session config
+ * (when present) for memory settings, returning a `restore()` that rolls both
+ * back to their prior values on failure.
+ */
+function applyOptimisticMemoryConfig(
+  get: StoreGet,
+  set: StoreSet,
+  workspaceId: string,
+  patch: {
+    record: Partial<{ defaultAdvancedMemory: boolean; defaultMemoryGenerationModel: string }>;
+    sessionConfig: Partial<{ advancedMemory: boolean; memoryGenerationModel: string }>;
+  },
+): () => void {
+  const state = get();
+  const prevWorkspace = state.workspaces.find((w) => w.id === workspaceId);
+  const prevRecord: Record<string, unknown> = {};
+  for (const key of Object.keys(patch.record)) {
+    prevRecord[key] = (prevWorkspace as Record<string, unknown> | undefined)?.[key];
+  }
+  const prevSessionConfig = state.workspaceRuntimeById[workspaceId]?.controlSessionConfig ?? null;
+
+  set((s) => ({
+    workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, ...patch.record } : w)),
+    workspaceRuntimeById: {
+      ...s.workspaceRuntimeById,
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        controlSessionConfig: s.workspaceRuntimeById[workspaceId]?.controlSessionConfig
+          ? {
+              ...s.workspaceRuntimeById[workspaceId].controlSessionConfig,
+              ...patch.sessionConfig,
+            }
+          : (s.workspaceRuntimeById[workspaceId]?.controlSessionConfig ?? null),
+      },
+    },
+  }));
+
+  return () => {
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, ...prevRecord } : w)),
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...s.workspaceRuntimeById[workspaceId],
+          controlSessionConfig: prevSessionConfig,
+        },
+      },
+    }));
   };
 }

@@ -87,21 +87,30 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
     setDraft(emptyDraft());
   };
 
-  const handleSave = () => {
-    if (!draft.name.trim() || !draft.body.trim()) return;
-    void upsertAdvancedMemory(
-      workspaceId,
-      {
-        ...(folder ? { folder } : {}),
-        ...(editingSlug ? { slug: editingSlug } : {}),
-        name: draft.name.trim(),
-        description: draft.description.trim(),
-        type: draft.type,
-        body: draft.body.trim(),
-      },
-      { cwd },
-    );
-    closeDialog();
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!draft.name.trim() || !draft.body.trim() || saving) return;
+    setSaving(true);
+    try {
+      // Only close on success so a failed save keeps the dialog (and the user's
+      // entered content) intact rather than silently discarding it.
+      const ok = await upsertAdvancedMemory(
+        workspaceId,
+        {
+          ...(folder ? { folder } : {}),
+          ...(editingSlug ? { slug: editingSlug } : {}),
+          name: draft.name.trim(),
+          description: draft.description.trim(),
+          type: draft.type,
+          body: draft.body.trim(),
+        },
+        { cwd },
+      );
+      if (ok) closeDialog();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (entry: AdvancedMemoryEntry) => {
@@ -292,10 +301,10 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
               </Button>
               <Button
                 type="button"
-                onClick={handleSave}
-                disabled={!draft.name.trim() || !draft.body.trim()}
+                onClick={() => void handleSave()}
+                disabled={!draft.name.trim() || !draft.body.trim() || saving}
               >
-                {editingSlug ? "Save changes" : "Add memory"}
+                {saving ? "Saving..." : editingSlug ? "Save changes" : "Add memory"}
               </Button>
             </div>
           </div>

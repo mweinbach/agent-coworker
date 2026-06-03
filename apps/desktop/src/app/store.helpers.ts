@@ -491,7 +491,7 @@ export type AppStoreState = {
       body: string;
     },
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   deleteAdvancedMemory: (
     workspaceId: string,
     folder: string | undefined,

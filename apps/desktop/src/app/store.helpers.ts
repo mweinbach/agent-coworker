@@ -475,6 +475,18 @@ export type AppStoreState = {
     id: string,
     opts?: { cwd?: string },
   ) => Promise<void>;
+  requestWorkspaceAdvancedMemories: (workspaceId: string, opts?: { cwd?: string }) => Promise<void>;
+  upsertWorkspaceAdvancedMemory: (
+    workspaceId: string,
+    name: string,
+    content: string,
+    opts?: { cwd?: string },
+  ) => Promise<void>;
+  deleteWorkspaceAdvancedMemory: (
+    workspaceId: string,
+    name: string,
+    opts?: { cwd?: string },
+  ) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;

@@ -6,6 +6,46 @@ import type { SessionContext } from "../SessionContext";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
 
+function renderMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(content);
+  const parts: string[] = [];
+  for (const part of content) {
+    if (typeof part === "string") {
+      parts.push(part);
+      continue;
+    }
+    if (!part || typeof part !== "object") continue;
+    const record = part as Record<string, unknown>;
+    const text = record.text ?? record.inputText ?? record.outputText;
+    if (typeof text === "string") {
+      parts.push(text);
+      continue;
+    }
+    const type = typeof record.type === "string" ? record.type : "part";
+    parts.push(`[${type}]`);
+  }
+  return parts.join("\n");
+}
+
+function renderTranscript(
+  messages: { role: string; content: unknown }[],
+  offset: number,
+  total: number,
+): string {
+  if (messages.length === 0) return "No transcript messages found.";
+  const lines = [`Transcript messages ${offset + 1}-${offset + messages.length} of ${total}:`];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    lines.push(
+      "",
+      `## ${offset + index + 1}. ${message.role}`,
+      renderMessageContent(message.content),
+    );
+  }
+  return lines.join("\n").trimEnd();
+}
+
 type A2uiSurfaceManagerProvider = () => {
   applyUnknown: (
     value: unknown,
@@ -63,6 +103,20 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       providerState: providerStateOverride,
       harnessContext,
       referencedPlugins: context.state.turnReferencedPlugins,
+      readPastConversation: async ({ sessionId, offset, limit }) => {
+        const safeOffset = Math.max(0, Math.floor(offset ?? 0));
+        const safeLimit = Math.min(200, Math.max(1, Math.floor(limit ?? 80)));
+        if (sessionId === context.id) {
+          const total = context.state.allMessages.length;
+          return renderTranscript(
+            context.state.allMessages.slice(safeOffset, safeOffset + safeLimit),
+            safeOffset,
+            total,
+          );
+        }
+        const result = await context.deps.sessionDb?.getMessages(sessionId, safeOffset, safeLimit);
+        return renderTranscript(result?.messages ?? [], safeOffset, result?.total ?? 0);
+      },
       prepareStep: async ({ messages }) => steerCoordinator.drainPendingSteers(messages),
       registerSteerHandler: (handler) => {
         context.state.activeSteerHandler = handler;

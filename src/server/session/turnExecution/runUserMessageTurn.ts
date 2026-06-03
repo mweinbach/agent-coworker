@@ -1,3 +1,4 @@
+import { runAdvancedMemoryUpdate } from "../../../advancedMemoryAgent";
 import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
@@ -154,6 +155,7 @@ export function createUserMessageTurnRunner(
       return;
     }
     const visibleText = displayText ?? resolveUserInputDisplayText(text, attachments);
+    const memoryDeltaStartIndex = context.state.allMessages.length;
 
     if (context.state.persistenceStatus === "closed") {
       context.state.persistenceStatus = "active";
@@ -465,6 +467,33 @@ export function createUserMessageTurnRunner(
       void flushPendingExternalSkillRefresh().catch(() => {
         // refresh helper already emits skill refresh errors.
       });
+      const memoryDeltaMessages = context.state.allMessages.slice(memoryDeltaStartIndex);
+      const shouldRunAdvancedMemory =
+        (context.state.config.enableMemory ?? true) &&
+        (context.state.config.advancedMemory ?? false) &&
+        memoryDeltaMessages.some((message) => message.role === "assistant");
+      if (shouldRunAdvancedMemory) {
+        void (async () => {
+          try {
+            const updated = await runAdvancedMemoryUpdate({
+              config: context.state.config,
+              sessionId: context.id,
+              deltaMessages: memoryDeltaMessages,
+              log,
+            });
+            if (!updated) return;
+            const refreshed = await context.deps.loadSystemPromptWithSkillsImpl(
+              context.state.config,
+            );
+            context.state.system = refreshed.prompt;
+            context.state.discoveredSkills = refreshed.discoveredSkills;
+            context.state.systemPromptMetadataLoaded = true;
+            context.queuePersistSessionSnapshot("advanced_memory.updated");
+          } catch (error) {
+            log(`[warn] advanced memory update failed: ${context.formatError(error)}`);
+          }
+        })();
+      }
       if (backupController.isBackupsEnabled()) {
         void backupController.takeAutomaticSessionCheckpoint().catch(() => {
           // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.

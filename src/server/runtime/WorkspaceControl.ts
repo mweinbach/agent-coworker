@@ -185,6 +185,10 @@ export class WorkspaceControl {
         enableMcp: controlConfig.enableMcp ?? false,
         enableMemory: controlConfig.enableMemory ?? true,
         memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
+        advancedMemory: controlConfig.advancedMemory ?? false,
+        ...(controlConfig.advancedMemoryModelRef
+          ? { advancedMemoryModelRef: controlConfig.advancedMemoryModelRef }
+          : {}),
       },
       {
         type: "session_config",
@@ -197,6 +201,10 @@ export class WorkspaceControl {
           ...(a2uiExperimentEnabled ? { enableA2ui: workspaceA2ui } : {}),
           enableMemory: controlConfig.enableMemory ?? true,
           memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
+          advancedMemory: controlConfig.advancedMemory ?? false,
+          ...(controlConfig.advancedMemoryModelRef
+            ? { advancedMemoryModelRef: controlConfig.advancedMemoryModelRef }
+            : {}),
           preferredChildModel: controlConfig.preferredChildModel,
           childModelRoutingMode: controlConfig.childModelRoutingMode ?? "same-provider",
           preferredChildModelRef,

@@ -156,6 +156,8 @@ export const sessionSettingsEventSchema = z
     enableMcp: z.boolean(),
     enableMemory: z.boolean(),
     memoryRequireApproval: z.boolean(),
+    advancedMemory: z.boolean().optional(),
+    advancedMemoryModelRef: z.string().optional(),
   })
   .passthrough();
 
@@ -171,6 +173,8 @@ export const sessionConfigEventSchema = z
         defaultBackupsEnabled: z.boolean().optional(),
         enableMemory: z.boolean().optional(),
         memoryRequireApproval: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        advancedMemoryModelRef: z.string().optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),

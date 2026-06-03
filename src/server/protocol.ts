@@ -55,7 +55,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.35";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.36";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -64,6 +64,8 @@ export type SessionConfigPatch = {
   enableA2ui?: boolean;
   enableMemory?: boolean;
   memoryRequireApproval?: boolean;
+  advancedMemory?: boolean;
+  advancedMemoryModelRef?: string;
   preferredChildModel?: string;
   childModelRoutingMode?: ChildModelRoutingMode;
   preferredChildModelRef?: string;
@@ -91,6 +93,8 @@ type SessionConfigState = {
   enableA2ui?: boolean;
   enableMemory: boolean;
   memoryRequireApproval: boolean;
+  advancedMemory: boolean;
+  advancedMemoryModelRef?: string;
   preferredChildModel: string;
   childModelRoutingMode: ChildModelRoutingMode;
   preferredChildModelRef: string;
@@ -150,6 +154,8 @@ export type SessionEvent =
       enableMcp: boolean;
       enableMemory: boolean;
       memoryRequireApproval: boolean;
+      advancedMemory: boolean;
+      advancedMemoryModelRef?: string;
     }
   | {
       type: "session_info";
@@ -342,6 +348,22 @@ export type SessionEvent =
         scope: "workspace" | "user";
         content: string;
         createdAt: string;
+        updatedAt: string;
+      }>;
+    }
+  | {
+      type: "advanced_memory_list";
+      sessionId: string;
+      rootDir: string;
+      folderName: string;
+      folderPath: string;
+      indexPath: string;
+      indexContent: string;
+      memories: Array<{
+        name: string;
+        fileName: string;
+        path: string;
+        content: string;
         updatedAt: string;
       }>;
     }

@@ -88,6 +88,16 @@ export class SessionMetadataManager {
     if (patch.memoryRequireApproval !== undefined) {
       nextConfig = { ...nextConfig, memoryRequireApproval: patch.memoryRequireApproval };
     }
+    if (patch.advancedMemory !== undefined) {
+      nextConfig = { ...nextConfig, advancedMemory: patch.advancedMemory };
+    }
+    if (patch.advancedMemoryModelRef !== undefined) {
+      const trimmed = patch.advancedMemoryModelRef.trim();
+      nextConfig = {
+        ...nextConfig,
+        ...(trimmed ? { advancedMemoryModelRef: trimmed } : { advancedMemoryModelRef: undefined }),
+      };
+    }
     if (normalizedChildRouting !== undefined) {
       nextConfig = {
         ...nextConfig,
@@ -188,6 +198,12 @@ export class SessionMetadataManager {
     if (patch.memoryRequireApproval !== undefined) {
       persistPatch.memoryRequireApproval = patch.memoryRequireApproval;
     }
+    if (patch.advancedMemory !== undefined) {
+      persistPatch.advancedMemory = patch.advancedMemory;
+    }
+    if (patch.advancedMemoryModelRef !== undefined) {
+      persistPatch.advancedMemoryModelRef = patch.advancedMemoryModelRef.trim();
+    }
     if (patch.toolOutputOverflowChars !== undefined) {
       persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
     }
@@ -236,6 +252,8 @@ export class SessionMetadataManager {
         (baseConfig.enableA2ui ?? false) !== (nextConfig.enableA2ui ?? false)) ||
       (baseConfig.enableMemory ?? true) !== (nextConfig.enableMemory ?? true) ||
       (baseConfig.memoryRequireApproval ?? false) !== (nextConfig.memoryRequireApproval ?? false) ||
+      (baseConfig.advancedMemory ?? false) !== (nextConfig.advancedMemory ?? false) ||
+      (baseConfig.advancedMemoryModelRef ?? "") !== (nextConfig.advancedMemoryModelRef ?? "") ||
       baseConfig.preferredChildModel !== nextConfig.preferredChildModel ||
       (baseConfig.childModelRoutingMode ?? "same-provider") !==
         (nextConfig.childModelRoutingMode ?? "same-provider") ||
@@ -303,6 +321,10 @@ export class SessionMetadataManager {
         ...(a2uiExperimentEnabled ? { enableA2ui: workspaceA2ui } : {}),
         enableMemory: this.context.state.config.enableMemory ?? true,
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
+        advancedMemory: this.context.state.config.advancedMemory ?? false,
+        ...(this.context.state.config.advancedMemoryModelRef
+          ? { advancedMemoryModelRef: this.context.state.config.advancedMemoryModelRef }
+          : {}),
         defaultBackupsEnabled,
         preferredChildModel: this.context.state.config.preferredChildModel,
         childModelRoutingMode: this.context.state.config.childModelRoutingMode ?? "same-provider",
@@ -539,6 +561,8 @@ export class SessionMetadataManager {
       (isA2uiExperimentActive(nextConfig) &&
         (patch.enableA2ui !== undefined || patch.featureFlags?.workspace !== undefined)) ||
       patch.enableMemory !== undefined ||
+      patch.advancedMemory !== undefined ||
+      patch.advancedMemoryModelRef !== undefined ||
       patch.providerOptions !== undefined
     ) {
       try {

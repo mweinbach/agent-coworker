@@ -85,6 +85,13 @@ export interface ToolContext {
   /** Session-backed persistent agent lifecycle callbacks. */
   agentControl?: AgentControl;
 
+  /** Read compact persisted conversation transcripts for advanced memory recall. */
+  readPastConversation?: (opts: {
+    sessionId: string;
+    offset?: number;
+    limit?: number;
+  }) => Promise<string>;
+
   /** Session-level cost tracker. Tools can query and set budget thresholds. */
   costTracker?: SessionCostTracker;
 

@@ -240,6 +240,18 @@ export interface AgentConfig {
   memoryRequireApproval?: boolean;
 
   /**
+   * Whether to use the advanced Markdown memory system instead of the legacy
+   * SQLite hot-cache memory tool. Only applies when enableMemory is true.
+   */
+  advancedMemory?: boolean;
+
+  /**
+   * Optional provider:modelId override for the headless advanced-memory generator.
+   * Defaults to a small economical model.
+   */
+  advancedMemoryModelRef?: string;
+
+  /**
    * Whether to include raw model stream chunks in emitted stream events.
    * Defaults to true when not specified.
    */

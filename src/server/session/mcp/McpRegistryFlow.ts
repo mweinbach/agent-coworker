@@ -44,6 +44,10 @@ export class McpRegistryFlow {
       enableMcp: prepared.enableMcp,
       enableMemory: this.context.state.config.enableMemory ?? true,
       memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
+      advancedMemory: this.context.state.config.advancedMemory ?? false,
+      ...(this.context.state.config.advancedMemoryModelRef
+        ? { advancedMemoryModelRef: this.context.state.config.advancedMemoryModelRef }
+        : {}),
     });
     if (opts?.queuePersistSessionSnapshot !== false) {
       this.context.queuePersistSessionSnapshot("session.enable_mcp");

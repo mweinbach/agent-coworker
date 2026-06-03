@@ -151,6 +151,8 @@ const sessionSettingsEventSchema = z
     enableMcp: z.boolean(),
     enableMemory: z.boolean(),
     memoryRequireApproval: z.boolean(),
+    advancedMemory: z.boolean().optional(),
+    advancedMemoryModelRef: z.string().optional(),
   })
   .passthrough();
 
@@ -166,6 +168,8 @@ const sessionConfigEventSchema = z
         defaultBackupsEnabled: z.boolean().optional(),
         enableMemory: z.boolean().optional(),
         memoryRequireApproval: z.boolean().optional(),
+        advancedMemory: z.boolean().optional(),
+        advancedMemoryModelRef: z.string().optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
@@ -575,6 +579,29 @@ const memoryListEventSchema = z
     type: z.literal("memory_list"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
     memories: z.array(memoryEntrySchema),
+  })
+  .passthrough();
+
+const advancedMemoryEntrySchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    fileName: nonEmptyTrimmedStringSchema,
+    path: nonEmptyTrimmedStringSchema,
+    content: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
+const advancedMemoryListEventSchema = z
+  .object({
+    type: z.literal("advanced_memory_list"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    rootDir: nonEmptyTrimmedStringSchema,
+    folderName: nonEmptyTrimmedStringSchema,
+    folderPath: nonEmptyTrimmedStringSchema,
+    indexPath: nonEmptyTrimmedStringSchema,
+    indexContent: z.string(),
+    memories: z.array(advancedMemoryEntrySchema),
   })
   .passthrough();
 
@@ -1496,6 +1523,27 @@ const memoryDeleteRequestSchema = z
   })
   .strict();
 
+const advancedMemoryListRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const advancedMemoryUpsertRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    name: nonEmptyTrimmedStringSchema,
+    content: z.string(),
+  })
+  .strict();
+
+const advancedMemoryDeleteRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    name: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const workspaceBackupsReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1640,6 +1688,9 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
+  "cowork/advanced-memory/list": advancedMemoryListRequestSchema,
+  "cowork/advanced-memory/upsert": advancedMemoryUpsertRequestSchema,
+  "cowork/advanced-memory/delete": advancedMemoryDeleteRequestSchema,
   "cowork/backups/workspace/read": workspaceBackupsReadRequestSchema,
   "cowork/backups/workspace/delta/read": workspaceBackupsDeltaReadRequestSchema,
   "cowork/backups/workspace/checkpoint": workspaceBackupsCheckpointRequestSchema,
@@ -1718,6 +1769,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/memory/list": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": sessionEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": sessionEventEnvelope(memoryListEventSchema),
+  "cowork/advanced-memory/list": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/advanced-memory/upsert": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/advanced-memory/delete": sessionEventEnvelope(advancedMemoryListEventSchema),
   "cowork/backups/workspace/read": sessionEventEnvelope(workspaceBackupsEventSchema),
   "cowork/backups/workspace/delta/read": sessionEventEnvelope(workspaceBackupDeltaEventSchema),
   "cowork/backups/workspace/checkpoint": sessionEventEnvelope(workspaceBackupsEventSchema),

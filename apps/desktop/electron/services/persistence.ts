@@ -305,6 +305,9 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(
         item.defaultToolOutputOverflowChars,
       ),
+      defaultAdvancedMemory:
+        typeof item.defaultAdvancedMemory === "boolean" ? item.defaultAdvancedMemory : false,
+      defaultAdvancedMemoryModelRef: asOptionalString(item.defaultAdvancedMemoryModelRef),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       userName: asDefinedString(item.userName),
       userProfile: isRecord(item.userProfile)

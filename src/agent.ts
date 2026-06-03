@@ -90,6 +90,11 @@ export interface RunTurnParams {
   /** Plugins the user @-mentioned this turn; rendered as a soft-awareness system block. */
   referencedPlugins?: ReferencedPluginContext[];
   agentControl?: AgentControl;
+  readPastConversation?: (opts: {
+    sessionId: string;
+    offset?: number;
+    limit?: number;
+  }) => Promise<string>;
   prepareStep?: RuntimePrepareStep;
   registerSteerHandler?: RuntimeRegisterSteerHandler;
 
@@ -397,6 +402,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentTargetPaths: params.agentTargetPaths,
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       agentControl: params.agentControl,
+      readPastConversation: params.readPastConversation,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,

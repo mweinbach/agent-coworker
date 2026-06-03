@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.35`
+- Current protocol version: `7.36`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -289,6 +289,9 @@ Currently implemented `cowork/*` methods include:
   - `cowork/memory/list`
   - `cowork/memory/upsert`
   - `cowork/memory/delete`
+  - `cowork/advanced-memory/list`
+  - `cowork/advanced-memory/upsert`
+  - `cowork/advanced-memory/delete`
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`
@@ -584,6 +587,11 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.36`:
+
+- Added Advanced Memory config fields: `set_config.config.advancedMemory`, `set_config.config.advancedMemoryModelRef`, and matching `session_config.config` / `session_settings` fields.
+- Added advanced Markdown memory controls: `cowork/advanced-memory/list`, `cowork/advanced-memory/upsert`, and `cowork/advanced-memory/delete`, returning `advanced_memory_list`.
 
 Changes in `7.35`:
 
@@ -3388,6 +3396,8 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.backupsEnabled` | `boolean` | Whether advanced backups are enabled for the live session after applying any session-scoped override. Defaults to `false`. |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied. Defaults to `false`. |
+| `config.advancedMemory` | `boolean` | Whether Advanced Memory is enabled. When true, legacy hot-cache memory injection/tooling is replaced by Markdown memory index injection plus recall tools. |
+| `config.advancedMemoryModelRef` | `string?` | Optional `provider:modelId` override for the headless memory-generation agent |
 | `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.preferredChildModel` | `string` | Normalized same-provider fallback model identifier used for legacy/default suggestion state |
@@ -3452,6 +3462,47 @@ Current memory entries for workspace/user scopes.
 | `memories[].scope` | `"workspace" \| "user"` | Memory scope |
 | `memories[].content` | `string` | Memory text |
 | `memories[].createdAt` | `string` | ISO timestamp |
+| `memories[].updatedAt` | `string` | ISO timestamp |
+
+---
+
+### advanced_memory_list
+
+Current Markdown advanced memory folder state for the workspace target.
+
+```json
+{
+  "type": "advanced_memory_list",
+  "sessionId": "...",
+  "rootDir": "~/.cowork/memories",
+  "folderName": "Projects__example",
+  "folderPath": "~/.cowork/memories/Projects__example",
+  "indexPath": "~/.cowork/memories/Projects__example/MEMORY.md",
+  "indexContent": "# Memory Index\n- [coding-style.md](./coding-style.md) — Coding Style",
+  "memories": [
+    {
+      "name": "coding-style",
+      "fileName": "coding-style.md",
+      "path": "~/.cowork/memories/Projects__example/coding-style.md",
+      "content": "---\nsummary: Prefer explicit types.\n---\n# Coding Style\n...",
+      "updatedAt": "2026-03-13T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"advanced_memory_list"` | — |
+| `sessionId` | `string` | Session identifier |
+| `rootDir` | `string` | User-level advanced memory root |
+| `folderName` | `string` | Active project or `(chats)` folder |
+| `folderPath` | `string` | Active folder path |
+| `indexPath` | `string` | Generated `MEMORY.md` path |
+| `indexContent` | `string` | Current generated index content |
+| `memories` | `Array<object>` | Markdown memory files in the folder |
+| `memories[].fileName` | `string` | Safe Markdown file name |
+| `memories[].content` | `string` | Full Markdown file content |
 | `memories[].updatedAt` | `string` | ISO timestamp |
 
 ---

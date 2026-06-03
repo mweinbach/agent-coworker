@@ -215,6 +215,10 @@ const persistedWorkspaceSchema = z
       }
       return undefined;
     }, z.number().int().nonnegative().nullable().optional()),
+    defaultAdvancedMemory: z
+      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+      .optional(),
+    defaultAdvancedMemoryModelRef: optionalStringWithContentSchema,
     providerOptions: z.unknown().optional(),
     userName: optionalStringSchema,
     userProfile: z
@@ -273,6 +277,8 @@ const persistedWorkspaceSchema = z
       defaultPreferredChildModelRef: preferredChildModelRef,
       defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
       defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
+      defaultAdvancedMemory: workspace.defaultAdvancedMemory ?? false,
+      defaultAdvancedMemoryModelRef: workspace.defaultAdvancedMemoryModelRef,
       providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
       userName: workspace.userName,
       userProfile: workspace.userProfile

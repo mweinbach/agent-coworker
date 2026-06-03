@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { AdvancedMemoryStore } from "../../advancedMemoryStore";
 import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
 import { closeMcpServersForSession } from "../../mcp";
@@ -643,6 +644,14 @@ export class AgentSession {
     return this.state.config.memoryRequireApproval ?? false;
   }
 
+  getAdvancedMemory() {
+    return this.state.config.advancedMemory ?? false;
+  }
+
+  getAdvancedMemoryModelRef() {
+    return this.state.config.advancedMemoryModelRef;
+  }
+
   getBackupsEnabled() {
     return this.state.backupsEnabledOverride ?? this.state.config.backupsEnabled ?? false;
   }
@@ -928,6 +937,10 @@ export class AgentSession {
       enableMcp: this.getEnableMcp(),
       enableMemory: this.getEnableMemory(),
       memoryRequireApproval: this.getMemoryRequireApproval(),
+      advancedMemory: this.getAdvancedMemory(),
+      ...(this.getAdvancedMemoryModelRef()
+        ? { advancedMemoryModelRef: this.getAdvancedMemoryModelRef() }
+        : {}),
     });
     this.queuePersistSessionSnapshot("session.enable_memory");
     await this.refreshSystemPromptWithSkills("session.enable_memory");
@@ -944,6 +957,10 @@ export class AgentSession {
       enableMcp: this.getEnableMcp(),
       enableMemory: this.getEnableMemory(),
       memoryRequireApproval: this.getMemoryRequireApproval(),
+      advancedMemory: this.getAdvancedMemory(),
+      ...(this.getAdvancedMemoryModelRef()
+        ? { advancedMemoryModelRef: this.getAdvancedMemoryModelRef() }
+        : {}),
     });
     this.queuePersistSessionSnapshot("session.memory_require_approval");
   }
@@ -989,6 +1006,70 @@ export class AgentSession {
     }
     await this.emitMemories();
     await this.refreshSystemPromptWithSkills("session.memory_delete");
+  }
+
+  private async advancedMemoryListEvent(): Promise<
+    Extract<SessionEvent, { type: "advanced_memory_list" }>
+  > {
+    const index = await AdvancedMemoryStore.fromConfig(this.state.config).readIndex();
+    return {
+      type: "advanced_memory_list",
+      sessionId: this.id,
+      rootDir: index.rootDir,
+      folderName: index.folderName,
+      folderPath: index.folderPath,
+      indexPath: index.indexPath,
+      indexContent: index.indexContent,
+      memories: index.entries.map((entry) => ({
+        name: entry.name,
+        fileName: entry.fileName,
+        path: entry.path,
+        content: entry.content,
+        updatedAt: entry.updatedAt,
+      })),
+    };
+  }
+
+  async emitAdvancedMemories() {
+    try {
+      this.context.emit(await this.advancedMemoryListEvent());
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list advanced memories: ${String(err)}`,
+      );
+    }
+  }
+
+  async upsertAdvancedMemory(name: string, content: string) {
+    try {
+      await AdvancedMemoryStore.fromConfig(this.state.config).upsert(name, content);
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to save advanced memory: ${String(err)}`,
+      );
+      return;
+    }
+    await this.emitAdvancedMemories();
+    await this.refreshSystemPromptWithSkills("advanced_memory.upsert");
+  }
+
+  async deleteAdvancedMemory(name: string) {
+    try {
+      await AdvancedMemoryStore.fromConfig(this.state.config).remove(name);
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to delete advanced memory: ${String(err)}`,
+      );
+      return;
+    }
+    await this.emitAdvancedMemories();
+    await this.refreshSystemPromptWithSkills("advanced_memory.delete");
   }
 
   private async ensureSystemPromptReady(): Promise<boolean> {

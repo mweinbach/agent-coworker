@@ -91,6 +91,8 @@ export type WorkspaceRecord = {
   defaultPreferredChildModelRef?: string;
   defaultAllowedChildModelRefs?: string[];
   defaultToolOutputOverflowChars?: number | null;
+  defaultAdvancedMemory?: boolean;
+  defaultAdvancedMemoryModelRef?: string;
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;
   userProfile?: WorkspaceUserProfile;
@@ -479,6 +481,14 @@ export type MemoryListEntry = {
   updatedAt: string;
 };
 
+export type AdvancedMemoryListEntry = {
+  name: string;
+  fileName: string;
+  path: string;
+  content: string;
+  updatedAt: string;
+};
+
 export type ImportRuntimeState = {
   items: ImportableItem[];
   homeExists: boolean;
@@ -537,6 +547,10 @@ export type WorkspaceRuntime = {
   importItemsByKey: Record<string, ImportRuntimeState>;
   importPendingKeys: Record<string, true>;
   memories: MemoryListEntry[];
+  advancedMemories: AdvancedMemoryListEntry[];
+  advancedMemoryIndexContent: string;
+  advancedMemoryFolderPath: string | null;
+  advancedMemoryIndexPath: string | null;
   memoriesLoading: boolean;
   workspaceBackupsPath: string | null;
   workspaceBackups: WorkspaceBackupsEvent["backups"];

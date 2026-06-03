@@ -69,6 +69,8 @@ export type PersistedProjectConfigPatch = Partial<
     | "enableA2ui"
     | "enableMemory"
     | "memoryRequireApproval"
+    | "advancedMemory"
+    | "advancedMemoryModelRef"
     | "observabilityEnabled"
     | "backupsEnabled"
     | "toolOutputOverflowChars"

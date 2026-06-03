@@ -190,6 +190,27 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(10);
   });
 
+  test("advanced memory replaces legacy memory tool", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { advancedMemory: true }) }));
+    expect(tools).not.toHaveProperty("memory");
+    expect(tools).toHaveProperty("recallMemory");
+    expect(tools).toHaveProperty("readPastConversation");
+  });
+
+  test("listSessionToolNames reports advanced memory tools", () => {
+    const names = listSessionToolNames({
+      provider: "google",
+      providerOptions: undefined,
+      enableMemory: true,
+      advancedMemory: true,
+    });
+
+    expect(names).not.toContain("memory");
+    expect(names).toContain("recallMemory");
+    expect(names).toContain("readPastConversation");
+  });
+
   test("includes a2ui for non-google providers when enabled", async () => {
     await withEnv("COWORK_EXPERIMENTAL_A2UI", "1", async () => {
       const dir = await tmpDir();

@@ -889,6 +889,8 @@ export function createWorkspaceDefaultsActions(
         workspacePatch.defaultAllowedChildModelRefs !== undefined ||
         workspacePatch.defaultToolOutputOverflowChars !== undefined ||
         clearDefaultToolOutputOverflowChars === true ||
+        workspacePatch.defaultAdvancedMemory !== undefined ||
+        workspacePatch.defaultAdvancedMemoryModelRef !== undefined ||
         workspacePatch.defaultEnableMcp !== undefined ||
         workspacePatch.defaultBackupsEnabled !== undefined ||
         workspacePatch.providerOptions !== undefined ||

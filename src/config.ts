@@ -597,6 +597,26 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.memoryRequireApproval) ??
     false;
 
+  const advancedMemory =
+    asBoolean(env.AGENT_ADVANCED_MEMORY) ??
+    asBoolean(projectConfig.advancedMemory) ??
+    asBoolean(userConfig.advancedMemory) ??
+    asBoolean(builtInDefaults.advancedMemory) ??
+    false;
+
+  const advancedMemoryModelRef =
+    env.AGENT_ADVANCED_MEMORY_MODEL_REF ||
+    (typeof projectConfig.advancedMemoryModelRef === "string"
+      ? projectConfig.advancedMemoryModelRef.trim()
+      : "") ||
+    (typeof userConfig.advancedMemoryModelRef === "string"
+      ? userConfig.advancedMemoryModelRef.trim()
+      : "") ||
+    (typeof builtInDefaults.advancedMemoryModelRef === "string"
+      ? builtInDefaults.advancedMemoryModelRef.trim()
+      : "") ||
+    undefined;
+
   const includeRawChunks =
     asBoolean(env.AGENT_INCLUDE_RAW_CHUNKS) ??
     asBoolean(projectConfig.includeRawChunks) ??
@@ -738,6 +758,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     enableMcp,
     enableMemory,
     memoryRequireApproval,
+    advancedMemory,
+    ...(advancedMemoryModelRef ? { advancedMemoryModelRef } : {}),
     includeRawChunks,
     experimentalFeatures: {
       a2ui: a2uiExperimentEnabled,

@@ -257,6 +257,10 @@ export function buildControlSessionStateEvents(runtime: SessionRuntime): Session
       enableMcp: runtime.settings.enableMcp,
       enableMemory: runtime.settings.enableMemory,
       memoryRequireApproval: runtime.settings.memoryRequireApproval,
+      advancedMemory: runtime.settings.advancedMemory,
+      ...(runtime.settings.advancedMemoryModelRef
+        ? { advancedMemoryModelRef: runtime.settings.advancedMemoryModelRef }
+        : {}),
     },
     runtime.settings.configEvent,
   ];

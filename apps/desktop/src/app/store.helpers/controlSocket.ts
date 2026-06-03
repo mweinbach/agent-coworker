@@ -839,7 +839,14 @@ export function createControlSocketHelpers(
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
           workspace.id === workspaceId
-            ? { ...workspace, defaultEnableMcp: evt.enableMcp }
+            ? {
+                ...workspace,
+                defaultEnableMcp: evt.enableMcp,
+                defaultAdvancedMemory: evt.advancedMemory,
+                ...(evt.advancedMemoryModelRef
+                  ? { defaultAdvancedMemoryModelRef: evt.advancedMemoryModelRef }
+                  : {}),
+              }
             : workspace,
         ),
         workspaceRuntimeById: {
@@ -884,6 +891,12 @@ export function createControlSocketHelpers(
                   : {}),
                 ...(sessionConfigHas("allowedChildModelRefs")
                   ? { defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs }
+                  : {}),
+                ...(sessionConfigHas("advancedMemory")
+                  ? { defaultAdvancedMemory: evt.config.advancedMemory }
+                  : {}),
+                ...(sessionConfigHas("advancedMemoryModelRef")
+                  ? { defaultAdvancedMemoryModelRef: evt.config.advancedMemoryModelRef }
                   : {}),
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 ...(sessionConfigHasProviderOptions

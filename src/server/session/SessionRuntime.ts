@@ -196,6 +196,14 @@ export class SessionSettingsService {
     return this.session.getMemoryRequireApproval();
   }
 
+  get advancedMemory(): boolean {
+    return this.session.getAdvancedMemory();
+  }
+
+  get advancedMemoryModelRef(): string | undefined {
+    return this.session.getAdvancedMemoryModelRef();
+  }
+
   get backupsEnabled(): boolean {
     return this.session.getBackupsEnabled();
   }
@@ -342,6 +350,18 @@ export class SessionMemoryService {
 
   async delete(scope: MemoryScope, id: string): Promise<void> {
     await this.session.deleteMemory(scope, id);
+  }
+
+  async listAdvanced(): Promise<void> {
+    await this.session.emitAdvancedMemories();
+  }
+
+  async upsertAdvanced(name: string, content: string): Promise<void> {
+    await this.session.upsertAdvancedMemory(name, content);
+  }
+
+  async deleteAdvanced(name: string): Promise<void> {
+    await this.session.deleteAdvancedMemory(name);
   }
 }
 

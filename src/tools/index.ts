@@ -22,6 +22,8 @@ import {
   createWaitForAgentTool,
 } from "./persistentAgents";
 import { createReadTool } from "./read";
+import { createReadPastConversationTool } from "./readPastConversation";
+import { createRecallMemoryTool } from "./recallMemory";
 import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
 import { createTodoWriteTool } from "./todoWrite";
@@ -60,11 +62,13 @@ type ListSessionToolNameOptions = {
 };
 
 export function listSessionToolNames(
-  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory"> &
+  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory" | "advancedMemory"> &
     Partial<Pick<AgentConfig, "enableA2ui" | "featureFlags" | "experimentalFeatures">>,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const providerIsCodex = config.provider === "codex-cli";
+  const memoryEnabled = config.enableMemory ?? true;
+  const advancedMemoryEnabled = memoryEnabled && (config.advancedMemory ?? false);
   const includeLegacyWebSearch =
     !usesGoogleNativeWebToolsConfig(config) &&
     (!providerIsCodex || usesLegacyCodexWebSearchConfig(config));
@@ -84,7 +88,11 @@ export function listSessionToolNames(
     "AskUserQuestion",
     "todoWrite",
     "skill",
-    ...((config.enableMemory ?? true) ? ["memory"] : []),
+    ...(memoryEnabled
+      ? advancedMemoryEnabled
+        ? ["readPastConversation", "recallMemory"]
+        : ["memory"]
+      : []),
     ...(resolveExperimentalA2uiConfig(config) ? ["a2ui"] : []),
     ...(opts.includeAgentControl
       ? [
@@ -108,6 +116,8 @@ export function listSessionToolNames(
 
 export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
+  const memoryEnabled = ctx.config.enableMemory ?? true;
+  const advancedMemoryEnabled = memoryEnabled && (ctx.config.advancedMemory ?? false);
   const includeLegacyWebSearch =
     !usesGoogleNativeWebTools(ctx) &&
     (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
@@ -124,7 +134,14 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     todoWrite: createTodoWriteTool(ctx),
     ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     skill: createSkillTool(ctx),
-    ...((ctx.config.enableMemory ?? true) ? { memory: createMemoryTool(ctx) } : {}),
+    ...(memoryEnabled
+      ? advancedMemoryEnabled
+        ? {
+            recallMemory: createRecallMemoryTool(ctx),
+            readPastConversation: createReadPastConversationTool(ctx),
+          }
+        : { memory: createMemoryTool(ctx) }
+      : {}),
     ...(resolveExperimentalA2uiConfig(ctx.config) && ctx.applyA2uiEnvelope
       ? {
           a2ui: (

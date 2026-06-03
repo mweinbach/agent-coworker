@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AdvancedMemoryStore } from "./advancedMemoryStore";
 import { resolveExperimentalA2uiConfig } from "./experimental/a2ui/flags";
 import { MemoryStore } from "./memoryStore";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
@@ -164,6 +165,11 @@ function renderCapabilitySpecificPrompt(
 function renderMemorySpecificPrompt(prompt: string, enabled: boolean): string {
   if (enabled) return prompt;
 
+  const out = stripLegacyMemoryPrompt(prompt);
+  return `${out}\n\n## Memory Disabled\n\nPersistent memory is disabled for this workspace. Do not read or write AGENT.md and do not call the memory tool.`;
+}
+
+function stripLegacyMemoryPrompt(prompt: string): string {
   let out = prompt;
   const memoryBlockPatterns = [
     /\n### memory\n[\s\S]*?(?=\n## [^\n]+\n|\n# [^\n]+\n|$)/i,
@@ -179,9 +185,35 @@ function renderMemorySpecificPrompt(prompt: string, enabled: boolean): string {
   out = stripPromptLine(out, /^\s*Memory:\s*\.agent\/AGENT\.md/i);
   out = stripPromptLine(out, /^\s*-\s*Memory:\s*`?\.cowork\/AGENT\.md/i);
   out = stripPromptLine(out, /^\s*Memory:\s*\.cowork\/AGENT\.md/i);
-  out = out.replace(/\n{3,}/g, "\n\n").trimEnd();
+  return out.replace(/\n{3,}/g, "\n\n").trimEnd();
+}
 
-  return `${out}\n\n## Memory Disabled\n\nPersistent memory is disabled for this workspace. Do not read or write AGENT.md and do not call the memory tool.`;
+async function renderAdvancedMemoryPrompt(prompt: string, config: AgentConfig): Promise<string> {
+  const out = stripLegacyMemoryPrompt(prompt);
+  const store = AdvancedMemoryStore.fromConfig(config);
+  let indexContent = "";
+  try {
+    indexContent = (await store.readIndex()).indexContent.trim();
+  } catch {
+    // Fail open so an unreadable memory tree does not block session startup.
+  }
+  return [
+    out,
+    "## Advanced Memory",
+    "",
+    "Advanced memory is enabled for this workspace. The legacy SQLite `memory` tool and hot-cache prompt injection are disabled.",
+    "",
+    "- Use the injected `MEMORY.md` index to decide whether a memory might be relevant.",
+    "- Call `recallMemory` with a file name from the index when you need full memory content.",
+    "- Call `readPastConversation` only when the user asks about or needs details from a prior session.",
+    "",
+    "### MEMORY.md Index",
+    "",
+    indexContent || "No advanced memories have been saved for this target yet.",
+  ]
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
 }
 
 function renderA2uiSpecificPrompt(prompt: string, enabled: boolean): string {
@@ -652,9 +684,13 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       ].join("\n"),
   };
 
+  const advancedMemoryEnabled = (config.enableMemory ?? true) && (config.advancedMemory ?? false);
+
   prompt = renderTemplateVariables(prompt, vars);
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
-  prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
+  prompt = advancedMemoryEnabled
+    ? await renderAdvancedMemoryPrompt(prompt, config)
+    : renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
   prompt = renderA2uiSpecificPrompt(prompt, a2uiEnabled);
   prompt = renderLocalWebToolProviderPrompt(prompt, config);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
@@ -690,7 +726,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       list;
   }
 
-  if (config.enableMemory ?? true) {
+  if ((config.enableMemory ?? true) && !advancedMemoryEnabled) {
     const memoryStore = new MemoryStore(
       config.projectMemoryDbPath ?? path.join(config.projectCoworkDir, "memory.sqlite"),
       path.join(config.userCoworkDir, "memory.sqlite"),

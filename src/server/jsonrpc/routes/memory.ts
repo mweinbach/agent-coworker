@@ -63,5 +63,59 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       context.jsonrpc.sendResult(ws, message.id, { event });
     },
+
+    "cowork/advanced-memory/list": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.memory.listAdvanced(),
+        (event): event is Extract<SessionEvent, { type: "advanced_memory_list" }> =>
+          event.type === "advanced_memory_list",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
+    "cowork/advanced-memory/upsert": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const name = typeof params.name === "string" ? params.name.trim() : "";
+      const content = typeof params.content === "string" ? params.content : "";
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.memory.upsertAdvanced(name, content),
+        (event): event is Extract<SessionEvent, { type: "advanced_memory_list" }> =>
+          event.type === "advanced_memory_list",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
+    "cowork/advanced-memory/delete": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const name = typeof params.name === "string" ? params.name.trim() : "";
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.memory.deleteAdvanced(name),
+        (event): event is Extract<SessionEvent, { type: "advanced_memory_list" }> =>
+          event.type === "advanced_memory_list",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
   };
 }

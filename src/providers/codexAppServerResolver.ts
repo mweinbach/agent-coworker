@@ -71,6 +71,7 @@ const CODEX_RELEASE_TAG_URL = "https://api.github.com/repos/openai/codex/release
 const CODEX_USER_AGENT = "agent-coworker-codex-app-server-runtime";
 const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 export const CODEX_APP_SERVER_MANAGED_VERSION = "0.136.0";
+const MANAGED_CODEX_APP_SERVER_ARGS = ["--session-source", "app-server"] as const;
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
 
 function normalizeBuildArch(arch: string): string {
@@ -152,7 +153,7 @@ function managedCurrentPath(homeDir: string, target: BuildTarget): string {
 function managedCommand(command: string, version?: string): CodexAppServerCommand {
   return {
     command,
-    args: [],
+    args: [...MANAGED_CODEX_APP_SERVER_ARGS],
     source: "managed",
     ...(version ? { version } : {}),
   };

@@ -107,6 +107,7 @@ describe("codex app-server resolver", () => {
 
     expect(command.source).toBe("managed");
     expect(command.version).toBe(CODEX_APP_SERVER_MANAGED_VERSION);
+    expect(command.args).toEqual(["--session-source", "app-server"]);
     expect(command.command).toContain(path.join("versions", CODEX_APP_SERVER_MANAGED_VERSION));
     expect(requestedVersions).toEqual([CODEX_APP_SERVER_MANAGED_VERSION]);
   });
@@ -328,7 +329,7 @@ describe("codex app-server resolver", () => {
       });
       expect(managed).toEqual({
         command: currentPath,
-        args: [],
+        args: ["--session-source", "app-server"],
         source: "managed",
         version: CODEX_APP_SERVER_MANAGED_VERSION,
       });

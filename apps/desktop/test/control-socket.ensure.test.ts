@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+
+import type { SessionEvent } from "../src/lib/wsProtocol";
 import {
   clearJsonRpcSocketOverride,
   createControlSocketHelpers,
@@ -18,6 +20,47 @@ import {
   registerControlSocketLifecycleHooks,
   setJsonRpcSocketOverride,
 } from "./control-socket.harness";
+
+const { bumpAgentProfilesCatalogGeneration } = await import(
+  "../src/app/store.helpers/runtimeState"
+);
+
+type AgentProfilesCatalogEvent = Extract<SessionEvent, { type: "agent_profiles_catalog" }>;
+
+function agentProfilesCatalogEvent(displayName: string): AgentProfilesCatalogEvent {
+  const profile = {
+    version: 1,
+    scope: "workspace" as const,
+    id: "qa-reviewer",
+    displayName,
+    description: "",
+    enabled: true,
+    baseRole: "reviewer" as const,
+    prompt: "Review regressions carefully.",
+    allowedBuiltInTools: ["read"],
+    allowedMcpServers: [],
+    skillNames: [],
+  };
+  const entry: AgentProfilesCatalogEvent["catalog"]["profiles"][number] = {
+    scope: "workspace",
+    path: `/profiles/${profile.id}.json`,
+    effective: true,
+    shadowed: false,
+    profile,
+  };
+  return {
+    type: "agent_profiles_catalog",
+    catalog: {
+      profiles: [entry],
+      effectiveProfiles: [entry],
+      diagnostics: [],
+      roots: {
+        globalDir: "/tmp/global-profiles",
+        workspaceDir: "/tmp/workspace-profiles",
+      },
+    },
+  };
+}
 
 describe("control socket helpers over JSON-RPC", () => {
   registerControlSocketLifecycleHooks();
@@ -166,6 +209,41 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(
       jsonRpcRequests.filter((entry) => entry.method === "cowork/session/state/read"),
     ).toHaveLength(2);
+  });
+
+  test("stale profile catalog bootstrap reads do not overwrite fresher catalog state", async () => {
+    const workspaceId = "ws-bootstrap-profile-catalog";
+    const freshCatalog = agentProfilesCatalogEvent("Fresh Profile").catalog;
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          agentProfilesCatalog: freshCatalog,
+        },
+      },
+    });
+    const staleRead = Promise.withResolvers<Record<string, unknown>>();
+
+    jsonRpcHandlers.set(
+      "cowork/agentProfiles/catalog/read",
+      async () => await staleRead.promise,
+    );
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await flushAsyncWork();
+
+    expect(
+      jsonRpcRequests.some((entry) => entry.method === "cowork/agentProfiles/catalog/read"),
+    ).toBe(true);
+
+    bumpAgentProfilesCatalogGeneration(workspaceId);
+    staleRead.resolve({ event: agentProfilesCatalogEvent("Stale Profile") });
+    await flushAsyncWork();
+
+    expect(
+      state.workspaceRuntimeById[workspaceId].agentProfilesCatalog?.profiles[0]?.profile
+        .displayName,
+    ).toBe("Fresh Profile");
   });
 
   test("disposeWorkspaceControlState clears workspace-scoped lifecycle and bootstrap state", async () => {

@@ -218,10 +218,7 @@ describe("control socket helpers over JSON-RPC", () => {
     state.workspaceRuntimeById[workspaceId].agentProfilesCatalog = freshCatalog;
     const staleRead = Promise.withResolvers<Record<string, unknown>>();
 
-    jsonRpcHandlers.set(
-      "cowork/agentProfiles/catalog/read",
-      async () => await staleRead.promise,
-    );
+    jsonRpcHandlers.set("cowork/agentProfiles/catalog/read", async () => await staleRead.promise);
 
     const helpers = createControlSocketHelpers(deps);
     const socket = helpers.ensureControlSocket(get as any, set as any, workspaceId);

@@ -807,7 +807,15 @@ export function createWorkspaceDefaultsActions(
               }
             : {}),
           yolo: ws.yolo,
-          advancedMemory: ws.defaultAdvancedMemory,
+          // Advanced memory is an effectively-global setting surfaced via the
+          // workspace control session. Prefer the workspace record when it has an
+          // explicit value, otherwise fall back to the live control-session value
+          // so a thread apply that races ahead of the record sync still applies
+          // the correct mode (mirrors the merge at resolveWorkspaceDefaults).
+          advancedMemory:
+            typeof ws.defaultAdvancedMemory === "boolean"
+              ? ws.defaultAdvancedMemory
+              : workspaceRuntime?.controlSessionConfig?.advancedMemory,
           memoryGenerationModel,
           ...(mode === "explicit"
             ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }

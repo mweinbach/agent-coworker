@@ -144,7 +144,7 @@ export function createWorkspaceMemoryActions(
         get,
         set,
         workspaceId,
-        "cowork/memory/advanced/list",
+        opts?.folder ? "cowork/memory/advanced/folder/list" : "cowork/memory/advanced/list",
         {
           cwd: resolveMemoryCwd(workspaceId, opts),
           ...(opts?.folder ? { folder: opts.folder } : {}),
@@ -178,7 +178,7 @@ export function createWorkspaceMemoryActions(
         get,
         set,
         workspaceId,
-        "cowork/memory/advanced/upsert",
+        input.folder ? "cowork/memory/advanced/folder/upsert" : "cowork/memory/advanced/upsert",
         {
           cwd: resolveMemoryCwd(workspaceId, opts),
           ...(input.folder ? { folder: input.folder } : {}),
@@ -211,7 +211,7 @@ export function createWorkspaceMemoryActions(
         get,
         set,
         workspaceId,
-        "cowork/memory/advanced/delete",
+        folder ? "cowork/memory/advanced/folder/delete" : "cowork/memory/advanced/delete",
         {
           cwd: resolveMemoryCwd(workspaceId, opts),
           ...(folder ? { folder } : {}),
@@ -239,7 +239,7 @@ export function createWorkspaceMemoryActions(
         get,
         set,
         workspaceId,
-        "cowork/memory/advanced/generate",
+        opts?.folder ? "cowork/memory/advanced/folder/generate" : "cowork/memory/advanced/generate",
         {
           cwd: resolveMemoryCwd(workspaceId, opts),
           ...(opts?.folder ? { folder: opts.folder } : {}),

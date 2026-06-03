@@ -144,9 +144,9 @@ describe("memory store actions", () => {
     await actions.deleteAdvancedMemory(workspaceId, "proj", "rule", { cwd: "/tmp/proj" });
 
     expect(requests.map((r) => r.method)).toEqual([
-      "cowork/memory/advanced/list",
-      "cowork/memory/advanced/upsert",
-      "cowork/memory/advanced/delete",
+      "cowork/memory/advanced/folder/list",
+      "cowork/memory/advanced/folder/upsert",
+      "cowork/memory/advanced/folder/delete",
     ]);
     expect(requests[1]?.params).toMatchObject({ folder: "proj", name: "rule", body: "b" });
     expect(state.workspaceRuntimeById[workspaceId].advancedMemoriesLoading).toBe(false);
@@ -186,7 +186,7 @@ describe("memory store actions", () => {
     expect(ok).toBe(true);
     expect(requests).toEqual([
       {
-        method: "cowork/memory/advanced/generate",
+        method: "cowork/memory/advanced/folder/generate",
         params: { cwd: "/tmp/proj", folder: "proj", threadId: "thread-1" },
       },
     ]);

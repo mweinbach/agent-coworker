@@ -211,6 +211,14 @@ export class AgentSession {
     const hydratedSessionInfo = normalizeHydratedSessionInfo(hydrated);
     const seededMessages =
       hydrated?.messages ?? (opts.seedContext ? structuredClone(opts.seedContext.messages) : []);
+    const hydratedMemoryGeneratedIndex =
+      typeof hydrated?.lastMemoryGeneratedIndex === "number" &&
+      Number.isFinite(hydrated.lastMemoryGeneratedIndex)
+        ? Math.min(
+            Math.max(0, Math.floor(hydrated.lastMemoryGeneratedIndex)),
+            seededMessages.length,
+          )
+        : seededMessages.length;
     const seededTodos =
       hydrated?.todos ?? (opts.seedContext ? structuredClone(opts.seedContext.todos) : []);
     const seededHarnessContext =
@@ -306,7 +314,7 @@ export class AgentSession {
       sessionBackupInit: null,
       backupOperationQueue: Promise.resolve(),
       lastAutoCheckpointAt: 0,
-      lastMemoryGeneratedIndex: seededMessages.length,
+      lastMemoryGeneratedIndex: hydratedMemoryGeneratedIndex,
       memoryGenerationsSinceConsolidation: 0,
       costTracker: null,
       turnReferenceInjectionCounter: 0,
@@ -1146,6 +1154,7 @@ export class AgentSession {
     // the delta is retried on the next turn.
     if (result.ok) {
       this.state.lastMemoryGeneratedIndex = end;
+      this.queuePersistSessionSnapshot("session.advanced_memory_checkpoint");
       if (result.ran) {
         this.state.memoryGenerationsSinceConsolidation += 1;
         const consolidation = await this.maybeRunMemoryConsolidation();

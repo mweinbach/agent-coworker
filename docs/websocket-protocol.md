@@ -292,15 +292,23 @@ Currently implemented `cowork/*` methods include:
 - advanced memory controls (file-based, agent-driven memory under `~/.cowork/memories/<folder>/`;
   active when `advancedMemory` is enabled). Each result returns an `advanced_memory_list` event with
   the resolved `folder`, the list of `folders`, and the folder's `memories` (frontmatter-parsed
-  `{ slug, name, description, type, originSessionId?, body, updatedAt }`).
-  - `cowork/memory/advanced/list` — params `{ cwd?, folder? }`; lists folders + a folder's memories.
-  - `cowork/memory/advanced/upsert` — params `{ cwd?, folder?, slug?, name, description, type?, body }`;
-    creates/overwrites a memory and regenerates the folder's `MEMORY.md` index.
-  - `cowork/memory/advanced/delete` — params `{ cwd?, folder?, slug }`; removes a memory and
+  `{ slug, name, description, type, originSessionId?, body, updatedAt }`). The base routes always
+  target the current session/workspace folder and reject arbitrary `folder` params.
+  - `cowork/memory/advanced/list` — params `{ cwd? }`; lists folders + current-folder memories.
+  - `cowork/memory/advanced/upsert` — params `{ cwd?, slug?, name, description, type?, body }`;
+    creates/overwrites a current-folder memory and regenerates the folder's `MEMORY.md` index.
+  - `cowork/memory/advanced/delete` — params `{ cwd?, slug }`; removes a current-folder memory and
     regenerates the index.
-  - `cowork/memory/advanced/generate` — params `{ cwd?, folder?, threadId }`; loads an existing
-    conversation and runs the advanced-memory generator over each completed assistant response in
-    order, returning the refreshed folder list.
+  - `cowork/memory/advanced/generate` — params `{ cwd?, threadId }`; loads an existing conversation
+    and runs the advanced-memory generator for the thread's current folder.
+  - `cowork/memory/advanced/folder/list` — params `{ cwd?, folder }`; administrative explicit-folder
+    browse route.
+  - `cowork/memory/advanced/folder/upsert` — params `{ cwd?, folder, slug?, name, description, type?, body }`;
+    administrative explicit-folder create/overwrite route.
+  - `cowork/memory/advanced/folder/delete` — params `{ cwd?, folder, slug }`; administrative
+    explicit-folder delete route.
+  - `cowork/memory/advanced/folder/generate` — params `{ cwd?, folder, threadId }`; administrative
+    explicit-folder history-generation route.
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`

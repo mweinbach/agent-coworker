@@ -95,6 +95,7 @@ export type HydratedSessionState = {
   status: SessionPersistenceStatus;
   hasGeneratedTitle: boolean;
   messages: ModelMessage[];
+  lastMemoryGeneratedIndex?: number;
   providerState: ProviderContinuationState | null;
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;

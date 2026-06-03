@@ -193,7 +193,6 @@ describe("shared JSON-RPC control schemas", () => {
   test("parses advanced memory request and result envelopes", () => {
     const request = jsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].parse({
       cwd: "/tmp/proj",
-      folder: "proj",
       name: "rule",
       description: "a rule",
       type: "feedback",
@@ -202,10 +201,27 @@ describe("shared JSON-RPC control schemas", () => {
     expect(request.name).toBe("rule");
     const generateRequest = jsonRpcControlRequestSchemas["cowork/memory/advanced/generate"].parse({
       cwd: "/tmp/proj",
-      folder: "proj",
       threadId: "session-1",
     });
     expect(generateRequest.threadId).toBe("session-1");
+    expect(
+      jsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].safeParse({
+        cwd: "/tmp/proj",
+        folder: "proj",
+        name: "rule",
+        description: "a rule",
+        body: "always do X",
+      }).success,
+    ).toBe(false);
+    expect(
+      jsonRpcControlRequestSchemas["cowork/memory/advanced/folder/upsert"].parse({
+        cwd: "/tmp/proj",
+        folder: "proj",
+        name: "rule",
+        description: "a rule",
+        body: "always do X",
+      }).folder,
+    ).toBe("proj");
 
     const parsed = jsonRpcControlResultSchemas["cowork/memory/advanced/list"].parse({
       event: {
@@ -233,7 +249,6 @@ describe("shared JSON-RPC control schemas", () => {
   test("keeps mobile advanced memory schemas aligned", () => {
     const request = {
       cwd: "/tmp/proj",
-      folder: "proj",
       name: "rule",
       description: "a rule",
       type: "feedback",
@@ -262,7 +277,6 @@ describe("shared JSON-RPC control schemas", () => {
       mobileJsonRpcControlRequestSchemas["cowork/memory/advanced/upsert"].parse(request);
     const generateRequest = {
       cwd: "/tmp/proj",
-      folder: "proj",
       threadId: "session-1",
     };
     const parsedGenerate =
@@ -277,6 +291,38 @@ describe("shared JSON-RPC control schemas", () => {
     expect(mobileParsed).toEqual(parsed);
     expect(mobileParsedGenerate).toEqual(parsedGenerate);
     expect(mobileResult.event.memories[0]?.slug).toBe(result.event.memories[0]?.slug);
+  });
+
+  test("keeps mobile advanced memory folder schemas aligned", () => {
+    const folderRequest = {
+      cwd: "/tmp/proj",
+      folder: "proj",
+      name: "rule",
+      description: "a rule",
+      body: "always do X",
+    };
+    const currentRequestWithFolder = {
+      cwd: "/tmp/proj",
+      folder: "proj",
+      threadId: "session-1",
+    };
+
+    expect(
+      mobileJsonRpcControlRequestSchemas["cowork/memory/advanced/generate"].safeParse(
+        currentRequestWithFolder,
+      ).success,
+    ).toBe(
+      jsonRpcControlRequestSchemas["cowork/memory/advanced/generate"].safeParse(
+        currentRequestWithFolder,
+      ).success,
+    );
+    expect(
+      mobileJsonRpcControlRequestSchemas["cowork/memory/advanced/folder/upsert"].parse(
+        folderRequest,
+      ),
+    ).toEqual(
+      jsonRpcControlRequestSchemas["cowork/memory/advanced/folder/upsert"].parse(folderRequest),
+    );
   });
 
   test("keeps mobile session default memory config schemas aligned", () => {

@@ -158,6 +158,57 @@ describe("sessionStore", () => {
     expect(parsed.context).not.toHaveProperty("providerState");
   });
 
+  test("parsePersistedSessionSnapshot preserves advanced-memory checkpoint state", () => {
+    const parsed = parsePersistedSessionSnapshot({
+      version: 7,
+      sessionId: "checkpoint-v7",
+      createdAt: "2026-06-03T00:00:00.000Z",
+      updatedAt: "2026-06-03T00:00:01.000Z",
+      session: {
+        title: "Checkpoint",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "openai",
+        model: "gpt-5.2",
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        mode: null,
+        depth: null,
+        nickname: null,
+        requestedModel: null,
+        effectiveModel: null,
+        requestedReasoningEffort: null,
+        effectiveReasoningEffort: null,
+        executionState: null,
+        lastMessagePreview: null,
+      },
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        enableMcp: true,
+        backupsEnabledOverride: null,
+        workingDirectory: "/tmp/checkpoint",
+      },
+      context: {
+        system: "system",
+        messages: [
+          { role: "user", content: "old" },
+          { role: "assistant", content: "processed" },
+          { role: "user", content: "pending" },
+        ],
+        lastMemoryGeneratedIndex: 2,
+        providerState: null,
+        todos: [],
+        harnessContext: null,
+        costTracker: null,
+      },
+    });
+
+    expect(parsed.version).toBe(7);
+    expect(parsed.context.lastMemoryGeneratedIndex).toBe(2);
+  });
+
   test("listPersistedSessionSnapshots excludes subagent snapshots from top-level lists", async () => {
     const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-subagents-"));
     await writePersistedSessionSnapshot({

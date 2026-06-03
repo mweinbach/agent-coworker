@@ -3,7 +3,6 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/o
 import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
-  mergeWorkspaceProviderOptions,
   mergeWorkspaceProviderOptionsPreservingSearchSettings,
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
@@ -36,6 +35,15 @@ import {
   type WorkspaceDefaultsPatch,
   type WorkspaceRecord,
 } from "../types";
+import { applyWorkspacePatch, copyWorkspaceSettings } from "./workspaceDefaultRecords";
+import {
+  applyGlobalMemoryDefaults,
+  buildGlobalMemoryDefaultsPatch,
+  hasGlobalMemoryDefaultsPatch,
+  resolveControlApplyMemoryDefaults,
+  resolveThreadApplyMemoryDefaults,
+  resolveWorkspaceMemoryDefaultsFromControl,
+} from "./workspaceMemoryDefaults";
 
 export function createWorkspaceDefaultsActions(
   set: StoreSet,
@@ -374,6 +382,11 @@ export function createWorkspaceDefaultsActions(
       workspace.defaultPreferredChildModelRef?.trim() ||
       (defaultPreferredChildModel ? `${provider}:${defaultPreferredChildModel}` : undefined);
 
+    const memoryDefaults = resolveWorkspaceMemoryDefaultsFromControl(
+      workspace,
+      controlSessionConfig,
+    );
+
     return {
       ...workspace,
       defaultProvider: provider,
@@ -389,14 +402,8 @@ export function createWorkspaceDefaultsActions(
       defaultToolOutputOverflowChars:
         controlSessionConfig?.defaultToolOutputOverflowChars ??
         workspace.defaultToolOutputOverflowChars,
-      defaultAdvancedMemory:
-        typeof controlSessionConfig?.advancedMemory === "boolean"
-          ? controlSessionConfig.advancedMemory
-          : workspace.defaultAdvancedMemory,
-      defaultMemoryGenerationModel:
-        typeof controlSessionConfig?.memoryGenerationModel === "string"
-          ? controlSessionConfig.memoryGenerationModel.trim() || undefined
-          : workspace.defaultMemoryGenerationModel,
+      defaultAdvancedMemory: memoryDefaults.defaultAdvancedMemory,
+      defaultMemoryGenerationModel: memoryDefaults.defaultMemoryGenerationModel,
       providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
         workspace.providerOptions,
         normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions),
@@ -424,60 +431,6 @@ export function createWorkspaceDefaultsActions(
           : workspace.yolo,
     };
   };
-
-  const applyWorkspacePatch = (
-    workspace: WorkspaceRecord,
-    patch: WorkspaceDefaultsPatch,
-  ): WorkspaceRecord => {
-    const {
-      clearDefaultToolOutputOverflowChars,
-      userProfile: userProfilePatch,
-      ...workspacePatch
-    } = patch;
-    return {
-      ...workspace,
-      ...workspacePatch,
-      ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
-      ...(workspacePatch.providerOptions !== undefined
-        ? {
-            providerOptions: mergeWorkspaceProviderOptions(
-              workspace.providerOptions,
-              workspacePatch.providerOptions,
-            ),
-          }
-        : {}),
-      ...(userProfilePatch !== undefined
-        ? {
-            userProfile: {
-              ...normalizeWorkspaceUserProfile(workspace.userProfile),
-              ...userProfilePatch,
-            },
-          }
-        : {}),
-    };
-  };
-
-  const copyWorkspaceSettings = (
-    target: WorkspaceRecord,
-    source: WorkspaceRecord,
-  ): WorkspaceRecord => ({
-    ...target,
-    defaultProvider: source.defaultProvider,
-    defaultModel: source.defaultModel,
-    defaultPreferredChildModel: source.defaultPreferredChildModel,
-    defaultChildModelRoutingMode: source.defaultChildModelRoutingMode,
-    defaultPreferredChildModelRef: source.defaultPreferredChildModelRef,
-    defaultAllowedChildModelRefs: [...(source.defaultAllowedChildModelRefs ?? [])],
-    defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars,
-    defaultAdvancedMemory: source.defaultAdvancedMemory,
-    defaultMemoryGenerationModel: source.defaultMemoryGenerationModel,
-    providerOptions: source.providerOptions,
-    userName: source.userName,
-    userProfile: source.userProfile ? normalizeWorkspaceUserProfile(source.userProfile) : undefined,
-    defaultEnableMcp: source.defaultEnableMcp,
-    defaultBackupsEnabled: source.defaultBackupsEnabled,
-    yolo: source.yolo,
-  });
 
   const resolveSharedSettingsSource = (preferredWorkspaceId: string): WorkspaceRecord | null => {
     const state = get();
@@ -541,7 +494,7 @@ export function createWorkspaceDefaultsActions(
     const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
     const providerOptions = nextWorkspace.providerOptions;
     const userName = nextWorkspace.userName;
-    const memoryGenerationModel = nextWorkspace.defaultMemoryGenerationModel?.trim() || null;
+    const memoryDefaults = resolveControlApplyMemoryDefaults(nextWorkspace);
     const userProfile = nextWorkspace.userProfile
       ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
       : undefined;
@@ -561,8 +514,8 @@ export function createWorkspaceDefaultsActions(
               model,
               enableMcp: nextWorkspace.defaultEnableMcp,
               backupsEnabled: nextWorkspace.defaultBackupsEnabled,
-              advancedMemory: nextWorkspace.defaultAdvancedMemory,
-              memoryGenerationModel,
+              advancedMemory: memoryDefaults.advancedMemory,
+              memoryGenerationModel: memoryDefaults.memoryGenerationModel,
               toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
               yolo: nextWorkspace.yolo,
               ...(preferredChildModel ? { preferredChildModel } : {}),
@@ -781,10 +734,10 @@ export function createWorkspaceDefaultsActions(
         : (ws.defaultAllowedChildModelRefs ?? rt.sessionConfig?.allowedChildModelRefs ?? []);
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
-      const memoryGenerationModel =
-        ws.defaultMemoryGenerationModel?.trim() ||
-        workspaceRuntime?.controlSessionConfig?.memoryGenerationModel?.trim() ||
-        null;
+      const memoryDefaults = resolveThreadApplyMemoryDefaults(
+        ws,
+        workspaceRuntime?.controlSessionConfig,
+      );
       const userProfile = ws.userProfile
         ? normalizeWorkspaceUserProfile(ws.userProfile)
         : undefined;
@@ -811,16 +764,8 @@ export function createWorkspaceDefaultsActions(
               }
             : {}),
           yolo: ws.yolo,
-          // Advanced memory is an effectively-global setting surfaced via the
-          // workspace control session. Prefer the workspace record when it has an
-          // explicit value, otherwise fall back to the live control-session value
-          // so a thread apply that races ahead of the record sync still applies
-          // the correct mode (mirrors the merge at resolveWorkspaceDefaults).
-          advancedMemory:
-            typeof ws.defaultAdvancedMemory === "boolean"
-              ? ws.defaultAdvancedMemory
-              : workspaceRuntime?.controlSessionConfig?.advancedMemory,
-          memoryGenerationModel,
+          advancedMemory: memoryDefaults.advancedMemory,
+          memoryGenerationModel: memoryDefaults.memoryGenerationModel,
           ...(mode === "explicit"
             ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }
             : harnessToolOutputOverflowChars !== undefined
@@ -912,15 +857,8 @@ export function createWorkspaceDefaultsActions(
       }
 
       const nextWorkspace = applyWorkspacePatch(optimisticWorkspace, patch);
-      const globalMemoryPatch = {
-        ...(patch.defaultAdvancedMemory !== undefined
-          ? { defaultAdvancedMemory: nextWorkspace.defaultAdvancedMemory }
-          : {}),
-        ...(patch.defaultMemoryGenerationModel !== undefined
-          ? { defaultMemoryGenerationModel: nextWorkspace.defaultMemoryGenerationModel }
-          : {}),
-      };
-      const hasGlobalMemoryPatch = Object.keys(globalMemoryPatch).length > 0;
+      const globalMemoryPatch = buildGlobalMemoryDefaultsPatch(patch, nextWorkspace);
+      const hasGlobalMemoryPatch = hasGlobalMemoryDefaultsPatch(globalMemoryPatch);
 
       set((s) => ({
         workspaces: s.workspaces.map((workspace) => {
@@ -931,9 +869,7 @@ export function createWorkspaceDefaultsActions(
               : workspace.id === sourceWorkspace.id
                 ? nextWorkspace
                 : workspace;
-          return hasGlobalMemoryPatch
-            ? { ...patchedWorkspace, ...globalMemoryPatch }
-            : patchedWorkspace;
+          return applyGlobalMemoryDefaults(patchedWorkspace, globalMemoryPatch);
         }),
       }));
       await persistNow(get);

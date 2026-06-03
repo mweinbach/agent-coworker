@@ -1,7 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 
 import type { ModelMessage } from "../../src/types";
-import { makeConfig, makeSession } from "./agentSession.harness";
+import {
+  AgentSession,
+  flushAsyncWork,
+  makeConfig,
+  makeEmit,
+  makeSession,
+  makeSessionBackupFactory,
+  waitForCondition,
+} from "./agentSession.harness";
 
 type MemoryGenerationSessionInternals = {
   memoryGenerator: {
@@ -13,6 +21,12 @@ type MemoryGenerationSessionInternals = {
     allMessages: ModelMessage[];
     lastMemoryGeneratedIndex: number;
     memoryGenerationsSinceConsolidation: number;
+  };
+};
+
+type PersistedMemoryCheckpointSnapshot = {
+  context: {
+    lastMemoryGeneratedIndex?: number;
   };
 };
 
@@ -91,6 +105,102 @@ describe("AgentSession advanced memory generation", () => {
 
     expect(refreshCount).toBe(1);
     expect(internals.state.system).toBe("refreshed-1");
+  });
+
+  test("persists the automatic generation checkpoint after a successful run", async () => {
+    const snapshots: unknown[] = [];
+    const writePersistedSessionSnapshotImpl = mock(async (opts: { snapshot: unknown }) => {
+      snapshots.push(opts.snapshot);
+      return "/tmp/test-session/.cowork/sessions/mock.json";
+    });
+    const config = {
+      ...makeConfig("/tmp/test-session"),
+      advancedMemory: true,
+    };
+    const { session } = makeSession({ config, writePersistedSessionSnapshotImpl });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    await flushAsyncWork();
+    snapshots.length = 0;
+
+    internals.memoryGenerator = {
+      run: async () => ({ ran: true, ok: true }),
+      consolidate: async () => {
+        throw new Error("consolidation should not run before five generations");
+      },
+    };
+
+    internals.state.allMessages.push(
+      { role: "user", content: "persist this" } as ModelMessage,
+      { role: "assistant", content: "persisted" } as ModelMessage,
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    await waitForCondition(() => snapshots.length > 0);
+    const latestSnapshot = snapshots.at(-1) as PersistedMemoryCheckpointSnapshot | undefined;
+    expect(latestSnapshot?.context.lastMemoryGeneratedIndex).toBe(2);
+  });
+
+  test("resumes automatic generation from the persisted checkpoint", async () => {
+    const messages = [
+      { role: "user", content: "already processed" },
+      { role: "assistant", content: "old answer" },
+      { role: "user", content: "needs retry" },
+      { role: "assistant", content: "new answer" },
+    ] as ModelMessage[];
+    const { emit } = makeEmit();
+    const session = AgentSession.fromPersisted({
+      persisted: {
+        sessionId: "persisted-memory-session",
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        title: "Persisted",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        workingDirectory: "/tmp/test-session",
+        enableMcp: true,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        updatedAt: "2026-03-09T00:00:01.000Z",
+        status: "active",
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+        messageCount: messages.length,
+        lastEventSeq: 1,
+        systemPrompt: "system",
+        messages,
+        lastMemoryGeneratedIndex: 2,
+        providerState: null,
+        todos: [],
+        harnessContext: null,
+        costTracker: null,
+      },
+      baseConfig: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+      discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
+      emit,
+      sessionBackupFactory: makeSessionBackupFactory(),
+      getProviderStatusesImpl: async () => [],
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const deltas: ModelMessage[][] = [];
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        return { ran: false, ok: true };
+      },
+      consolidate: async () => {
+        throw new Error("consolidation should not run for a no-op generation");
+      },
+    };
+
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.map((message) => message.content)).toEqual(["needs retry", "new answer"]);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(messages.length);
   });
 
   test("manual backfill replays completed assistant responses in order", async () => {

@@ -257,6 +257,7 @@ export class SessionDbRepository {
           "           s.last_event_seq,",
           "           st.system_prompt,",
           "           st.messages_json,",
+          "           st.last_memory_generated_index,",
           "           st.provider_state_json,",
           "           st.provider_options_json,",
           "           st.todos_json,",
@@ -318,6 +319,13 @@ export class SessionDbRepository {
         snapshot.providerOptions === undefined ? null : toJsonString(snapshot.providerOptions);
       const costTrackerJson =
         snapshot.costTracker === null ? null : toJsonString(snapshot.costTracker);
+      const lastMemoryGeneratedIndex =
+        typeof snapshot.lastMemoryGeneratedIndex === "number"
+          ? Math.min(
+              Math.max(0, Math.floor(snapshot.lastMemoryGeneratedIndex)),
+              snapshot.messages.length,
+            )
+          : snapshot.messages.length;
       const backupsEnabledOverride =
         snapshot.backupsEnabledOverride === null ? null : snapshot.backupsEnabledOverride ? 1 : 0;
       const parentSessionId = snapshot.parentSessionId ?? null;
@@ -464,15 +472,17 @@ export class SessionDbRepository {
             "             session_id,",
             "             system_prompt,",
             "             messages_json,",
+            "             last_memory_generated_index,",
             "             provider_state_json,",
             "             provider_options_json,",
             "             todos_json,",
             "             harness_context_json,",
             "             cost_tracker_json",
-            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "           ON CONFLICT(session_id) DO UPDATE SET",
             "             system_prompt = excluded.system_prompt,",
             "             messages_json = excluded.messages_json,",
+            "             last_memory_generated_index = excluded.last_memory_generated_index,",
             "             provider_state_json = excluded.provider_state_json,",
             "             provider_options_json = excluded.provider_options_json,",
             "             todos_json = excluded.todos_json,",
@@ -484,6 +494,7 @@ export class SessionDbRepository {
           input.sessionId,
           snapshot.systemPrompt,
           toJsonString(snapshot.messages),
+          lastMemoryGeneratedIndex,
           providerStateJson,
           providerOptionsJson,
           toJsonString(snapshot.todos),
@@ -970,6 +981,7 @@ export class SessionDbRepository {
         "             session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,",
         "             system_prompt TEXT NOT NULL,",
         "             messages_json TEXT NOT NULL,",
+        "             last_memory_generated_index INTEGER NULL,",
         "             provider_state_json TEXT NULL,",
         "             provider_options_json TEXT NULL,",
         "             todos_json TEXT NOT NULL,",
@@ -1123,6 +1135,11 @@ export class SessionDbRepository {
   addProviderOptionsColumn(): void {
     if (this.hasSessionStateColumn("provider_options_json")) return;
     this.db.exec("ALTER TABLE session_state ADD COLUMN provider_options_json TEXT NULL");
+  }
+
+  addLastMemoryGeneratedIndexColumn(): void {
+    if (this.hasSessionStateColumn("last_memory_generated_index")) return;
+    this.db.exec("ALTER TABLE session_state ADD COLUMN last_memory_generated_index INTEGER NULL");
   }
 
   hasSessionsColumn(columnName: string): boolean {
@@ -1372,6 +1389,13 @@ export class SessionDbRepository {
         : 0;
       const providerState = "providerState" in legacy.context ? legacy.context.providerState : null;
       const costTracker = "costTracker" in legacy.context ? legacy.context.costTracker : null;
+      const lastMemoryGeneratedIndex =
+        legacy.version === 7 && typeof legacy.context.lastMemoryGeneratedIndex === "number"
+          ? Math.min(
+              Math.max(0, Math.floor(legacy.context.lastMemoryGeneratedIndex)),
+              legacy.context.messages.length,
+            )
+          : legacy.context.messages.length;
       const backupsEnabledOverride =
         legacy.version === 5 || legacy.version === 6 || legacy.version === 7
           ? legacy.config.backupsEnabledOverride
@@ -1534,15 +1558,17 @@ export class SessionDbRepository {
             "             session_id,",
             "             system_prompt,",
             "             messages_json,",
+            "             last_memory_generated_index,",
             "             provider_state_json,",
             "             provider_options_json,",
             "             todos_json,",
             "             harness_context_json,",
             "             cost_tracker_json",
-            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "           ON CONFLICT(session_id) DO UPDATE SET",
             "             system_prompt = excluded.system_prompt,",
             "             messages_json = excluded.messages_json,",
+            "             last_memory_generated_index = excluded.last_memory_generated_index,",
             "             provider_state_json = excluded.provider_state_json,",
             "             provider_options_json = excluded.provider_options_json,",
             "             todos_json = excluded.todos_json,",
@@ -1554,6 +1580,7 @@ export class SessionDbRepository {
           legacy.sessionId,
           legacy.context.system,
           toJsonString(legacy.context.messages),
+          lastMemoryGeneratedIndex,
           providerState === null ? null : toJsonString(providerState),
           providerOptions === undefined ? null : toJsonString(providerOptions),
           toJsonString(legacy.context.todos),

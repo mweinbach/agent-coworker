@@ -105,6 +105,7 @@ describe("AgentSession", () => {
       expect(mockWritePersistedSessionSnapshot).toHaveBeenCalledTimes(1);
       const first = mockWritePersistedSessionSnapshot.mock.calls[0]?.[0] as any;
       expect(first?.snapshot?.version).toBe(7);
+      expect(first?.snapshot?.context?.lastMemoryGeneratedIndex).toBe(0);
       expect(first?.snapshot?.context?.providerState).toBeNull();
       expect(first?.snapshot?.context?.costTracker).toMatchObject({
         totalTurns: 0,

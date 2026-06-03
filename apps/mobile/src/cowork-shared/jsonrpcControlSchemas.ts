@@ -1361,17 +1361,15 @@ export const memoryDeleteRequestSchema = z
   })
   .strict();
 
-export const advancedMemoryListRequestSchema = z
+export const advancedMemoryCurrentListRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
-    folder: optionalNonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const advancedMemoryUpsertRequestSchema = z
+export const advancedMemoryCurrentUpsertRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
-    folder: optionalNonEmptyTrimmedStringSchema,
     slug: z.string().optional(),
     name: z.string(),
     description: z.string(),
@@ -1380,19 +1378,42 @@ export const advancedMemoryUpsertRequestSchema = z
   })
   .strict();
 
-export const advancedMemoryDeleteRequestSchema = z
+export const advancedMemoryCurrentDeleteRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
-    folder: optionalNonEmptyTrimmedStringSchema,
     slug: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
-export const advancedMemoryGenerateRequestSchema = z
+export const advancedMemoryCurrentGenerateRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
-    folder: optionalNonEmptyTrimmedStringSchema,
     threadId: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+export const advancedMemoryFolderListRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    folder: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+export const advancedMemoryFolderUpsertRequestSchema = advancedMemoryCurrentUpsertRequestSchema
+  .extend({
+    folder: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+export const advancedMemoryFolderDeleteRequestSchema = advancedMemoryCurrentDeleteRequestSchema
+  .extend({
+    folder: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+export const advancedMemoryFolderGenerateRequestSchema = advancedMemoryCurrentGenerateRequestSchema
+  .extend({
+    folder: nonEmptyTrimmedStringSchema,
   })
   .strict();
 
@@ -1534,10 +1555,14 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
-  "cowork/memory/advanced/list": advancedMemoryListRequestSchema,
-  "cowork/memory/advanced/upsert": advancedMemoryUpsertRequestSchema,
-  "cowork/memory/advanced/delete": advancedMemoryDeleteRequestSchema,
-  "cowork/memory/advanced/generate": advancedMemoryGenerateRequestSchema,
+  "cowork/memory/advanced/list": advancedMemoryCurrentListRequestSchema,
+  "cowork/memory/advanced/upsert": advancedMemoryCurrentUpsertRequestSchema,
+  "cowork/memory/advanced/delete": advancedMemoryCurrentDeleteRequestSchema,
+  "cowork/memory/advanced/generate": advancedMemoryCurrentGenerateRequestSchema,
+  "cowork/memory/advanced/folder/list": advancedMemoryFolderListRequestSchema,
+  "cowork/memory/advanced/folder/upsert": advancedMemoryFolderUpsertRequestSchema,
+  "cowork/memory/advanced/folder/delete": advancedMemoryFolderDeleteRequestSchema,
+  "cowork/memory/advanced/folder/generate": advancedMemoryFolderGenerateRequestSchema,
   "cowork/backups/workspace/read": workspaceBackupsReadRequestSchema,
   "cowork/backups/workspace/delta/read": workspaceBackupsDeltaReadRequestSchema,
   "cowork/backups/workspace/checkpoint": workspaceBackupsCheckpointRequestSchema,
@@ -1611,6 +1636,10 @@ export const jsonRpcControlResultSchemas = {
   "cowork/memory/advanced/upsert": sessionEventEnvelope(advancedMemoryListEventSchema),
   "cowork/memory/advanced/delete": sessionEventEnvelope(advancedMemoryListEventSchema),
   "cowork/memory/advanced/generate": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/list": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/upsert": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/delete": sessionEventEnvelope(advancedMemoryListEventSchema),
+  "cowork/memory/advanced/folder/generate": sessionEventEnvelope(advancedMemoryListEventSchema),
   "cowork/backups/workspace/read": sessionEventEnvelope(workspaceBackupsEventSchema),
   "cowork/backups/workspace/delta/read": sessionEventEnvelope(workspaceBackupDeltaEventSchema),
   "cowork/backups/workspace/checkpoint": sessionEventEnvelope(workspaceBackupsEventSchema),

@@ -74,6 +74,7 @@ export type PersistedSessionRecord = {
   lastEventSeq: number;
   systemPrompt: string;
   messages: ModelMessage[];
+  lastMemoryGeneratedIndex?: number;
   providerState: ProviderContinuationState | null;
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
@@ -120,6 +121,7 @@ export type PersistedSessionMutation = {
     hasPendingApproval: boolean;
     systemPrompt: string;
     messages: ModelMessage[];
+    lastMemoryGeneratedIndex?: number | null;
     providerState: ProviderContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;

@@ -39,7 +39,13 @@ describe("server JSON-RPC control methods", () => {
     try {
       const rpc = await connectJsonRpc(url);
 
-      const upserted = await rpc.request("cowork/memory/advanced/upsert", {
+      const scopedWithFolder = await rpc.request("cowork/memory/advanced/list", {
+        cwd: tmpDir,
+        folder: "proj",
+      });
+      expect(scopedWithFolder.error?.message).toContain("folder");
+
+      const upserted = await rpc.request("cowork/memory/advanced/folder/upsert", {
         cwd: tmpDir,
         folder: "proj",
         name: "remembered rule",
@@ -52,13 +58,13 @@ describe("server JSON-RPC control methods", () => {
       expect(upserted.result.event.memories).toHaveLength(1);
       expect(upserted.result.event.memories[0].slug).toBe("remembered-rule");
 
-      const listed = await rpc.request("cowork/memory/advanced/list", {
+      const listed = await rpc.request("cowork/memory/advanced/folder/list", {
         cwd: tmpDir,
         folder: "proj",
       });
       expect(listed.result.event.memories[0].name).toBe("remembered rule");
 
-      const deleted = await rpc.request("cowork/memory/advanced/delete", {
+      const deleted = await rpc.request("cowork/memory/advanced/folder/delete", {
         cwd: tmpDir,
         folder: "proj",
         slug: "remembered-rule",
@@ -80,7 +86,7 @@ describe("server JSON-RPC control methods", () => {
       const started = await rpc.request("thread/start", {
         cwd: tmpDir,
       });
-      const generated = await rpc.request("cowork/memory/advanced/generate", {
+      const generated = await rpc.request("cowork/memory/advanced/folder/generate", {
         cwd: tmpDir,
         folder: "proj",
         threadId: started.result.thread.id,

@@ -89,6 +89,7 @@ export class SessionSnapshotBuilder {
       context: {
         system: this.opts.state.system,
         messages: this.opts.state.allMessages,
+        lastMemoryGeneratedIndex: this.opts.state.lastMemoryGeneratedIndex,
         providerState: this.opts.state.providerState,
         todos: this.opts.state.todos,
         harnessContext: this.opts.harnessContextStore.get(this.opts.sessionId),
@@ -140,6 +141,7 @@ export class SessionSnapshotBuilder {
       hasPendingApproval: this.opts.hasPendingApproval(),
       systemPrompt: this.opts.state.system,
       messages: this.opts.state.allMessages,
+      lastMemoryGeneratedIndex: this.opts.state.lastMemoryGeneratedIndex,
       providerState: this.opts.state.providerState,
       todos: this.opts.state.todos,
       harnessContext: this.opts.harnessContextStore.get(this.opts.sessionId),

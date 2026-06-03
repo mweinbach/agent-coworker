@@ -257,7 +257,9 @@ type PersistedSessionSnapshotV7 = {
   config: PersistedSessionSnapshotV6["config"] & {
     providerOptions?: AgentConfig["providerOptions"];
   };
-  context: PersistedSessionSnapshotV6["context"];
+  context: PersistedSessionSnapshotV6["context"] & {
+    lastMemoryGeneratedIndex?: number;
+  };
 };
 
 export type PersistedSessionSnapshot =
@@ -594,7 +596,11 @@ const persistedSessionSnapshotV7Schema = z
         providerOptions: z.record(z.string(), z.unknown()).optional(),
       })
       .strict(),
-    context: persistedSessionSnapshotV6Schema.shape.context,
+    context: persistedSessionSnapshotV6Schema.shape.context
+      .extend({
+        lastMemoryGeneratedIndex: z.number().int().min(0).optional(),
+      })
+      .strict(),
   })
   .strict();
 
@@ -698,6 +704,7 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
       context: {
         system: snapshot.context.system,
         messages: snapshot.context.messages,
+        lastMemoryGeneratedIndex: snapshot.context.lastMemoryGeneratedIndex,
         providerState: snapshot.context.providerState,
         todos: snapshot.context.todos,
         harnessContext: snapshot.context.harnessContext,

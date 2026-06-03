@@ -781,7 +781,10 @@ export function createWorkspaceDefaultsActions(
         : (ws.defaultAllowedChildModelRefs ?? rt.sessionConfig?.allowedChildModelRefs ?? []);
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
-      const memoryGenerationModel = ws.defaultMemoryGenerationModel?.trim() || null;
+      const memoryGenerationModel =
+        ws.defaultMemoryGenerationModel?.trim() ||
+        workspaceRuntime?.controlSessionConfig?.memoryGenerationModel?.trim() ||
+        null;
       const userProfile = ws.userProfile
         ? normalizeWorkspaceUserProfile(ws.userProfile)
         : undefined;

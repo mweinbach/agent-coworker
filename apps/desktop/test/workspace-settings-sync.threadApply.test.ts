@@ -361,6 +361,52 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("applyWorkspaceDefaultsToThread preserves live memory model when saved default is unset", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultAdvancedMemory: undefined,
+              defaultMemoryGenerationModel: undefined,
+            }
+          : workspace,
+      ),
+      workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
+        [workspaceId]: {
+          ...state.workspaceRuntimeById[workspaceId],
+          controlSessionId: `jsonrpc:${workspaceId}`,
+          controlSessionConfig: {
+            advancedMemory: true,
+            memoryGenerationModel: "gemini-live",
+          },
+          controlEnableMcp: true,
+        },
+      },
+    }));
+    const { threadId } = seedConnectedThread({
+      sessionConfig: {
+        advancedMemory: false,
+        memoryGenerationModel: "gemini-old",
+      },
+    });
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId, "explicit");
+    await flushAsyncWork();
+
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: {
+        advancedMemory: true,
+        memoryGenerationModel: "gemini-live",
+      },
+    });
+  });
+
   test("updateWorkspaceDefaults syncs advanced memory defaults to the control session", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({

@@ -903,12 +903,16 @@ export function createThreadActions(
       return true;
     },
 
-    openNewChatLanding: async (opts?: { defaultTargetKind?: "project" | "oneOff" }) => {
+    openNewChatLanding: async (opts?: {
+      defaultTargetKind?: "project" | "oneOff";
+      target?: NewChatLandingTarget;
+    }) => {
       const state = get();
       const landingTarget: NewChatLandingTarget =
-        opts?.defaultTargetKind === "oneOff"
+        opts?.target ??
+        (opts?.defaultTargetKind === "oneOff"
           ? { kind: "oneOff" }
-          : resolveDefaultNewChatTarget(state.workspaces, state.selectedWorkspaceId);
+          : resolveDefaultNewChatTarget(state.workspaces, state.selectedWorkspaceId));
       set({
         selectedThreadId: null,
         view: "chat",

@@ -315,6 +315,13 @@ export const Sidebar = memo(function Sidebar() {
     [effectiveView, selectWorkspace, setPluginManagementWorkspace],
   );
 
+  const handleNewWorkspaceChat = useCallback(
+    (workspaceId: string) => {
+      void openNewChatLanding({ target: { kind: "project", workspaceId } });
+    },
+    [openNewChatLanding],
+  );
+
   const handleProjectSectionMenu = async (e: MouseEvent<HTMLElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -455,6 +462,7 @@ export const Sidebar = memo(function Sidebar() {
         onCancelRename={cancelRename}
         onCommitRename={commitRename}
         onEditingTitleChange={setEditingTitle}
+        onNewWorkspaceChat={handleNewWorkspaceChat}
         onSelectWorkspace={handleSelectWorkspace}
         onStartEditing={startEditing}
         onThreadContextMenu={handleThreadContextMenu}

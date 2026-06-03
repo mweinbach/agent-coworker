@@ -588,6 +588,64 @@ describe("desktop sidebar", () => {
     }
   });
 
+  test.serial(
+    "workspace row plus opens new chat landing with that workspace selected",
+    async () => {
+      const harness = setupSidebarJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+
+        await act(async () => {
+          resetAppStore({
+            workspaces: [
+              makeWorkspace(),
+              makeWorkspace({
+                id: "ws-2",
+                name: "Reports",
+                path: "/tmp/reports",
+              }),
+            ],
+            selectedWorkspaceId: "ws-1",
+          });
+          root.render(createElement(Sidebar));
+        });
+
+        const workspaceNewChatButton = container.querySelector(
+          '[aria-label="New chat in Reports"]',
+        );
+        if (!(workspaceNewChatButton instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error("missing workspace new chat button");
+        }
+
+        expect(workspaceNewChatButton.className).toContain("group-hover/workspace-row:opacity-100");
+
+        await act(async () => {
+          workspaceNewChatButton.dispatchEvent(
+            new harness.dom.window.MouseEvent("click", { bubbles: true }),
+          );
+          await Promise.resolve();
+        });
+
+        const state = useAppStore.getState();
+        expect(state.selectedThreadId).toBeNull();
+        expect(state.newChatLandingTarget).toEqual({ kind: "project", workspaceId: "ws-2" });
+        expect(state.threads).toEqual([]);
+        expect(state.view).toBe("chat");
+      } finally {
+        if (root) {
+          await act(async () => {
+            root.unmount();
+          });
+        }
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("one-off new chat landing does not emphasize a project row", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;

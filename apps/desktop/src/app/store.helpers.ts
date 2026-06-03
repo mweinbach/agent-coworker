@@ -268,7 +268,10 @@ export type AppStoreState = {
     provider?: ProviderName;
     model?: string;
   }) => Promise<boolean>;
-  openNewChatLanding: (opts?: { defaultTargetKind?: "project" | "oneOff" }) => Promise<void>;
+  openNewChatLanding: (opts?: {
+    defaultTargetKind?: "project" | "oneOff";
+    target?: NewChatLandingTarget;
+  }) => Promise<void>;
   setNewChatLandingTarget: (target: NewChatLandingTarget) => void;
   removeThread: (threadId: string) => Promise<void>;
   archiveThread: (threadId: string) => Promise<void>;

@@ -1,5 +1,5 @@
 import { Reorder, useDragControls } from "framer-motion";
-import { ArchiveIcon, ChevronRightIcon, FolderIcon, FolderOpenIcon } from "lucide-react";
+import { ArchiveIcon, ChevronRightIcon, FolderIcon, FolderOpenIcon, PlusIcon } from "lucide-react";
 import {
   type MouseEvent,
   memo,
@@ -47,6 +47,7 @@ export type SidebarWorkspaceItemProps = {
   onCancelRename: () => void;
   onCommitRename: (threadId: string, title: string) => void;
   onEditingTitleChange: (title: string) => void;
+  onNewWorkspaceChat: (workspaceId: string) => void;
   onSelectWorkspace: (workspaceId: string) => void;
   onStartEditing: (threadId: string, currentTitle: string) => void;
   onThreadContextMenu: (event: MouseEvent<HTMLElement>, threadId: string, title: string) => void;
@@ -79,6 +80,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   onCancelRename,
   onCommitRename,
   onEditingTitleChange,
+  onNewWorkspaceChat,
   onSelectWorkspace,
   onStartEditing,
   onThreadContextMenu,
@@ -181,7 +183,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
     >
       <div
         className={cn(
-          "sidebar-workspace-card flex items-center gap-1 rounded-lg px-1 py-0.5",
+          "sidebar-workspace-card group/workspace-row flex items-center gap-1 rounded-lg px-1 py-0.5",
           reorderEnabled && "sidebar-workspace-card--reorderable",
           emphasizeWorkspace
             ? "border-border/45 bg-foreground/[0.05] text-foreground"
@@ -252,6 +254,21 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           <span className="block min-w-0 flex-1 truncate text-[13px] font-medium tracking-[-0.015em]">
             {workspace.name}
           </span>
+        </Button>
+        <Button
+          aria-label={`New chat in ${workspace.name}`}
+          className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:bg-foreground/[0.045] hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onNewWorkspaceChat(workspace.id);
+          }}
+          size="icon-sm"
+          title={`New chat in ${workspace.name}`}
+          type="button"
+          variant="ghost"
+        >
+          <PlusIcon className="h-4 w-4" />
         </Button>
       </div>
 

@@ -123,11 +123,26 @@ describe("resolveMemoryFolderName", () => {
     expect(resolveMemoryFolderName(config)).toBe(CHATS_FOLDER);
   });
 
-  test("derives a slug from the workspace root for projects", () => {
+  test("derives a readable slug plus a stable path hash from the workspace root", () => {
     const config = {
       workingDirectory: "/home/user/My Project",
       projectCoworkDir: "/home/user/My Project/.cowork",
     } as AgentConfig;
-    expect(resolveMemoryFolderName(config)).toBe("my-project");
+    expect(resolveMemoryFolderName(config)).toMatch(/^my-project-[a-f0-9]{12}$/);
+  });
+
+  test("does not collide for unrelated projects with the same basename", () => {
+    const first = {
+      workingDirectory: "/home/user/client-a/app",
+      projectCoworkDir: "/home/user/client-a/app/.cowork",
+    } as AgentConfig;
+    const second = {
+      workingDirectory: "/home/user/client-b/app",
+      projectCoworkDir: "/home/user/client-b/app/.cowork",
+    } as AgentConfig;
+
+    expect(resolveMemoryFolderName(first)).toMatch(/^app-[a-f0-9]{12}$/);
+    expect(resolveMemoryFolderName(second)).toMatch(/^app-[a-f0-9]{12}$/);
+    expect(resolveMemoryFolderName(first)).not.toBe(resolveMemoryFolderName(second));
   });
 });

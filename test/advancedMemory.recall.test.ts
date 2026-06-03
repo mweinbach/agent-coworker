@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { AdvancedMemoryStore } from "../src/advancedMemory/store";
+import {
+  AdvancedMemoryStore,
+  CHATS_FOLDER,
+  resolveMemoryFolderName,
+} from "../src/advancedMemory/store";
 import type { ToolContext } from "../src/tools/context";
 import { createRecallMemoryTool } from "../src/tools/recallMemory";
 
@@ -28,10 +32,14 @@ function makeCtx(): ToolContext {
   } as unknown as ToolContext;
 }
 
+function activeFolder(): string {
+  return resolveMemoryFolderName(makeCtx().config);
+}
+
 describe("recallMemory", () => {
   test("recalls by slug", async () => {
     const store = new AdvancedMemoryStore(tmpDir);
-    await store.writeMemory("proj", {
+    await store.writeMemory(activeFolder(), {
       name: "cs-report skill",
       description: "d",
       body: "the body",
@@ -43,14 +51,15 @@ describe("recallMemory", () => {
 
   test("falls back to the display name when the slug diverges after a rename", async () => {
     const store = new AdvancedMemoryStore(tmpDir);
+    const folder = activeFolder();
     // Create with one name, then rename (keeping the original slug stable).
-    await store.writeMemory("proj", {
+    await store.writeMemory(folder, {
       slug: "cs-report-skill",
       name: "Original",
       description: "d",
       body: "b1",
     });
-    await store.editMemory("proj", "cs-report-skill", { name: "Renamed Title", body: "b2" });
+    await store.editMemory(folder, "cs-report-skill", { name: "Renamed Title", body: "b2" });
 
     const tool = createRecallMemoryTool(makeCtx());
     // The Memory Index would show "Renamed Title"; recalling by that name must hit.
@@ -63,5 +72,32 @@ describe("recallMemory", () => {
     const tool = createRecallMemoryTool(makeCtx());
     const out = (await tool.execute({ name: "does-not-exist" })) as string;
     expect(out).toContain("No memory named");
+  });
+
+  test("does not read arbitrary memory folders", async () => {
+    const store = new AdvancedMemoryStore(tmpDir);
+    await store.writeMemory("other-project", {
+      name: "secret",
+      description: "unrelated project",
+      body: "do not expose",
+    });
+
+    const tool = createRecallMemoryTool(makeCtx());
+    const out = (await tool.execute({ name: "secret", folder: "other-project" })) as string;
+    expect(out).toContain("is not available in this session");
+    expect(out).not.toContain("do not expose");
+  });
+
+  test("allows explicit shared chats memory folder", async () => {
+    const store = new AdvancedMemoryStore(tmpDir);
+    await store.writeMemory(CHATS_FOLDER, {
+      name: "chat rule",
+      description: "shared chats",
+      body: "shared body",
+    });
+
+    const tool = createRecallMemoryTool(makeCtx());
+    const out = (await tool.execute({ name: "chat rule", folder: CHATS_FOLDER })) as string;
+    expect(out).toContain("shared body");
   });
 });

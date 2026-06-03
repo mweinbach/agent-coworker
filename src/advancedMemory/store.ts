@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getAiCoworkerPaths } from "../store/connections";
 import type { AgentConfig } from "../types";
 import { isPathInsideOneOffChatsRoot } from "../utils/oneOffChats";
+import { canonicalWorkspacePath } from "../utils/workspacePath";
 
 /**
  * Advanced (agent-driven, file-based) memory store.
@@ -67,7 +69,9 @@ export function normalizeMemoryFolderName(raw: string): string {
 
 /**
  * Resolve the memory folder name for a session/config: `(chats)` for one-off
- * chats, otherwise a slug derived from the workspace root directory name.
+ * chats, otherwise a readable workspace slug plus a stable path hash. Advanced
+ * memories live in one shared user-level directory, so basename-only project
+ * folders would collide for unrelated workspaces named `app`, `client`, etc.
  */
 export function resolveMemoryFolderName(config: AgentConfig): string {
   const cwd = config.workingDirectory ?? process.cwd();
@@ -78,7 +82,10 @@ export function resolveMemoryFolderName(config: AgentConfig): string {
   }
   // `projectCoworkDir` is `<workspaceRoot>/.cowork`; the workspace root is its parent.
   const workspaceRoot = config.projectCoworkDir ? path.dirname(config.projectCoworkDir) : cwd;
-  return slugify(path.basename(workspaceRoot) || "workspace");
+  const canonicalRoot = canonicalWorkspacePath(workspaceRoot);
+  const readableName = slugify(path.basename(workspaceRoot) || "workspace");
+  const stableSuffix = createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 12);
+  return `${readableName}-${stableSuffix}`;
 }
 
 export function resolveMemoriesDir(config: AgentConfig): string {

@@ -317,17 +317,18 @@ describe("loadSystemPrompt", () => {
 
   test("advanced memory injects the Memory Index and suppresses the legacy hot cache", async () => {
     const memTmp = await fs.mkdtemp(path.join(os.tmpdir(), "adv-mem-prompt-"));
-    const { AdvancedMemoryStore } = await import("../src/advancedMemory/store");
+    const { AdvancedMemoryStore, resolveMemoryFolderName } = await import(
+      "../src/advancedMemory/store"
+    );
     const store = new AdvancedMemoryStore(memTmp);
-    // projectCoworkDir "/test/project/.cowork" → workspace root "/test/project" → folder slug "project".
-    await store.writeMemory("project", {
+    const config = makeConfig({ advancedMemory: true, memoriesDir: memTmp });
+    await store.writeMemory(resolveMemoryFolderName(config), {
       name: "remembered-rule",
       description: "a durable rule to recall",
       type: "feedback",
       body: "always do X",
     });
 
-    const config = makeConfig({ advancedMemory: true, memoriesDir: memTmp });
     const prompt = await loadSystemPrompt(config);
 
     expect(prompt).toContain("## Memory");

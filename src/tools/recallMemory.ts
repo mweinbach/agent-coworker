@@ -26,13 +26,18 @@ export function createRecallMemoryTool(ctx: ToolContext) {
         .string()
         .optional()
         .describe(
-          `Memory folder to read from (defaults to the active folder, then ${CHATS_FOLDER})`,
+          `Memory folder to read from. Only the active folder or ${CHATS_FOLDER} are available; omit to search both.`,
         ),
     }),
     execute: async ({ name, folder }: { name: string; folder?: string }) => {
       ctx.log(`tool> recallMemory ${JSON.stringify({ name, folder })}`);
-      const folders = folder
-        ? [folder]
+      const requestedFolder = folder?.trim();
+      const allowedFolders = new Set([activeFolder, CHATS_FOLDER]);
+      if (requestedFolder && !allowedFolders.has(requestedFolder)) {
+        return `Memory folder "${requestedFolder}" is not available in this session.`;
+      }
+      const folders = requestedFolder
+        ? [requestedFolder]
         : activeFolder === CHATS_FOLDER
           ? [CHATS_FOLDER]
           : [activeFolder, CHATS_FOLDER];

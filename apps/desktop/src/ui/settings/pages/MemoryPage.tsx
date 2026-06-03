@@ -27,9 +27,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
+import { modelChoicesFromCatalog } from "../../../lib/modelChoices";
 import { cn } from "../../../lib/utils";
+import { AdvancedMemoryPanel } from "./AdvancedMemoryPanel";
 
 type DraftMemory = {
   scope: "workspace" | "user";
@@ -95,6 +98,9 @@ export function MemoryPage() {
   const requestWorkspaceMemories = useAppStore((s) => s.requestWorkspaceMemories);
   const upsertWorkspaceMemory = useAppStore((s) => s.upsertWorkspaceMemory);
   const deleteWorkspaceMemory = useAppStore((s) => s.deleteWorkspaceMemory);
+  const setWorkspaceAdvancedMemory = useAppStore((s) => s.setWorkspaceAdvancedMemory);
+  const setWorkspaceMemoryGenerationModel = useAppStore((s) => s.setWorkspaceMemoryGenerationModel);
+  const providerCatalog = useAppStore((s) => s.providerCatalog);
 
   const { targets: memoryTargets, activeTarget } = useMemo(
     () => resolveMemoryTargets(workspaces, selectedWorkspaceId),
@@ -103,6 +109,19 @@ export function MemoryPage() {
   const runtime = activeTarget ? workspaceRuntimeById[activeTarget.workspaceId] : null;
   const memories = runtime?.memories ?? [];
   const memoriesLoading = runtime?.memoriesLoading ?? false;
+
+  const activeWorkspace = useMemo(
+    () => workspaces.find((w) => w.id === activeTarget?.workspaceId) ?? null,
+    [workspaces, activeTarget?.workspaceId],
+  );
+  const advancedMemoryEnabled = activeWorkspace?.defaultAdvancedMemory ?? false;
+  const memoryGenerationModel = activeWorkspace?.defaultMemoryGenerationModel ?? "";
+  const generationModelChoices = useMemo(() => {
+    const provider = activeWorkspace?.defaultProvider;
+    if (!provider) return [] as readonly string[];
+    return modelChoicesFromCatalog(providerCatalog)[provider] ?? [];
+  }, [providerCatalog, activeWorkspace?.defaultProvider]);
+  const MEMORY_MODEL_DEFAULT_VALUE = "__default__";
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);
   const [editingEntry, setEditingEntry] = useState<MemoryListEntry | null>(null);
@@ -226,6 +245,79 @@ export function MemoryPage() {
 
   return (
     <div className="space-y-5">
+      <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/40 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium text-foreground">Advanced memory</p>
+            <p className="text-xs text-muted-foreground">
+              Agent-driven memory that summarizes each turn into indexed files Cowork can recall.
+            </p>
+          </div>
+          <Switch
+            checked={advancedMemoryEnabled}
+            disabled={!activeTarget}
+            onCheckedChange={(value) => {
+              if (!activeTarget) return;
+              void setWorkspaceAdvancedMemory(activeTarget.workspaceId, value, {
+                cwd: activeTarget.targetPath,
+              });
+            }}
+            aria-label="Advanced memory"
+          />
+        </div>
+        {advancedMemoryEnabled ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Memory generation model</p>
+            <Select
+              value={memoryGenerationModel || MEMORY_MODEL_DEFAULT_VALUE}
+              onValueChange={(value) => {
+                if (!activeTarget) return;
+                void setWorkspaceMemoryGenerationModel(
+                  activeTarget.workspaceId,
+                  value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value,
+                  { cwd: activeTarget.targetPath },
+                );
+              }}
+            >
+              <SelectTrigger className="max-w-64" aria-label="Memory generation model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>Default (economical)</SelectItem>
+                {generationModelChoices.map((model) => (
+                  <SelectItem key={model} value={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+      </div>
+
+      {advancedMemoryEnabled && activeTarget ? (
+        <>
+          {workspacePickerEnabled && memoryTargets.length > 1 ? (
+            <Select value={activeTarget.id} onValueChange={handleTargetChange}>
+              <SelectTrigger className="max-w-48" aria-label="Memory target">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {memoryTargets.map((entry) => (
+                  <SelectItem key={entry.id} value={entry.id}>
+                    {entry.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          <AdvancedMemoryPanel
+            workspaceId={activeTarget.workspaceId}
+            cwd={activeTarget.targetPath}
+          />
+        </>
+      ) : (
+        <>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
@@ -451,6 +543,8 @@ export function MemoryPage() {
           </div>
         </DialogContent>
       </Dialog>
+        </>
+      )}
     </div>
   );
 }

@@ -885,6 +885,12 @@ export function createControlSocketHelpers(
                 ...(sessionConfigHas("allowedChildModelRefs")
                   ? { defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs }
                   : {}),
+                ...(sessionConfigHas("advancedMemory")
+                  ? { defaultAdvancedMemory: evt.config.advancedMemory }
+                  : {}),
+                ...(sessionConfigHas("memoryGenerationModel")
+                  ? { defaultMemoryGenerationModel: evt.config.memoryGenerationModel }
+                  : {}),
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 ...(sessionConfigHasProviderOptions
                   ? {
@@ -1337,6 +1343,22 @@ export function createControlSocketHelpers(
             ...s.workspaceRuntimeById[workspaceId],
             memories: evt.memories,
             memoriesLoading: false,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "advanced_memory_list") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            advancedMemories: evt.memories,
+            advancedMemoryFolders: evt.folders,
+            advancedMemoryActiveFolder: evt.folder,
+            advancedMemoriesLoading: false,
           },
         },
       }));

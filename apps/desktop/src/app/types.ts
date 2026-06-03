@@ -96,6 +96,8 @@ export type WorkspaceRecord = {
   userProfile?: WorkspaceUserProfile;
   defaultEnableMcp: boolean;
   defaultBackupsEnabled: boolean;
+  defaultAdvancedMemory?: boolean;
+  defaultMemoryGenerationModel?: string;
   yolo: boolean;
 };
 
@@ -479,6 +481,16 @@ export type MemoryListEntry = {
   updatedAt: string;
 };
 
+export type AdvancedMemoryEntry = {
+  slug: string;
+  name: string;
+  description: string;
+  type: string;
+  originSessionId?: string;
+  body: string;
+  updatedAt: string;
+};
+
 export type ImportRuntimeState = {
   items: ImportableItem[];
   homeExists: boolean;
@@ -538,6 +550,10 @@ export type WorkspaceRuntime = {
   importPendingKeys: Record<string, true>;
   memories: MemoryListEntry[];
   memoriesLoading: boolean;
+  advancedMemories: AdvancedMemoryEntry[];
+  advancedMemoryFolders: string[];
+  advancedMemoryActiveFolder: string | null;
+  advancedMemoriesLoading: boolean;
   workspaceBackupsPath: string | null;
   workspaceBackups: WorkspaceBackupsEvent["backups"];
   workspaceBackupsLoading: boolean;

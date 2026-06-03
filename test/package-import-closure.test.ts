@@ -27,6 +27,7 @@ const NODE_MODULES_RELATIVE_IMPORT_ALLOWLIST = new Set<string>([
 ]);
 
 const CODE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+const PACK_CLOSURE_TEST_TIMEOUT_MS = 20_000;
 
 function toPosix(p: string): string {
   return p.split(path.sep).join("/");
@@ -185,12 +186,16 @@ function packContext(): PackContext {
 }
 
 describe.skipIf(SKIP)("packaged import closure", () => {
-  test("npm pack reports a non-trivial set of TypeScript files", () => {
+  test("npm pack reports a non-trivial set of TypeScript files", {
+    timeout: PACK_CLOSURE_TEST_TIMEOUT_MS,
+  }, () => {
     const { scannable } = packContext();
     expect(scannable.length).toBeGreaterThan(50);
   });
 
-  test("every packed relative import resolves to a file that is also packed", () => {
+  test("every packed relative import resolves to a file that is also packed", {
+    timeout: PACK_CLOSURE_TEST_TIMEOUT_MS,
+  }, () => {
     const { scannable, packedSet } = packContext();
     const violations: string[] = [];
 
@@ -234,7 +239,9 @@ describe.skipIf(SKIP)("packaged import closure", () => {
     expect(violations).toEqual([]);
   });
 
-  test("relative node_modules imports are allowlisted and target declared, resolvable dependencies", () => {
+  test("relative node_modules imports are allowlisted and target declared, resolvable dependencies", {
+    timeout: PACK_CLOSURE_TEST_TIMEOUT_MS,
+  }, () => {
     const { scannable, declaredDeps } = packContext();
     const offenders: string[] = [];
     const reviewed: string[] = [];

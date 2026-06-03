@@ -33,6 +33,8 @@ import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
+  type CatalogVisibilityOptions,
+  configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
   modelChoicesFromCatalog,
@@ -106,11 +108,17 @@ export function resolveMemoryGenerationModelSelection(
 export function buildMemoryGenerationModelGroups(
   catalog: readonly ProviderCatalogEntry[],
   currentSelection: string,
+  visibility?: CatalogVisibilityOptions,
 ): MemoryGenerationModelGroup[] {
-  const choices = modelChoicesFromCatalog(catalog);
+  const choices = modelChoicesFromCatalog(catalog, visibility);
   const displayNames = modelDisplayNamesFromCatalog(catalog);
   const groups = sortProviderEntriesForSettings(
-    PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+    PROVIDER_NAMES.filter(
+      (provider) =>
+        !UI_DISABLED_PROVIDERS.has(provider) &&
+        (visibility?.includedProviders ? visibility.includedProviders.includes(provider) : true) &&
+        !visibility?.hiddenProviders?.includes(provider),
+    )
       .map((provider) => ({
         provider,
         label: displayProviderName(provider),
@@ -196,6 +204,9 @@ export function MemoryPage() {
   const setWorkspaceAdvancedMemory = useAppStore((s) => s.setWorkspaceAdvancedMemory);
   const setWorkspaceMemoryGenerationModel = useAppStore((s) => s.setWorkspaceMemoryGenerationModel);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
+  const providerConnected = useAppStore((s) => s.providerConnected);
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const providerUiState = useAppStore((s) => s.providerUiState);
 
   const { targets: memoryTargets, activeTarget } = useMemo(
     () => resolveMemoryTargets(workspaces, selectedWorkspaceId),
@@ -226,6 +237,25 @@ export function MemoryPage() {
   const memoryGenerationModelSelection =
     resolveMemoryGenerationModelSelection(memoryGenerationModel, fallbackMemoryModelProvider) ||
     MEMORY_MODEL_DEFAULT_VALUE;
+  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(
+    () => ({
+      hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+      hiddenModelsByProvider: {
+        lmstudio: providerUiState.lmstudio.hiddenModels,
+      },
+    }),
+    [providerUiState],
+  );
+  const configuredModelProviders = useMemo(
+    () =>
+      configuredProvidersForModelChoices({
+        catalog: providerCatalog,
+        connected: providerConnected,
+        providerStatusByName,
+        visibility: modelSelectorVisibility,
+      }),
+    [modelSelectorVisibility, providerCatalog, providerConnected, providerStatusByName],
+  );
   const generationModelGroups = useMemo(
     () =>
       buildMemoryGenerationModelGroups(
@@ -233,8 +263,17 @@ export function MemoryPage() {
         memoryGenerationModelSelection === MEMORY_MODEL_DEFAULT_VALUE
           ? ""
           : memoryGenerationModelSelection,
+        {
+          ...modelSelectorVisibility,
+          includedProviders: configuredModelProviders,
+        },
       ),
-    [providerCatalog, memoryGenerationModelSelection],
+    [
+      configuredModelProviders,
+      modelSelectorVisibility,
+      providerCatalog,
+      memoryGenerationModelSelection,
+    ],
   );
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);

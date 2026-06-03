@@ -204,6 +204,95 @@ describe("desktop memory page", () => {
     );
   });
 
+  test("memory model choices hide unconfigured provider catalogs", () => {
+    const groups = buildMemoryGenerationModelGroups(
+      [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3.5-flash",
+          models: [
+            {
+              id: "gemini-3.5-flash",
+              displayName: "Gemini 3.5 Flash",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+        {
+          id: "bedrock",
+          name: "Amazon Bedrock",
+          defaultModel: "amazon.nova-lite-v1:0",
+          models: [
+            {
+              id: "amazon.nova-lite-v1:0",
+              displayName: "Amazon Nova Lite",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
+        },
+      ],
+      "",
+      { includedProviders: ["google"] },
+    );
+
+    expect(groups.map((group) => group.provider)).toEqual(["google"]);
+    expect(JSON.stringify(groups)).not.toContain("Amazon Nova Lite");
+  });
+
+  test("memory model choices preserve the current unconfigured model as custom", () => {
+    const groups = buildMemoryGenerationModelGroups(
+      [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3.5-flash",
+          models: [
+            {
+              id: "gemini-3.5-flash",
+              displayName: "Gemini 3.5 Flash",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+        {
+          id: "bedrock",
+          name: "Amazon Bedrock",
+          defaultModel: "amazon.nova-lite-v1:0",
+          models: [
+            {
+              id: "amazon.nova-lite-v1:0",
+              displayName: "Amazon Nova Lite",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+            {
+              id: "amazon.nova-micro-v1:0",
+              displayName: "Amazon Nova Micro",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
+        },
+      ],
+      "bedrock:amazon.nova-lite-v1:0",
+      { includedProviders: ["google"] },
+    );
+
+    const bedrockGroup = groups.find((group) => group.provider === "bedrock");
+    expect(bedrockGroup?.options).toEqual([
+      {
+        value: "bedrock:amazon.nova-lite-v1:0",
+        label: "Amazon Nova Lite (custom)",
+        title: "amazon.nova-lite-v1:0",
+      },
+    ]);
+    expect(JSON.stringify(groups)).not.toContain("Amazon Nova Micro");
+  });
+
   test("memory targets collapse non-project chats while keeping projects individual", () => {
     const chatsRoot = "/tmp/cowork-home/.cowork/chats";
     const workspaces = [

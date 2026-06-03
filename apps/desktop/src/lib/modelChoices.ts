@@ -71,17 +71,22 @@ export function resolveModelDisplayLabel(
 }
 export type CatalogVisibilityOptions = {
   hiddenProviders?: readonly ProviderName[];
+  includedProviders?: readonly ProviderName[];
   hiddenModelsByProvider?: Partial<Record<ProviderName, readonly string[]>>;
 };
+
+function providerIncluded(provider: ProviderName, options?: CatalogVisibilityOptions): boolean {
+  if (options?.hiddenProviders?.includes(provider)) return false;
+  if (options?.includedProviders && !options.includedProviders.includes(provider)) return false;
+  return true;
+}
 
 function filterModelsForProvider(
   provider: ProviderName,
   models: readonly string[],
   options?: CatalogVisibilityOptions,
 ): readonly string[] {
-  if (options?.hiddenProviders?.includes(provider)) {
-    return [];
-  }
+  if (!providerIncluded(provider, options)) return [];
   const hiddenModels = new Set(
     (options?.hiddenModelsByProvider?.[provider] ?? [])
       .map((entry) => entry.trim())
@@ -97,7 +102,9 @@ export function modelChoicesFromCatalog(
 ): Record<ProviderName, readonly string[]> {
   if (catalog.length === 0) {
     return Object.fromEntries(
-      PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider)).map((provider) => [
+      PROVIDER_NAMES.filter(
+        (provider) => !UI_DISABLED_PROVIDERS.has(provider) && providerIncluded(provider, options),
+      ).map((provider) => [
         provider,
         filterModelsForProvider(provider, MODEL_CHOICES[provider] ?? [], options),
       ]),
@@ -106,12 +113,45 @@ export function modelChoicesFromCatalog(
   const result = {} as Record<ProviderName, readonly string[]>;
   for (const entry of catalog) {
     if (UI_DISABLED_PROVIDERS.has(entry.id)) continue;
+    if (!providerIncluded(entry.id, options)) continue;
     const models = Array.isArray(entry.models)
       ? entry.models.map((m) => m.id)
       : (MODEL_CHOICES[entry.id] ?? []);
     result[entry.id] = filterModelsForProvider(entry.id, models, options);
   }
   return result;
+}
+
+export function hasConfiguredProviderStatus(
+  status: { verified?: boolean; authorized?: boolean } | undefined,
+): boolean {
+  return Boolean(status?.verified || status?.authorized);
+}
+
+export function configuredProvidersForModelChoices({
+  catalog,
+  connected,
+  providerStatusByName,
+  visibility,
+}: {
+  catalog: readonly ProviderCatalogEntry[];
+  connected: readonly ProviderName[];
+  providerStatusByName?: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
+  visibility?: CatalogVisibilityOptions;
+}): ProviderName[] {
+  const connectedSet = new Set(
+    connected.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider)),
+  );
+  const catalogProviders = (
+    catalog.length === 0 ? PROVIDER_NAMES : catalog.map((entry) => entry.id)
+  ).filter(
+    (provider) => !UI_DISABLED_PROVIDERS.has(provider) && providerIncluded(provider, visibility),
+  );
+
+  return [...new Set(catalogProviders)].filter((provider) => {
+    if (connectedSet.has(provider)) return true;
+    return hasConfiguredProviderStatus(providerStatusByName?.[provider]);
+  });
 }
 
 export function availableProvidersFromCatalog(

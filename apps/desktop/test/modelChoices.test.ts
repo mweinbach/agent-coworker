@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   availableProvidersFromCatalog,
+  configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
   MODEL_CHOICES,
@@ -237,6 +238,75 @@ describe("modelOptionsForProvider", () => {
     );
 
     expect(choices.lmstudio).toEqual(["model-a"]);
+  });
+
+  test("filters catalog model choices to configured providers", () => {
+    const choices = modelChoicesFromCatalog(
+      [
+        {
+          id: "google",
+          name: "Google",
+          models: [
+            {
+              id: "gemini-3.5-flash",
+              displayName: "Gemini 3.5 Flash",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+          defaultModel: "gemini-3.5-flash",
+        },
+        {
+          id: "bedrock",
+          name: "Amazon Bedrock",
+          models: [
+            {
+              id: "amazon.nova-lite-v1:0",
+              displayName: "Amazon Nova Lite",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
+          defaultModel: "amazon.nova-lite-v1:0",
+        },
+      ],
+      { includedProviders: ["google"] },
+    );
+
+    expect(choices.google).toEqual(["gemini-3.5-flash"]);
+    expect(choices.bedrock).toBeUndefined();
+  });
+
+  test("derives configured model providers from connected/status signals, not catalog presence", () => {
+    const providers = configuredProvidersForModelChoices({
+      catalog: [
+        {
+          id: "google",
+          name: "Google",
+          models: [],
+          defaultModel: "gemini-3.5-flash",
+        },
+        {
+          id: "bedrock",
+          name: "Amazon Bedrock",
+          models: [
+            {
+              id: "amazon.nova-lite-v1:0",
+              displayName: "Amazon Nova Lite",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
+          defaultModel: "amazon.nova-lite-v1:0",
+        },
+      ],
+      connected: ["google"],
+      providerStatusByName: {
+        bedrock: { authorized: false, verified: false },
+      },
+    });
+
+    expect(providers).toEqual(["google"]);
   });
 
   test("preserves the current hidden LM Studio model in model options", () => {

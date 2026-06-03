@@ -393,9 +393,10 @@ export function createWorkspaceDefaultsActions(
         typeof controlSessionConfig?.advancedMemory === "boolean"
           ? controlSessionConfig.advancedMemory
           : workspace.defaultAdvancedMemory,
-      defaultMemoryGenerationModel: controlSessionConfig
-        ? controlSessionConfig.memoryGenerationModel?.trim() || undefined
-        : workspace.defaultMemoryGenerationModel,
+      defaultMemoryGenerationModel:
+        typeof controlSessionConfig?.memoryGenerationModel === "string"
+          ? controlSessionConfig.memoryGenerationModel.trim() || undefined
+          : workspace.defaultMemoryGenerationModel,
       providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
         workspace.providerOptions,
         normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions),

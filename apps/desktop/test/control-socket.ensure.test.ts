@@ -214,13 +214,8 @@ describe("control socket helpers over JSON-RPC", () => {
   test("stale profile catalog bootstrap reads do not overwrite fresher catalog state", async () => {
     const workspaceId = "ws-bootstrap-profile-catalog";
     const freshCatalog = agentProfilesCatalogEvent("Fresh Profile").catalog;
-    const { state, get, set } = createState(workspaceId, {
-      workspaceRuntimeById: {
-        [workspaceId]: {
-          agentProfilesCatalog: freshCatalog,
-        },
-      },
-    });
+    const { state, get, set } = createState(workspaceId);
+    state.workspaceRuntimeById[workspaceId].agentProfilesCatalog = freshCatalog;
     const staleRead = Promise.withResolvers<Record<string, unknown>>();
 
     jsonRpcHandlers.set(

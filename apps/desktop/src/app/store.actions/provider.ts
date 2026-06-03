@@ -599,7 +599,7 @@ export function createProviderActions(
       }
     },
 
-    updateCodexAppServer: async () => {
+    updateCodexAppServer: async (opts) => {
       const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
@@ -610,7 +610,13 @@ export function createProviderActions(
           set,
           workspaceId,
           "cowork/provider/codexAppServer/update",
-          { cwd: path },
+          {
+            cwd: path,
+            ...(opts?.version ? { version: opts.version } : {}),
+            ...(opts?.force !== undefined ? { force: opts.force } : {}),
+            ...(opts?.pin !== undefined ? { pin: opts.pin } : {}),
+            ...(opts?.clearPin !== undefined ? { clearPin: opts.clearPin } : {}),
+          },
         )) as { status?: unknown };
         const status = result.status;
         if (status && typeof status === "object") {

@@ -626,8 +626,8 @@ Changes in `7.33`:
 Changes in `7.32`:
 
 - Added JSON-RPC controls for the runtime-managed Codex app-server payload:
-  - `cowork/provider/codexAppServer/status` returns `{ status }` with source, version, latest version, and update availability.
-  - `cowork/provider/codexAppServer/update` downloads/promotes the latest Cowork-managed Codex app-server under `~/.cowork/codex-app-server`.
+  - `cowork/provider/codexAppServer/status` returns `{ status }` with source, version, latest version, optional pinned version, pin match state, and update availability.
+  - `cowork/provider/codexAppServer/update` downloads/promotes the latest or requested Cowork-managed Codex app-server under `~/.cowork/codex-app-server`; pass `{ version, pin: true }` to pin a version globally or `{ clearPin: true }` to clear the pin.
 - Desktop/runtime Codex app-server resolution now prefers explicit overrides, then an existing Cowork-managed install, downloads a managed latest release when missing, and falls back to a system `codex app-server` only if managed install fails and the system binary exposes the app-server subcommand.
 
 Changes in `7.31`:

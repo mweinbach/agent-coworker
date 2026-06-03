@@ -27,9 +27,13 @@ function fakeReleaseFetch(version = "0.129.0"): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/releases/")) {
+      const tagPrefix = "/releases/tags/rust-v";
+      const releaseVersion = url.includes(tagPrefix)
+        ? decodeURIComponent(url.slice(url.lastIndexOf(tagPrefix) + tagPrefix.length))
+        : version;
       return new Response(
         JSON.stringify({
-          tag_name: `rust-v${version}`,
+          tag_name: `rust-v${releaseVersion}`,
           assets: [
             {
               name: "codex-app-server-x86_64-pc-windows-msvc.exe",
@@ -52,6 +56,10 @@ async function createFakeCodexBin(prefix: string): Promise<string> {
   return binDir;
 }
 
+async function writePinnedVersion(homeDir: string, version: string): Promise<void> {
+  await __internal.writeCodexAppServerVersionPin(version, { homeDir });
+}
+
 describe("codex app-server resolver", () => {
   test.serial(
     "uses explicit command overrides without adding implicit app-server args",
@@ -70,6 +78,120 @@ describe("codex app-server resolver", () => {
       });
     },
   );
+
+  test.serial("downloads a pinned managed app-server before latest", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-pinned-download-"));
+    await writePinnedVersion(homeDir, "0.128.0");
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      fetchImpl: fakeReleaseFetch("0.129.0"),
+      spawnForResult: async () => {
+        throw new Error("system codex should not be probed when pinned install succeeds");
+      },
+    });
+
+    expect(command.source).toBe("managed");
+    expect(command.version).toBe("0.128.0");
+    expect(command.command).toContain(path.join("versions", "0.128.0"));
+    expect(await __internal.readCodexAppServerVersionPin({ homeDir })).toBe("0.128.0");
+  });
+
+  test.serial("prefers a pinned managed app-server over a newer managed version", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-pinned-newer-"));
+    await updateManagedCodexAppServer(
+      { version: "0.129.0" },
+      {
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: fakeReleaseFetch("0.129.0"),
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+      },
+    );
+    await updateManagedCodexAppServer(
+      { version: "0.128.0" },
+      {
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: fakeReleaseFetch("0.129.0"),
+        spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+      },
+    );
+    await writePinnedVersion(homeDir, "0.128.0");
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+    });
+
+    expect(command.source).toBe("managed");
+    expect(command.version).toBe("0.128.0");
+    expect(command.command).toContain(path.join("versions", "0.128.0"));
+  });
+
+  test.serial("clearing a pin restores newest managed app-server selection", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-clear-pin-"));
+    for (const version of ["0.129.0", "0.128.0"]) {
+      await updateManagedCodexAppServer(
+        { version },
+        {
+          homeDir,
+          platform: "win32",
+          arch: "x64",
+          fetchImpl: fakeReleaseFetch("0.129.0"),
+          spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+        },
+      );
+    }
+    await writePinnedVersion(homeDir, "0.128.0");
+    expect(
+      (
+        await resolveCodexAppServerCommand({
+          homeDir,
+          platform: "win32",
+          arch: "x64",
+          spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+        })
+      ).version,
+    ).toBe("0.128.0");
+
+    await __internal.writeCodexAppServerVersionPin(undefined, { homeDir });
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+    });
+
+    expect(command.version).toBe("0.129.0");
+    expect(command.command).toContain(path.join("versions", "0.129.0"));
+  });
+
+  test.serial("explicit command overrides still win over a pinned version", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-pinned-override-"));
+    await writePinnedVersion(homeDir, "0.128.0");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      fetchImpl: async () => {
+        throw new Error("managed pin should not be fetched when override exists");
+      },
+      spawnForResult: async () => ({ ok: false, stdout: "", stderr: "" }),
+    });
+
+    expect(command).toEqual({
+      command: "/tmp/custom-codex-app-server",
+      args: [],
+      source: "override",
+    });
+  });
 
   test.serial("downloads a managed app-server before using system codex", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-system-"));
@@ -413,6 +535,35 @@ describe("codex app-server resolver", () => {
       updateAvailable: true,
     });
   });
+
+  test.serial(
+    "reports a missing pinned managed app-server without probing system codex",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-status-pin-"));
+      await writePinnedVersion(homeDir, "0.128.0");
+
+      const status = await getCodexAppServerInstallStatus(
+        { checkLatest: true },
+        {
+          homeDir,
+          pathEnv: await createFakeCodexBin("cowork-codex-status-pin-bin-"),
+          fetchImpl: fakeReleaseFetch("0.129.0"),
+          spawnForResult: async () => {
+            throw new Error("system codex should not be probed while a missing pin is active");
+          },
+        },
+      );
+
+      expect(status).toMatchObject({
+        available: false,
+        source: "missing",
+        pinnedVersion: "0.128.0",
+        latestVersion: "0.129.0",
+        pinMatchesCurrent: false,
+      });
+      expect("updateAvailable" in status).toBe(false);
+    },
+  );
 
   test.serial("parses Codex CLI version strings", () => {
     expect(__internal.parseCodexVersion("codex-cli 0.128.0")).toBe("0.128.0");

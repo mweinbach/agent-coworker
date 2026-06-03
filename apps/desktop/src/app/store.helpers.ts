@@ -536,7 +536,12 @@ export type AppStoreState = {
     workspaceId?: string;
   }) => Promise<void>;
   checkCodexAppServerStatus: (opts?: { checkLatest?: boolean }) => Promise<void>;
-  updateCodexAppServer: () => Promise<void>;
+  updateCodexAppServer: (opts?: {
+    version?: string;
+    force?: boolean;
+    pin?: boolean;
+    clearPin?: boolean;
+  }) => Promise<void>;
   checkLibreOfficeRuntime: (opts?: {
     smoke?: boolean;
   }) => Promise<import("../lib/wsProtocol").LibreOfficeRuntimeDiagnostic | null>;

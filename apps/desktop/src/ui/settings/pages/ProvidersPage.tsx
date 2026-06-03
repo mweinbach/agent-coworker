@@ -1,5 +1,12 @@
 import { motion } from "framer-motion";
-import { ChevronDownIcon, ChevronRightIcon, DownloadIcon, RefreshCcwIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  DownloadIcon,
+  PinIcon,
+  PinOffIcon,
+  RefreshCcwIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -132,6 +139,7 @@ export function ProvidersPage({
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(
     initialExpandedSectionId,
   );
+  const [codexPinnedVersionDraft, setCodexPinnedVersionDraft] = useState("");
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
 
@@ -201,6 +209,10 @@ export function ProvidersPage({
     if (!canConnectProvider) return;
     void checkCodexAppServerStatus({ checkLatest: false });
   }, [canConnectProvider, checkCodexAppServerStatus]);
+
+  useEffect(() => {
+    setCodexPinnedVersionDraft(codexAppServerStatus?.pinnedVersion ?? "");
+  }, [codexAppServerStatus?.pinnedVersion]);
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {
@@ -986,11 +998,65 @@ export function ProvidersPage({
                         </div>
                       </>
                     ) : null}
+                    {codexAppServerStatus?.pinnedVersion ? (
+                      <>
+                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Pinned
+                        </div>
+                        <div className="text-sm text-foreground/95">
+                          {codexAppServerStatus.pinnedVersion}
+                        </div>
+                      </>
+                    ) : null}
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">
                       Status
                     </div>
                     <div className="text-sm text-foreground/95">
                       {codexAppServerStatus?.message ?? "Checking Codex app-server."}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <Input
+                      aria-label="Pinned Codex app-server version"
+                      className="h-8 min-w-0 sm:max-w-[11rem]"
+                      placeholder={codexAppServerStatus?.latestVersion ?? "0.129.0"}
+                      value={codexPinnedVersionDraft}
+                      onChange={(event) => setCodexPinnedVersionDraft(event.target.value)}
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        disabled={
+                          codexAppServerUpdating ||
+                          codexAppServerChecking ||
+                          codexPinnedVersionDraft.trim().length === 0
+                        }
+                        onClick={() =>
+                          void updateCodexAppServer({
+                            version: codexPinnedVersionDraft.trim(),
+                            pin: true,
+                          })
+                        }
+                      >
+                        <PinIcon data-icon="inline-start" />
+                        Pin
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        type="button"
+                        disabled={
+                          codexAppServerUpdating ||
+                          codexAppServerChecking ||
+                          !codexAppServerStatus?.pinnedVersion
+                        }
+                        onClick={() => void updateCodexAppServer({ clearPin: true })}
+                      >
+                        <PinOffIcon data-icon="inline-start" />
+                        Clear
+                      </Button>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">

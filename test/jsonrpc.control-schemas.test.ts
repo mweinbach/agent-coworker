@@ -62,6 +62,49 @@ describe("shared JSON-RPC control schemas", () => {
     expect(statusResult.event.providers[0]?.usage?.rateLimits[0]?.limitName).toBe("requests");
   });
 
+  test("parses Codex app-server pin controls", () => {
+    const request = {
+      cwd: "/tmp/project",
+      version: "0.129.0",
+      pin: true,
+      force: true,
+    };
+    const result = {
+      status: {
+        available: true,
+        source: "managed",
+        version: "0.129.0",
+        latestVersion: "0.130.0",
+        pinnedVersion: "0.129.0",
+        pinMatchesCurrent: true,
+        updateAvailable: true,
+        managedPath: "/tmp/codex-app-server",
+        message: "Installed Cowork-managed Codex app-server 0.129.0 and pinned it.",
+      },
+    };
+
+    const parsed =
+      jsonRpcControlRequestSchemas["cowork/provider/codexAppServer/update"].parse(request);
+    const mobileParsed =
+      mobileJsonRpcControlRequestSchemas["cowork/provider/codexAppServer/update"].parse(request);
+    const parsedResult =
+      jsonRpcControlResultSchemas["cowork/provider/codexAppServer/update"].parse(result);
+    const mobileResult =
+      mobileJsonRpcControlResultSchemas["cowork/provider/codexAppServer/update"].parse(result);
+
+    expect(parsed.pin).toBe(true);
+    expect(mobileParsed.pin).toBe(parsed.pin);
+    expect(parsedResult.status.pinnedVersion).toBe("0.129.0");
+    expect(mobileResult.status.pinMatchesCurrent).toBe(true);
+
+    const clearRequest = jsonRpcControlRequestSchemas[
+      "cowork/provider/codexAppServer/update"
+    ].parse({
+      clearPin: true,
+    });
+    expect(clearRequest.clearPin).toBe(true);
+  });
+
   test("parses MCP server envelopes", () => {
     const parsed = jsonRpcControlResultSchemas["cowork/mcp/servers/read"].parse({
       event: {

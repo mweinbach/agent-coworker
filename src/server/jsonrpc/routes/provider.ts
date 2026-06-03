@@ -85,6 +85,8 @@ export function createProviderRouteHandlers(
       const status = await updateManagedCodexAppServer({
         ...(version ? { version } : {}),
         force: params.force === true,
+        pin: params.pin === true,
+        clearPin: params.clearPin === true,
       });
       context.jsonrpc.sendResult(ws, message.id, { status });
     },

@@ -567,9 +567,11 @@ describe("desktop providers page", () => {
         source: "managed",
         version: "0.128.0",
         latestVersion: "0.129.0",
+        pinnedVersion: "0.128.0",
+        pinMatchesCurrent: true,
         updateAvailable: true,
         managedPath: "/Users/max/.cowork/codex-app-server/current/darwin-arm64/codex-app-server",
-        message: "Using Cowork-managed Codex app-server.",
+        message: "Using pinned Cowork-managed Codex app-server 0.128.0.",
       },
     });
 
@@ -704,7 +706,8 @@ describe("desktop providers page", () => {
     expect(html).toContain("Cowork managed");
     expect(html).toContain("0.128.0");
     expect(html).toContain("0.129.0");
-    expect(html).toContain("Using Cowork-managed Codex app-server.");
+    expect(html).toContain("Pinned");
+    expect(html).toContain("Using pinned Cowork-managed Codex app-server 0.128.0.");
     expect(html).not.toContain("Allowed");
     expect(html).not.toContain("Limit reached");
     expect(html).not.toContain("Rate limited");

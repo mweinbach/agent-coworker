@@ -1105,8 +1105,19 @@ export class AgentSession {
   async generateAdvancedMemoryForHistory(folder?: string) {
     const resolvedFolder = this.resolveAdvancedMemoryFolder(folder);
     const messages = [...this.state.allMessages];
+    const shouldCheckpointAutomaticGeneration =
+      resolvedFolder === resolveMemoryFolderName(this.state.config);
     this.memoryGenerationQueue = this.memoryGenerationQueue
-      .then(() => this.runMemoryBackfill(resolvedFolder, messages))
+      .then(async () => {
+        const backfilled = await this.runMemoryBackfill(resolvedFolder, messages);
+        if (backfilled && shouldCheckpointAutomaticGeneration) {
+          const nextIndex = Math.max(this.state.lastMemoryGeneratedIndex, messages.length);
+          if (nextIndex !== this.state.lastMemoryGeneratedIndex) {
+            this.state.lastMemoryGeneratedIndex = nextIndex;
+            this.queuePersistSessionSnapshot("session.advanced_memory_backfill_checkpoint");
+          }
+        }
+      })
       .catch((err) => {
         // Manual generation failures are emitted as session errors and must not
         // poison the per-session generation queue.
@@ -1142,10 +1153,12 @@ export class AgentSession {
     const end = Math.min(targetMessageIndex, this.state.allMessages.length);
     if (end <= start) return;
     const deltaMessages = this.state.allMessages.slice(start, end);
+    const folder = resolveMemoryFolderName(this.state.config);
     const result = await this.memoryGenerator.run({
       config: this.state.config,
       sessionId: this.id,
       deltaMessages,
+      folder,
       log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
       abortSignal: undefined,
     });
@@ -1157,12 +1170,13 @@ export class AgentSession {
       this.queuePersistSessionSnapshot("session.advanced_memory_checkpoint");
       if (result.ran) {
         this.state.memoryGenerationsSinceConsolidation += 1;
-        const consolidation = await this.maybeRunMemoryConsolidation();
+        const consolidation = await this.maybeRunMemoryConsolidation(folder);
         await this.refreshSystemPromptWithSkills(
           consolidation.ran
             ? "session.advanced_memory_consolidated"
             : "session.advanced_memory_generated",
         );
+        await this.emitAdvancedMemories(folder);
       }
     }
   }
@@ -1195,16 +1209,16 @@ export class AgentSession {
     });
   }
 
-  private async runMemoryBackfill(folder: string, messages: ModelMessage[]): Promise<void> {
+  private async runMemoryBackfill(folder: string, messages: ModelMessage[]): Promise<boolean> {
     if (!this.state.config.advancedMemory) {
       await this.emitAdvancedMemories(folder);
-      return;
+      return false;
     }
 
     const chunks = splitMessagesForMemoryBackfill(messages);
     if (chunks.length === 0) {
       await this.emitAdvancedMemories(folder);
-      return;
+      return true;
     }
 
     let ranAny = false;
@@ -1223,7 +1237,7 @@ export class AgentSession {
           "session",
           "Failed to generate advanced memories from this conversation.",
         );
-        return;
+        return false;
       }
       ranAny = ranAny || result.ran;
     }
@@ -1237,6 +1251,7 @@ export class AgentSession {
       );
     }
     await this.emitAdvancedMemories(folder);
+    return true;
   }
 
   private async ensureSystemPromptReady(): Promise<boolean> {

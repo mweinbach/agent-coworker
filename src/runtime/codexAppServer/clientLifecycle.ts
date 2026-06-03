@@ -4,6 +4,7 @@ import { prepareManagedSofficeToolEnv } from "../../managedSofficeRuntime";
 import {
   type CodexAppServerJsonRpcRawMessage,
   getPooledCodexAppServerClient,
+  UNHANDLED_CODEX_APP_SERVER_REQUEST,
 } from "../../providers/codexAppServerClient";
 import { asRecord } from "../../shared/recordParsing";
 import { resolveAuthHomeDir } from "../../utils/authHome";
@@ -53,9 +54,12 @@ export async function startCodexAppServer(
     log: params.log,
     invalidJsonLogPrefix: "[codex-app-server] ignored invalid JSONL",
   });
-  const disposeServerRequest = client.onServerRequest(
-    async (request) => await handleServerRequest(request, params),
-  );
+  const disposeServerRequest = client.onServerRequest(async (request) => {
+    if (!targetsActiveCodexTurn(asRecord(request.params), target)) {
+      return UNHANDLED_CODEX_APP_SERVER_REQUEST;
+    }
+    return await handleServerRequest(request, params);
+  });
   const disposeJsonRpcMessage = client.onJsonRpcMessage(recordJsonRpcMessage);
 
   return {

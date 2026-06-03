@@ -4,6 +4,60 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.13 - 2026-06-03
+
+### Added
+
+- **Advanced agent memory** — Added the core advanced memory system with
+  agent-driven generation, recall, read-past-conversation support,
+  periodic consolidation, manual backfill controls, WebSocket protocol
+  coverage, and dedicated desktop controls for enabling advanced memory,
+  choosing a memory generation model, and reviewing/editing saved memories.
+- **Subagent profiles** — Added built-in and specialized subagent profiles
+  with desktop settings for profile defaults, prompt edits, workspace/global
+  scope, disabled/copied profiles, skill refreshes, and JSON-RPC-backed
+  profile management.
+- **Project sidebar chat affordance** — Added a sidebar new-chat action for
+  project workspaces so new chats open with the clicked project preselected.
+
+### Changed
+
+- **Global memory defaults** — Moved advanced memory mode and memory
+  generation model defaults into shared profile/global settings while keeping
+  workspace and live-session application paths synchronized.
+- **Codex app-server runtime selection** — Pinned managed Codex app-server
+  runtime versions and tightened resolver/client behavior for steering,
+  model lookup, and active-turn request routing.
+- **Cross-platform harness commands** — Centralized platform-aware command
+  snippets for raw harness loops so shell guidance is less POSIX-specific.
+
+### Fixed
+
+- **Memory setting boundaries** — Hardened advanced memory scope isolation,
+  default inheritance, live config sync, checkpointing, model preservation,
+  connected-provider filtering, memory editor dialog sizing, and rollback
+  behavior when desktop saves fail.
+- **Subagent settings reliability** — Fixed stale catalog refreshes, hidden
+  profile defaults, workspace targeting, model catalog scoping, profile edit
+  save failures, and settings target grouping for one-off chat workspaces.
+- **Built-in tool contracts** — Refined tool prompt guidance and coverage for
+  provider-backed web search, read/write/edit/glob/grep/bash tool behavior,
+  package import closure, and readonly command policy handling.
+
+## 1.1.12 - 2026-06-01
+
+### Changed
+
+- **macOS release packaging** — Reduced notarization upload size and stapled
+  the notarization ticket after approval so packaged macOS releases ship with a
+  complete notarized app bundle.
+
+### Fixed
+
+- **Telemetry trace status** — Aligned Privacy & Telemetry trace status with
+  the effective settings state and added coverage for packaged telemetry
+  configuration.
+
 ## 1.1.11 - 2026-06-01
 
 ### Fixed

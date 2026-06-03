@@ -229,7 +229,9 @@ describe("control socket helpers over JSON-RPC", () => {
     );
 
     const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    const socket = helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    expect(socket).toBeInstanceOf(MockJsonRpcSocket);
+    (socket as MockJsonRpcSocket).connect();
     await flushAsyncWork();
 
     expect(

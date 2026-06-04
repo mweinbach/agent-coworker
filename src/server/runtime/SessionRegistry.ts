@@ -100,7 +100,9 @@ export function shouldMirrorHarnessLogsToTerminal(
   return value === "1" || value === "true";
 }
 
-export function formatHarnessTerminalLogLine(event: Extract<SessionEvent, { type: "log" }>): string {
+export function formatHarnessTerminalLogLine(
+  event: Extract<SessionEvent, { type: "log" }>,
+): string {
   return `[cowork-harness:${event.sessionId}] ${event.line}`;
 }
 

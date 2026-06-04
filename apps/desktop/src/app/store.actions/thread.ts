@@ -138,6 +138,19 @@ export async function hydrateThreadSelection(
           : candidate,
       );
       const currentRuntime = state.threadRuntimeById[selectedThreadId];
+      const currentThread = state.threads.find((candidate) => candidate.id === selectedThreadId);
+      const snapshotWorkspace = currentThread
+        ? state.workspaces.find((workspace) => workspace.id === currentThread.workspaceId)
+        : null;
+      const snapshotConfig =
+        currentRuntime?.config ??
+        (snapshotWorkspace
+          ? {
+              provider: snapshot.provider,
+              model: snapshot.model,
+              workingDirectory: snapshotWorkspace.path,
+            }
+          : null);
       return {
         threads: nextThreads,
         threadRuntimeById: {
@@ -169,7 +182,7 @@ export async function hydrateThreadSelection(
             hydrating: false,
             transcriptOnly: false,
             connected: currentRuntime?.connected ?? false,
-            config: currentRuntime?.config ?? null,
+            config: snapshotConfig,
             sessionConfig: currentRuntime?.sessionConfig ?? null,
             enableMcp: currentRuntime?.enableMcp ?? null,
             busy: currentRuntime?.busy ?? false,

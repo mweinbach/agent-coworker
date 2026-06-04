@@ -132,6 +132,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
+const { hydrateThreadSelection } = await import("../src/app/store.actions/thread");
 const { RUNTIME, defaultThreadRuntime } = await import("../src/app/store.helpers");
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -473,6 +474,49 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(
       useAppStore.getState().threads.find((thread) => thread.id === activeThreadId)?.status,
     ).toBe("active");
+  });
+
+  test("cached session snapshots hydrate the thread model before reconnect", async () => {
+    const { threadId } = seedStore();
+    const snapshot = {
+      ...threadSnapshot("session-1"),
+      titleModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      requestedModel: "gpt-5.5",
+      effectiveModel: "gpt-5.5",
+    };
+    useAppStore.setState((state) => ({
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === state.threads[0]?.workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "google",
+              defaultModel: "gemini-3.5-flash",
+            }
+          : workspace,
+      ),
+    }));
+    RUNTIME.sessionSnapshots.set("session-1", {
+      fingerprint: {
+        updatedAt: snapshot.updatedAt,
+        messageCount: snapshot.messageCount,
+        lastEventSeq: snapshot.lastEventSeq,
+      },
+      snapshot,
+    });
+    jsonRpcHandlers.set("thread/read", async () => ({ coworkSnapshot: snapshot }));
+
+    await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId, {
+      preserveView: true,
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.config).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      workingDirectory: "/tmp/workspace",
+    });
   });
 
   test("reconnectThread dedupes an in-flight connect after draft thread identity migration", async () => {

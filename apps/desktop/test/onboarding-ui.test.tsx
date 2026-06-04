@@ -93,6 +93,7 @@ function setupOnboardingJsdom() {
 }
 
 const { useAppStore } = await import("../src/app/store");
+const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers");
 const { DesktopOnboarding } = await import("../src/ui/onboarding/DesktopOnboarding");
 const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage");
 
@@ -461,6 +462,59 @@ describe("DeveloperPage rerun onboarding button", () => {
       });
 
       expect(startOnboarding).toHaveBeenCalled();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("workspace step shows ready when a stale starting flag has a server URL", async () => {
+    const harness = setupOnboardingJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: true,
+          onboardingStep: "workspace",
+          workspaces: [
+            {
+              id: "ws-ready",
+              name: "Ready Workspace",
+              path: "/tmp/ready",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultPreferredChildModel: "gpt-5.2",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-ready",
+          workspaceRuntimeById: {
+            "ws-ready": {
+              ...defaultWorkspaceRuntime(),
+              serverUrl: "ws://127.0.0.1:7337/ws",
+              starting: true,
+              error: null,
+            },
+          },
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DesktopOnboarding));
+      });
+
+      expect(container.textContent).toContain("Ready");
+      expect(container.textContent).not.toContain("Starting...");
 
       await act(async () => {
         root.unmount();

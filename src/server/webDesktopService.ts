@@ -443,9 +443,37 @@ async function assertWorkspaceDirectory(workspacePath: string): Promise<string> 
 function waitForServerListening(
   child: ChildProcessByStdio<null, Readable, Readable>,
 ): Promise<{ url: string }> {
-  const monitor = createWorkspaceServerMonitor(child);
+  const monitor = createWorkspaceServerMonitor(
+    child,
+    shouldMirrorWorkspaceServerOutputToTerminal()
+      ? (source, line) => writeWorkspaceServerOutputToTerminal(source, line)
+      : undefined,
+  );
   void monitor.drained.catch(() => {});
   return monitor.ready;
+}
+
+function shouldMirrorWorkspaceServerOutputToTerminal(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const value = env.COWORK_HARNESS_TERMINAL_LOGS?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+function writeWorkspaceServerOutputToTerminal(
+  source: WorkspaceServerOutputSource,
+  line: string,
+): void {
+  const output = `[cowork-workspace-server:${source}] ${line}\n`;
+  try {
+    if (source === "stderr") {
+      process.stderr.write(output);
+    } else {
+      process.stdout.write(output);
+    }
+  } catch {
+    // Terminal debug logging must never affect workspace server startup.
+  }
 }
 
 function createWorkspaceServerMonitor(
@@ -1035,5 +1063,6 @@ export class WebDesktopService implements WebDesktopServiceLike {
 export const __internal = {
   SourceWorkspaceServerManager,
   createWorkspaceServerMonitor,
+  shouldMirrorWorkspaceServerOutputToTerminal,
   waitForServerListening,
 };

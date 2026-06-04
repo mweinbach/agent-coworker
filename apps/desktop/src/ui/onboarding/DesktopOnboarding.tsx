@@ -236,10 +236,10 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
               <div className="shrink-0">
                 {serverError ? (
                   <Badge variant="destructive">Error</Badge>
-                ) : starting ? (
-                  <Badge variant="secondary">{timedOut ? "Slow start..." : "Starting..."}</Badge>
                 ) : serverReady ? (
                   <Badge>Ready</Badge>
+                ) : starting ? (
+                  <Badge variant="secondary">{timedOut ? "Slow start..." : "Starting..."}</Badge>
                 ) : (
                   <Badge variant="secondary">Connecting...</Badge>
                 )}

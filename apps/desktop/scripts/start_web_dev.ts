@@ -53,10 +53,12 @@ export function createServerStdoutMonitor(
               ? parsed.browserAccessToken.trim()
               : null,
         });
+        return;
       }
     } catch {
-      onNonJsonLine(line);
+      // Non-JSON lines are human-readable server logs. Keep them visible.
     }
+    onNonJsonLine(line);
   };
 
   const drained = (async () => {
@@ -120,6 +122,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       ...process.env,
       FORCE_COLOR: "1",
       COWORK_WEB_DESKTOP_SERVICE: "1",
+      COWORK_HARNESS_TERMINAL_LOGS: process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
     },
   });
 

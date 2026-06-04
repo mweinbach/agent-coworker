@@ -50,6 +50,7 @@
     "build:server-binary": "bun scripts/build_cowork_server_binary.ts",
     "desktop:dev": "cd apps/desktop && bun run dev",
     "desktop:web": "bun apps/desktop/scripts/start_web_dev.ts",
+    "web:dev": "bun apps/desktop/scripts/start_web_dev.ts",
     "desktop:build": "cd apps/desktop && bun run build",
     "app:mobile:dev": "cd apps/mobile && npx expo start --dev-client",
     "app:mobile:ios": "cd apps/mobile && npx expo run:ios",

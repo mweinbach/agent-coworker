@@ -509,4 +509,18 @@ describe("web desktop routes", () => {
     child.emit("exit", 0, null);
     await expect(monitor.drained).resolves.toBeUndefined();
   });
+
+  test("workspace server terminal mirroring follows the harness log env flag", () => {
+    expect(__internal.shouldMirrorWorkspaceServerOutputToTerminal({})).toBe(false);
+    expect(
+      __internal.shouldMirrorWorkspaceServerOutputToTerminal({
+        COWORK_HARNESS_TERMINAL_LOGS: "1",
+      }),
+    ).toBe(true);
+    expect(
+      __internal.shouldMirrorWorkspaceServerOutputToTerminal({
+        COWORK_HARNESS_TERMINAL_LOGS: "true",
+      }),
+    ).toBe(true);
+  });
 });

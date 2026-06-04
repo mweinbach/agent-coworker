@@ -201,11 +201,83 @@ describe("desktop server manager startup parsing", () => {
     }
   });
 
+  test("waitForServerListening keeps forwarding non-JSON stdout after readiness", async () => {
+    const child = createFakeChild();
+    const stdoutLines: string[] = [];
+    const waitPromise = __internal.waitForServerListening(child as any, {
+      onStdoutLine: (line: string) => {
+        stdoutLines.push(line);
+      },
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "/tmp/workspace",
+      })}\n`,
+    );
+
+    await expect(waitPromise).resolves.toMatchObject({
+      url: "ws://127.0.0.1:1234/ws",
+    });
+
+    child.stdout.write("server log after ready\n");
+    child.stdout.write(`${JSON.stringify({ type: "status", phase: "logged" })}\n`);
+    await Bun.sleep(0);
+
+    expect(stdoutLines).toEqual([
+      "server log after ready",
+      JSON.stringify({ type: "status", phase: "logged" }),
+    ]);
+    child.emit("exit", 0, null);
+  });
+
   test("withStderrTail appends compact server stderr diagnostics", () => {
     expect(__internal.withStderrTail("startup failed", " first line\n\nsecond\tline ")).toBe(
       "startup failed; stderr=first line second line",
     );
     expect(__internal.withStderrTail("startup failed", " \n ")).toBe("startup failed");
+  });
+
+  test("server output mirror prefixes complete lines and flushes partial chunks", () => {
+    const stdoutWrites: string[] = [];
+    const stderrWrites: string[] = [];
+    const mirror = __internal.createServerOutputMirror({
+      stdoutWrite: (chunk: string) => {
+        stdoutWrites.push(chunk);
+      },
+      stderrWrite: (chunk: string) => {
+        stderrWrites.push(chunk);
+      },
+    });
+
+    mirror.writeLine("stdout", "ready log");
+    mirror.writeChunk("stderr", "first");
+    mirror.writeChunk("stderr", " line\nsecond line\npartial");
+    mirror.flush();
+
+    expect(stdoutWrites).toEqual(["[cowork-server:stdout] ready log\n"]);
+    expect(stderrWrites).toEqual([
+      "[cowork-server:stderr] first line\n",
+      "[cowork-server:stderr] second line\n",
+      "[cowork-server:stderr] partial\n",
+    ]);
+  });
+
+  test("server output mirroring is enabled for dev and explicit packaged debugging", () => {
+    expect(__internal.shouldMirrorServerOutput({}, false)).toBe(true);
+    expect(__internal.shouldMirrorServerOutput({}, true)).toBe(false);
+    expect(
+      __internal.shouldMirrorServerOutput({ COWORK_DESKTOP_DEBUG_SERVER_STDERR: "1" }, true),
+    ).toBe(true);
+    expect(
+      __internal.shouldMirrorServerOutput({ COWORK_DESKTOP_MIRROR_SERVER_LOGS: "1" }, true),
+    ).toBe(true);
+    expect(
+      __internal.shouldMirrorServerOutput({ COWORK_DESKTOP_MIRROR_SERVER_LOGS: "0" }, false),
+    ).toBe(false);
   });
 });
 
@@ -250,6 +322,9 @@ describe("desktop server manager startup mode", () => {
     expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);
     expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
       process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    );
+    expect(env.COWORK_HARNESS_TERMINAL_LOGS).toBe(
+      process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
     );
     expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
     expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");

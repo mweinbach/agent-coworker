@@ -93,6 +93,17 @@ function shouldInvalidateThreadList(evt: SessionEvent): boolean {
   }
 }
 
+export function shouldMirrorHarnessLogsToTerminal(
+  env: Record<string, string | undefined>,
+): boolean {
+  const value = env.COWORK_HARNESS_TERMINAL_LOGS?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+export function formatHarnessTerminalLogLine(event: Extract<SessionEvent, { type: "log" }>): string {
+  return `[cowork-harness:${event.sessionId}] ${event.line}`;
+}
+
 export class SessionRegistry {
   readonly sessionBindings = new Map<string, SessionBinding>();
   readonly sessionIdleSince = new Map<string, number>();
@@ -308,6 +319,13 @@ export class SessionRegistry {
     const emit = (evt: SessionEvent) => {
       if (sessionKind === "root" && shouldInvalidateThreadList(evt)) {
         this.options.onThreadListChanged?.();
+      }
+      if (evt.type === "log" && shouldMirrorHarnessLogsToTerminal(this.options.env)) {
+        try {
+          process.stderr.write(`${formatHarnessTerminalLogLine(evt)}\n`);
+        } catch {
+          // Terminal debug logging must never affect session delivery.
+        }
       }
       for (const sink of binding.sinks.values()) {
         try {

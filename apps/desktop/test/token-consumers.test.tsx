@@ -178,4 +178,18 @@ describe("desktop token consumers", () => {
       /\[data-slot="tooltip-content"\]\s*\{\s*z-index:\s*var\(--desktop-portal-layer\);/s,
     );
   });
+
+  test("selector popovers use an opaque surface over translucent platform chrome", () => {
+    const selectSource = readFileSync(
+      resolve(import.meta.dir, "../src/components/ui/select.tsx"),
+      "utf8",
+    );
+    const popoverSource = readFileSync(
+      resolve(import.meta.dir, "../src/components/ui/popover.tsx"),
+      "utf8",
+    );
+
+    expect(selectSource).toMatch(/data-slot="select-content"[\s\S]*app-surface-opaque/);
+    expect(popoverSource).toMatch(/data-slot="popover-content"[\s\S]*app-surface-opaque/);
+  });
 });

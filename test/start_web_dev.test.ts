@@ -26,6 +26,7 @@ describe("createServerStdoutMonitor", () => {
         '{"type":"server_',
         'listening","url":"ws://127.0.0.1:7337/ws"}\n',
         "server log after ready\n",
+        `${JSON.stringify({ type: "status", phase: "logged" })}\n`,
       ]),
       (line) => echoed.push(line),
     );
@@ -35,7 +36,10 @@ describe("createServerStdoutMonitor", () => {
       browserAccessToken: null,
     });
     await expect(monitor.drained).resolves.toBeUndefined();
-    expect(echoed).toEqual(["server log after ready"]);
+    expect(echoed).toEqual([
+      "server log after ready",
+      JSON.stringify({ type: "status", phase: "logged" }),
+    ]);
   });
 
   test("captures the browser access token from server readiness", async () => {

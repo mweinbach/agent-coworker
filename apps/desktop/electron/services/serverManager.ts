@@ -43,7 +43,7 @@ const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
 const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
-const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
+const MIRROR_SERVER_OUTPUT_PREFIX = "[cowork-server";
 
 const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
 const CRASH_REPORTING_ENV_PREFIXES = ["COWORK_SENTRY_", "SENTRY_"] as const;
@@ -71,6 +71,19 @@ type PendingServerHandle = {
 };
 
 type ServerChildProcess = ChildProcessByStdio<null, Readable, Readable>;
+
+type ServerOutputSource = "stdout" | "stderr";
+
+type ServerOutputMirror = {
+  flush: () => void;
+  writeChunk: (source: ServerOutputSource, chunk: string) => void;
+  writeLine: (source: ServerOutputSource, line: string) => void;
+};
+
+type WaitForServerListeningOptions = {
+  timeoutMs?: number;
+  onStdoutLine?: (line: string) => void;
+};
 
 type ServerListening = {
   type: "server_listening";
@@ -371,13 +384,99 @@ function getServerStartupTimeoutMs(env: Record<string, string | undefined> = pro
   );
 }
 
+function shouldMirrorServerOutput(
+  env: Record<string, string | undefined> = process.env,
+  isPackaged = app.isPackaged,
+): boolean {
+  const override = env.COWORK_DESKTOP_MIRROR_SERVER_LOGS?.trim();
+  if (override === "1") {
+    return true;
+  }
+  if (override === "0") {
+    return false;
+  }
+  return !isPackaged || env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
+}
+
+function buildHarnessTerminalLogsEnv(
+  baseEnv: Record<string, string | undefined>,
+): NodeJS.ProcessEnv {
+  const inherited = baseEnv.COWORK_HARNESS_TERMINAL_LOGS?.trim();
+  if (inherited) {
+    return { COWORK_HARNESS_TERMINAL_LOGS: inherited };
+  }
+  return shouldMirrorServerOutput(baseEnv) ? { COWORK_HARNESS_TERMINAL_LOGS: "1" } : {};
+}
+
+function createServerOutputMirror(
+  opts: { stdoutWrite?: (chunk: string) => void; stderrWrite?: (chunk: string) => void } = {},
+): ServerOutputMirror {
+  const stdoutWrite = opts.stdoutWrite ?? ((chunk) => process.stdout.write(chunk));
+  const stderrWrite = opts.stderrWrite ?? ((chunk) => process.stderr.write(chunk));
+  const buffers: Record<ServerOutputSource, string> = {
+    stdout: "",
+    stderr: "",
+  };
+
+  const writerFor = (source: ServerOutputSource) =>
+    source === "stderr" ? stderrWrite : stdoutWrite;
+
+  const writeLine = (source: ServerOutputSource, line: string) => {
+    if (!line) {
+      return;
+    }
+    writerFor(source)(`${MIRROR_SERVER_OUTPUT_PREFIX}:${source}] ${line}\n`);
+  };
+
+  const writeChunk = (source: ServerOutputSource, chunk: string) => {
+    if (!chunk) {
+      return;
+    }
+    const parts = (buffers[source] + chunk).split(/\r?\n/);
+    buffers[source] = parts.pop() ?? "";
+    for (const line of parts) {
+      writeLine(source, line);
+    }
+  };
+
+  const flush = () => {
+    for (const source of ["stdout", "stderr"] as const) {
+      const remainder = buffers[source];
+      buffers[source] = "";
+      writeLine(source, remainder);
+    }
+  };
+
+  return { flush, writeChunk, writeLine };
+}
+
 function waitForServerListening(
   child: ServerChildProcess,
-  timeoutMs = getServerStartupTimeoutMs(),
+  opts: WaitForServerListeningOptions = {},
 ): Promise<ServerListening> {
+  const timeoutMs = opts.timeoutMs ?? getServerStartupTimeoutMs();
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({ input: child.stdout });
     const recentLines: string[] = [];
+    let readySeen = false;
+    let finished = false;
+    let readySettled = false;
+
+    const settleReadyResolve = (value: ServerListening) => {
+      if (readySettled) {
+        return;
+      }
+      readySettled = true;
+      resolve(value);
+    };
+
+    const settleReadyReject = (error: Error) => {
+      if (readySettled) {
+        return;
+      }
+      readySettled = true;
+      reject(error);
+    };
 
     const recordLine = (line: string) => {
       const trimmed = line.trim();
@@ -399,28 +498,36 @@ function waitForServerListening(
 
     const onError = (error: Error) => {
       cleanup();
-      reject(error);
+      if (!readySeen) {
+        settleReadyReject(error);
+      }
     };
 
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
-      reject(
-        new Error(
-          withRecentOutput(
-            `Server exited before startup JSON (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+      if (!readySeen) {
+        settleReadyReject(
+          new Error(
+            withRecentOutput(
+              `Server exited before startup JSON (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+            ),
           ),
-        ),
-      );
+        );
+      }
     };
 
     const timeout = setTimeout(() => {
       cleanup();
-      reject(
+      settleReadyReject(
         new Error(withRecentOutput(`Server startup timed out after ${timeoutMs / 1000} seconds`)),
       );
     }, timeoutMs);
 
     const cleanup = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
       clearTimeout(timeout);
       rl.off("line", onLine);
       rl.close();
@@ -436,12 +543,16 @@ function waitForServerListening(
       }
       try {
         const parsed = serverListeningSchema.safeParse(JSON.parse(trimmed));
-        if (!parsed.success) return;
-        cleanup();
-        resolve(parsed.data);
+        if (parsed.success && !readySeen) {
+          readySeen = true;
+          clearTimeout(timeout);
+          settleReadyResolve(parsed.data);
+          return;
+        }
       } catch {
-        // Ignore non-JSON lines while waiting for the startup event.
+        // Non-JSON lines are human-readable server logs. Keep them visible.
       }
+      opts.onStdoutLine?.(trimmed);
     };
 
     rl.on("line", onLine);
@@ -532,6 +643,7 @@ function buildServerEnv(
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
+    ...buildHarnessTerminalLogsEnv(processEnv),
     ...buildDesktopObservabilityEnv(privacyTelemetrySettings),
     ...buildDesktopCrashReportingEnv(privacyTelemetrySettings),
     ...buildDesktopProductAnalyticsEnv(
@@ -799,6 +911,7 @@ export class ServerManager {
 
     const attemptCount = getSourceStartupAttemptCount(useSource);
     let previousError: unknown = null;
+    const outputMirror = shouldMirrorServerOutput() ? createServerOutputMirror() : null;
 
     for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
       const serverEnv = buildServerEnv(opts.featureFlags, {
@@ -864,9 +977,7 @@ export class ServerManager {
         if (stderrTail.length > STDERR_TAIL_LIMIT) {
           stderrTail = stderrTail.slice(-STDERR_TAIL_LIMIT);
         }
-        if (DEBUG_SERVER_STDERR) {
-          process.stderr.write(`[cowork-server] ${text}`);
-        }
+        outputMirror?.writeChunk("stderr", text);
         logServerManagerEvent("workspace server stderr emitted", {
           workspaceId,
           bytes: Buffer.byteLength(text),
@@ -875,7 +986,13 @@ export class ServerManager {
       });
 
       try {
-        const listening = await waitForServerListening(child);
+        const listening = await waitForServerListening(child, {
+          onStdoutLine: outputMirror
+            ? (line) => {
+                outputMirror.writeLine("stdout", line);
+              }
+            : undefined,
+        });
         const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
         logServerManagerEvent("workspace server listening", {
           workspaceId,
@@ -901,6 +1018,7 @@ export class ServerManager {
         });
 
         child.once("exit", () => {
+          outputMirror?.flush();
           const pendingExit = this.pendingStarts.get(workspaceId);
           if (pendingExit?.child === child) {
             this.pendingStarts.delete(workspaceId);
@@ -915,6 +1033,7 @@ export class ServerManager {
         return { url, mobileH3: listening.mobileH3 ?? null };
       } catch (error) {
         await gracefulKill(child);
+        outputMirror?.flush();
         const pendingHandle = this.pendingStarts.get(workspaceId);
         if (pendingHandle?.child === child) {
           this.pendingStarts.delete(workspaceId);
@@ -934,11 +1053,10 @@ export class ServerManager {
             attempt,
             error: toErrorMessage(error),
           });
-          if (DEBUG_SERVER_STDERR) {
-            process.stderr.write(
-              "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n",
-            );
-          }
+          outputMirror?.writeLine(
+            "stderr",
+            "Bun crashed during startup; retrying with async transpiler disabled.",
+          );
           continue;
         }
 
@@ -1169,11 +1287,14 @@ export const __internal = {
   getServerLogPath,
   getServerStartupTimeoutMs,
   appendBrowserAccessToken,
+  buildHarnessTerminalLogsEnv,
+  createServerOutputMirror,
   getSourceStartupAttemptCount,
   isLikelyBunSegfault,
   logServerManagerEvent,
   flushServerManagerLogWrites,
   resolveSourceStartup,
+  shouldMirrorServerOutput,
   shouldReplaceForMobileH3Request,
   summarizeLogChunk,
   withStderrTail,

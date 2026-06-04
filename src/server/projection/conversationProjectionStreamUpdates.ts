@@ -19,7 +19,10 @@ function partialTagSuffixLength(text: string, tag: string): number {
   return 0;
 }
 
-function stripThinkTaggedText(text: string, state: { inThink: boolean; pending: string }): string {
+export function stripThinkTaggedText(
+  text: string,
+  state: { inThink: boolean; pending: string },
+): string {
   const input = `${state.pending}${text}`;
   state.pending = "";
 
@@ -63,11 +66,16 @@ function stripThinkTaggedText(text: string, state: { inThink: boolean; pending: 
   return visible;
 }
 
-function flushVisibleThinkPending(state: { inThink: boolean; pending: string }): string {
+export function flushVisibleThinkPending(state: { inThink: boolean; pending: string }): string {
   if (state.inThink || !state.pending) return "";
   const pending = state.pending;
   state.pending = "";
   return pending;
+}
+
+export function stripCompleteThinkTaggedText(text: string): string {
+  const state = { inThink: false, pending: "" };
+  return `${stripThinkTaggedText(text, state)}${flushVisibleThinkPending(state)}`;
 }
 
 export function createStreamUpdateHandler(

@@ -120,6 +120,11 @@ describe("JSON-RPC projectors", () => {
     projector.handle(streamChunk("text_delta", { id: "s1", text: "\n</think>\n\nVisible answer" }));
     projector.handle(streamChunk("text_end", { id: "s1" }));
     projector.handle({
+      type: "assistant_message",
+      sessionId,
+      text: "<think>\nPlanning the work\n</think>\n\nVisible answer",
+    });
+    projector.handle({
       type: "session_busy",
       sessionId,
       busy: false,

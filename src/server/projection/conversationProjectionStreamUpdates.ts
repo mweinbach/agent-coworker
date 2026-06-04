@@ -6,6 +6,70 @@ import type { ConversationProjectionState } from "./conversationProjectionState"
 import type { ToolProjection } from "./conversationProjectionTools";
 import { normalizeToolArgsFromInput } from "./shared";
 
+const THINK_OPEN_TAG = "<think>";
+const THINK_CLOSE_TAG = "</think>";
+
+function partialTagSuffixLength(text: string, tag: string): number {
+  const lower = text.toLowerCase();
+  for (let len = Math.min(tag.length - 1, text.length); len > 0; len -= 1) {
+    if (tag.startsWith(lower.slice(text.length - len))) {
+      return len;
+    }
+  }
+  return 0;
+}
+
+function stripThinkTaggedText(text: string, state: { inThink: boolean; pending: string }): string {
+  const input = `${state.pending}${text}`;
+  state.pending = "";
+
+  const lower = input.toLowerCase();
+  let visible = "";
+  let index = 0;
+
+  while (index < input.length) {
+    if (state.inThink) {
+      const closeIndex = lower.indexOf(THINK_CLOSE_TAG, index);
+      if (closeIndex < 0) {
+        const pendingLength = partialTagSuffixLength(input.slice(index), THINK_CLOSE_TAG);
+        if (pendingLength > 0) {
+          state.pending = input.slice(input.length - pendingLength);
+        }
+        return visible;
+      }
+      index = closeIndex + THINK_CLOSE_TAG.length;
+      state.inThink = false;
+      continue;
+    }
+
+    const openIndex = lower.indexOf(THINK_OPEN_TAG, index);
+    if (openIndex < 0) {
+      const rest = input.slice(index);
+      const pendingLength = partialTagSuffixLength(rest, THINK_OPEN_TAG);
+      if (pendingLength > 0) {
+        visible += rest.slice(0, rest.length - pendingLength);
+        state.pending = rest.slice(rest.length - pendingLength);
+      } else {
+        visible += rest;
+      }
+      return visible;
+    }
+
+    visible += input.slice(index, openIndex);
+    index = openIndex + THINK_OPEN_TAG.length;
+    state.inThink = true;
+  }
+
+  return visible;
+}
+
+function flushVisibleThinkPending(state: { inThink: boolean; pending: string }): string {
+  if (state.inThink || !state.pending) return "";
+  const pending = state.pending;
+  state.pending = "";
+  return pending;
+}
+
 export function createStreamUpdateHandler(
   state: ConversationProjectionState,
   assistant: AssistantProjection,
@@ -19,7 +83,14 @@ export function createStreamUpdateHandler(
 
     if (update.kind === "assistant_delta") {
       if (update.phase === "commentary") return;
-      const currentText = update.text;
+      const scrubKey = `${update.turnId}:${update.streamId}`;
+      let scrubState = state.assistantThinkTagStateByTurnStream.get(scrubKey);
+      if (!scrubState) {
+        scrubState = { inThink: false, pending: "" };
+        state.assistantThinkTagStateByTurnStream.set(scrubKey, scrubState);
+      }
+      const currentText = stripThinkTaggedText(update.text, scrubState);
+      if (!currentText) return;
       const assistantState = assistant.ensureActiveAssistantState(update.turnId);
       assistantState.text = `${assistantState.text}${currentText}`;
       assistant.startAssistantState(update.turnId, assistantState);
@@ -30,6 +101,16 @@ export function createStreamUpdateHandler(
     }
 
     if (update.kind === "assistant_text_end") {
+      const scrubKey = `${update.turnId}:${update.streamId}`;
+      const scrubState = state.assistantThinkTagStateByTurnStream.get(scrubKey);
+      const pendingText = scrubState ? flushVisibleThinkPending(scrubState) : "";
+      state.assistantThinkTagStateByTurnStream.delete(scrubKey);
+      if (pendingText) {
+        const assistantState = assistant.ensureActiveAssistantState(update.turnId);
+        assistantState.text = `${assistantState.text}${pendingText}`;
+        assistant.startAssistantState(update.turnId, assistantState);
+        state.opts.sink.emitAgentMessageDelta(update.turnId, assistantState.itemId, pendingText);
+      }
       assistant.completeAssistantStateBeforeStep(update.turnId, update.annotations);
       return;
     }

@@ -17,6 +17,7 @@ export type ConversationProjectionState = {
   lastUserMessageText: string | null;
   lastUserMessageClientMessageId: string | null;
   activeAssistantByTurn: Map<string, BufferedAssistantState>;
+  assistantThinkTagStateByTurnStream: Map<string, { inThink: boolean; pending: string }>;
   assistantOccurrenceByTurn: Map<string, number>;
   assistantHistoryByTurn: Map<string, string>;
   reasoningByKey: Map<string, BufferedReasoningState>;
@@ -39,6 +40,7 @@ export function createConversationProjectionState(
     lastUserMessageText: null,
     lastUserMessageClientMessageId: null,
     activeAssistantByTurn: new Map(),
+    assistantThinkTagStateByTurnStream: new Map(),
     assistantOccurrenceByTurn: new Map(),
     assistantHistoryByTurn: new Map(),
     reasoningByKey: new Map(),
@@ -106,12 +108,18 @@ export function clearTurnProjectionState(
 ) {
   if (turnId) {
     state.activeAssistantByTurn.delete(turnId);
+    for (const key of state.assistantThinkTagStateByTurnStream.keys()) {
+      if (key.startsWith(`${turnId}:`)) {
+        state.assistantThinkTagStateByTurnStream.delete(key);
+      }
+    }
     state.assistantOccurrenceByTurn.delete(turnId);
     state.assistantHistoryByTurn.delete(turnId);
     clearReasoningStateForTurn(state, turnId);
     clearToolStateForTurn(state, turnId);
   } else {
     state.activeAssistantByTurn.clear();
+    state.assistantThinkTagStateByTurnStream.clear();
     state.assistantOccurrenceByTurn.clear();
     state.assistantHistoryByTurn.clear();
     state.reasoningByKey.clear();

@@ -94,6 +94,57 @@ describe("JSON-RPC projectors", () => {
     expect(reasoningCompletedIndex).toBeLessThan(assistantDeltaIndex);
   });
 
+  test("notification projector strips think-tagged text from assistant deltas", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("text_delta", { id: "s1", text: "<thi" }));
+    projector.handle(streamChunk("text_delta", { id: "s1", text: "nk>\nPlanning" }));
+    projector.handle(
+      streamChunk("reasoning_delta", { id: "s1", mode: "reasoning", text: "Planning" }),
+    );
+    projector.handle(streamChunk("text_delta", { id: "s1", text: " the work" }));
+    projector.handle(
+      streamChunk("reasoning_delta", { id: "s1", mode: "reasoning", text: " the work" }),
+    );
+    projector.handle(streamChunk("text_delta", { id: "s1", text: "\n</think>\n\nVisible answer" }));
+    projector.handle(streamChunk("text_end", { id: "s1" }));
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: false,
+      turnId,
+      outcome: "success",
+    });
+
+    const assistantDeltas = outbound
+      .filter((message) => message.method === "item/agentMessage/delta")
+      .map((message) => String(message.params?.delta ?? ""));
+    expect(assistantDeltas).toEqual(["\n\nVisible answer"]);
+
+    const assistantCompleted = outbound
+      .filter((message) => message.method === "item/completed")
+      .filter((message) => message.params?.item?.type === "agentMessage");
+    expect(assistantCompleted.map((message) => message.params?.item?.text)).toEqual([
+      "\n\nVisible answer",
+    ]);
+
+    const reasoningDeltas = outbound
+      .filter((message) => message.method === "item/reasoning/delta")
+      .map((message) => String(message.params?.delta ?? ""));
+    expect(reasoningDeltas).toEqual(["Planning", " the work"]);
+  });
+
   test("notification projector splits same-id reasoning when a tool lands between deltas", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcNotificationProjector({

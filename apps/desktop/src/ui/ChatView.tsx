@@ -43,7 +43,12 @@ import { NewChatLanding } from "./chat/NewChatLanding";
 import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 
-const COMPOSER_OVERLAY_EXTRA_HEIGHT_PX = 24;
+// Compact-state floor for the feed's bottom reservation and the composer
+// overlay's min-height. The composer auto-grows and a ResizeObserver measures
+// its real height, so this is only a floor — it must NOT scale with the resizer
+// cap (messageBarHeight), or raising the cap would over-reserve empty feed space
+// above a short bar.
+const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 14;
 const FEED_BOTTOM_STICKY_THRESHOLD_PX = 220;
 const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
@@ -93,7 +98,7 @@ export function ChatView() {
   const developerMode = useAppStore((s) => s.developerMode);
   const desktopA2uiEnabled = useAppStore((s) => s.desktopFeatureFlags.a2ui);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
-  const composerOverlayMinHeight = messageBarHeight + COMPOSER_OVERLAY_EXTRA_HEIGHT_PX;
+  const composerOverlayMinHeight = COMPOSER_OVERLAY_MIN_HEIGHT_PX;
   const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<
     Map<string, Map<number, string>>
   >(() => new Map());

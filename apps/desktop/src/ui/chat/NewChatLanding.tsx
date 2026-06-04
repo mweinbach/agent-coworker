@@ -5,7 +5,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   MessageSquareIcon,
-  PlusIcon,
+  PaperclipIcon,
 } from "lucide-react";
 import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -388,7 +388,7 @@ export function NewChatLanding() {
                   aria-label="Attach files"
                   title="Attach files"
                 >
-                  <PlusIcon className="h-4 w-4" />
+                  <PaperclipIcon className="h-4 w-4" />
                 </button>
                 <Popover open={selectorOpen} onOpenChange={setSelectorOpen}>
                   <PopoverTrigger asChild>

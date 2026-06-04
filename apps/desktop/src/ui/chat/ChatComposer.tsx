@@ -1,5 +1,11 @@
-import { AlertTriangleIcon, LoaderCircleIcon, PlusIcon } from "lucide-react";
-import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
+import { AlertTriangleIcon, LoaderCircleIcon, PaperclipIcon } from "lucide-react";
+import type {
+  ChangeEvent,
+  CSSProperties,
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  RefObject,
+} from "react";
 import {
   PromptInputAttachmentPreviews,
   PromptInputBody,
@@ -12,7 +18,6 @@ import {
 } from "../../components/ai-elements/prompt-input";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
-import { cn } from "../../lib/utils";
 import type { ProviderName } from "../../lib/wsProtocol";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
@@ -97,8 +102,8 @@ export function ChatComposer(props: {
       <div className="relative mx-auto w-full max-w-[56rem] pointer-events-auto">
         <MessageBarResizer />
         <PromptInputRoot
-          className="w-full max-w-full rounded-[20px] border border-border/50 bg-background/90 app-shadow-overlay backdrop-blur-md"
-          style={{ height: messageBarHeight }}
+          className="w-full max-w-full rounded-[28px] border border-border/55 bg-background/95 app-shadow-overlay backdrop-blur-md"
+          style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
           fileDrop={
             inputDisabled || transcriptOnly
               ? undefined
@@ -147,6 +152,7 @@ export function ChatComposer(props: {
                 placeholder={placeholder}
                 catalog={mentionCatalog}
                 ariaLabel="Message input"
+                textareaScrollClassName="min-h-14 max-h-[var(--composer-cap)] overflow-y-auto"
               />
             </PromptInputBody>
             <PromptInputFooter className="gap-3 pt-1">
@@ -166,7 +172,7 @@ export function ChatComposer(props: {
                   aria-label="Attach files"
                   title="Attach files"
                 >
-                  <PlusIcon className="h-4 w-4" />
+                  <PaperclipIcon className="h-4 w-4" />
                 </button>
                 {threadModelConfig ? (
                   threadDraft ? (
@@ -186,12 +192,7 @@ export function ChatComposer(props: {
                   )
                 ) : null}
               </PromptInputTools>
-              <div
-                className={cn(
-                  "flex shrink-0 items-center gap-2",
-                  busy ? "opacity-100" : "opacity-80",
-                )}
-              >
+              <div className="flex shrink-0 items-center gap-2">
                 <PromptInputSubmit
                   mode={composerSubmitState.mode}
                   status={composerSubmitState.status}

@@ -670,8 +670,8 @@ describe("desktop chat view stability", () => {
       expect(separator?.getAttribute("aria-valuenow")).toBe("144");
       expect(separator?.getAttribute("aria-valuetext")).toBe("Minimum height 144 pixels");
       expect(composerShell?.className).not.toContain("border-t");
-      expect(reservedSpace?.style.height).toBe("168px");
-      expect(overlay?.style.minHeight).toBe("168px");
+      expect(reservedSpace?.style.height).toBe("140px");
+      expect(overlay?.style.minHeight).toBe("140px");
     } finally {
       if (root) {
         await act(async () => {

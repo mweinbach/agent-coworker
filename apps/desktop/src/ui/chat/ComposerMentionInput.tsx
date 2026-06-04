@@ -40,6 +40,13 @@ export function ComposerMentionInput(props: {
    * for composers with non-default font size / line height.
    */
   textareaClassName?: string;
+  /**
+   * Extra classes applied to ONLY the textarea (not the highlight overlay).
+   * Use for scroll/height behavior (`min-h`, `max-h`, `overflow`) that must not
+   * be mirrored onto the overlay — the overlay stays `overflow-hidden` and is
+   * scroll-synced manually, so giving it its own scroll would desync the boxes.
+   */
+  textareaScrollClassName?: string;
 }) {
   const {
     value,
@@ -51,6 +58,7 @@ export function ComposerMentionInput(props: {
     catalog,
     ariaLabel,
     textareaClassName,
+    textareaScrollClassName,
   } = props;
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -170,6 +178,7 @@ export function ComposerMentionInput(props: {
         className={cn(
           "relative z-[1] break-words text-transparent caret-foreground",
           textareaClassName,
+          textareaScrollClassName,
         )}
         onChange={(event) => {
           setValue(event.currentTarget.value);

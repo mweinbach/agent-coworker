@@ -9,6 +9,10 @@ import { normalizeToolArgsFromInput } from "./shared";
 const THINK_OPEN_TAG = "<think>";
 const THINK_CLOSE_TAG = "</think>";
 
+function commentaryReasoningPart(streamId: string) {
+  return { id: `commentary:${streamId}`, mode: "summary" as const };
+}
+
 function partialTagSuffixLength(text: string, tag: string): number {
   const lower = text.toLowerCase();
   for (let len = Math.min(tag.length - 1, text.length); len > 0; len -= 1) {
@@ -89,8 +93,42 @@ export function createStreamUpdateHandler(
       reasoning.completeReasoningStateForTurn(update.turnId);
     }
 
+    if (update.kind === "assistant_text_start" && update.phase === "commentary") {
+      const { state: reasoningState } = reasoning.ensureBufferedReasoning(
+        update.turnId,
+        commentaryReasoningPart(update.streamId),
+      );
+      reasoning.startBufferedReasoning(update.turnId, reasoningState);
+      return;
+    }
+
+    if (update.kind === "assistant_delta" && update.phase === "commentary") {
+      const { state: reasoningState } = reasoning.ensureBufferedReasoning(
+        update.turnId,
+        commentaryReasoningPart(update.streamId),
+      );
+      reasoning.startBufferedReasoning(update.turnId, reasoningState);
+      reasoningState.text = `${reasoningState.text}${update.text}`;
+      if (update.text) {
+        state.opts.sink.emitReasoningDelta(
+          update.turnId,
+          reasoningState.itemId,
+          reasoningState.mode,
+          update.text,
+        );
+      }
+      return;
+    }
+
+    if (update.kind === "assistant_text_end" && update.phase === "commentary") {
+      reasoning.flushBufferedReasoning(
+        update.turnId,
+        `${update.turnId}:commentary:${update.streamId}`,
+      );
+      return;
+    }
+
     if (update.kind === "assistant_delta") {
-      if (update.phase === "commentary") return;
       const scrubKey = `${update.turnId}:${update.streamId}`;
       let scrubState = state.assistantThinkTagStateByTurnStream.get(scrubKey);
       if (!scrubState) {

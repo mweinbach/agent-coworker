@@ -284,6 +284,60 @@ describe("codex app-server runtime", () => {
     expect(rawDeltaIndex).toBeLessThanOrEqual(textDeltaIndex);
   });
 
+  test.serial(
+    "preserves app-server assistant phases and excludes commentary from final text",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-commentary-"));
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = "commentary-and-final";
+
+      const streamParts: unknown[] = [];
+      const runtime = createRuntime(makeConfig(dir));
+      const result = await runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Say hi" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
+      });
+
+      expect(result.text).toBe("final answer");
+      expect(result.responseMessages).toEqual([{ role: "assistant", content: "final answer" }]);
+      expect(streamParts).toContainEqual(
+        expect.objectContaining({
+          type: "text-start",
+          id: "item_commentary",
+          phase: "commentary",
+        }),
+      );
+      expect(streamParts).toContainEqual(
+        expect.objectContaining({
+          type: "text-delta",
+          id: "item_commentary",
+          text: "working note",
+          phase: "commentary",
+        }),
+      );
+      expect(streamParts).toContainEqual(
+        expect.objectContaining({
+          type: "text-end",
+          id: "item_commentary",
+          phase: "commentary",
+        }),
+      );
+      expect(streamParts).toContainEqual(
+        expect.objectContaining({
+          type: "text-delta",
+          id: "item_1",
+          text: "final answer",
+          phase: "final_answer",
+        }),
+      );
+    },
+  );
+
   test.serial("ignores pooled app-server title-generation events from other threads", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-title-leak-"));
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "cross-thread-title-leak";

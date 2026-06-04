@@ -144,7 +144,15 @@ export function createReasoningProjection(state: ConversationProjectionState) {
     ) {
       return false;
     }
-    return !(update.kind === "assistant_delta" && update.phase === "commentary");
+    if (
+      (update.kind === "assistant_text_start" ||
+        update.kind === "assistant_delta" ||
+        update.kind === "assistant_text_end") &&
+      update.phase === "commentary"
+    ) {
+      return false;
+    }
+    return true;
   };
 
   return {

@@ -684,6 +684,44 @@ function applyModelStreamUpdate(
     ops.pushFeedItem(item);
   };
 
+  const appendReasoningDelta = (
+    turnId: string,
+    streamId: string,
+    mode: Extract<FeedItem, { kind: "reasoning" }>["mode"],
+    text: string,
+  ) => {
+    stream.lastReasoningTurnId = turnId;
+    stream.reasoningTurns.add(turnId);
+    const key = `${turnId}:${streamId}`;
+    const itemId = stream.reasoningItemIdByStream.get(key);
+    const nextText = `${stream.reasoningTextByStream.get(key) ?? ""}${text}`;
+    stream.reasoningTextByStream.set(key, nextText);
+    if (itemId) {
+      ops.updateFeedItem(itemId, (item) =>
+        item.kind === "reasoning" ? { ...item, mode, text: nextText } : item,
+      );
+    } else if (nextText) {
+      const id = ops.makeId();
+      stream.reasoningItemIdByStream.set(key, id);
+      const item: FeedItem = {
+        id,
+        kind: "reasoning",
+        mode,
+        ts: ops.nowIso(),
+        text: nextText,
+      };
+      const beforeAssistantId =
+        turnId === stream.lastAssistantTurnId
+          ? reasoningInsertBeforeAssistantAfterStreamReplay(stream)
+          : null;
+      if (beforeAssistantId && ops.insertFeedItemBefore) {
+        ops.insertFeedItemBefore(beforeAssistantId, item);
+      } else {
+        push(item);
+      }
+    }
+  };
+
   const failActiveToolStreams = (turnId: string | null, error?: unknown) => {
     for (const [fullKey, itemId] of [...stream.toolItemIdByKey.entries()]) {
       if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
@@ -703,6 +741,19 @@ function applyModelStreamUpdate(
       clearStepLocalModelStreamRuntime(stream);
       clearStepLocalToolRuntime(stream);
     }
+    return;
+  }
+
+  if (update.kind === "assistant_text_start" && update.phase === "commentary") {
+    return;
+  }
+
+  if (update.kind === "assistant_delta" && update.phase === "commentary") {
+    appendReasoningDelta(update.turnId, `commentary:${update.streamId}`, "summary", update.text);
+    return;
+  }
+
+  if (update.kind === "assistant_text_end" && update.phase === "commentary") {
     return;
   }
 
@@ -738,9 +789,6 @@ function applyModelStreamUpdate(
   }
 
   if (update.kind === "assistant_delta") {
-    if (update.phase === "commentary") {
-      return;
-    }
     stream.lastAssistantTurnId = update.turnId;
     const assistantKey = `${update.turnId}:${update.streamId}`;
     stream.completedAssistantStreamKeys.delete(assistantKey);
@@ -761,36 +809,7 @@ function applyModelStreamUpdate(
   }
 
   if (update.kind === "reasoning_delta") {
-    stream.lastReasoningTurnId = update.turnId;
-    stream.reasoningTurns.add(update.turnId);
-    const key = `${update.turnId}:${update.streamId}`;
-    const itemId = stream.reasoningItemIdByStream.get(key);
-    const nextText = `${stream.reasoningTextByStream.get(key) ?? ""}${update.text}`;
-    stream.reasoningTextByStream.set(key, nextText);
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "reasoning" ? { ...item, mode: update.mode, text: nextText } : item,
-      );
-    } else if (nextText) {
-      const id = ops.makeId();
-      stream.reasoningItemIdByStream.set(key, id);
-      const item: FeedItem = {
-        id,
-        kind: "reasoning",
-        mode: update.mode,
-        ts: ops.nowIso(),
-        text: nextText,
-      };
-      const beforeAssistantId =
-        update.turnId === stream.lastAssistantTurnId
-          ? reasoningInsertBeforeAssistantAfterStreamReplay(stream)
-          : null;
-      if (beforeAssistantId && ops.insertFeedItemBefore) {
-        ops.insertFeedItemBefore(beforeAssistantId, item);
-      } else {
-        push(item);
-      }
-    }
+    appendReasoningDelta(update.turnId, update.streamId, update.mode, update.text);
     return;
   }
 

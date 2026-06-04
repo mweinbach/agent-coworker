@@ -310,7 +310,7 @@ describe("desktop transcript feed mapping", () => {
     });
   });
 
-  test("prefers raw final-answer text over a stale merged assistant_message on raw-backed turns", () => {
+  test("keeps raw commentary as reasoning while preferring final-answer text over a stale merged assistant_message", () => {
     const transcript: TranscriptEvent[] = [
       {
         ts: "2024-01-01T00:00:01.000Z",
@@ -493,6 +493,9 @@ describe("desktop transcript feed mapping", () => {
 
     const feed = mapTranscriptToFeed(transcript);
     const assistant = feed.filter((item) => item.kind === "message" && item.role === "assistant");
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.text).toBe("progress note");
     expect(assistant).toHaveLength(1);
     expect(assistant[0]?.text).toBe("final answer");
   });

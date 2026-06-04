@@ -5,7 +5,7 @@ import { createThreadJournalNotificationProjector } from "../../../src/server/js
 import { sessionId, streamChunk, turnId } from "./fixtures";
 
 describe("JSON-RPC projectors", () => {
-  test("notification projector suppresses commentary deltas and streams reasoning items from live chunks", () => {
+  test("notification projector routes commentary deltas into reasoning items from live chunks", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcNotificationProjector({
       threadId: sessionId,
@@ -56,9 +56,9 @@ describe("JSON-RPC projectors", () => {
       .filter((message) => message.method === "item/completed")
       .filter((message) => message.params?.item?.type === "reasoning");
 
-    expect(reasoningStarted).toHaveLength(1);
-    expect(reasoningDeltas).toHaveLength(1);
-    expect(reasoningCompleted).toHaveLength(1);
+    expect(reasoningStarted).toHaveLength(2);
+    expect(reasoningDeltas).toHaveLength(2);
+    expect(reasoningCompleted).toHaveLength(2);
 
     expect(reasoningStarted[0]?.params?.item).toMatchObject({
       type: "reasoning",
@@ -69,20 +69,37 @@ describe("JSON-RPC projectors", () => {
       threadId: sessionId,
       turnId,
       mode: "summary",
-      delta: "Inspecting the reports.",
+      delta: "Internal commentary",
     });
     expect(reasoningDeltas[0]?.params?.itemId).toBe(reasoningStarted[0]?.params?.item?.id);
-    expect(reasoningCompleted[0]?.params?.item).toMatchObject({
+    expect(reasoningDeltas[1]?.params).toMatchObject({
+      threadId: sessionId,
+      turnId,
+      mode: "summary",
+      delta: "Inspecting the reports.",
+    });
+    expect(reasoningDeltas[1]?.params?.itemId).toBe(reasoningStarted[1]?.params?.item?.id);
+    expect(reasoningCompleted.map((message) => message.params?.item?.text).sort()).toEqual([
+      "Inspecting the reports.",
+      "Internal commentary",
+    ]);
+    expect(
+      reasoningCompleted.find((message) => message.params?.item?.text === "Internal commentary")
+        ?.params?.item,
+    ).toMatchObject({
       id: reasoningStarted[0]?.params?.item?.id,
       type: "reasoning",
       mode: "summary",
-      text: "Inspecting the reports.",
+      text: "Internal commentary",
     });
 
     const reasoningStartedIndex = outbound.findIndex((message) => message === reasoningStarted[0]);
     const reasoningDeltaIndex = outbound.findIndex((message) => message === reasoningDeltas[0]);
-    const reasoningCompletedIndex = outbound.findIndex(
-      (message) => message === reasoningCompleted[0],
+    const commentaryCompletedIndex = outbound.findIndex(
+      (message) =>
+        message.method === "item/completed" &&
+        message.params?.item?.type === "reasoning" &&
+        message.params?.item?.text === "Internal commentary",
     );
     const assistantDeltaIndex = outbound.findIndex(
       (message) =>
@@ -90,8 +107,8 @@ describe("JSON-RPC projectors", () => {
         message.params?.delta === "Here is the result.",
     );
     expect(reasoningStartedIndex).toBeLessThan(reasoningDeltaIndex);
-    expect(reasoningDeltaIndex).toBeLessThan(reasoningCompletedIndex);
-    expect(reasoningCompletedIndex).toBeLessThan(assistantDeltaIndex);
+    expect(reasoningDeltaIndex).toBeLessThan(commentaryCompletedIndex);
+    expect(commentaryCompletedIndex).toBeLessThan(assistantDeltaIndex);
   });
 
   test("notification projector strips think-tagged text from assistant deltas", () => {
@@ -271,7 +288,7 @@ describe("JSON-RPC projectors", () => {
     );
   });
 
-  test("journal projector suppresses commentary deltas and records streamed reasoning events from live chunks", () => {
+  test("journal projector routes commentary deltas into streamed reasoning events from live chunks", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
     const projector = createThreadJournalNotificationProjector({
       threadId: sessionId,
@@ -322,9 +339,9 @@ describe("JSON-RPC projectors", () => {
       .filter((event) => event.eventType === "item/completed")
       .filter((event) => event.payload?.item?.type === "reasoning");
 
-    expect(reasoningStarted).toHaveLength(1);
-    expect(reasoningDeltas).toHaveLength(1);
-    expect(reasoningCompleted).toHaveLength(1);
+    expect(reasoningStarted).toHaveLength(2);
+    expect(reasoningDeltas).toHaveLength(2);
+    expect(reasoningCompleted).toHaveLength(2);
 
     expect(reasoningStarted[0]?.payload?.item).toMatchObject({
       type: "reasoning",
@@ -335,14 +352,28 @@ describe("JSON-RPC projectors", () => {
       threadId: sessionId,
       turnId,
       mode: "summary",
-      delta: "Inspecting the reports.",
+      delta: "Internal commentary",
     });
     expect(reasoningDeltas[0]?.payload?.itemId).toBe(reasoningStarted[0]?.payload?.item?.id);
-    expect(reasoningCompleted[0]?.payload?.item).toMatchObject({
+    expect(reasoningDeltas[1]?.payload).toMatchObject({
+      threadId: sessionId,
+      turnId,
+      mode: "summary",
+      delta: "Inspecting the reports.",
+    });
+    expect(reasoningDeltas[1]?.payload?.itemId).toBe(reasoningStarted[1]?.payload?.item?.id);
+    expect(reasoningCompleted.map((event) => event.payload?.item?.text).sort()).toEqual([
+      "Inspecting the reports.",
+      "Internal commentary",
+    ]);
+    expect(
+      reasoningCompleted.find((event) => event.payload?.item?.text === "Internal commentary")
+        ?.payload?.item,
+    ).toMatchObject({
       id: reasoningStarted[0]?.payload?.item?.id,
       type: "reasoning",
       mode: "summary",
-      text: "Inspecting the reports.",
+      text: "Internal commentary",
     });
   });
 });

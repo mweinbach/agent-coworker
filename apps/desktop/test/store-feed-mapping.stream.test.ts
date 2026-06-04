@@ -50,6 +50,109 @@ describe("desktop transcript feed mapping", () => {
     expect(assistant.map((item) => item.text)).toEqual(["First note.", "Second note."]);
   });
 
+  test("routes normalized gpt-5.4 commentary chunks into reasoning during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 0,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_start",
+          part: { id: "msg_commentary", phase: "commentary" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 1,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_delta",
+          part: { id: "msg_commentary", phase: "commentary", text: "Working note." },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 2,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_end",
+          part: { id: "msg_commentary", phase: "commentary" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 3,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_start",
+          part: { id: "msg_final", phase: "final_answer" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 4,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_delta",
+          part: { id: "msg_final", phase: "final_answer", text: "Final answer." },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:06.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 5,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_end",
+          part: { id: "msg_final", phase: "final_answer" },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+    const assistant = feed.filter((item) => item.kind === "message" && item.role === "assistant");
+
+    expect(feed.map((item) => item.kind)).toEqual(["reasoning", "message"]);
+    expect(reasoning.map((item) => item.text)).toEqual(["Working note."]);
+    expect(assistant.map((item) => item.text)).toEqual(["Final answer."]);
+  });
+
   test("does not create a blank assistant message for whitespace-only streamed text", () => {
     const transcript: TranscriptEvent[] = [
       {

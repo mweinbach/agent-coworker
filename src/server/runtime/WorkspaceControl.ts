@@ -95,6 +95,7 @@ export class WorkspaceControl {
       this.options.registry.disposeBinding(
         binding,
         `workspace control request completed for ${cwd}`,
+        { closeSharedCodexClient: false },
       );
     }
   }
@@ -306,6 +307,7 @@ export class WorkspaceControl {
       this.options.registry.disposeBinding(
         binding,
         `workspace control refresh capture completed for ${cwd}`,
+        { closeSharedCodexClient: false },
       );
     }
   }

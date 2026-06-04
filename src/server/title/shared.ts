@@ -96,15 +96,8 @@ export function truncateToCharLimit(value: string, maxChars: number): string {
   return `${(truncated || value.slice(0, maxChars)).trimEnd()}…`;
 }
 
-export function stripThinkBlocks(value: string): string {
-  return value
-    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, " ")
-    .replace(/<think\b[^>]*>[\s\S]*$/gi, " ")
-    .replace(/<\/think>/gi, " ");
-}
-
 export function sanitizeTitle(value: string): string {
-  const compact = collapseWhitespace(stripWrappingQuotes(stripThinkBlocks(value))).replace(
+  const compact = collapseWhitespace(stripWrappingQuotes(value)).replace(
     /^(?:title|chat title|session title)\s*:\s*/i,
     "",
   );

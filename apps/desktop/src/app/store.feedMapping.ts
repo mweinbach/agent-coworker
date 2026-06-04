@@ -590,6 +590,7 @@ export function shouldSkipAssistantMessageAfterStreamReplay(
     );
     if (streamed) {
       if (normalizedAssistantText === streamed) return true;
+      if (streamed.startsWith(normalizedAssistantText)) return true;
 
       if (stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
         return normalizedAssistantText.endsWith(streamed);
@@ -602,6 +603,7 @@ export function shouldSkipAssistantMessageAfterStreamReplay(
   );
   if (exactStreamedAssistantText) {
     if (normalizedAssistantText === exactStreamedAssistantText) return true;
+    if (exactStreamedAssistantText.startsWith(normalizedAssistantText)) return true;
 
     if (
       stream.lastAssistantTurnId &&
@@ -722,6 +724,26 @@ function applyModelStreamUpdate(
     }
   };
 
+  const appendAssistantDelta = (turnId: string, streamId: string, text: string) => {
+    if (!text) return;
+    stream.lastAssistantTurnId = turnId;
+    const assistantKey = `${turnId}:${streamId}`;
+    stream.completedAssistantStreamKeys.delete(assistantKey);
+    stream.lastAssistantStreamKeyByTurn.set(turnId, assistantKey);
+    const itemId = stream.assistantItemIdByStream.get(assistantKey);
+    const nextText = `${stream.assistantTextByStream.get(assistantKey) ?? ""}${text}`;
+    stream.assistantTextByStream.set(assistantKey, nextText);
+    if (itemId) {
+      ops.updateFeedItem(itemId, (item) =>
+        item.kind === "message" && item.role === "assistant" ? { ...item, text: nextText } : item,
+      );
+    } else if (hasVisibleAssistantText(nextText)) {
+      const id = ops.makeId();
+      stream.assistantItemIdByStream.set(assistantKey, id);
+      push({ id, kind: "message", role: "assistant", ts: ops.nowIso(), text: nextText });
+    }
+  };
+
   const failActiveToolStreams = (turnId: string | null, error?: unknown) => {
     for (const [fullKey, itemId] of [...stream.toolItemIdByKey.entries()]) {
       if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
@@ -741,19 +763,6 @@ function applyModelStreamUpdate(
       clearStepLocalModelStreamRuntime(stream);
       clearStepLocalToolRuntime(stream);
     }
-    return;
-  }
-
-  if (update.kind === "assistant_text_start" && update.phase === "commentary") {
-    return;
-  }
-
-  if (update.kind === "assistant_delta" && update.phase === "commentary") {
-    appendReasoningDelta(update.turnId, `commentary:${update.streamId}`, "summary", update.text);
-    return;
-  }
-
-  if (update.kind === "assistant_text_end" && update.phase === "commentary") {
     return;
   }
 
@@ -789,22 +798,11 @@ function applyModelStreamUpdate(
   }
 
   if (update.kind === "assistant_delta") {
-    stream.lastAssistantTurnId = update.turnId;
-    const assistantKey = `${update.turnId}:${update.streamId}`;
-    stream.completedAssistantStreamKeys.delete(assistantKey);
-    stream.lastAssistantStreamKeyByTurn.set(update.turnId, assistantKey);
-    const itemId = stream.assistantItemIdByStream.get(assistantKey);
-    const nextText = `${stream.assistantTextByStream.get(assistantKey) ?? ""}${update.text}`;
-    stream.assistantTextByStream.set(assistantKey, nextText);
-    if (itemId) {
-      ops.updateFeedItem(itemId, (item) =>
-        item.kind === "message" && item.role === "assistant" ? { ...item, text: nextText } : item,
-      );
-    } else if (hasVisibleAssistantText(nextText)) {
-      const id = ops.makeId();
-      stream.assistantItemIdByStream.set(assistantKey, id);
-      push({ id, kind: "message", role: "assistant", ts: ops.nowIso(), text: nextText });
-    }
+    appendAssistantDelta(update.turnId, update.streamId, update.text);
+    return;
+  }
+
+  if (update.kind === "reasoning_start" || update.kind === "reasoning_end") {
     return;
   }
 

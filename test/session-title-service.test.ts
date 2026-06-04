@@ -737,9 +737,9 @@ describe("sessionTitleService", () => {
     });
   });
 
-  test("strips think blocks from generated model titles", async () => {
+  test("uses normalized MiniMax title text", async () => {
     const runTurn = mock(async (_args: any) => ({
-      text: "<think>\nThe user wants a brief title.\n</think>\nWrite WWDC Preview",
+      text: "Write WWDC Preview",
       reasoningText: undefined,
       responseMessages: [] as any[],
       usage: undefined,

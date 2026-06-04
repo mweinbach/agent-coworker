@@ -144,14 +144,6 @@ export function createReasoningProjection(state: ConversationProjectionState) {
     ) {
       return false;
     }
-    if (
-      (update.kind === "assistant_text_start" ||
-        update.kind === "assistant_delta" ||
-        update.kind === "assistant_text_end") &&
-      update.phase === "commentary"
-    ) {
-      return false;
-    }
     return true;
   };
 

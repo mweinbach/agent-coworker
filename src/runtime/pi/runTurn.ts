@@ -17,10 +17,12 @@ import {
   extractPiAssistantText,
   extractPiReasoningText,
   mergePiUsage,
+  normalizePiAssistantRecordForProvider,
   normalizePiUsage,
   piTurnMessagesToModelMessages,
 } from "../piMessageBridge";
 import { asRecord, asString, extractToolCallsFromAssistant } from "../piRuntimeOptions";
+import { createPiEventRawPartMapper } from "../piStreamParts";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult } from "../types";
 import {
   preparePiModelForStream,
@@ -36,7 +38,6 @@ import {
 } from "./stepState";
 import {
   buildInvalidToolCallFormatReminderMessage,
-  emitPiEventAsRawPart,
   executeToolCall,
   shouldAddInvalidToolCallFormatReminder,
   toolMapToPiTools,
@@ -70,6 +71,10 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           asRecord(params.providerOptions) ?? undefined;
 
         const maxSteps = Math.max(1, params.maxSteps);
+        const mapPiEventToRawParts = createPiEventRawPartMapper(
+          params.config.provider,
+          includeUnknownRawParts,
+        );
         for (let step = 0; step < maxSteps; step += 1) {
           if (params.abortSignal?.aborted) {
             throw new Error("Model turn aborted.");
@@ -121,18 +126,15 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
               );
 
               for await (const event of stream) {
-                await emitPiEventAsRawPart(
-                  event,
-                  params.config.provider,
-                  includeUnknownRawParts,
-                  emitPart,
-                );
+                for (const part of mapPiEventToRawParts(event)) {
+                  await emitPart(part);
+                }
               }
 
               const assistant = await stream.result();
-              assistantRecord = stripPlaceholderCostFromAssistantRecord(
-                asRecord(assistant) ?? {},
-                resolved.model,
+              assistantRecord = normalizePiAssistantRecordForProvider(
+                stripPlaceholderCostFromAssistantRecord(asRecord(assistant) ?? {}, resolved.model),
+                params.config.provider,
               );
             };
 

@@ -111,7 +111,7 @@ describe("JSON-RPC projectors", () => {
     expect(commentaryCompletedIndex).toBeLessThan(assistantDeltaIndex);
   });
 
-  test("notification projector strips think-tagged text from assistant deltas", () => {
+  test("notification projector renders normalized think-tag streams as reasoning plus assistant text", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcNotificationProjector({
       threadId: sessionId,
@@ -125,21 +125,20 @@ describe("JSON-RPC projectors", () => {
       turnId,
       cause: "user_message",
     });
-    projector.handle(streamChunk("text_delta", { id: "s1", text: "<thi" }));
-    projector.handle(streamChunk("text_delta", { id: "s1", text: "nk>\nPlanning" }));
+    projector.handle(streamChunk("reasoning_start", { id: "s1:think", mode: "reasoning" }));
     projector.handle(
-      streamChunk("reasoning_delta", { id: "s1", mode: "reasoning", text: "Planning" }),
+      streamChunk("reasoning_delta", { id: "s1:think", mode: "reasoning", text: "Planning" }),
     );
-    projector.handle(streamChunk("text_delta", { id: "s1", text: " the work" }));
     projector.handle(
-      streamChunk("reasoning_delta", { id: "s1", mode: "reasoning", text: " the work" }),
+      streamChunk("reasoning_delta", { id: "s1:think", mode: "reasoning", text: " the work" }),
     );
-    projector.handle(streamChunk("text_delta", { id: "s1", text: "\n</think>\n\nVisible answer" }));
+    projector.handle(streamChunk("reasoning_end", { id: "s1:think", mode: "reasoning" }));
+    projector.handle(streamChunk("text_delta", { id: "s1", text: "\n\nVisible answer" }));
     projector.handle(streamChunk("text_end", { id: "s1" }));
     projector.handle({
       type: "assistant_message",
       sessionId,
-      text: "<think>\nPlanning the work\n</think>\n\nVisible answer",
+      text: "\n\nVisible answer",
     });
     projector.handle({
       type: "session_busy",

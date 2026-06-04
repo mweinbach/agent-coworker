@@ -21,7 +21,6 @@ import {
   type ConversationProjectionState,
   clearTurnProjectionState,
 } from "./conversationProjectionState";
-import { stripCompleteThinkTaggedText } from "./conversationProjectionStreamUpdates";
 import type { ToolProjection } from "./conversationProjectionTools";
 import { makeItemId } from "./shared";
 
@@ -117,8 +116,7 @@ export function createSessionEventHandler(
         if (!state.activeTurnId) return;
         {
           reasoning.completeReasoningStateForTurn(state.activeTurnId);
-          const visibleText = stripCompleteThinkTaggedText(event.text);
-          const remainder = assistant.assistantRemainderForTurn(state.activeTurnId, visibleText);
+          const remainder = assistant.assistantRemainderForTurn(state.activeTurnId, event.text);
           const activeAssistant = state.activeAssistantByTurn.get(state.activeTurnId);
           if (activeAssistant) {
             assistant.completeAssistantState(state.activeTurnId, remainder || activeAssistant.text);

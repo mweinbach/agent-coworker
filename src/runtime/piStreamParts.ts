@@ -1,4 +1,10 @@
 import { reasoningModeForProvider } from "../server/modelStream";
+import {
+  createThinkTagStripState,
+  flushThinkTagSplitState,
+  splitThinkTaggedTextChunk,
+  type ThinkTagStripState,
+} from "../shared/thinkTags";
 import type { ProviderName } from "../types";
 import { normalizePiUsage } from "./piMessageBridge";
 
@@ -148,4 +154,89 @@ export function mapPiEventToRawParts(
         },
       ];
   }
+}
+
+type ThinkTagStreamState = {
+  stripState: ThinkTagStripState;
+  reasoningStarted: boolean;
+};
+
+function thinkStreamId(textStreamId: string): string {
+  return `${textStreamId}:think`;
+}
+
+function minimaxThinkTagRawPartNormalizer() {
+  const streamStateById = new Map<string, ThinkTagStreamState>();
+
+  const ensureState = (streamId: string): ThinkTagStreamState => {
+    const existing = streamStateById.get(streamId);
+    if (existing) return existing;
+    const next = { stripState: createThinkTagStripState(), reasoningStarted: false };
+    streamStateById.set(streamId, next);
+    return next;
+  };
+
+  const appendThinking = (
+    out: Array<Record<string, unknown>>,
+    streamId: string,
+    state: ThinkTagStreamState,
+    text: string,
+  ) => {
+    if (!text) return;
+    if (!state.reasoningStarted) {
+      out.push({ type: "reasoning-start", id: thinkStreamId(streamId), mode: "reasoning" });
+      state.reasoningStarted = true;
+    }
+    out.push({ type: "reasoning-delta", id: thinkStreamId(streamId), mode: "reasoning", text });
+  };
+
+  return (part: unknown): unknown[] => {
+    const record = asRecord(part);
+    if (!record) return [part];
+    const type = asNonEmptyString(record.type);
+    const streamId = asNonEmptyString(record.id);
+    if (!type || !streamId) return [part];
+
+    if (type === "text-delta") {
+      const text = typeof record.text === "string" ? record.text : "";
+      const state = ensureState(streamId);
+      const split = splitThinkTaggedTextChunk(text, state.stripState);
+      const out: Array<Record<string, unknown>> = [];
+      appendThinking(out, streamId, state, split.thinkingText);
+      if (split.visibleText) {
+        out.push({ ...record, text: split.visibleText });
+      }
+      return out;
+    }
+
+    if (type === "text-end") {
+      const state = streamStateById.get(streamId);
+      if (!state) return [part];
+      const split = flushThinkTagSplitState(state.stripState);
+      const out: Array<Record<string, unknown>> = [];
+      appendThinking(out, streamId, state, split.thinkingText);
+      if (split.visibleText) {
+        out.push({ type: "text-delta", id: streamId, text: split.visibleText });
+      }
+      if (state.reasoningStarted) {
+        out.push({ type: "reasoning-end", id: thinkStreamId(streamId), mode: "reasoning" });
+      }
+      streamStateById.delete(streamId);
+      out.push(part as Record<string, unknown>);
+      return out;
+    }
+
+    return [part];
+  };
+}
+
+export function createPiEventRawPartMapper(
+  provider: ProviderName,
+  includeUnknown: boolean,
+): (event: unknown) => unknown[] {
+  const normalizeRawPart =
+    provider === "minimax" ? minimaxThinkTagRawPartNormalizer() : (part: unknown) => [part];
+
+  return (event: unknown) =>
+    mapPiEventToRawParts(event, provider, includeUnknown).flatMap((part) => normalizeRawPart(part));
 }

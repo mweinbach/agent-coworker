@@ -153,6 +153,105 @@ describe("desktop transcript feed mapping", () => {
     expect(assistant.map((item) => item.text)).toEqual(["Final answer."]);
   });
 
+  test("renders normalized MiniMax thinking and answer during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-think",
+          index: 0,
+          provider: "minimax",
+          model: "MiniMax-M3",
+          partType: "reasoning_start",
+          part: { id: "msg_final:think", mode: "reasoning" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-think",
+          index: 1,
+          provider: "minimax",
+          model: "MiniMax-M3",
+          partType: "reasoning_delta",
+          part: { id: "msg_final:think", mode: "reasoning", text: "hidden" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-think",
+          index: 2,
+          provider: "minimax",
+          model: "MiniMax-M3",
+          partType: "reasoning_end",
+          part: { id: "msg_final:think", mode: "reasoning" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-think",
+          index: 3,
+          provider: "minimax",
+          model: "MiniMax-M3",
+          partType: "text_delta",
+          part: { id: "msg_final", text: "Visible answer" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-think",
+          index: 4,
+          provider: "minimax",
+          model: "MiniMax-M3",
+          partType: "text_end",
+          part: { id: "msg_final" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:06.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "assistant_message",
+          sessionId: "thread-session",
+          text: "Visible answer",
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+    const assistant = feed.filter((item) => item.kind === "message" && item.role === "assistant");
+
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.text).toBe("hidden");
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.text).toBe("Visible answer");
+  });
+
   test("does not create a blank assistant message for whitespace-only streamed text", () => {
     const transcript: TranscriptEvent[] = [
       {
@@ -942,7 +1041,6 @@ describe("desktop transcript feed mapping", () => {
 
     expect(feed.map((item) => item.kind)).toEqual([
       "message",
-      "system",
       "reasoning",
       "tool",
       "tool",
@@ -953,11 +1051,6 @@ describe("desktop transcript feed mapping", () => {
     expect(reasoning?.kind).toBe("reasoning");
     if (!reasoning || reasoning.kind !== "reasoning") throw new Error("Expected reasoning item");
     expect(reasoning.text).toBe("Searching for trailer visuals.");
-
-    const system = feed.find((item) => item.kind === "system");
-    expect(system?.kind).toBe("system");
-    if (!system || system.kind !== "system") throw new Error("Expected system item");
-    expect(system.line).toBe("Reasoning started (reasoning)");
 
     const tools = feed.filter((item) => item.kind === "tool");
     expect(tools).toHaveLength(2);

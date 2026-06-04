@@ -830,6 +830,93 @@ describe("pi runtime regressions", () => {
     },
   );
 
+  test("MiniMax PI runtime normalizes think-tagged text before stream and history", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-minimax-think-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    const streamCalls: Array<Record<string, unknown>> = [];
+    const runtime = createPiRuntime({
+      piStreamImpl: ((model: unknown, input: Record<string, unknown>, options: unknown) => {
+        streamCalls.push({ model, input, options });
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text_start", contentIndex: 0 };
+            yield { type: "text_delta", contentIndex: 0, delta: "<thi" };
+            yield {
+              type: "text_delta",
+              contentIndex: 0,
+              delta: 'nk data-provider="minimax">hidden</think>\nVisible answer',
+            };
+            yield { type: "text_end", contentIndex: 0 };
+          },
+          async result() {
+            return {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: '<think data-provider="minimax">hidden</think>\nVisible answer',
+                },
+              ],
+              usage: { input: 10, output: 4, totalTokens: 14 },
+              stopReason: "stop",
+            };
+          },
+        };
+      }) as any,
+    });
+    const config = makeConfig(homeDir, {
+      provider: "minimax",
+      model: "MiniMax-M3",
+      preferredChildModel: "MiniMax-M3",
+    });
+
+    const result = await withEnv(
+      "MINIMAX_API_KEY",
+      "minimax-key",
+      async () =>
+        await runtime.runTurn(
+          makeParams(config, {
+            onModelStreamPart: async (part) => {
+              emitted.push(part as Record<string, unknown>);
+            },
+          }),
+        ),
+    );
+
+    expect(streamCalls[0]?.model).toMatchObject({
+      id: "MiniMax-M3",
+      provider: "minimax",
+      compat: {
+        maxTokensField: "max_completion_tokens",
+        thinkingFormat: "openai",
+      },
+    });
+    expect(streamCalls[0]?.options).toMatchObject({ apiKey: "minimax-key" });
+    expect(
+      emitted.filter((part) =>
+        ["reasoning-start", "reasoning-delta", "reasoning-end", "text-delta"].includes(
+          String(part.type),
+        ),
+      ),
+    ).toEqual([
+      { type: "reasoning-start", id: "s0:think", mode: "reasoning" },
+      { type: "reasoning-delta", id: "s0:think", mode: "reasoning", text: "hidden" },
+      { type: "text-delta", id: "s0", text: "\nVisible answer" },
+      { type: "reasoning-end", id: "s0:think", mode: "reasoning" },
+    ]);
+    expect(result.text).toBe("Visible answer");
+    expect(result.reasoningText).toBe("hidden");
+    expect(result.responseMessages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "hidden" },
+          { type: "text", text: "\nVisible answer" },
+        ],
+      },
+    ]);
+  });
+
   test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-"));
     const config = makeConfig(homeDir, {

@@ -72,6 +72,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   firepass: "Fire Pass",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
+  minimax: "MiniMax",
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
   "codex-cli": "Codex",

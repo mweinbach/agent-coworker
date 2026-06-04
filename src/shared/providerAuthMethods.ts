@@ -111,6 +111,7 @@ const DEFAULT_PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> 
   firepass: [{ id: "api_key", type: "api", label: "Fire Pass API key" }],
   nvidia: [{ id: "api_key", type: "api", label: "API key" }],
   lmstudio: [{ id: "api_key", type: "api", label: "API token (optional)" }],
+  minimax: [{ id: "api_key", type: "api", label: "API key" }],
   "opencode-go": [{ id: "api_key", type: "api", label: "API key" }],
   "opencode-zen": [{ id: "api_key", type: "api", label: "API key" }],
   "codex-cli": [

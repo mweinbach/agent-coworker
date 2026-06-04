@@ -5,6 +5,7 @@ import {
   createBasetenModelAdapter,
   createCodexAppServerModelAdapter,
   createGoogleModelAdapter,
+  createMinimaxModelAdapter,
   createNvidiaModelAdapter,
   createOpenAiModelAdapter,
   createTogetherModelAdapter,
@@ -78,6 +79,16 @@ describe("provider model adapters", () => {
     });
   });
 
+  test("MiniMax adapter wires Bearer authorization header and baseUrl", async () => {
+    await withEnv("MINIMAX_API_KEY", "mmkey", async () => {
+      const adapter = createMinimaxModelAdapter("MiniMax-M3");
+      const headers = await adapter.config.headers();
+      expect(headers.authorization).toBe("Bearer mmkey");
+      expect(adapter.provider).toBe("minimax.completions");
+      expect(adapter.config.baseUrl).toBe("https://api.minimax.io/v1");
+    });
+  });
+
   test("adapters omit auth headers when no key source is available", async () => {
     await withEnv("OPENAI_API_KEY", undefined, async () => {
       await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
@@ -86,25 +97,31 @@ describe("provider model adapters", () => {
             await withEnv("BASETEN_API_KEY", undefined, async () => {
               await withEnv("TOGETHER_API_KEY", undefined, async () => {
                 await withEnv("NVIDIA_API_KEY", undefined, async () => {
-                  const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
-                  const googleHeaders =
-                    await createGoogleModelAdapter("gemini-3.1").config.headers();
-                  const anthropicHeaders =
-                    await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
-                  const basetenHeaders =
-                    await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
-                  const togetherHeaders =
-                    await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
-                  const nvidiaHeaders = await createNvidiaModelAdapter(
-                    "nvidia/nemotron-3-super-120b-a12b",
-                  ).config.headers();
+                  await withEnv("MINIMAX_API_KEY", undefined, async () => {
+                    const openAiHeaders =
+                      await createOpenAiModelAdapter("gpt-5.2").config.headers();
+                    const googleHeaders =
+                      await createGoogleModelAdapter("gemini-3.1").config.headers();
+                    const anthropicHeaders =
+                      await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
+                    const basetenHeaders =
+                      await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                    const togetherHeaders =
+                      await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                    const nvidiaHeaders = await createNvidiaModelAdapter(
+                      "nvidia/nemotron-3-super-120b-a12b",
+                    ).config.headers();
+                    const minimaxHeaders =
+                      await createMinimaxModelAdapter("MiniMax-M3").config.headers();
 
-                  expect(openAiHeaders).toEqual({});
-                  expect(googleHeaders).toEqual({});
-                  expect(anthropicHeaders).toEqual({});
-                  expect(basetenHeaders).toEqual({});
-                  expect(togetherHeaders).toEqual({});
-                  expect(nvidiaHeaders).toEqual({});
+                    expect(openAiHeaders).toEqual({});
+                    expect(googleHeaders).toEqual({});
+                    expect(anthropicHeaders).toEqual({});
+                    expect(basetenHeaders).toEqual({});
+                    expect(togetherHeaders).toEqual({});
+                    expect(nvidiaHeaders).toEqual({});
+                    expect(minimaxHeaders).toEqual({});
+                  });
                 });
               });
             });

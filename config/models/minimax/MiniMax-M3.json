@@ -1,0 +1,10 @@
+{
+  "id": "MiniMax-M3",
+  "provider": "minimax",
+  "displayName": "MiniMax M3",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

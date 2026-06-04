@@ -884,7 +884,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "bedrock" | "baseten" | "together" | "fireworks" | "firepass" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli" | "antigravity"
+"google" | "openai" | "anthropic" | "bedrock" | "baseten" | "together" | "fireworks" | "firepass" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli" | "antigravity" | "minimax"
 ```
 
 ### PublicConfig

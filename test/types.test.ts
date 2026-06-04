@@ -5,8 +5,8 @@ import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/type
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 14 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(14);
+  test("contains exactly 15 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(15);
   });
 
   test("contains expected provider names", () => {
@@ -20,6 +20,7 @@ describe("PROVIDER_NAMES", () => {
     expect(PROVIDER_NAMES).toContain("firepass");
     expect(PROVIDER_NAMES).toContain("nvidia");
     expect(PROVIDER_NAMES).toContain("lmstudio");
+    expect(PROVIDER_NAMES).toContain("minimax");
     expect(PROVIDER_NAMES).toContain("opencode-go");
     expect(PROVIDER_NAMES).toContain("opencode-zen");
     expect(PROVIDER_NAMES).toContain("codex-cli");
@@ -38,6 +39,7 @@ describe("resolveProviderName", () => {
     expect(resolveProviderName("fireworks")).toBe("fireworks");
     expect(resolveProviderName("nvidia")).toBe("nvidia");
     expect(resolveProviderName("lmstudio")).toBe("lmstudio");
+    expect(resolveProviderName("minimax")).toBe("minimax");
     expect(resolveProviderName("opencode-go")).toBe("opencode-go");
     expect(resolveProviderName("opencode-zen")).toBe("opencode-zen");
     expect(resolveProviderName("codex-cli")).toBe("codex-cli");
@@ -94,6 +96,10 @@ describe("isProviderName", () => {
 
     test("lmstudio", () => {
       expect(isProviderName("lmstudio")).toBe(true);
+    });
+
+    test("minimax", () => {
+      expect(isProviderName("minimax")).toBe(true);
     });
 
     test("codex-cli", () => {

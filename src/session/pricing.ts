@@ -183,6 +183,13 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     cacheWriteInputPerMillion: 0.375,
   },
 
+  // ── MiniMax (https://platform.minimax.io) ────────────────────────────
+  "minimax:MiniMax-M3": {
+    inputPerMillion: 0.6,
+    outputPerMillion: 2.4,
+    cachedInputPerMillion: 0.12,
+  },
+
   // ── OpenAI ───────────────────────────────────────────────────────────
   "openai:gpt-5.5": {
     inputPerMillion: 5,

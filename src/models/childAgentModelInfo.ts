@@ -125,6 +125,7 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
 
   [key("opencode-zen", "minimax-m2.5")]: minimax25,
   [key("fireworks", "accounts/fireworks/models/minimax-m2p7")]: minimax25,
+  [key("minimax", "MiniMax-M3")]: frontierCoding,
   [key("fireworks", "accounts/fireworks/models/qwen3p6-plus")]: qwenAdvanced,
   [key("opencode-zen", "minimax-m2.5-free")]: freeExperimental,
   [key("opencode-zen", "mimo-v2-flash-free")]: mimoFlash,

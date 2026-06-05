@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import {
+  DEFAULT_SANDBOX_CONFIG,
   isLikelySandboxDenied,
   resolveSandboxPolicy,
   type SandboxCapabilities,
@@ -361,10 +362,14 @@ export function createBashTool(ctx: ToolContext) {
       // alternate delegate path), derive one here from the role + config rather
       // than defaulting to full access, so read-only roles and targetPaths stay
       // enforced instead of silently running unsandboxed.
+      const sandboxConfig = {
+        ...DEFAULT_SANDBOX_CONFIG,
+        ...(ctx.config.sandbox ?? {}),
+      };
       const policy: SandboxPolicy =
         ctx.sandboxPolicy ??
         resolveSandboxPolicy({
-          config: ctx.config.sandbox,
+          config: sandboxConfig,
           readOnlyRole: ctx.agentRole ? getAgentRoleDefinition(ctx.agentRole).readOnly : false,
           workingDirectory: ctx.config.workingDirectory,
           outputDirectory: ctx.config.outputDirectory,
@@ -377,7 +382,7 @@ export function createBashTool(ctx: ToolContext) {
         abortSignal: ctx.abortSignal,
         timeoutMs,
         env: ctx.toolEnv,
-        requireBackend: ctx.config.sandbox?.requireBackend,
+        requireBackend: sandboxConfig.requireBackend,
       };
 
       let result = await runner({ ...baseArgs, policy });

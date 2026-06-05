@@ -4,11 +4,11 @@ import type { SandboxPolicy } from "./policy";
 
 /**
  * Windows sandbox generation. Unlike macOS/Linux there is no system sandbox
- * wrapper to call, so we shell out to a bundled native helper
+ * wrapper to call, so this module builds the command line for a bundled native helper
  * (`cowork-win-sandbox.exe`, see `crates/cowork-win-sandbox/`) that applies a
- * restricted token + Job Object before spawning the command. This module only
- * builds the helper invocation; locating the helper binary and falling back
- * when it is absent is handled by the {@link SandboxManager}.
+ * restricted token + Job Object before spawning the command. The helper is not
+ * currently selected by {@link SandboxManager} for restrictive policies because
+ * it does not yet enforce per-root filesystem scoping or WFP network isolation.
  *
  * Modeled on the restricted-token path of Codex's `windows-sandbox-rs`. Network
  * isolation (Codex's WFP layer) is intentionally out of scope for v1, so the

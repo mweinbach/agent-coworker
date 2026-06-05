@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
 import { isLikelySandboxDenied } from "../../src/platform/sandbox/denied";
 import {
+  DEFAULT_SANDBOX_CONFIG,
   SANDBOX_ENV_VAR,
   SANDBOX_NETWORK_DISABLED_ENV_VAR,
   type SandboxCapabilities,
@@ -22,6 +23,14 @@ function caps(overrides: Partial<SandboxCapabilities> = {}): SandboxCapabilities
 }
 
 describe("resolveSandboxPolicy", () => {
+  test("default sandbox config fails closed when a backend is unavailable", () => {
+    expect(DEFAULT_SANDBOX_CONFIG).toEqual({
+      mode: "workspace-write",
+      network: true,
+      requireBackend: true,
+    });
+  });
+
   test("danger-full-access mode wins", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "danger-full-access" },
@@ -320,6 +329,19 @@ describe("SandboxManager.transform", () => {
     });
     expect(r.sandbox).toBe("none");
     expect(r.warning).toContain("cowork-win-sandbox");
+  });
+
+  test("win32 helper is not treated as a filesystem/network sandbox yet", () => {
+    const r = mgr.transform({
+      ...INNER,
+      policy: { kind: "workspace-write", writableRoots: ["C:/w"], network: false },
+      cwd: "C:/w",
+      platform: "win32",
+      capabilities: caps({ windowsHelperPath: "C:/h/cowork-win-sandbox.exe" }),
+    });
+    expect(r.sandbox).toBe("none");
+    expect(r.unsandboxed).toBe(true);
+    expect(r.warning).toContain("does not yet enforce filesystem or network restrictions");
   });
 });
 

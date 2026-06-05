@@ -2,7 +2,8 @@
   "provider": "google",
   "sandbox": {
     "mode": "workspace-write",
-    "network": true
+    "network": true,
+    "requireBackend": true
   },
   "userName": "",
   "knowledgeCutoff": "End of May 2025",

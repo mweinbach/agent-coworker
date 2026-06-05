@@ -4,6 +4,11 @@ import {
 } from "../../artifactRuntime";
 import { renderManagedSofficeRuntimeInstructions } from "../../managedSofficeRuntime";
 import { getSupportedModel } from "../../models/registry";
+import {
+  type SandboxPolicy as CoworkSandboxPolicy,
+  resolveSandboxPolicy,
+  type SandboxConfig,
+} from "../../platform/sandbox";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
@@ -245,8 +250,9 @@ export async function resolveEffectiveCodexModel(
 }
 
 export function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode {
-  if (params.shellPolicy === "no_project_write") return "read-only";
-  return params.yolo === true ? "danger-full-access" : "workspace-write";
+  const policy = resolveCodexCoworkSandboxPolicy(params);
+  if (policy.kind === "danger-full-access") return "danger-full-access";
+  return policy.kind;
 }
 
 export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApprovalPolicy {
@@ -254,15 +260,34 @@ export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApproval
 }
 
 export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPolicy {
-  const sandbox = codexSandboxMode(params);
-  if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
-  if (sandbox === "read-only") return { type: "readOnly", networkAccess: true };
+  const sandbox = resolveCodexCoworkSandboxPolicy(params);
+  if (sandbox.kind === "danger-full-access") return { type: "dangerFullAccess" };
+  if (sandbox.kind === "read-only") {
+    return { type: "readOnly", networkAccess: sandbox.network };
+  }
   return {
     type: "workspaceWrite",
-    writableRoots: [params.config.workingDirectory],
-    networkAccess: true,
+    writableRoots: sandbox.writableRoots,
+    networkAccess: sandbox.network,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
+  };
+}
+
+function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSandboxPolicy {
+  return resolveSandboxPolicy({
+    config: codexSandboxConfig(params),
+    readOnlyRole: params.shellPolicy === "no_project_write",
+    workingDirectory: params.config.workingDirectory,
+    outputDirectory: params.config.outputDirectory,
+  });
+}
+
+function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undefined {
+  if (params.yolo !== true) return params.config.sandbox;
+  return {
+    ...(params.config.sandbox ?? {}),
+    mode: "danger-full-access",
   };
 }
 

@@ -80,6 +80,36 @@ describe("loadConfig", () => {
     expect(cfg.memoryGenerationModel).toBe("together:moonshotai/Kimi-K2.5");
   });
 
+  test("sandbox defaults require a backend unless explicitly disabled", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.sandbox).toEqual({
+      mode: "workspace-write",
+      network: true,
+      requireBackend: true,
+    });
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      sandbox: { requireBackend: false },
+    });
+
+    const relaxed = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(relaxed.sandbox?.requireBackend).toBe(false);
+  });
+
   test("provider override uses provider-default model when no model is set", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-"));
     const cwd = path.join(tmp, "project");

@@ -4,7 +4,6 @@ import { buildBwrapCommand } from "./bwrap";
 import { findBwrap, findWindowsHelper, hasSeatbelt } from "./detect";
 import type { SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
-import { buildWindowsSandboxCommand } from "./windows";
 
 export { isLikelySandboxDenied } from "./denied";
 export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
@@ -16,7 +15,7 @@ export {
 } from "./policy";
 
 /** Concrete sandbox backend selected for a given platform + policy. */
-export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-restricted";
+export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap";
 
 /** Marker env var set on sandboxed children (mirrors Codex's `CODEX_SANDBOX`). */
 export const SANDBOX_ENV_VAR = "COWORK_SANDBOX";
@@ -152,18 +151,9 @@ export class SandboxManager {
         if (!capabilities.windowsHelperPath) {
           return unavailable("Windows sandbox helper (cowork-win-sandbox.exe) not found");
         }
-        const wrapped = buildWindowsSandboxCommand(
-          inner,
-          input.policy,
-          input.cwd,
-          capabilities.windowsHelperPath,
+        return unavailable(
+          "Windows sandbox helper does not yet enforce filesystem or network restrictions",
         );
-        return {
-          ...wrapped,
-          env: markerEnv("windows-restricted"),
-          sandbox: "windows-restricted",
-          unsandboxed: false,
-        };
       }
       default:
         return unavailable(`No sandbox backend available for platform "${platform}"`);

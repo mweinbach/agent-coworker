@@ -21,7 +21,11 @@ import {
   describeModelProviderMismatch,
   getSupportedModel,
 } from "./models/registry";
-import type { SandboxConfig, SandboxMode } from "./platform/sandbox/policy";
+import {
+  DEFAULT_SANDBOX_CONFIG,
+  type SandboxConfig,
+  type SandboxMode,
+} from "./platform/sandbox/policy";
 import { getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
@@ -119,7 +123,8 @@ const SANDBOX_MODE_VALUES: readonly SandboxMode[] = [
 /**
  * Resolve the effective sandbox configuration from the `AGENT_SANDBOX` env
  * override (mode) and the deep-merged config layers. Always returns a concrete
- * config; defaults to workspace-write with network enabled.
+ * config; defaults to workspace-write with network enabled and fail-closed
+ * backend enforcement.
  */
 function resolveSandboxConfig(envMode: string | undefined, raw: unknown): SandboxConfig {
   const obj = isPlainObject(raw) ? raw : {};
@@ -131,8 +136,11 @@ function resolveSandboxConfig(envMode: string | undefined, raw: unknown): Sandbo
       : "workspace-write";
   return {
     mode,
-    network: typeof obj.network === "boolean" ? obj.network : true,
-    requireBackend: typeof obj.requireBackend === "boolean" ? obj.requireBackend : false,
+    network: typeof obj.network === "boolean" ? obj.network : DEFAULT_SANDBOX_CONFIG.network,
+    requireBackend:
+      typeof obj.requireBackend === "boolean"
+        ? obj.requireBackend
+        : DEFAULT_SANDBOX_CONFIG.requireBackend,
   };
 }
 

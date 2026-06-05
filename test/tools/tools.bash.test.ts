@@ -190,9 +190,35 @@ describe("bash tool", () => {
 
   test("returns exit code on failure", async () => {
     const dir = await tmpDir();
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 42,
+    }));
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({ command: "exit 42" });
     expect(res.exitCode).not.toBe(0);
+  });
+
+  test("fails closed when a restrictive sandbox backend is required but unavailable", async () => {
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "workspace-write", writableRoots: ["/tmp"], network: true },
+      requireBackend: true,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls).toEqual([]);
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+    expect(result.stderr).toContain("Refusing to run unsandboxed");
   });
 
   test("does not prompt for approval when a sandboxed command succeeds", async () => {

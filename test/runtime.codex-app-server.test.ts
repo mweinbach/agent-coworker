@@ -750,7 +750,7 @@ rl.on("line", (line) => {
 
       const runtime = createRuntime(makeConfig(dir));
       await runtime.runTurn({
-        config: makeConfig(dir),
+        config: { ...makeConfig(dir), sandbox: { mode: "workspace-write", network: false } },
         system: "You are Codex.",
         messages: [{ role: "user", content: "Say hi" }],
         tools: {},
@@ -769,14 +769,45 @@ rl.on("line", (line) => {
         approvalPolicy: "on-request",
         sandboxPolicy: {
           type: "workspaceWrite",
-          writableRoots: [dir],
-          networkAccess: true,
+          writableRoots: [dir, path.join(dir, "output")],
+          networkAccess: false,
           excludeTmpdirEnvVar: false,
           excludeSlashTmp: false,
         },
       });
     },
   );
+
+  test.serial("passes configured read-only sandbox to Codex app-server turns", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-config-ro-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: { ...makeConfig(dir), sandbox: { mode: "read-only", network: false } },
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Inspect only" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: false,
+      shellPolicy: "full",
+      approveCommand: async () => true,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+    });
+    expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "readOnly", networkAccess: false },
+    });
+  });
 
   test.serial("passes danger-full-access sandbox when the session is in yolo mode", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-"));

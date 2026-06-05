@@ -35,9 +35,10 @@ child's exit code. Stdio is inherited (passthrough).
   currently informational.
 
 These are the heavier parts of Codex's `windows-sandbox-rs`; they are the next
-iteration. Until then, Windows gets privilege reduction + containment, and the
-TypeScript side falls back to running unsandboxed (with a warning) whenever the
-helper binary is not present.
+iteration. Until then, the TypeScript sandbox manager treats restrictive Windows
+policies as backend-unavailable rather than claiming filesystem or network
+isolation. With the default `sandbox.requireBackend: true`, that fails closed;
+users may explicitly opt into unsandboxed execution by setting it to `false`.
 
 ## Build
 

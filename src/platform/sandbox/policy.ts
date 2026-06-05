@@ -27,12 +27,17 @@ export interface SandboxConfig {
   /**
    * When `true`, refuse to run a restrictive (read-only/workspace-write) command
    * if the platform sandbox backend is unavailable, instead of running it
-   * unsandboxed with a warning. Defaults to `false` (run + warn).
+   * unsandboxed with a warning. Defaults to `true` so the OS sandbox remains
+   * the enforcement boundary unless the user explicitly opts out.
    */
   requireBackend?: boolean;
 }
 
-export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = { mode: "workspace-write", network: true };
+export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
+  mode: "workspace-write",
+  network: true,
+  requireBackend: true,
+};
 
 /**
  * Metadata directory names that must remain read-only even when they live under

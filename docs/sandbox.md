@@ -25,7 +25,7 @@ crates/cowork-win-sandbox/   Windows native helper (restricted token + Job Objec
 
 `SandboxManager.transform()` is the single abstraction every platform flows
 through. Given the command argv and a policy it selects a backend
-(`macos-seatbelt` | `linux-bwrap` | `windows-restricted` | `none`) and prepends
+(`macos-seatbelt` | `linux-bwrap` | `none`) and prepends
 the appropriate wrapper, mirroring Codex's `SandboxManager::transform`. The bash
 tool (`src/tools/bash.ts`) is the single integration point: it wraps the shell
 candidate before spawning and attaches marker env vars (`COWORK_SANDBOX`,
@@ -51,11 +51,13 @@ so write scope is enforced by the OS rather than by parsing the command.
 `config.sandbox` (built-in default in `config/defaults.json`):
 
 ```json
-{ "sandbox": { "mode": "workspace-write", "network": true } }
+{ "sandbox": { "mode": "workspace-write", "network": true, "requireBackend": true } }
 ```
 
 - `mode`: `auto` | `read-only` | `workspace-write` | `danger-full-access`
 - `network`: allow outbound network inside the sandbox (default `true`)
+- `requireBackend`: fail closed when the selected OS sandbox backend is unavailable
+  (default `true`; set `false` to run unsandboxed with a surfaced warning)
 - env override: `AGENT_SANDBOX=<mode>`
 
 ## Escalate-on-failure
@@ -78,15 +80,16 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
   network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is
   resolved only from trusted system dirs (`/usr/bin`, `/bin`, …) or an absolute
   `COWORK_BWRAP_PATH` — never `$PATH` — so a workspace-planted binary can't hijack
-  it. If absent the command runs unsandboxed with a surfaced warning (or fails
-  closed when `sandbox.requireBackend` is set).
+  it. If absent the command fails closed by default, or runs unsandboxed with a
+  surfaced warning when `sandbox.requireBackend` is explicitly `false`.
   (The in-process seccomp layer Codex adds is not ported — bwrap alone provides
   filesystem + network + namespace isolation.)
 - **Windows — restricted token** (`crates/cowork-win-sandbox`): a native helper
   runs the child under a restricted (LUA) token inside a kill-on-close Job
   Object. **Status: the Win32 path requires a Windows CI build to be verified;**
   per-root ACL filesystem scoping and WFP network isolation are tracked TODOs.
-  When the helper is absent the command runs unsandboxed with a warning.
+  Until those are implemented, restrictive Windows policies are treated as
+  backend-unavailable instead of as a filesystem/network sandbox.
 
 ## Verification
 

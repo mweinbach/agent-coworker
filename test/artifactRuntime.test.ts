@@ -226,7 +226,7 @@ describe("artifact runtime bootstrap", () => {
       if (process.platform === "win32") {
         await fs.symlink(realDir, linkPath, "junction");
       } else {
-        await fs.symlink(path.join("..", "real-pkg"), linkPath);
+        await fs.symlink(path.relative(path.dirname(linkPath), realDir), linkPath);
       }
       symlinkCreated = true;
     } catch {

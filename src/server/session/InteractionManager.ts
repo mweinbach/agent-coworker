@@ -1,7 +1,5 @@
-import path from "node:path";
 import { captureProductEvent } from "../../telemetry/productAnalytics";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
-import { classifyCommandDetailed } from "../../utils/approval";
 import { ASK_SKIP_TOKEN, type SessionEvent } from "../protocol";
 
 function makeId(): string {
@@ -140,19 +138,15 @@ export class InteractionManager {
     });
   }
 
-  async approveCommand(command: string) {
+  /**
+   * Request approval to escalate a command out of the OS sandbox. Under the
+   * escalate-on-failure model the OS sandbox is the enforcement boundary, so
+   * this is only invoked when a sandboxed command failed in a way that looks
+   * like a sandbox denial and the agent wants to retry it unsandboxed. YOLO
+   * mode auto-approves the escalation.
+   */
+  async approveCommand(command: string, _opts?: { reason?: string }) {
     if (this.opts.isYolo()) return true;
-
-    const config = this.opts.getConfig();
-    const classification = classifyCommandDetailed(command, {
-      allowedRoots: [
-        path.dirname(config.projectCoworkDir),
-        config.workingDirectory,
-        ...(config.outputDirectory ? [config.outputDirectory] : []),
-      ],
-      workingDirectory: config.workingDirectory,
-    });
-    if (classification.kind === "auto") return true;
 
     const requestId = makeId();
     const pending = Promise.withResolvers<boolean>();
@@ -163,15 +157,15 @@ export class InteractionManager {
       sessionId: this.opts.sessionId,
       requestId,
       command,
-      dangerous: classification.dangerous,
-      reasonCode: classification.riskCode,
+      dangerous: true,
+      reasonCode: "sandbox_denied_escalation",
     };
     this.pendingApprovalEvents.set(requestId, evt);
     this.opts.emit(evt);
     captureProductEvent("tool_approval_requested", {
       eventSource: "server",
-      status: classification.dangerous ? "dangerous" : "review",
-      errorCategory: classification.riskCode,
+      status: "dangerous",
+      errorCategory: "sandbox_denied_escalation",
     });
     this.opts.queuePersistSessionSnapshot("session.approval_pending");
 

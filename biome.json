@@ -325,9 +325,7 @@
         "src/workspace/map.ts",
         "src/tools/webFetch.ts",
         "src/tools/webSearch.ts",
-        "src/server/agents/commandPolicy.ts",
-        "src/server/commands.ts",
-        "src/utils/approval.ts"
+        "src/server/commands.ts"
       ],
       "linter": {
         "rules": {

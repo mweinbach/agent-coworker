@@ -1,3 +1,4 @@
+import type { SandboxPolicy } from "../platform/sandbox/policy";
 import type { AgentShellPolicy } from "../server/agents/commandPolicy";
 import type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
@@ -41,7 +42,7 @@ export interface ToolContext {
   log: (line: string) => void;
 
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string) => Promise<boolean>;
+  approveCommand: (command: string, opts?: { reason?: string }) => Promise<boolean>;
 
   updateTodos?: (todos: TodoItem[]) => void;
 
@@ -78,6 +79,13 @@ export interface ToolContext {
 
   /** Effective shell mutation policy. Defaults to "full" when omitted. */
   shellPolicy?: AgentShellPolicy;
+
+  /**
+   * Effective OS sandbox policy for shell command execution. When omitted, the
+   * bash tool runs with full access (no sandbox). Enforced at the OS level via
+   * `src/platform/sandbox`.
+   */
+  sandboxPolicy?: SandboxPolicy;
 
   /** Environment variables inherited by child processes launched from tools. */
   toolEnv?: Record<string, string | undefined>;

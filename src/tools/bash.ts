@@ -1,14 +1,19 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 
+import {
+  isLikelySandboxDenied,
+  sandboxManager,
+  type SandboxCapabilities,
+  type SandboxPolicy,
+  type SandboxType,
+} from "../platform/sandbox";
 import {
   buildPlatformShellCommandWithRuntimePrelude,
   buildPlatformShellExecutionPlan,
 } from "../platform/shell";
-import {
-  getShellCommandPathScopeViolation,
-  getShellCommandPolicyViolation,
-} from "../server/agents/commandPolicy";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -123,13 +128,24 @@ function execFileAsync(
   });
 }
 
-async function runShellCommand(opts: {
+/** Exec result augmented with which sandbox backend (if any) wrapped the run. */
+type ShellRunResult = ExecResult & { sandbox?: SandboxType; sandboxWarning?: string };
+
+type RunShellCommandOpts = {
   command: string;
   cwd: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   env?: Record<string, string | undefined>;
-}): Promise<ExecResult> {
+  /** Sandbox policy to enforce. Omit or use danger-full-access to run unsandboxed. */
+  policy?: SandboxPolicy;
+  /** Injectable sandbox capabilities (for tests). */
+  capabilities?: SandboxCapabilities;
+  /** Injectable existence check for shell selection (for tests). */
+  exists?: (p: string) => boolean;
+};
+
+async function runShellCommand(opts: RunShellCommandOpts): Promise<ShellRunResult> {
   return await runShellCommandWithExec({
     ...opts,
     platform: process.platform,
@@ -138,25 +154,14 @@ async function runShellCommand(opts: {
 }
 
 let runShellCommandOverrideForTests:
-  | ((opts: {
-      command: string;
-      cwd: string;
-      abortSignal?: AbortSignal;
-      timeoutMs?: number;
-      env?: Record<string, string | undefined>;
-    }) => Promise<ExecResult>)
+  | ((opts: RunShellCommandOpts) => Promise<ShellRunResult>)
   | null = null;
 
-async function runShellCommandWithExec(opts: {
-  command: string;
-  cwd: string;
-  abortSignal?: AbortSignal;
-  timeoutMs?: number;
-  env?: Record<string, string | undefined>;
-  platform: NodeJS.Platform;
-  execRunner: ExecRunner;
-}): Promise<ExecResult> {
+async function runShellCommandWithExec(
+  opts: RunShellCommandOpts & { platform: NodeJS.Platform; execRunner: ExecRunner },
+): Promise<ShellRunResult> {
   const maxBuffer = 1024 * 1024 * 10;
+  const exists = opts.exists ?? ((p: string) => fsSync.existsSync(p));
 
   const command = buildPlatformShellCommandWithRuntimePrelude({
     command: opts.command,
@@ -164,7 +169,44 @@ async function runShellCommandWithExec(opts: {
     env: opts.env,
   });
   const plan = buildPlatformShellExecutionPlan(opts.platform, command);
+  const policy = opts.policy;
 
+  // Determine whether an OS sandbox applies (independent of which shell we pick).
+  const probe =
+    policy && plan.length > 0
+      ? sandboxManager.transform({
+          file: plan[0].file,
+          args: [],
+          policy,
+          cwd: opts.cwd,
+          platform: opts.platform,
+          capabilities: opts.capabilities,
+        })
+      : null;
+
+  if (policy && probe && probe.sandbox !== "none") {
+    // Resolve the inner shell before wrapping: first existing absolute candidate,
+    // otherwise the first candidate (a bare name resolved via PATH at exec time).
+    const inner = plan.find((c) => path.isAbsolute(c.file) && exists(c.file)) ?? plan[0];
+    const wrapped = sandboxManager.transform({
+      file: inner.file,
+      args: inner.args,
+      policy,
+      cwd: opts.cwd,
+      platform: opts.platform,
+      capabilities: opts.capabilities,
+    });
+    const result = await opts.execRunner(wrapped.file, wrapped.args, {
+      cwd: opts.cwd,
+      maxBuffer,
+      signal: opts.abortSignal,
+      timeoutMs: opts.timeoutMs,
+      env: { ...opts.env, ...wrapped.env },
+    });
+    return { ...result, sandbox: wrapped.sandbox, sandboxWarning: wrapped.warning };
+  }
+
+  // Unsandboxed: try shell candidates until one is not missing (ENOENT).
   for (const candidate of plan) {
     const result = await opts.execRunner(candidate.file, candidate.args, {
       cwd: opts.cwd,
@@ -173,7 +215,9 @@ async function runShellCommandWithExec(opts: {
       timeoutMs: opts.timeoutMs,
       env: opts.env,
     });
-    if (result.errorCode !== "ENOENT") return result;
+    if (result.errorCode !== "ENOENT") {
+      return { ...result, sandbox: "none", sandboxWarning: probe?.warning };
+    }
   }
 
   return {
@@ -181,6 +225,8 @@ async function runShellCommandWithExec(opts: {
     stderr: `No compatible shell executable was found for platform ${opts.platform}.`,
     exitCode: 1,
     errorCode: "ENOENT",
+    sandbox: "none",
+    sandboxWarning: probe?.warning,
   };
 }
 
@@ -240,66 +286,46 @@ export function createBashTool(ctx: ToolContext) {
         return res;
       }
 
-      const shellPolicyViolation = getShellCommandPolicyViolation(command, ctx.shellPolicy);
-      if (shellPolicyViolation) {
-        const res = {
-          stdout: "",
-          stderr:
-            `Command blocked by shell policy "${shellPolicyViolation.shellPolicy}": ` +
-            `${shellPolicyViolation.reason}. Use read/test/build commands or a write-capable role instead.`,
-          exitCode: 1,
-        };
-        ctx.log(`tool< bash ${JSON.stringify(res)}`);
-        return res;
+      // The OS sandbox (src/platform/sandbox) is the enforcement boundary. We
+      // run the command inside it and only fall back to prompting the user when
+      // a sandboxed command fails in a way that looks like a sandbox denial.
+      const policy: SandboxPolicy = ctx.sandboxPolicy ?? { kind: "danger-full-access" };
+      const runner = runShellCommandOverrideForTests ?? runShellCommand;
+      const baseArgs = {
+        command,
+        cwd: ctx.config.workingDirectory,
+        abortSignal: ctx.abortSignal,
+        timeoutMs,
+        env: ctx.toolEnv,
+      };
+
+      let result = await runner({ ...baseArgs, policy });
+      if (result.sandboxWarning) {
+        ctx.log(`tool> bash sandbox unavailable: ${result.sandboxWarning}`);
       }
 
-      const pathScopeViolation = getShellCommandPathScopeViolation(command, {
-        workingDirectory: ctx.config.workingDirectory,
-        targetPaths: ctx.agentTargetPaths,
-      });
-      if (pathScopeViolation) {
-        const res = {
-          stdout: "",
-          stderr:
-            `Command blocked by targetPaths: ${pathScopeViolation.targetPath} is outside this child agent's assigned target paths. ` +
-            "Use a path inside targetPaths or ask the parent to spawn a child with a broader scope.",
-          exitCode: 1,
-        };
-        ctx.log(`tool< bash ${JSON.stringify(res)}`);
-        return res;
+      // Escalate-on-failure: when a sandboxed command fails in a way that looks
+      // like a sandbox denial, ask the user whether to re-run it unsandboxed.
+      const wasSandboxed = result.sandbox !== undefined && result.sandbox !== "none";
+      if (wasSandboxed && result.exitCode !== 0 && isLikelySandboxDenied(result)) {
+        const approved = await ctx.approveCommand(command, { reason: "sandbox_denied" });
+        if (approved) {
+          result = await runner({ ...baseArgs, policy: { kind: "danger-full-access" } });
+        }
       }
 
-      const approved = await ctx.approveCommand(command);
-      if (!approved) {
-        const res = { stdout: "", stderr: "User rejected this command.", exitCode: 1 };
-        ctx.log(`tool< bash ${JSON.stringify(res)}`);
-        return res;
-      }
-
-      return await new Promise((resolve, reject) => {
-        void (runShellCommandOverrideForTests ?? runShellCommand)({
-          command,
-          cwd: ctx.config.workingDirectory,
-          abortSignal: ctx.abortSignal,
-          timeoutMs,
-          env: ctx.toolEnv,
-        })
-          .then(({ stdout, stderr, exitCode }) => {
-            const res = {
-              stdout: String(stdout ?? ""),
-              stderr: String(stderr ?? ""),
-              exitCode,
-            };
-            const redactedRes = {
-              stdout: redactSecrets(res.stdout),
-              stderr: redactSecrets(res.stderr),
-              exitCode: res.exitCode,
-            };
-            ctx.log(`tool< bash ${JSON.stringify(redactedRes)}`);
-            resolve(res);
-          })
-          .catch(reject);
-      });
+      const res = {
+        stdout: String(result.stdout ?? ""),
+        stderr: String(result.stderr ?? ""),
+        exitCode: result.exitCode,
+      };
+      const redactedRes = {
+        stdout: redactSecrets(res.stdout),
+        stderr: redactSecrets(res.stderr),
+        exitCode: res.exitCode,
+      };
+      ctx.log(`tool< bash ${JSON.stringify(redactedRes)}`);
+      return res;
     },
   });
 }

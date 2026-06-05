@@ -21,6 +21,7 @@ import type {
   RuntimeStepOverride,
 } from "./runtime/types";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
+import { resolveSandboxPolicy } from "./platform/sandbox";
 import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./server/agents/roles";
 import { filterToolsForProfile, filterToolsForRole } from "./server/agents/toolPolicy";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
@@ -95,7 +96,7 @@ export interface RunTurnParams {
 
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string) => Promise<boolean>;
+  approveCommand: (command: string, opts?: { reason?: string }) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
 
   /** Lightweight skill metadata for dynamic tool descriptions. */
@@ -396,6 +397,15 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
+      sandboxPolicy: resolveSandboxPolicy({
+        config: config.sandbox,
+        readOnlyRole: params.agentRole
+          ? getAgentRoleDefinition(params.agentRole).readOnly
+          : false,
+        workingDirectory: config.workingDirectory,
+        outputDirectory: config.outputDirectory,
+        targetPaths: params.agentTargetPaths,
+      }),
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,

@@ -195,7 +195,7 @@ describe("bash tool", () => {
     expect(res.exitCode).not.toBe(0);
   });
 
-  test("calls approveCommand before execution", async () => {
+  test("does not prompt for approval when a sandboxed command succeeds", async () => {
     const dir = await tmpDir();
     const approveFn = mock(async () => true);
     const ctx = makeCtx(dir);
@@ -204,22 +204,33 @@ describe("bash tool", () => {
       stdout: "test\n",
       stderr: "",
       exitCode: 0,
+      sandbox: "linux-bwrap",
     }));
 
     const t: any = createBashTool(ctx);
-    await t.execute({ command: "echo test" });
-    expect(approveFn).toHaveBeenCalledWith("echo test");
+    const res = await t.execute({ command: "echo test" });
+    expect(res.exitCode).toBe(0);
+    // Under escalate-on-failure the sandbox is the boundary; no pre-run prompt.
+    expect(approveFn).not.toHaveBeenCalled();
   });
 
-  test("returns rejection when command not approved", async () => {
+  test("escalation rejected returns the sandbox failure unchanged", async () => {
     const dir = await tmpDir();
+    const approveFn = mock(async () => false);
     const ctx = makeCtx(dir);
-    ctx.approveCommand = async () => false;
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot touch 'x': Operation not permitted",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
 
     const t: any = createBashTool(ctx);
-    const res = await t.execute({ command: "echo secret" });
+    const res = await t.execute({ command: "touch x" });
+    expect(approveFn).toHaveBeenCalled();
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain("rejected");
+    expect(res.stderr).toContain("Operation not permitted");
   });
 
   test("handles stderr output", async () => {
@@ -285,26 +296,53 @@ describe("bash tool", () => {
     expect(res.stderr.trim()).toBe("err");
   });
 
-  test("rejected command does not execute the command", async () => {
+  test("approved escalation re-runs the command without the sandbox", async () => {
     const dir = await tmpDir();
-    const p = path.join(dir, "should-not-exist.txt");
+    const approveFn = mock(async () => true);
     const ctx = makeCtx(dir);
-    ctx.approveCommand = async () => false;
+    ctx.approveCommand = approveFn;
+    const policies: Array<{ kind: string }> = [];
+    let call = 0;
+    bashInternal.setRunShellCommandForTests(async (opts: any) => {
+      policies.push(opts.policy);
+      call += 1;
+      if (call === 1) {
+        return {
+          stdout: "",
+          stderr: "bash: cannot create file: Read-only file system",
+          exitCode: 1,
+          sandbox: "linux-bwrap",
+        };
+      }
+      return { stdout: "ran unsandboxed\n", stderr: "", exitCode: 0, sandbox: "none" };
+    });
 
     const t: any = createBashTool(ctx);
-    await t.execute({ command: `touch "${p}"` });
-    // File should not have been created since command was rejected
-    await expect(fs.access(p)).rejects.toThrow();
+    const res = await t.execute({ command: "touch x" });
+    expect(approveFn).toHaveBeenCalled();
+    expect(call).toBe(2);
+    // The retry drops to full access (no sandbox).
+    expect(policies[1]?.kind).toBe("danger-full-access");
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("ran unsandboxed");
   });
 
-  test("returns empty stdout on rejected command", async () => {
+  test("does not escalate when a sandboxed failure is not a sandbox denial", async () => {
     const dir = await tmpDir();
+    const approveFn = mock(async () => true);
     const ctx = makeCtx(dir);
-    ctx.approveCommand = async () => false;
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "some normal command error",
+      exitCode: 2,
+      sandbox: "linux-bwrap",
+    }));
 
     const t: any = createBashTool(ctx);
-    const res = await t.execute({ command: "echo should not see" });
-    expect(res.stdout).toBe("");
+    const res = await t.execute({ command: "false" });
+    expect(approveFn).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(2);
   });
 
   test("returns aborted exit code when turn signal is aborted", async () => {

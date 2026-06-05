@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
 import { isA2uiExperimentEnabled } from "./experimental/a2ui/flags";
+import type { SandboxConfig, SandboxMode } from "./platform/sandbox/policy";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
@@ -106,6 +107,32 @@ const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
+}
+
+const SANDBOX_MODE_VALUES: readonly SandboxMode[] = [
+  "auto",
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+];
+
+/**
+ * Resolve the effective sandbox configuration from the `AGENT_SANDBOX` env
+ * override (mode) and the deep-merged config layers. Always returns a concrete
+ * config; defaults to workspace-write with network enabled.
+ */
+function resolveSandboxConfig(envMode: string | undefined, raw: unknown): SandboxConfig {
+  const obj = isPlainObject(raw) ? raw : {};
+  const trimmedEnv = envMode?.trim();
+  const mode: SandboxMode = SANDBOX_MODE_VALUES.includes(trimmedEnv as SandboxMode)
+    ? (trimmedEnv as SandboxMode)
+    : SANDBOX_MODE_VALUES.includes(obj.mode as SandboxMode)
+      ? (obj.mode as SandboxMode)
+      : "workspace-write";
+  return {
+    mode,
+    network: typeof obj.network === "boolean" ? obj.network : true,
+  };
 }
 
 function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
@@ -437,6 +464,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
+  const sandbox = resolveSandboxConfig(env.AGENT_SANDBOX, (merged as Record<string, unknown>).sandbox);
+
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
     ? (deepMerge(
         {},
@@ -710,6 +739,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   return {
     provider,
     runtime,
+    sandbox,
     model: supportedModel.id,
     preferredChildModel: normalizedChildRouting.preferredChildModel,
     childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,

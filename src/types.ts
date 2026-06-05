@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import type { SandboxConfig } from "./platform/sandbox/policy";
+
 export const PROVIDER_NAMES = [
   "google",
   "openai",
@@ -170,6 +172,12 @@ export type WorkspaceFeatureFlags = {
 export interface AgentConfig {
   provider: ProviderName;
   runtime?: RuntimeName;
+  /**
+   * OS-level sandbox configuration for shell command execution. When omitted,
+   * defaults to workspace-write with network enabled. See
+   * `src/platform/sandbox`.
+   */
+  sandbox?: SandboxConfig;
   model: string;
   preferredChildModel: string;
   childModelRoutingMode?: ChildModelRoutingMode;
@@ -669,6 +677,7 @@ export const APPROVAL_RISK_CODES = [
   "requires_manual_review",
   "file_read_command_requires_review",
   "outside_allowed_scope",
+  "sandbox_denied_escalation",
 ] as const;
 
 export type ApprovalRiskCode = (typeof APPROVAL_RISK_CODES)[number];

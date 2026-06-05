@@ -193,6 +193,23 @@ describe("seatbelt argv generation", () => {
     // /tmp is always writable scratch
     expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/tmp"))).toBe(true);
   });
+
+  test("does not add /tmp or /private/tmp scratch for a /tmp-scoped root (macOS alias)", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/tmp/proj/src"],
+      network: true,
+    };
+    const { args } = buildSeatbeltCommand(INNER, policy);
+    // Neither blanket temp root may be granted: `/tmp` and `/private/tmp` are the
+    // same tree on macOS, so either would re-open the scope via the alias.
+    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/tmp"))).toBe(false);
+    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/private/tmp"))).toBe(
+      false,
+    );
+    // The scoped root itself stays writable.
+    expect(args.some((a) => a.endsWith("=/tmp/proj/src"))).toBe(true);
+  });
 });
 
 describe("bwrap argv generation", () => {

@@ -152,13 +152,33 @@ function rootCrossesProtectedMetadata(base: string, root: string): boolean {
  * scratch dir that is an ancestor of an existing root. Otherwise a child scoped
  * to a target under `/tmp` (e.g. `/tmp/proj/src`) would get all of `/tmp` made
  * writable, defeating the scope.
+ *
+ * The ancestor check runs on macOS-canonical paths so the `/tmp` → `/private/tmp`
+ * symlink can't sneak a blanket scratch root back in: a `/tmp/proj/src`-scoped
+ * child must not get `/private/tmp` (the same tree) as writable scratch. The
+ * emitted root keeps its original spelling — only the comparison is normalized.
  */
 export function withTmpScratch(writableRoots: string[], scratch: string[]): string[] {
   const resolved = writableRoots.map((r) => path.resolve(r));
-  const extra = scratch.filter(
-    (s) => !resolved.some((r) => r === s || r.startsWith(`${s}${path.sep}`)),
-  );
+  const canonicalRoots = resolved.map(canonicalTmpAlias);
+  const extra = scratch.filter((s) => {
+    const cs = canonicalTmpAlias(s);
+    return !canonicalRoots.some((cr) => cr === cs || cr.startsWith(`${cs}${path.sep}`));
+  });
   return [...new Set([...resolved, ...extra])];
+}
+
+/**
+ * Normalize the well-known macOS firmlink aliases (`/tmp`, `/var` → `/private/*`)
+ * for ancestor comparisons only. Applied symmetrically to both sides, so it is a
+ * no-op on Linux (where the same prefix maps consistently) yet collapses the
+ * macOS alias where `/tmp` and `/private/tmp` are the same directory.
+ */
+function canonicalTmpAlias(p: string): string {
+  if (p === "/tmp" || p === "/var" || p.startsWith("/tmp/") || p.startsWith("/var/")) {
+    return `/private${p}`;
+  }
+  return p;
 }
 
 /** Whether the policy permits outbound network access. */

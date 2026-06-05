@@ -105,10 +105,18 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
   if (input.projectRoot) candidates.push(path.resolve(input.projectRoot));
   if (input.outputDirectory) candidates.push(path.resolve(base, input.outputDirectory));
   if (input.uploadsDirectory) candidates.push(path.resolve(base, input.uploadsDirectory));
-  // Drop any root that sits inside the workspace's protected metadata, so a
-  // mis-pointed output/uploads dir (e.g. under .git/.cowork) can't re-open the
-  // metadata writes the backends promise to keep read-only.
-  return [...new Set(candidates.filter((root) => !rootCrossesProtectedMetadata(base, root)))];
+  // Canonicalize each root before the metadata check, then drop any that sit
+  // inside the workspace's protected metadata. Canonicalizing first ensures a
+  // symlinked output/uploads dir (e.g. `uploads` -> `.git/hooks`) can't slip
+  // protected metadata in as a writable root the backends would later resolve.
+  const realBase = canonicalizeRoot(base);
+  return [
+    ...new Set(
+      candidates
+        .map(canonicalizeRoot)
+        .filter((root) => !rootCrossesProtectedMetadata(realBase, root)),
+    ),
+  ];
 }
 
 /**

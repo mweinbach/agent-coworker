@@ -401,7 +401,13 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       sandboxPolicy: resolveSandboxPolicy({
         config: config.sandbox,
-        readOnlyRole: params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false,
+        // Honor an explicit `no_project_write` shell policy even without an
+        // agentRole; otherwise this precomputed policy (preferred by the bash
+        // tool over deriving from shellPolicy) would run mutating commands with
+        // project write access despite the read-only shell policy.
+        readOnlyRole:
+          (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
+          (params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole)) === "no_project_write",
         workingDirectory: config.workingDirectory,
         projectRoot: path.dirname(config.projectCoworkDir),
         outputDirectory: config.outputDirectory,

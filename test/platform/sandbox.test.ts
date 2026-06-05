@@ -184,6 +184,24 @@ describe("resolveSandboxPolicy", () => {
       network: true,
     });
   });
+
+  test("drops an output/uploads dir that symlinks into protected metadata", () => {
+    const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "od-ws-")));
+    try {
+      fs.mkdirSync(path.join(ws, ".git", "hooks"), { recursive: true });
+      // `uploads` -> `.git/hooks`: a logical-looking root that really resolves
+      // into protected metadata.
+      fs.symlinkSync(path.join(ws, ".git", "hooks"), path.join(ws, "uploads"));
+      const policy = resolveSandboxPolicy({
+        config: { mode: "workspace-write", network: true },
+        workingDirectory: ws,
+        uploadsDirectory: "uploads",
+      });
+      expect(policy).toEqual({ kind: "workspace-write", writableRoots: [ws], network: true });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("filterTargetPathsToWorkspace", () => {

@@ -28,6 +28,10 @@ export interface BuildBwrapOptions {
   exists?: (p: string) => boolean;
   /** Create a directory (recursively); injectable for deterministic tests. */
   ensureDir?: (p: string) => void;
+  /** Create a file and its parent directory; injectable for deterministic tests. */
+  ensureFile?: (p: string) => void;
+  /** Directory predicate; injectable for deterministic tests. */
+  isDirectory?: (p: string) => boolean;
 }
 
 /**
@@ -51,6 +55,27 @@ export function buildBwrapCommand(
         // best effort: if we cannot create the root, it is skipped below
       }
     });
+  const ensureFile =
+    opts.ensureFile ??
+    ((p: string) => {
+      try {
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.closeSync(fs.openSync(p, "a"));
+      } catch {
+        // best effort: if we cannot create the file root, it is skipped below
+      }
+    });
+  const isDirectory =
+    opts.isDirectory ??
+    ((p: string) => {
+      try {
+        return fs.statSync(p).isDirectory();
+      } catch {
+        // Tests may provide virtual paths with a custom `exists` predicate. In
+        // that case, assume directory so protected metadata carve-outs stay on.
+        return true;
+      }
+    });
 
   const flags: string[] = ["--new-session", "--die-with-parent"];
 
@@ -63,16 +88,20 @@ export function buildBwrapCommand(
     const writableRoots = withTmpScratch(policy.writableRoots, ["/tmp"]);
 
     for (const root of writableRoots) {
-      // bwrap bind mount sources must exist. A child's assigned target dir may
-      // not exist yet (e.g. `mkdir src/new-feature` is the first command), so
-      // create it rather than dropping it — otherwise only /tmp stays writable
-      // and the child can't work in its own scope (Linux/macOS parity).
-      if (!exists(root)) ensureDir(root);
+      // bwrap bind mount sources must exist. A child's assigned target may not
+      // exist yet, so create a directory for dir-like roots and an empty file for
+      // file-like roots. Otherwise Linux either drops the scope or creates a
+      // directory where the child intended to create a file.
+      if (!exists(root)) {
+        if (looksLikeFilePath(root)) ensureFile(root);
+        else ensureDir(root);
+      }
       if (!exists(root)) continue; // creation failed; can't bind a missing source
       // Bind the canonical path so a symlinked root can't smuggle write access
       // to an unexpected target through a different logical path.
       const realRoot = canonicalize(root);
       flags.push("--bind", realRoot, realRoot);
+      if (!isDirectory(realRoot)) continue;
       // Keep protected metadata read-only. When the path is absent, mask it with
       // an unwritable empty tmpfs so a workspace-write command cannot *create*
       // `.git`/`.cowork` (and e.g. install git hooks) under the writable root.
@@ -109,4 +138,8 @@ function canonicalize(p: string): string {
   } catch {
     return p;
   }
+}
+
+function looksLikeFilePath(p: string): boolean {
+  return path.extname(path.basename(p)) !== "";
 }

@@ -222,6 +222,35 @@ describe("bwrap argv generation", () => {
     expect(joinPairs(args, "--bind")).toContain("/work/new-feature /work/new-feature");
   });
 
+  test("creates file-like missing writable roots as files", () => {
+    const existing = new Set(["/tmp", "/work/src"]);
+    const fileRoots = new Set<string>();
+    const createdDirs: string[] = [];
+    const createdFiles: string[] = [];
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/work/src/new.ts"],
+      network: true,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/work", {
+      program: "bwrap",
+      exists: (p) => existing.has(p),
+      ensureDir: (p) => {
+        createdDirs.push(p);
+        existing.add(p);
+      },
+      ensureFile: (p) => {
+        createdFiles.push(p);
+        existing.add(p);
+        fileRoots.add(p);
+      },
+      isDirectory: (p) => !fileRoots.has(p),
+    });
+    expect(createdFiles).toContain("/work/src/new.ts");
+    expect(createdDirs).not.toContain("/work/src/new.ts");
+    expect(joinPairs(args, "--bind")).toContain("/work/src/new.ts /work/src/new.ts");
+  });
+
   test("does not add /tmp scratch when a root already lives under /tmp", () => {
     const policy: SandboxPolicy = {
       kind: "workspace-write",

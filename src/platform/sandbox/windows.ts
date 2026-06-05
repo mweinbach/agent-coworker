@@ -5,7 +5,7 @@ import type { SandboxPolicy } from "./policy";
 /**
  * Windows sandbox generation. Unlike macOS/Linux there is no system sandbox
  * wrapper to call, so we shell out to a bundled native helper
- * (`cowork-win-sandbox.exe`, see `native/cowork-win-sandbox/`) that applies a
+ * (`cowork-win-sandbox.exe`, see `crates/cowork-win-sandbox/`) that applies a
  * restricted token + Job Object before spawning the command. This module only
  * builds the helper invocation; locating the helper binary and falling back
  * when it is absent is handled by the {@link SandboxManager}.

@@ -1,0 +1,28 @@
+[package]
+name = "cowork-win-sandbox"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Windows sandbox helper for agent-coworker (restricted token + Job Object)."
+
+[[bin]]
+name = "cowork-win-sandbox"
+path = "src/main.rs"
+
+# Win32 APIs are only pulled in when targeting Windows. On other hosts the crate
+# still builds (the helper just refuses to run), which lets CI typecheck/build
+# the scaffolding on Linux/macOS.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_SystemServices",
+    "Win32_System_Diagnostics_Debug",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

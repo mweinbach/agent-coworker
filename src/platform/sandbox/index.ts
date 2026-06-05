@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { buildBwrapCommand } from "./bwrap";
 import { findBwrap, findWindowsHelper, hasSeatbelt } from "./detect";
 import { buildSeatbeltCommand } from "./seatbelt";
@@ -52,16 +54,35 @@ export interface SandboxTransformResult extends SandboxCommand {
   warning?: string;
 }
 
+/**
+ * Default directories to search for the bundled Windows sandbox helper: next to
+ * the running binary and the Electron `resources` dir. The
+ * `COWORK_WIN_SANDBOX_HELPER` env override (handled in `findWindowsHelper`)
+ * takes precedence over these.
+ */
+function defaultWindowsHelperDirs(): string[] {
+  const dirs: string[] = [];
+  try {
+    if (process.execPath) dirs.push(path.dirname(process.execPath));
+  } catch {
+    // process.execPath may be unavailable in some embeddings
+  }
+  const resourcesPath = (process as { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) dirs.push(resourcesPath);
+  return dirs;
+}
+
 /** Probe the host for available sandbox backends. */
 export function detectCapabilities(
   platform: NodeJS.Platform = process.platform,
   windowsHelperDirs: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
 ): SandboxCapabilities {
+  const winDirs = windowsHelperDirs.length > 0 ? windowsHelperDirs : defaultWindowsHelperDirs();
   return {
     seatbelt: platform === "darwin" ? hasSeatbelt() : false,
     bwrapPath: platform === "linux" ? findBwrap(env) : null,
-    windowsHelperPath: platform === "win32" ? findWindowsHelper(windowsHelperDirs, env) : null,
+    windowsHelperPath: platform === "win32" ? findWindowsHelper(winDirs, env) : null,
   };
 }
 

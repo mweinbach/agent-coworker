@@ -769,7 +769,7 @@ rl.on("line", (line) => {
         approvalPolicy: "on-request",
         sandboxPolicy: {
           type: "workspaceWrite",
-          writableRoots: [dir, path.join(dir, "output")],
+          writableRoots: [dir, path.join(dir, "output"), path.join(dir, "uploads")],
           networkAccess: false,
           excludeTmpdirEnvVar: false,
           excludeSlashTmp: false,

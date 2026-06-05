@@ -1,5 +1,10 @@
 import { captureProductEvent } from "../../telemetry/productAnalytics";
-import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
+import type {
+  AgentConfig,
+  ApprovalRiskCode,
+  ServerErrorCode,
+  ServerErrorSource,
+} from "../../types";
 import { ASK_SKIP_TOKEN, type SessionEvent } from "../protocol";
 
 function makeId(): string {
@@ -139,10 +144,11 @@ export class InteractionManager {
   }
 
   /**
-   * Request approval to escalate a command out of the OS sandbox. Under the
-   * escalate-on-failure model the OS sandbox is the enforcement boundary, so
-   * this is only invoked when a sandboxed command failed in a way that looks
-   * like a sandbox denial and the agent wants to retry it unsandboxed.
+   * Request user approval for an action. The primary case is a sandbox-denial
+   * retry (`reason: "sandbox_denied"`): lifting the OS sandbox to run a command
+   * unsandboxed. Provider runtimes (e.g. the Codex app-server) also route their
+   * own command/file approvals here without a reason — those are ordinary
+   * approvals, not sandbox escapes.
    *
    * YOLO auto-approves normal command execution, but lifting the OS sandbox to
    * full-disk access is a higher trust boundary, so the `sandbox_denied`
@@ -151,26 +157,33 @@ export class InteractionManager {
    * could silently grant full access on an unrelated failure.
    */
   async approveCommand(command: string, opts?: { reason?: string }) {
-    if (this.opts.isYolo() && opts?.reason !== "sandbox_denied") return true;
+    const isSandboxEscalation = opts?.reason === "sandbox_denied";
+    if (this.opts.isYolo() && !isSandboxEscalation) return true;
 
     const requestId = makeId();
     const pending = Promise.withResolvers<boolean>();
     this.pendingApproval.set(requestId, pending);
 
+    // Only a sandbox-denial retry is the "escape the OS sandbox" action; other
+    // callers (e.g. Codex app-server command/file approvals) are ordinary
+    // approvals and must not be mislabeled as a sandbox escalation.
+    const reasonCode: ApprovalRiskCode = isSandboxEscalation
+      ? "sandbox_denied_escalation"
+      : "requires_manual_review";
     const evt: Extract<SessionEvent, { type: "approval" }> = {
       type: "approval",
       sessionId: this.opts.sessionId,
       requestId,
       command,
-      dangerous: true,
-      reasonCode: "sandbox_denied_escalation",
+      dangerous: isSandboxEscalation,
+      reasonCode,
     };
     this.pendingApprovalEvents.set(requestId, evt);
     this.opts.emit(evt);
     captureProductEvent("tool_approval_requested", {
       eventSource: "server",
       status: "dangerous",
-      errorCategory: "sandbox_denied_escalation",
+      errorCategory: reasonCode,
     });
     this.opts.queuePersistSessionSnapshot("session.approval_pending");
 

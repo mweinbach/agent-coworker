@@ -402,6 +402,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         readOnlyRole: params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false,
         workingDirectory: config.workingDirectory,
         outputDirectory: config.outputDirectory,
+        uploadsDirectory: config.uploadsDirectory,
         targetPaths: params.agentTargetPaths,
       }),
       agentControl: params.agentControl,

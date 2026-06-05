@@ -45,4 +45,12 @@ describe("InteractionManager.approveCommand", () => {
     const approved = await manager.approveCommand("cat /etc/shadow", { reason: "sandbox_denied" });
     expect(approved).toBe(true);
   });
+
+  test("labels a non-sandbox approval as a normal review, not a sandbox escalation", async () => {
+    const { manager, events } = makeManager({ yolo: false, promptResult: true });
+    await manager.approveCommand("rm -rf build"); // no reason → ordinary approval
+    const evt = events.find((e) => e.type === "approval");
+    expect(evt?.type === "approval" && evt.reasonCode).toBe("requires_manual_review");
+    expect(evt?.type === "approval" && evt.dangerous).toBe(false);
+  });
 });

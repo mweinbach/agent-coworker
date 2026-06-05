@@ -353,7 +353,8 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
       expect(approvalEvt.command).toBe("npm install");
-      expect(approvalEvt.reasonCode).toBe("sandbox_denied_escalation");
+      // A no-reason approval is an ordinary review, not a sandbox escalation.
+      expect(approvalEvt.reasonCode).toBe("requires_manual_review");
 
       session.handleApprovalResponse(approvalEvt.requestId, true);
       await sendPromise;

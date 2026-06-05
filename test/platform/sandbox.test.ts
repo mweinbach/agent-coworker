@@ -143,6 +143,20 @@ describe("resolveSandboxPolicy", () => {
       network: true,
     });
   });
+
+  test("includes uploadsDirectory in workspace-write roots (file-tool parity)", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write", network: true },
+      workingDirectory: "/work/project",
+      outputDirectory: "/work/out",
+      uploadsDirectory: "/work/uploads",
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/work/project", "/work/out", "/work/uploads"],
+      network: true,
+    });
+  });
 });
 
 describe("filterTargetPathsToWorkspace", () => {
@@ -174,6 +188,22 @@ describe("filterTargetPathsToWorkspace", () => {
       const roots = filterTargetPathsToWorkspace(ws, ["src/link", "src/ok"]);
       // The escaping symlink is dropped; the legit root is kept (canonicalized).
       expect(roots).toEqual([path.join(ws, "src", "ok")]);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("drops a not-yet-existing target below a symlinked parent that escapes", () => {
+    const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tp-ws2-")));
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tp-out2-")));
+    try {
+      fs.mkdirSync(path.join(ws, "src"));
+      // `src/link` exists and escapes; `new.ts` below it does NOT exist yet.
+      fs.symlinkSync(outside, path.join(ws, "src", "link"));
+      const roots = filterTargetPathsToWorkspace(ws, ["src/link/new.ts", "src/ok.ts"]);
+      // The escaping parent is resolved via the existing prefix and dropped.
+      expect(roots).toEqual([path.join(ws, "src", "ok.ts")]);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });

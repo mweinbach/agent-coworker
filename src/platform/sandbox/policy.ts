@@ -54,6 +54,8 @@ export interface ResolveSandboxPolicyInput {
   readOnlyRole?: boolean;
   workingDirectory: string;
   outputDirectory?: string;
+  /** Uploads directory; writable for parity with the built-in file tools. */
+  uploadsDirectory?: string;
   /** Child-agent enforced scope; when present these become the only writable roots. */
   targetPaths?: readonly string[] | null;
 }
@@ -95,6 +97,10 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
   }
   const roots = new Set<string>([base]);
   if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
+  // Mirror the built-in file tools' write roots: an uploads dir configured
+  // outside the working directory is still a legitimate write target, so binding
+  // it avoids forcing a full-access escalation just to write alongside uploads.
+  if (input.uploadsDirectory) roots.add(path.resolve(base, input.uploadsDirectory));
   return [...roots];
 }
 
@@ -198,12 +204,29 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
   return [...new Set([...resolved, ...extra])];
 }
 
-/** Resolve a path to its canonical (symlink-free) form; fall back to the input. */
+/**
+ * Resolve a path to its canonical (symlink-free) form, canonicalizing the
+ * longest EXISTING prefix and re-appending the missing tail. This matters for a
+ * not-yet-created target below a symlinked parent (e.g. `src/link/new.ts` with
+ * `src/link` -> elsewhere): realpath-ing only the full leaf would throw and fall
+ * back to the unresolved in-workspace path, missing the escaping parent. Falls
+ * back to the resolved logical path when nothing can be resolved.
+ */
 export function canonicalizeRoot(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
+  const resolved = path.resolve(p);
+  const tail: string[] = [];
+  let cursor = resolved;
+  while (true) {
+    try {
+      const canonical = fs.realpathSync(cursor);
+      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
+    } catch (err) {
+      if ((err as { code?: string }).code !== "ENOENT") return resolved;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return resolved;
+      tail.push(path.basename(cursor));
+      cursor = parent;
+    }
   }
 }
 

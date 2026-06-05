@@ -377,6 +377,7 @@ export function createBashTool(ctx: ToolContext) {
           readOnlyRole: ctx.agentRole ? getAgentRoleDefinition(ctx.agentRole).readOnly : false,
           workingDirectory: ctx.config.workingDirectory,
           outputDirectory: ctx.config.outputDirectory,
+          uploadsDirectory: ctx.config.uploadsDirectory,
           targetPaths: ctx.agentTargetPaths,
         });
       const runner = runShellCommandOverrideForTests ?? runShellCommand;

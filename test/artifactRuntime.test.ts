@@ -9,6 +9,7 @@ import {
   renderArtifactRuntimeInstructions,
   shouldBootstrapArtifactRuntime,
 } from "../src/artifactRuntime";
+import { migrateLegacyArtifactRuntime } from "../src/artifactRuntime/migrate";
 
 function executableBasename(name: "node" | "python"): string {
   return process.platform === "win32" ? `${name}.exe` : name;
@@ -204,6 +205,70 @@ describe("artifact runtime bootstrap", () => {
 
       const state = JSON.parse(await fs.readFile(result?.stateFile ?? "", "utf-8"));
       expect(state.migratedFrom).toBe(legacyRoot);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("migrates a symlinked legacy runtime by dereferencing (Windows-safe)", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-symlink-"));
+    const legacyRoot = await writeFakeLegacyCodexRuntime(home);
+
+    // Mimic a pnpm-style symlink/junction inside the runtime payload. `fs.cp` must
+    // dereference it (copy the target's content) rather than recreate the link,
+    // which fails on Windows with EPERM. Skip if the OS forbids creating the fixture.
+    const realDir = path.join(legacyRoot, "node", "node_modules", "real-pkg");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(realDir, "index.js"), "module.exports = 1;\n", "utf-8");
+    const linkPath = path.join(legacyRoot, "node", "node_modules", "linked-pkg");
+    let symlinkCreated = false;
+    try {
+      if (process.platform === "win32") {
+        await fs.symlink(realDir, linkPath, "junction");
+      } else {
+        await fs.symlink(path.join("..", "real-pkg"), linkPath);
+      }
+      symlinkCreated = true;
+    } catch {
+      symlinkCreated = false;
+    }
+
+    try {
+      if (!symlinkCreated) return; // environment cannot create symlinks; nothing to assert
+
+      const cacheDir = path.join(home, ".cache", "cowork", "artifact-runtime");
+      const result = await ensureArtifactRuntimeReady({
+        homedir: home,
+        env: {},
+        allowNetwork: false,
+      });
+
+      expect(result?.migration.status).toBe("migrated");
+      const migratedLink = path.join(cacheDir, "node", "node_modules", "linked-pkg");
+      const stat = await fs.lstat(migratedLink);
+      expect(stat.isDirectory()).toBe(true);
+      expect(stat.isSymbolicLink()).toBe(false);
+      await expect(fs.readFile(path.join(migratedLink, "index.js"), "utf-8")).resolves.toContain(
+        "module.exports = 1;",
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("never throws when the legacy migration copy fails", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-migrate-fail-"));
+    await writeFakeLegacyCodexRuntime(home);
+    // Point the cache at a path whose parent is a regular file so the copy cannot
+    // succeed; a best-effort migration must degrade gracefully, not crash startup.
+    const blocker = path.join(home, "blocker-file");
+    await fs.writeFile(blocker, "not a directory", "utf-8");
+    const cacheDir = path.join(blocker, "artifact-runtime");
+
+    try {
+      const result = await migrateLegacyArtifactRuntime({ home, cacheDir });
+      expect(result.status).toBe("failed");
+      expect(result.reason).toBeTruthy();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

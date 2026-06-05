@@ -73,6 +73,8 @@ export async function ensureArtifactRuntimeReady(
       migration = { status: "migrated", ...(migrated.source ? { source: migrated.source } : {}) };
       runtimeRoots = await collectRuntimeRoots(home, bundledRuntimeDir);
       artifactTool = await resolveArtifactTool({ runtimeRoots });
+    } else if (migrated.status === "failed") {
+      migration = { status: "failed", ...(migrated.reason ? { reason: migrated.reason } : {}) };
     }
   }
 

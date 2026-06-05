@@ -19,8 +19,9 @@ export type ArtifactRuntimeSetupResult = {
     reason?: string;
   };
   migration: {
-    status: "migrated" | "skipped";
+    status: "migrated" | "skipped" | "failed";
     source?: string;
+    reason?: string;
   };
   archive: {
     status: "downloaded" | "skipped" | "failed";

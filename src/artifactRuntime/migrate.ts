@@ -52,26 +52,44 @@ export async function migrateLegacyArtifactRuntime(opts: {
   home: string;
   cacheDir: string;
   log?: (line: string) => void;
-}): Promise<{ status: "migrated" | "none"; source?: string }> {
-  const source = await findLegacyArtifactRuntimeRoot(opts.home);
-  if (!source) return { status: "none" };
+}): Promise<{ status: "migrated" | "none" | "failed"; source?: string; reason?: string }> {
+  try {
+    const source = await findLegacyArtifactRuntimeRoot(opts.home);
+    if (!source) return { status: "none" };
 
-  opts.log?.(`Migrating artifact runtime from legacy Codex cache at ${source}`);
-  await fs.rm(opts.cacheDir, { recursive: true, force: true });
-  await fs.mkdir(opts.cacheDir, { recursive: true });
-  for (const entry of RUNTIME_PAYLOAD_ENTRIES) {
-    const src = path.join(source, entry);
-    if (await pathExists(src)) {
-      await fs.cp(src, path.join(opts.cacheDir, entry), { recursive: true, force: true });
+    opts.log?.(`Migrating artifact runtime from legacy Codex cache at ${source}`);
+    await fs.rm(opts.cacheDir, { recursive: true, force: true });
+    await fs.mkdir(opts.cacheDir, { recursive: true });
+    for (const entry of RUNTIME_PAYLOAD_ENTRIES) {
+      const src = path.join(source, entry);
+      if (await pathExists(src)) {
+        // `dereference: true` copies symlink *targets* as real files instead of
+        // recreating the links. Legacy pnpm runtimes are full of symlinks and
+        // junctions (e.g. `@napi-rs/canvas-*`); recreating them fails on Windows
+        // with EPERM unless Developer Mode / administrator rights are enabled.
+        await fs.cp(src, path.join(opts.cacheDir, entry), {
+          recursive: true,
+          force: true,
+          dereference: true,
+        });
+      }
     }
+    if (!(await pathExists(path.join(opts.cacheDir, "runtime.json")))) {
+      await fs.writeFile(
+        path.join(opts.cacheDir, "runtime.json"),
+        `${JSON.stringify({ migratedFrom: source, migratedAt: new Date().toISOString() }, null, 2)}\n`,
+        "utf-8",
+      );
+    }
+    opts.log?.(`Artifact runtime migrated into ${opts.cacheDir}`);
+    return { status: "migrated", source };
+  } catch (error) {
+    // A best-effort, one-time migration must never crash server startup. Log it,
+    // remove any partially-copied tree so the next launch can retry or fall back
+    // to a fresh download, and let the runtime resolve as unavailable instead.
+    const reason = error instanceof Error ? error.message : String(error);
+    opts.log?.(`Artifact runtime migration failed; continuing without it: ${reason}`);
+    await fs.rm(opts.cacheDir, { recursive: true, force: true }).catch(() => {});
+    return { status: "failed", reason };
   }
-  if (!(await pathExists(path.join(opts.cacheDir, "runtime.json")))) {
-    await fs.writeFile(
-      path.join(opts.cacheDir, "runtime.json"),
-      `${JSON.stringify({ migratedFrom: source, migratedAt: new Date().toISOString() }, null, 2)}\n`,
-      "utf-8",
-    );
-  }
-  opts.log?.(`Artifact runtime migrated into ${opts.cacheDir}`);
-  return { status: "migrated", source };
 }

@@ -123,7 +123,7 @@ export class SandboxManager {
         if (!capabilities.seatbelt) {
           return unavailable("macOS Seatbelt unavailable (/usr/bin/sandbox-exec not found)");
         }
-        const wrapped = buildSeatbeltCommand(inner, input.policy, input.cwd);
+        const wrapped = buildSeatbeltCommand(inner, input.policy);
         return {
           ...wrapped,
           env: markerEnv("macos-seatbelt"),

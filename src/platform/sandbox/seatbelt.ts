@@ -110,7 +110,6 @@ interface DirParam {
 export function buildSeatbeltCommand(
   inner: SeatbeltCommand,
   policy: SandboxPolicy,
-  cwd: string,
 ): SeatbeltCommand {
   const sections: string[] = [SEATBELT_BASE_POLICY];
   const params: DirParam[] = [];
@@ -119,7 +118,7 @@ export function buildSeatbeltCommand(
   sections.push("; allow read-only file operations\n(allow file-read*)");
 
   if (policy.kind === "workspace-write") {
-    sections.push(buildWritePolicy(policy.writableRoots, cwd, params));
+    sections.push(buildWritePolicy(policy.writableRoots, params));
   }
 
   // `danger-full-access` never reaches here (handled as SandboxType.none).
@@ -143,14 +142,12 @@ export function buildSeatbeltCommand(
  * out protected metadata subpaths (`.git`, `.cowork`) so they stay read-only
  * even though their parent root is writable.
  */
-function buildWritePolicy(writableRoots: string[], cwd: string, params: DirParam[]): string {
-  // cwd is always writable under workspace-write; the /tmp family is scratch space.
-  const roots = dedupe([
-    path.resolve(cwd),
-    ...writableRoots.map((r) => path.resolve(r)),
-    "/tmp",
-    "/private/tmp",
-  ]);
+function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
+  // Use exactly the resolved writable roots (which already include cwd for the
+  // non-targetPaths case) plus the /tmp scratch family. Do NOT unconditionally
+  // add cwd here — that would widen a child agent's scope beyond its targetPaths,
+  // diverging from the Linux bwrap backend.
+  const roots = dedupe([...writableRoots.map((r) => path.resolve(r)), "/tmp", "/private/tmp"]);
 
   const components: string[] = [];
   roots.forEach((root, index) => {

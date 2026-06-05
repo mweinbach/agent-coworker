@@ -6,6 +6,8 @@
  * (`codex-rs/core/src/exec.rs`).
  */
 
+import type { SandboxDenialCategory } from "../../types";
+
 export interface SandboxDeniedInput {
   stdout: string;
   stderr: string;
@@ -60,4 +62,33 @@ export function isLikelySandboxDenied(
     return true;
   }
   return false;
+}
+
+/**
+ * Classify the kind of sandbox denial so the escalation UI can show tailored
+ * copy ("blocked a filesystem write" vs "blocked network access"). Returns
+ * `null` when the failure does not look like a sandbox denial. Filesystem
+ * markers take precedence over network markers.
+ */
+export function classifySandboxDenial(
+  output: SandboxDeniedInput,
+  opts?: { networkRestricted?: boolean },
+): SandboxDenialCategory | null {
+  if (NON_SANDBOX_EXIT_CODES.has(output.exitCode)) return null;
+  const haystack = `${output.stdout}\n${output.stderr}`.toLowerCase();
+  if (SANDBOX_DENIAL_MARKERS.some((marker) => haystack.includes(marker))) return "filesystem";
+  if (opts?.networkRestricted && NETWORK_DENIAL_MARKERS.some((m) => haystack.includes(m))) {
+    return "network";
+  }
+  return null;
+}
+
+/**
+ * Short, human-readable explanation of a sandbox denial for the approval UI.
+ * Kept generic (no raw command output) so it is safe to surface verbatim.
+ */
+export function describeSandboxDenial(category: SandboxDenialCategory): string {
+  return category === "network"
+    ? "The OS sandbox blocked network access for this command."
+    : "The OS sandbox blocked a write outside the workspace for this command.";
 }

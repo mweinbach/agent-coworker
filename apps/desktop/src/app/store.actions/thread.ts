@@ -633,11 +633,15 @@ export function createThreadActions(
         const nextThreadRuntimeById = { ...s.threadRuntimeById };
         delete nextThreadRuntimeById[threadId];
 
+        const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
+        delete nextSandboxApprovals[threadId];
+
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
           selectedThreadId,
           promptModal: nextPromptModal,
+          sandboxApprovalsByThread: nextSandboxApprovals,
           threadRuntimeById: nextThreadRuntimeById,
           selectedWorkspaceId:
             s.selectedWorkspaceId === workspaceIdToRemove
@@ -1239,7 +1243,17 @@ export function createThreadActions(
         requestId,
         approved,
       });
-      set({ promptModal: null });
+      // Clear the modal (ordinary approvals) and drop any matching inline
+      // sandbox-escalation prompt for this thread.
+      set((s) => {
+        const existing = s.sandboxApprovalsByThread[threadId];
+        if (!existing) return { promptModal: null };
+        const remaining = existing.filter((p) => p.requestId !== requestId);
+        const nextSandbox = { ...s.sandboxApprovalsByThread };
+        if (remaining.length > 0) nextSandbox[threadId] = remaining;
+        else delete nextSandbox[threadId];
+        return { promptModal: null, sandboxApprovalsByThread: nextSandbox };
+      });
     },
 
     dismissPrompt: () => set({ promptModal: null }),

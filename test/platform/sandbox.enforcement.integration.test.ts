@@ -100,6 +100,29 @@ seatbeltDescribe("seatbelt enforcement (macOS — run before merge)", () => {
     }
   });
 
+  test("allows reading global skills/plugins (~/.cowork) but keeps them read-only", () => {
+    // Global skills and plugins live outside the workspace under `~/.cowork`. A
+    // sandboxed command must still read/run them (reads are full-disk), while the
+    // `~/.cowork` tree itself stays read-only.
+    const ws = tmpDir("sbx-ws-");
+    const home = tmpDir("sbx-home-");
+    const skillFile = path.join(home, ".cowork", "skills", "demo", "SKILL.md");
+    const pluginFile = path.join(home, ".cowork", "plugins", "demo", "skills", "x", "SKILL.md");
+    fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+    fs.mkdirSync(path.dirname(pluginFile), { recursive: true });
+    fs.writeFileSync(skillFile, "skill-body-marker");
+    fs.writeFileSync(pluginFile, "plugin-skill-marker");
+    try {
+      expect(runSeatbelt(ws, `cat '${skillFile}' > /dev/null`)).toBe(0);
+      expect(runSeatbelt(ws, `cat '${pluginFile}' > /dev/null`)).toBe(0);
+      expect(runSeatbelt(ws, `printf x > '${skillFile}'`)).not.toBe(0);
+      expect(runSeatbelt(ws, `printf x > '${pluginFile}'`)).not.toBe(0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("scopes a child to its targetPaths (sibling write denied)", () => {
     const ws = tmpDir("sbx-ws-");
     try {
@@ -224,6 +247,26 @@ bwrapDescribe("bubblewrap enforcement (Linux)", () => {
       expect(fs.existsSync(path.join(ws, "src", "other", "y.txt"))).toBe(false);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("allows reading global skills/plugins (~/.cowork) but keeps them read-only", () => {
+    const ws = tmpDir("bwx-ws-");
+    const home = tmpDir("bwx-home-");
+    const skillFile = path.join(home, ".cowork", "skills", "demo", "SKILL.md");
+    const pluginFile = path.join(home, ".cowork", "plugins", "demo", "skills", "x", "SKILL.md");
+    fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+    fs.mkdirSync(path.dirname(pluginFile), { recursive: true });
+    fs.writeFileSync(skillFile, "skill-body-marker");
+    fs.writeFileSync(pluginFile, "plugin-skill-marker");
+    try {
+      expect(runBwrap(ws, `cat '${skillFile}' > /dev/null`)).toBe(0);
+      expect(runBwrap(ws, `cat '${pluginFile}' > /dev/null`)).toBe(0);
+      expect(runBwrap(ws, `printf x > '${skillFile}'`)).not.toBe(0);
+      expect(runBwrap(ws, `printf x > '${pluginFile}'`)).not.toBe(0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 

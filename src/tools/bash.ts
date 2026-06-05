@@ -4,7 +4,9 @@ import path from "node:path";
 import { z } from "zod";
 
 import {
+  classifySandboxDenial,
   DEFAULT_SANDBOX_CONFIG,
+  describeSandboxDenial,
   isLikelySandboxDenied,
   resolveSandboxPolicy,
   type SandboxCapabilities,
@@ -474,7 +476,12 @@ export function createBashTool(ctx: ToolContext) {
         // Prompt before running unsandboxed when no backend is available. This
         // is still a sandbox escape, so label it with the sandbox-denied reason
         // used by the approval layer's protected escalation path.
-        approveUnsandboxed: () => ctx.approveCommand(command, { reason: "sandbox_denied" }),
+        approveUnsandboxed: () =>
+          ctx.approveCommand(command, {
+            reason: "sandbox_denied",
+            detail:
+              "No OS sandbox backend is available on this machine, so this command can only run with full access.",
+          }),
       };
 
       let result = await runner({ ...baseArgs, policy });
@@ -499,7 +506,15 @@ export function createBashTool(ctx: ToolContext) {
         result.exitCode !== 0 &&
         isLikelySandboxDenied(result, { networkRestricted })
       ) {
-        const approved = await ctx.approveCommand(command, { reason: "sandbox_denied" });
+        // Classify the denial so the client can render a tailored, sandbox-aware
+        // escalation ("blocked a write" vs "blocked network access") instead of a
+        // generic command-approval prompt.
+        const category = classifySandboxDenial(result, { networkRestricted }) ?? "filesystem";
+        const approved = await ctx.approveCommand(command, {
+          reason: "sandbox_denied",
+          category,
+          detail: describeSandboxDenial(category),
+        });
         if (approved) {
           result = await runner({ ...baseArgs, policy: { kind: "danger-full-access" } });
         }

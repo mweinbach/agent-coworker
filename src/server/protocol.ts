@@ -28,6 +28,7 @@ import type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
   PluginUpdateCheckResult,
+  SandboxDenialCategory,
   ServerErrorCode,
   ServerErrorSource,
   SkillCatalogSnapshot,
@@ -330,6 +331,13 @@ export type SessionEvent =
       command: string;
       dangerous: boolean;
       reasonCode: ApprovalRiskCode;
+      /**
+       * Human-readable reason the command was blocked (sandbox escalations only).
+       * Safe to surface verbatim; never includes raw command output.
+       */
+      detail?: string;
+      /** Sandbox-denial classification, when the approval is a sandbox escalation. */
+      category?: SandboxDenialCategory;
     }
   | {
       type: "config_updated";

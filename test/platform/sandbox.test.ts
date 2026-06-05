@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
-import { isLikelySandboxDenied } from "../../src/platform/sandbox/denied";
+import {
+  classifySandboxDenial,
+  describeSandboxDenial,
+  isLikelySandboxDenied,
+} from "../../src/platform/sandbox/denied";
 import { findBwrapProbeCommand } from "../../src/platform/sandbox/detect";
 import {
   DEFAULT_SANDBOX_CONFIG,
@@ -821,6 +825,44 @@ describe("isLikelySandboxDenied", () => {
     expect(
       isLikelySandboxDenied({ stdout: "", stderr: "bash: foo: command not found", exitCode: 127 }),
     ).toBe(false);
+  });
+});
+
+describe("classifySandboxDenial", () => {
+  test("classifies filesystem denials", () => {
+    expect(
+      classifySandboxDenial({ stdout: "", stderr: "Operation not permitted", exitCode: 1 }),
+    ).toBe("filesystem");
+    expect(
+      classifySandboxDenial({
+        stdout: "",
+        stderr: "touch: cannot touch 'x': Read-only file system",
+        exitCode: 1,
+      }),
+    ).toBe("filesystem");
+  });
+
+  test("classifies network denials only when network is restricted", () => {
+    const out = {
+      stdout: "",
+      stderr: "curl: (6) Could not resolve host: example.com",
+      exitCode: 6,
+    };
+    expect(classifySandboxDenial(out, { networkRestricted: true })).toBe("network");
+    // Without network restriction this is a real network error, not a denial.
+    expect(classifySandboxDenial(out)).toBeNull();
+  });
+
+  test("returns null for non-denial failures and clean exits", () => {
+    expect(classifySandboxDenial({ stdout: "ok", stderr: "", exitCode: 0 })).toBeNull();
+    expect(
+      classifySandboxDenial({ stdout: "", stderr: "some normal error", exitCode: 2 }),
+    ).toBeNull();
+  });
+
+  test("describeSandboxDenial returns safe-to-display copy per category", () => {
+    expect(describeSandboxDenial("network")).toContain("network");
+    expect(describeSandboxDenial("filesystem")).toContain("workspace");
   });
 });
 

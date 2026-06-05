@@ -174,6 +174,8 @@ export function createSessionEventHandler(
             command: event.command,
             dangerous: event.dangerous,
             reason: event.reasonCode,
+            ...(event.detail ? { detail: event.detail } : {}),
+            ...(event.category ? { category: event.category } : {}),
           },
         });
         return;

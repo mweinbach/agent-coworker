@@ -317,7 +317,10 @@ describe("bash tool", () => {
 
     const t: any = createBashTool(ctx);
     await t.execute({ command: "touch outside" });
-    expect(approveFn).toHaveBeenCalledWith("touch outside", { reason: "sandbox_denied" });
+    expect(approveFn).toHaveBeenCalledWith(
+      "touch outside",
+      expect.objectContaining({ reason: "sandbox_denied", detail: expect.any(String) }),
+    );
   });
 
   test("runs the unsandboxed fallback once approved", async () => {
@@ -535,6 +538,32 @@ describe("bash tool", () => {
     expect(policies[1]?.kind).toBe("danger-full-access");
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("ran unsandboxed");
+  });
+
+  test("escalation carries a sandbox category + detail for the inline approval UI", async () => {
+    const dir = await tmpDir();
+    const calls: Array<{ reason?: string; detail?: string; category?: string }> = [];
+    const approveFn = mock(async (_command: string, opts?: Record<string, unknown>) => {
+      calls.push((opts ?? {}) as (typeof calls)[number]);
+      return false;
+    });
+    const ctx = makeCtx(dir);
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot touch 'x': Operation not permitted",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "touch x" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.reason).toBe("sandbox_denied");
+    // EPERM is a filesystem denial; detail is safe-to-display copy.
+    expect(calls[0]?.category).toBe("filesystem");
+    expect(typeof calls[0]?.detail).toBe("string");
+    expect((calls[0]?.detail ?? "").length).toBeGreaterThan(0);
   });
 
   test("does not escalate when a sandboxed failure is not a sandbox denial", async () => {

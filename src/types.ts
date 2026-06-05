@@ -682,6 +682,24 @@ export const APPROVAL_RISK_CODES = [
 
 export type ApprovalRiskCode = (typeof APPROVAL_RISK_CODES)[number];
 
+/**
+ * Coarse classification of why an OS-sandboxed command was denied. Used to tailor
+ * the escalation copy/iconography surfaced to the user.
+ */
+export type SandboxDenialCategory = "filesystem" | "network";
+
+/**
+ * Options for {@link ToolContext.approveCommand}. `reason: "sandbox_denied"` marks
+ * the escalation path (escape the OS sandbox); `detail`/`category` carry sandbox
+ * context so clients can render a clear, sandbox-aware approval instead of a
+ * generic prompt.
+ */
+export interface ApproveCommandOptions {
+  reason?: string;
+  detail?: string;
+  category?: SandboxDenialCategory;
+}
+
 export const SERVER_ERROR_SOURCES = [
   "protocol",
   "session",

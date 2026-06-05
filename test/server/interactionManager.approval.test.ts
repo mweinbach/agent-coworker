@@ -53,4 +53,31 @@ describe("InteractionManager.approveCommand", () => {
     expect(evt?.type === "approval" && evt.reasonCode).toBe("requires_manual_review");
     expect(evt?.type === "approval" && evt.dangerous).toBe(false);
   });
+
+  test("carries sandbox detail + category on the escalation event", async () => {
+    const { manager, events } = makeManager({ yolo: false, promptResult: true });
+    await manager.approveCommand("curl https://example.com", {
+      reason: "sandbox_denied",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    const evt = events.find((e) => e.type === "approval");
+    expect(evt?.type === "approval" && evt.detail).toBe(
+      "The OS sandbox blocked network access for this command.",
+    );
+    expect(evt?.type === "approval" && evt.category).toBe("network");
+  });
+
+  test("does not attach sandbox detail/category to an ordinary approval", async () => {
+    const { manager, events } = makeManager({ yolo: false, promptResult: true });
+    // Detail/category only describe sandbox escapes; an ordinary approval (no
+    // sandbox reason) must not be dressed up as one.
+    await manager.approveCommand("rm -rf build", {
+      detail: "should be ignored",
+      category: "filesystem",
+    });
+    const evt = events.find((e) => e.type === "approval");
+    expect(evt?.type === "approval" && evt.detail).toBeUndefined();
+    expect(evt?.type === "approval" && evt.category).toBeUndefined();
+  });
 });

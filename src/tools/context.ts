@@ -10,7 +10,7 @@ import type {
   AgentSpawnContextOptions,
   PersistentAgentSummary,
 } from "../shared/agents";
-import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
+import type { AgentConfig, ApproveCommandOptions, HarnessContextState, TodoItem } from "../types";
 
 export interface AgentControl {
   spawn: (
@@ -42,7 +42,7 @@ export interface ToolContext {
   log: (line: string) => void;
 
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string, opts?: { reason?: string }) => Promise<boolean>;
+  approveCommand: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
 
   updateTodos?: (todos: TodoItem[]) => void;
 

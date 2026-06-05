@@ -2303,6 +2303,8 @@ Internal session event recorded when an action needs user approval. There are tw
 
 YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always prompts (it is not auto-approved under YOLO). On the JSON-RPC wire, the prompt is sent as the server request `item/commandExecution/requestApproval` (or `item/fileChange/requestApproval`).
 
+For a sandbox-denial escalation the event also carries `detail` (a short, safe-to-display reason the command was blocked) and `category` (`"filesystem"` or `"network"`) so clients can render a clear, inline, sandbox-aware approval ("re-run with full disk + network access?") instead of a generic command-approval prompt. These fields are omitted for ordinary approvals. They are mirrored on the JSON-RPC server request `item/commandExecution/requestApproval` params (`detail`, `category`).
+
 ```json
 {
   "type": "approval",
@@ -2310,7 +2312,9 @@ YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always
   "requestId": "req-def",
   "command": "rm -rf /tmp/build",
   "dangerous": true,
-  "reasonCode": "sandbox_denied_escalation"
+  "reasonCode": "sandbox_denied_escalation",
+  "detail": "The OS sandbox blocked a write outside the workspace for this command.",
+  "category": "filesystem"
 }
 ```
 
@@ -2322,6 +2326,8 @@ YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always
 | `command` | `string` | The shell command (or action) awaiting approval |
 | `dangerous` | `boolean` | `true` for a sandbox escape (running outside the sandbox); `false` for an ordinary approval |
 | `reasonCode` | `ApprovalRiskCode` | `"sandbox_denied_escalation"` for a sandbox escape, else `"requires_manual_review"` (see [ApprovalRiskCode](#approvalriskcode)) |
+| `detail` | `string` (optional) | Human-readable reason the command was blocked; present for sandbox escalations only |
+| `category` | `"filesystem" \| "network"` (optional) | Sandbox-denial classification; present for sandbox escalations only |
 
 ---
 

@@ -1,7 +1,7 @@
 import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
-import type { TurnReference } from "../../../types";
+import type { ApproveCommandOptions, TurnReference } from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import { reasoningModeForProvider } from "../../modelStream";
 import type { HistoryManager } from "../HistoryManager";
@@ -110,7 +110,7 @@ export function createUserMessageTurnRunner(
     return await interactionManager.askUser(question, options);
   };
 
-  const approveCommand = async (command: string, opts?: { reason?: string }) => {
+  const approveCommand = async (command: string, opts?: ApproveCommandOptions) => {
     return await interactionManager.approveCommand(command, opts);
   };
 

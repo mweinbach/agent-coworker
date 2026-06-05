@@ -6,7 +6,7 @@ import type { SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand } from "./windows";
 
-export { isLikelySandboxDenied } from "./denied";
+export { classifySandboxDenial, describeSandboxDenial, isLikelySandboxDenied } from "./denied";
 export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
 export {
   DEFAULT_SANDBOX_CONFIG,

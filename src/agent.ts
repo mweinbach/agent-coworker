@@ -35,6 +35,7 @@ import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import type {
   AgentConfig,
+  ApproveCommandOptions,
   HarnessContextState,
   ModelMessage,
   ReferencedPluginContext,
@@ -98,7 +99,7 @@ export interface RunTurnParams {
 
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string, opts?: { reason?: string }) => Promise<boolean>;
+  approveCommand: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
 
   /** Lightweight skill metadata for dynamic tool descriptions. */

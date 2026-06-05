@@ -440,6 +440,60 @@ describe("assertReadPathAllowed", () => {
     await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
   });
 
+  test("a scoped child can still read global skills outside its targetPaths", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-skills-"));
+    // Global skills live under ~/.cowork/skills — a separate home, OUTSIDE the
+    // project write roots (not nested under the workspace).
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-home-"));
+    const cfg = makeConfig(dir);
+    const globalSkillsDir = path.join(home, ".cowork", "skills");
+    cfg.skillsDirs = [path.join(dir, ".cowork", "skills"), globalSkillsDir];
+    const skillFile = path.join(globalSkillsDir, "pdf", "SKILL.md");
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.writeFile(skillFile, "skill-body", "utf-8");
+    // The child is scoped to a single subdir of the project.
+    const targetPaths = [path.join(dir, "src", "auth")];
+
+    // Reads outside the project write roots (e.g. global skills) are not
+    // constrained by targetPaths, so a scoped child can still load them.
+    await expect(assertReadPathAllowed(skillFile, cfg, "read", targetPaths)).resolves.toBe(
+      path.resolve(skillFile),
+    );
+
+    // But a project file outside the child's targetPaths stays blocked.
+    await expect(
+      assertReadPathAllowed(path.join(dir, "src", "other", "secret.ts"), cfg, "read", targetPaths),
+    ).rejects.toThrow(/targetPaths/);
+  });
+
+  test("allows reads inside the user plugins dir (~/.cowork/plugins)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-user-plugins-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-user-plugins-home-"));
+    const cfg = makeConfig(dir);
+    // ~/.cowork/plugins is an explicit read root (config.userPluginsDir).
+    cfg.userPluginsDir = path.join(home, ".cowork", "plugins");
+    const target = path.join(cfg.userPluginsDir, "figma-toolkit", "README.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "plugin readme", "utf-8");
+
+    await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
+  });
+
+  test("a scoped child can still read the user plugins dir outside its targetPaths", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-plugins-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-plugins-home-"));
+    const cfg = makeConfig(dir);
+    cfg.userPluginsDir = path.join(home, ".cowork", "plugins");
+    const target = path.join(cfg.userPluginsDir, "figma-toolkit", "README.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "plugin readme", "utf-8");
+    const targetPaths = [path.join(dir, "src", "auth")];
+
+    await expect(assertReadPathAllowed(target, cfg, "read", targetPaths)).resolves.toBe(
+      path.resolve(target),
+    );
+  });
+
   test("allows reads from bundled plugin skill directories", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-plugin-roots-"));
     const cfg = makeConfig(dir);

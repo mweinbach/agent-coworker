@@ -3,7 +3,7 @@ import {
   developerDiagnosticSystemLineFromSessionEvent,
   upsertAgentSummary,
 } from "../../../store.feedMapping";
-import type { ApprovalPrompt, AskPrompt } from "../../../types";
+import type { ApprovalPrompt, AskPrompt, SandboxApprovalPrompt } from "../../../types";
 import {
   clearPendingThreadSteers,
   markPendingThreadSteerAccepted,
@@ -427,6 +427,29 @@ export function handleLifecycleThreadEvent(
   }
 
   if (evt.type === "approval") {
+    // Sandbox-denial escalations render inline in the chat feed (a sandbox-aware
+    // approve/deny on the running command), not the generic centered modal.
+    // Ordinary approvals (requires_manual_review) keep using the modal.
+    if (evt.reasonCode === "sandbox_denied_escalation") {
+      const prompt: SandboxApprovalPrompt = {
+        requestId: evt.requestId,
+        command: evt.command,
+        ...(evt.detail ? { detail: evt.detail } : {}),
+        ...(evt.category ? { category: evt.category } : {}),
+      };
+      set((s) => ({
+        sandboxApprovalsByThread: {
+          ...s.sandboxApprovalsByThread,
+          [threadId]: [
+            ...(s.sandboxApprovalsByThread[threadId] ?? []).filter(
+              (p) => p.requestId !== prompt.requestId,
+            ),
+            prompt,
+          ],
+        },
+      }));
+      return true;
+    }
     const prompt: ApprovalPrompt = {
       requestId: evt.requestId,
       command: evt.command,

@@ -1,5 +1,5 @@
 import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
-import type { TodoItem } from "../../../types";
+import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
 import type { SessionContext } from "../SessionContext";
@@ -31,7 +31,7 @@ export type RunTurnInvocationDeps = {
   getA2uiSurfaceManager?: A2uiSurfaceManagerProvider;
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string, opts?: { reason?: string }) => Promise<boolean>;
+  approveCommand: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
   updateTodos: (todos: TodoItem[]) => void;
   tracker: TurnStreamTracker;
   includeRawChunks: boolean;

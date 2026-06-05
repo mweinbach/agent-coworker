@@ -2,6 +2,7 @@ import { captureProductEvent } from "../../telemetry/productAnalytics";
 import type {
   AgentConfig,
   ApprovalRiskCode,
+  ApproveCommandOptions,
   ServerErrorCode,
   ServerErrorSource,
 } from "../../types";
@@ -156,7 +157,7 @@ export class InteractionManager {
    * intentionally broad (EACCES/EPERM markers), so auto-approving it under YOLO
    * could silently grant full access on an unrelated failure.
    */
-  async approveCommand(command: string, opts?: { reason?: string }) {
+  async approveCommand(command: string, opts?: ApproveCommandOptions) {
     const isSandboxEscalation = opts?.reason === "sandbox_denied";
     if (this.opts.isYolo() && !isSandboxEscalation) return true;
 
@@ -177,6 +178,10 @@ export class InteractionManager {
       command,
       dangerous: isSandboxEscalation,
       reasonCode,
+      // Sandbox context lets clients render a clear, inline approval ("re-run
+      // with full access?") instead of a generic command-approval modal.
+      ...(isSandboxEscalation && opts?.detail ? { detail: opts.detail } : {}),
+      ...(isSandboxEscalation && opts?.category ? { category: opts.category } : {}),
     };
     this.pendingApprovalEvents.set(requestId, evt);
     this.opts.emit(evt);

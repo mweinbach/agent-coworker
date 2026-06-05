@@ -13,6 +13,7 @@ import {
 } from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
+import type { SandboxApprovalPrompt } from "../app/types";
 import { ConversationScrollButton } from "../components/ai-elements/conversation";
 import {
   buildComposerAttachmentSignature,
@@ -52,6 +53,9 @@ const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 14;
 const FEED_BOTTOM_STICKY_THRESHOLD_PX = 220;
 const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
+// Stable empty reference so the sandbox-approvals selector doesn't allocate a new
+// array each render (which would defeat zustand's reference equality check).
+const EMPTY_SANDBOX_APPROVALS: SandboxApprovalPrompt[] = [];
 
 export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
@@ -94,6 +98,12 @@ export function ChatView() {
     [workspaceSkills, workspacePluginsCatalog],
   );
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
+  const sandboxApprovals = useAppStore((s) =>
+    s.selectedThreadId
+      ? (s.sandboxApprovalsByThread[s.selectedThreadId] ?? EMPTY_SANDBOX_APPROVALS)
+      : EMPTY_SANDBOX_APPROVALS,
+  );
+  const answerApproval = useAppStore((s) => s.answerApproval);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const desktopA2uiEnabled = useAppStore((s) => s.desktopFeatureFlags.a2ui);
@@ -698,6 +708,9 @@ export function ChatView() {
           latestUiSurfaceItemId={latestUiSurfaceItemId}
           a2uiEnabled={a2uiEnabled}
           composerOverlayHeight={composerOverlayHeight}
+          threadId={selectedThreadId}
+          sandboxApprovals={sandboxApprovals}
+          onAnswerApproval={answerApproval}
         />
         <ConversationScrollButton
           bottomOffset={scrollButtonBottomOffset}

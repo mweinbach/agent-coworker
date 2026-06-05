@@ -49,6 +49,26 @@ roles → `workspace-write`. Explicit `sandbox.mode: "read-only"` stays fully
 immutable. Child-agent `targetPaths` become the writable roots, so write scope is
 enforced by the OS rather than by parsing the command.
 
+Reads are full-disk in every sandboxed mode, so global skills/plugins/config
+under `~/.cowork` (e.g. `~/.cowork/skills`, `~/.cowork/plugins`), built-in/bundled
+skill assets, and any skill/plugin scripts the agent runs via `bash` remain
+readable and runnable inside the sandbox — they are just read-only (writes there
+are denied, as `~/.cowork` lives outside the writable roots and `.cowork` is
+protected metadata). The built-in `read`/`glob`/`grep` tools mirror this:
+`readRoots` (`src/utils/permissions.ts`) includes `config.skillsDirs`,
+`config.workspacePluginsDir`/`config.userPluginsDir`, and every discovered plugin
+root + its declared skill paths (`pluginReadRoots`), and reads outside the project
+are not constrained by a scoped child's `targetPaths`, so scoped agents can still
+load global skills and plugins.
+
+Note on namespaces: the canonical runtime skill/plugin roots are `.cowork/` and
+`~/.cowork/` (project + user) plus the built-in dir. `.agents/` is the
+marketplace/curated-repo *source* layout (e.g. `.agents/plugins/marketplace.json`)
+and is not a runtime skill/plugin lookup path, so the file tools do not treat
+`~/.agents/skills` or `~/.agents/plugins` as read roots. A `bash` command can still
+read them (reads are full-disk), but the harness never loads skills or plugins
+from there — install them under `~/.cowork/...` to make them first-class.
+
 `targetPaths` are clamped to the workspace: entries that resolve outside it (e.g.
 an absolute `/home/user/.ssh`) or inside protected metadata (`.git`/`.cowork`) are
 dropped so they never become shell-writable. A spawn whose `targetPaths` all drop

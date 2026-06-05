@@ -1256,6 +1256,51 @@ describe("desktop JSON-RPC event mapping", () => {
     });
   });
 
+  test("sandbox-denied escalation renders inline in the feed, not the modal", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-1";
+    const responseCountBefore = socket.responses.length;
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    // A sandbox escape is an inline, sandbox-aware card — never the centered modal.
+    expect(useAppStore.getState().promptModal).toBeNull();
+    const pending = useAppStore.getState().sandboxApprovalsByThread[threadId] ?? [];
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      requestId,
+      command: "curl https://example.com",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    // The card actually renders inline in the live ChatView tree (not just store state).
+    const bodyText = harness?.dom.window.document.body.textContent ?? "";
+    expect(bodyText).toContain("Blocked by the OS sandbox");
+    expect(bodyText).toContain("curl https://example.com");
+
+    await act(async () => {
+      useAppStore.getState().answerApproval(threadId, requestId, true);
+      await Promise.resolve();
+    });
+
+    // Answering resolves on the shared socket and clears the inline prompt.
+    expect(socket.responses.slice(responseCountBefore)).toEqual([
+      { id: requestId, result: { decision: "accept" } },
+    ]);
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
   test("retired shared JSON-RPC sockets do not route late notifications or server requests after a serverUrl swap", async () => {
     const firstSocket = await reconnectThreadAndGetSocket();
 

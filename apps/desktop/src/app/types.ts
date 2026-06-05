@@ -620,6 +620,19 @@ export type ApprovalPrompt = {
   reasonCode: ApprovalRiskCode;
 };
 
+/**
+ * A pending sandbox-denial escalation rendered inline in the chat feed (not the
+ * modal): the OS sandbox blocked a command and the agent is asking whether to
+ * re-run it with full access. `detail`/`category` come from the harness so the
+ * inline card can explain why the command was blocked.
+ */
+export type SandboxApprovalPrompt = {
+  requestId: string;
+  command: string;
+  detail?: string;
+  category?: "filesystem" | "network";
+};
+
 export type PromptModalState =
   | { kind: "ask"; threadId: string; prompt: AskPrompt }
   | { kind: "approval"; threadId: string; prompt: ApprovalPrompt }

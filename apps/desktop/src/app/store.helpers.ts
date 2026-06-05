@@ -81,6 +81,7 @@ import type {
   ResearchCard,
   ResearchDetail,
   ResearchSettingsState,
+  SandboxApprovalPrompt,
   SettingsPageId,
   SidebarSectionKey,
   ThreadBusyPolicy,
@@ -190,6 +191,12 @@ export type AppStoreState = {
   workspaceExplorerRefreshById: Record<string, number>;
 
   promptModal: PromptModalState;
+  /**
+   * Pending sandbox-denial escalations rendered inline in the chat feed, keyed by
+   * threadId. Sandbox escapes use this inline path; ordinary approvals
+   * (`requires_manual_review`) still use `promptModal`.
+   */
+  sandboxApprovalsByThread: Record<string, SandboxApprovalPrompt[]>;
   filePreview: { path: string } | null;
   canvasActiveTab: "preview" | "edit";
   canvasShowFormattingBar: boolean;

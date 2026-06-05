@@ -296,12 +296,15 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
 
 function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undefined {
   // A scoped child (agentTargetPaths) must stay within its assigned paths even
-  // under YOLO. Widening to danger-full-access here would bypass the scope
-  // before resolveSandboxPolicy can apply it, and Codex owns the native shell/
-  // write tools. YOLO still maps to approvalPolicy "never" separately, so the
-  // only effect of keeping the configured sandbox is preserving the write scope.
+  // under YOLO. An explicitly restrictive `read-only` sandbox is a hard floor and
+  // must not be widened either — YOLO only relaxes the APPROVAL policy, not the
+  // sandbox mode the user explicitly selected. Only an unscoped, non-read-only
+  // session is lifted to full access. YOLO still maps to approvalPolicy "never".
   const scoped = (params.agentTargetPaths?.length ?? 0) > 0;
-  if (params.yolo !== true || scoped) return params.config.sandbox;
+  const explicitlyReadOnly = params.config.sandbox?.mode === "read-only";
+  if (params.yolo !== true || scoped || explicitlyReadOnly) {
+    return params.config.sandbox;
+  }
   return {
     ...(params.config.sandbox ?? {}),
     mode: "danger-full-access",

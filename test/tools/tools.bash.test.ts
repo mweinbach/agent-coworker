@@ -294,6 +294,42 @@ describe("bash tool", () => {
     expect(result.sandbox).toBe("none");
   });
 
+  test("forces fail-closed for a scoped child even when config requireBackend is false", async () => {
+    const dir = await tmpDir();
+    let observed: boolean | undefined;
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = opts.requireBackend;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: true, requireBackend: false },
+      }),
+      agentTargetPaths: [path.join(dir, "src")],
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    // A scoped child is a hard floor: it must not take the unsandboxed fallback.
+    expect(observed).toBe(true);
+  });
+
+  test("keeps config requireBackend=false for an unscoped workspace-write session", async () => {
+    const dir = await tmpDir();
+    let observed: boolean | undefined;
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = opts.requireBackend;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: true, requireBackend: false },
+      }),
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    expect(observed).toBe(false);
+  });
+
   test("does not prompt for approval when a sandboxed command succeeds", async () => {
     const dir = await tmpDir();
     const approveFn = mock(async () => true);

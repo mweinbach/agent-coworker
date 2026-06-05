@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { buildBwrapCommand } from "./bwrap";
-import { findBwrap, findWindowsHelper, hasSeatbelt } from "./detect";
+import { findBwrap, findWindowsHelper, hasSeatbelt, isBwrapUsable } from "./detect";
 import type { SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 
@@ -77,9 +77,13 @@ export function detectCapabilities(
   env: NodeJS.ProcessEnv = process.env,
 ): SandboxCapabilities {
   const winDirs = windowsHelperDirs.length > 0 ? windowsHelperDirs : defaultWindowsHelperDirs();
+  // Treat an installed-but-unusable bwrap (no unprivileged user namespaces) as
+  // unavailable, so the configured requireBackend fail-closed/fallback applies
+  // instead of running commands that error during sandbox setup.
+  const bwrapFound = platform === "linux" ? findBwrap(env) : null;
   return {
     seatbelt: platform === "darwin" ? hasSeatbelt() : false,
-    bwrapPath: platform === "linux" ? findBwrap(env) : null,
+    bwrapPath: bwrapFound && isBwrapUsable(bwrapFound) ? bwrapFound : null,
     windowsHelperPath: platform === "win32" ? findWindowsHelper(winDirs, env) : null,
   };
 }

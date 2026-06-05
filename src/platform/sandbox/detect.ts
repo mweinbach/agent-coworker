@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -33,6 +34,46 @@ const TRUSTED_BWRAP_DIRS = [
   "/sbin",
   "/run/current-system/sw/bin", // NixOS
 ];
+
+const bwrapUsabilityCache = new Map<string, boolean>();
+
+/**
+ * Whether `bwrap` at `program` can actually create the namespaces the sandbox
+ * relies on. On hosts where bubblewrap is installed but unprivileged user
+ * namespaces are disabled, the binary exists yet every `--unshare-user`
+ * invocation fails — so the backend is effectively unavailable and commands
+ * would error during sandbox setup instead of taking the configured
+ * fail-closed/fallback path. Probes a trivial namespace command once and caches
+ * the result (host capability is stable for the process lifetime).
+ */
+export function isBwrapUsable(program: string): boolean {
+  const cached = bwrapUsabilityCache.get(program);
+  if (cached !== undefined) return cached;
+  let usable = false;
+  try {
+    const probe = spawnSync(
+      program,
+      [
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--unshare-user",
+        "--unshare-pid",
+        "--proc",
+        "/proc",
+        "/bin/true",
+      ],
+      { timeout: 10_000, stdio: "ignore" },
+    );
+    usable = probe.status === 0;
+  } catch {
+    usable = false;
+  }
+  bwrapUsabilityCache.set(program, usable);
+  return usable;
+}
 
 /** Locate the `bwrap` executable in a trusted system location, or `null`. */
 export function findBwrap(env: NodeJS.ProcessEnv = process.env): string | null {

@@ -881,6 +881,34 @@ rl.on("line", (line) => {
     );
   });
 
+  test.serial("does not widen an explicit read-only sandbox under yolo", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-ro-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: { ...makeConfig(dir), sandbox: { mode: "read-only", network: false } },
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Inspect" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: true,
+      shellPolicy: "full",
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    // YOLO relaxes the approval policy to "never", but an explicitly read-only
+    // sandbox is a hard floor and must not be widened to full access.
+    expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "readOnly" },
+    });
+  });
+
   test.serial("passes read-only sandbox for read-only subagent shell policy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-readonly-"));
     const script = await writeMockAppServer(dir);

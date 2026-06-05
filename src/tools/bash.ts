@@ -405,7 +405,12 @@ export function createBashTool(ctx: ToolContext) {
         ctx.sandboxPolicy ??
         resolveSandboxPolicy({
           config: sandboxConfig,
-          readOnlyRole: ctx.agentRole ? getAgentRoleDefinition(ctx.agentRole).readOnly : false,
+          // Honor a read-only role OR an explicit no_project_write shell policy,
+          // matching agent.ts so this fallback can't resolve looser than the
+          // precomputed policy would.
+          readOnlyRole:
+            (ctx.agentRole ? getAgentRoleDefinition(ctx.agentRole).readOnly : false) ||
+            ctx.shellPolicy === "no_project_write",
           workingDirectory: ctx.config.workingDirectory,
           projectRoot: path.dirname(ctx.config.projectCoworkDir),
           outputDirectory: ctx.config.outputDirectory,
@@ -413,13 +418,19 @@ export function createBashTool(ctx: ToolContext) {
           targetPaths: ctx.agentTargetPaths,
         });
       const runner = runShellCommandOverrideForTests ?? runShellCommand;
+      // Read-only roles and scoped children (targetPaths) are hard floors: their
+      // read-only / scope guarantee must never be relaxed to an unsandboxed
+      // full-access run, so fail closed when no backend is available regardless
+      // of the configured requireBackend. Only an unscoped workspace-write
+      // session may take the approved unsandboxed fallback.
+      const isHardFloor = policy.kind === "read-only" || (ctx.agentTargetPaths?.length ?? 0) > 0;
       const baseArgs = {
         command,
         cwd: ctx.config.workingDirectory,
         abortSignal: ctx.abortSignal,
         timeoutMs,
         env: ctx.toolEnv,
-        requireBackend: sandboxConfig.requireBackend,
+        requireBackend: sandboxConfig.requireBackend || isHardFloor,
         // Prompt before running unsandboxed when no backend is available. Uses a
         // non-"sandbox_denied" reason so YOLO auto-approves (the user opted into
         // requireBackend=false) while a non-YOLO session still confirms.

@@ -46,6 +46,21 @@ describe("resolveSandboxPolicy", () => {
     expect(policy.kind).toBe("danger-full-access");
   });
 
+  test("a scoped child stays scoped even under a danger-full-access config", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "danger-full-access" },
+      workingDirectory: "/work/project",
+      targetPaths: ["src/auth"],
+    });
+    // The explicit targetPaths scope is a hard floor; it is not lifted to full
+    // access just because the workspace config is danger-full-access.
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/work/project/src/auth"],
+      network: true,
+    });
+  });
+
   test("read-only role forces read-only even on auto", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },
@@ -281,12 +296,27 @@ describe("seatbelt argv generation", () => {
     const policyText = args[1];
     expect(policyText).toContain("(allow file-write*");
     expect(policyText).toContain("network-outbound");
-    // writable root + protected subpaths passed as -D bindings
+    // writable root passed as a -D binding
     expect(args).toContain("-DWRITABLE_ROOT_0=/work");
-    expect(args).toContain("-DWRITABLE_ROOT_0_EXCLUDED_0=/work/.git");
-    expect(args).toContain("-DWRITABLE_ROOT_0_EXCLUDED_1=/work/.cowork");
+    // protected metadata excluded recursively via a path regex (any depth)
+    expect(policyText).toContain('(require-not (regex #"/\\.git(/|$)"))');
+    expect(policyText).toContain('(require-not (regex #"/\\.cowork(/|$)"))');
     // /tmp is always writable scratch
     expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/tmp"))).toBe(true);
+  });
+
+  test("workspace-write: excludes nested .git/.cowork recursively (not just direct children)", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/repo"],
+      network: true,
+    };
+    const { args } = buildSeatbeltCommand(INNER, policy);
+    const policyText = args[1];
+    // One recursive regex per protected name covers nested cases like
+    // /repo/src/.git/hooks, replacing the old per-root direct-child subpaths.
+    expect(policyText).toContain('(require-not (regex #"/\\.git(/|$)"))');
+    expect(args.some((a) => a.includes("_EXCLUDED_"))).toBe(false);
   });
 
   test("does not add /tmp or /private/tmp scratch for a /tmp-scoped root (macOS alias)", () => {

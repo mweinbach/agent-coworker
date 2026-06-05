@@ -79,11 +79,17 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
     return { kind: "read-only", network };
   }
 
-  if (config.mode === "danger-full-access") {
+  // A scoped child (targetPaths) is constrained to its assigned paths even when
+  // the workspace is configured danger-full-access: the explicit scope is a hard
+  // floor, so it must not be lifted to unsandboxed full access (which would also
+  // hand Codex-native shell/write tools the whole filesystem).
+  const scoped = (input.targetPaths?.length ?? 0) > 0;
+  if (config.mode === "danger-full-access" && !scoped) {
     return { kind: "danger-full-access" };
   }
 
-  // `workspace-write` and `auto` (for write-capable roles) both resolve here.
+  // `workspace-write` and `auto` (for write-capable roles) both resolve here, as
+  // do scoped children under a danger-full-access config (held to their scope).
   return { kind: "workspace-write", writableRoots: deriveWritableRoots(input), network };
 }
 

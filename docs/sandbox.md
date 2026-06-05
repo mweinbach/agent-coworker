@@ -80,7 +80,10 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 
 - **macOS — Seatbelt** (`seatbelt.ts`): generates a `.sbpl` profile (deny-by-default
   base + dynamic `file-read*`/`file-write*`/network sections, `-D` path params)
-  and runs it under `/usr/bin/sandbox-exec`. Pure string/argv generation.
+  and runs it under `/usr/bin/sandbox-exec`. Pure string/argv generation. Protected
+  metadata (`.git`/`.cowork`) is excluded **recursively** via a path regex
+  (`require-not (regex #"/\.git(/|$)")`), so nested repos/worktrees/submodules at
+  any depth under a writable root stay read-only.
 - **Linux — bubblewrap** (`bwrap.ts`): `--ro-bind / /` for reads, `--bind` per
   writable root, `--ro-bind` to re-protect `.git`/`.cowork`, `--unshare-net` when
   network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is
@@ -90,6 +93,11 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
   surfaced warning when `sandbox.requireBackend` is explicitly `false`.
   (The in-process seccomp layer Codex adds is not ported — bwrap alone provides
   filesystem + network + namespace isolation.)
+  **Limitation:** the `.git`/`.cowork` re-protection is bind-based, so it masks
+  only the **top-level** metadata under each writable root; nested metadata
+  (e.g. a submodule's `/repo/src/.git`) is not re-frozen because per-command
+  recursive enumeration is impractical. Prefer narrow `targetPaths` when a child
+  must not touch nested metadata; the macOS backend excludes it recursively.
 - **Windows — restricted token** (`crates/cowork-win-sandbox`): a native helper
   runs the child under a restricted (LUA) token inside a kill-on-close Job
   Object. **Status: the Win32 path requires a Windows CI build to be verified;**
@@ -99,10 +107,16 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 
 ## Verification
 
-- Unit: `test/platform/sandbox.test.ts` asserts exact argv per policy × platform
-  and the escalate-on-failure detection.
-- Linux integration: under `read-only`, `touch $cwd/x` is denied by the OS;
-  `workspace-write` permits writing in cwd but not `$HOME`; network off blocks
-  `curl`. Skipped + warned when `bwrap`/user namespaces are unavailable.
-- macOS / Windows: verified on their own CI runners (this repo's dev container is
-  Linux-only).
+- Unit: `test/platform/sandbox.test.ts` asserts exact argv / policy text per
+  policy × platform and the escalate-on-failure detection.
+- **Enforcement (real OS sandbox):** `test/platform/sandbox.enforcement.integration.test.ts`
+  spawns the actual backend and asserts allow/deny on a real kernel — in-workspace
+  writes allowed, `.git`/`.cowork` (incl. nested, on macOS) denied, out-of-workspace
+  writes denied, reads allowed, and child `targetPaths` scoping. It is gated by
+  platform + backend availability, so it **skips** on the Linux CI image (no
+  `bwrap`/user namespaces). Run it before merging:
+  - macOS: `bun test test/platform/sandbox.enforcement.integration.test.ts`
+  - Linux (bubblewrap host): same command (auto-detects `bwrap`).
+  - Windows: build the helper (`cargo build --release` in `crates/cowork-win-sandbox`),
+    then point `COWORK_WIN_SANDBOX_PATH` at the `.exe` (or use the default
+    `target/release` path) and run the same command.

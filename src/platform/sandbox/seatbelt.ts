@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
@@ -147,8 +145,8 @@ export function buildSeatbeltCommand(
 
 /**
  * Build the `(allow file-write* ...)` section for the writable roots, carving
- * out protected metadata subpaths (`.git`, `.cowork`) so they stay read-only
- * even though their parent root is writable.
+ * out protected metadata (`.git`, `.cowork`) recursively (at any depth under a
+ * root) so it stays read-only even though its parent root is writable.
  */
 function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   // Canonicalize the explicit roots (realpath) first so a symlinked root can't
@@ -164,31 +162,23 @@ function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   // write allow in SBPL, so an empty root set must never reach the allow form.
   if (roots.length === 0) return "";
 
+  // Exclude protected metadata RECURSIVELY: reject any path segment named
+  // `.git`/`.cowork` anywhere under a writable root, not just the root's direct
+  // child. A single path regex covers all depths, so nested repos/worktrees/
+  // submodules — and broad roots like the project root — keep their metadata
+  // read-only. (A per-root `.git` subpath only matched the top-level child.)
+  const excluded = PROTECTED_SUBPATH_NAMES.map(
+    (name) => `(require-not (regex #"/\\${name}(/|$)"))`,
+  ).join(" ");
+
   const components: string[] = [];
   roots.forEach((root, index) => {
     const rootKey = `WRITABLE_ROOT_${index}`;
     params.push({ key: rootKey, value: root });
-
-    // Allow the root path itself: Seatbelt matches exact files with `literal`,
-    // so a file-valued scope (e.g. `src/new.ts`) can be written directly rather
-    // than only paths beneath it.
+    // Allow the exact root path (file-valued scopes use Seatbelt `literal`) and
+    // anything beneath it, minus the protected-metadata segments above.
     components.push(`(literal (param "${rootKey}"))`);
-
-    const excluded: string[] = [];
-    PROTECTED_SUBPATH_NAMES.forEach((name, subIndex) => {
-      const subKey = `${rootKey}_EXCLUDED_${subIndex}`;
-      params.push({ key: subKey, value: path.join(root, name) });
-      excluded.push(
-        `(require-not (subpath (param "${subKey}")))`,
-        `(require-not (literal (param "${subKey}")))`,
-      );
-    });
-
-    if (excluded.length === 0) {
-      components.push(`(subpath (param "${rootKey}"))`);
-    } else {
-      components.push(`(require-all (subpath (param "${rootKey}")) ${excluded.join(" ")})`);
-    }
+    components.push(`(require-all (subpath (param "${rootKey}")) ${excluded})`);
   });
 
   return `(allow file-write*\n${components.join("\n")}\n)`;

@@ -49,6 +49,14 @@ export interface SandboxTransformResult extends SandboxCommand {
   sandbox: SandboxType;
   /** True when no OS sandbox wraps the command (full-access or unavailable). */
   unsandboxed: boolean;
+  /**
+   * Whether the selected backend actually ENFORCES the policy's filesystem/scope
+   * (true for Seatbelt/bwrap). The Windows restricted-token helper provides only
+   * process containment (no per-root FS/WFP scoping), so it is NOT enforcing —
+   * hard-floor contexts (read-only roles, scoped children) must fail closed
+   * rather than run unenforced under it. Absent means non-enforcing.
+   */
+  enforcesScope?: boolean;
   /** Set when sandboxing was wanted but unavailable on this platform. */
   warning?: string;
 }
@@ -133,6 +141,7 @@ export class SandboxManager {
           env: markerEnv("macos-seatbelt"),
           sandbox: "macos-seatbelt",
           unsandboxed: false,
+          enforcesScope: true,
         };
       }
       case "linux": {
@@ -150,6 +159,7 @@ export class SandboxManager {
           env: markerEnv("linux-bwrap"),
           sandbox: "linux-bwrap",
           unsandboxed: false,
+          enforcesScope: true,
         };
       }
       case "win32": {

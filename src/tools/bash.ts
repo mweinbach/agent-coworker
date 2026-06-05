@@ -145,6 +145,13 @@ type RunShellCommandOpts = {
   /** When true, fail closed instead of running unsandboxed if no backend is available. */
   requireBackend?: boolean;
   /**
+   * When true, the policy MUST be enforced by the backend (filesystem/scope), not
+   * merely process-contained. Used for hard-floor contexts (read-only roles,
+   * scoped children): a non-enforcing backend (e.g. the Windows restricted-token
+   * helper) or no backend fails closed, with no unsandboxed fallback.
+   */
+  requireEnforcingBackend?: boolean;
+  /**
    * Called before falling back to an UNSANDBOXED run because no OS sandbox backend
    * is available (restrictive policy + `requireBackend: false`). Running with full
    * filesystem access is a privilege increase, so the caller may prompt; return
@@ -238,6 +245,26 @@ async function runShellCommandWithExec(
           capabilities: opts.capabilities,
         })
       : null;
+
+  // Hard-floor contexts (read-only roles, scoped children) require a backend that
+  // actually ENFORCES the policy, not just process containment. A non-enforcing
+  // backend (e.g. the Windows restricted-token helper) or no backend must fail
+  // closed — never run such a context unenforced, and never offer a fallback.
+  if (
+    policy &&
+    policy.kind !== "danger-full-access" &&
+    opts.requireEnforcingBackend &&
+    (!probe || probe.sandbox === "none" || !probe.enforcesScope)
+  ) {
+    return {
+      stdout: "",
+      stderr: `Refusing to run: this context requires an enforcing OS sandbox, which is unavailable (${probe?.warning ?? "no backend"}).`,
+      exitCode: 1,
+      errorCode: "SANDBOX_REQUIRED",
+      sandbox: "none",
+      sandboxWarning: probe?.warning,
+    };
+  }
 
   // Fail closed when configured to require a backend that is unavailable.
   if (
@@ -419,10 +446,10 @@ export function createBashTool(ctx: ToolContext) {
         });
       const runner = runShellCommandOverrideForTests ?? runShellCommand;
       // Read-only roles and scoped children (targetPaths) are hard floors: their
-      // read-only / scope guarantee must never be relaxed to an unsandboxed
-      // full-access run, so fail closed when no backend is available regardless
-      // of the configured requireBackend. Only an unscoped workspace-write
-      // session may take the approved unsandboxed fallback.
+      // read-only / scope guarantee must be ENFORCED by the backend, never just
+      // process-contained or relaxed to an unsandboxed run. They fail closed
+      // unless an enforcing backend (Seatbelt/bwrap) is available. Only an
+      // unscoped workspace-write session may take the approved unsandboxed fallback.
       const isHardFloor = policy.kind === "read-only" || (ctx.agentTargetPaths?.length ?? 0) > 0;
       const baseArgs = {
         command,
@@ -430,7 +457,8 @@ export function createBashTool(ctx: ToolContext) {
         abortSignal: ctx.abortSignal,
         timeoutMs,
         env: ctx.toolEnv,
-        requireBackend: sandboxConfig.requireBackend || isHardFloor,
+        requireBackend: sandboxConfig.requireBackend,
+        requireEnforcingBackend: isHardFloor,
         // Prompt before running unsandboxed when no backend is available. Uses a
         // non-"sandbox_denied" reason so YOLO auto-approves (the user opted into
         // requireBackend=false) while a non-YOLO session still confirms.

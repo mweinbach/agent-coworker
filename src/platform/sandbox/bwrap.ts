@@ -181,7 +181,17 @@ function collectExistingProtectedMetadataDirs(
     }
     for (const entry of entries) {
       const full = path.join(current, entry);
-      if (!exists(full) || !isDirectory(full)) continue;
+      // Never follow symlinks while scanning: a symlinked directory (e.g.
+      // `vendor` -> `/`, or a self-referential link) would make the scan traverse
+      // outside the root or loop forever before the command even starts. lstat
+      // classifies the link itself, not its target, so symlinks are skipped.
+      let stats: fs.Stats;
+      try {
+        stats = fs.lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (stats.isSymbolicLink() || !stats.isDirectory()) continue;
       if ((PROTECTED_SUBPATH_NAMES as readonly string[]).includes(entry)) {
         found.push(full);
         continue;

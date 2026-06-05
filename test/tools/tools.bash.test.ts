@@ -294,11 +294,14 @@ describe("bash tool", () => {
     expect(result.sandbox).toBe("none");
   });
 
-  test("forces fail-closed for a scoped child even when config requireBackend is false", async () => {
+  test("marks a scoped child as requiring an enforcing backend (hard floor)", async () => {
     const dir = await tmpDir();
-    let observed: boolean | undefined;
+    let observed: { requireBackend?: boolean; requireEnforcingBackend?: boolean } = {};
     bashInternal.setRunShellCommandForTests(async (opts) => {
-      observed = opts.requireBackend;
+      observed = {
+        requireBackend: opts.requireBackend,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
       return { stdout: "", stderr: "", exitCode: 0 };
     });
     const ctx = makeCtx(dir, {
@@ -309,15 +312,18 @@ describe("bash tool", () => {
     });
     const t: any = createBashTool(ctx);
     await t.execute({ command: "echo hi" });
-    // A scoped child is a hard floor: it must not take the unsandboxed fallback.
-    expect(observed).toBe(true);
+    // A scoped child must be enforced by the backend (no process-only/unsandboxed).
+    expect(observed.requireEnforcingBackend).toBe(true);
   });
 
-  test("keeps config requireBackend=false for an unscoped workspace-write session", async () => {
+  test("does not require an enforcing backend for an unscoped workspace-write session", async () => {
     const dir = await tmpDir();
-    let observed: boolean | undefined;
+    let observed: { requireBackend?: boolean; requireEnforcingBackend?: boolean } = {};
     bashInternal.setRunShellCommandForTests(async (opts) => {
-      observed = opts.requireBackend;
+      observed = {
+        requireBackend: opts.requireBackend,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
       return { stdout: "", stderr: "", exitCode: 0 };
     });
     const ctx = makeCtx(dir, {
@@ -327,7 +333,29 @@ describe("bash tool", () => {
     });
     const t: any = createBashTool(ctx);
     await t.execute({ command: "echo hi" });
-    expect(observed).toBe(false);
+    expect(observed.requireEnforcingBackend).toBe(false);
+    expect(observed.requireBackend).toBe(false);
+  });
+
+  test("hard-floor scoped child fails closed under a non-enforcing (Windows-like) backend", async () => {
+    // A backend that runs the command but does not enforce scope (enforcesScope
+    // falsy) must not satisfy a hard floor — the run is refused, not executed.
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "rm -rf /",
+      cwd: "/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["/work/src"], network: true },
+      requireEnforcingBackend: true,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls).toEqual([]); // never executed
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
   });
 
   test("does not prompt for approval when a sandboxed command succeeds", async () => {

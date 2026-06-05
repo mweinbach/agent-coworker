@@ -2296,7 +2296,12 @@ Client guidance:
 
 ### approval
 
-Internal session event recorded when a sandboxed command needs to be escalated out of the OS sandbox. The OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this prompt is emitted only when a sandboxed command failed in a way that looks like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure). Approving re-runs the command with full access; rejecting returns the sandbox failure to the model. YOLO mode auto-approves. On the JSON-RPC wire, the same prompt is sent as the server request `item/commandExecution/requestApproval`.
+Internal session event recorded when an action needs user approval. There are two kinds:
+
+1. **Sandbox-denial escalation** (`dangerous: true`, `reasonCode: "sandbox_denied_escalation"`): the OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this is emitted when a sandboxed command failed like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure). Approving re-runs the command with full access; rejecting returns the sandbox failure to the model.
+2. **Ordinary approval** (`dangerous: false`, `reasonCode: "requires_manual_review"`): a provider/tool approval that is NOT a sandbox escape — e.g. the Codex app-server `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` prompts, routed through `approveCommand` without a sandbox reason. Clients should render these as normal approval prompts, not as "escape the sandbox".
+
+YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always prompts (it is not auto-approved under YOLO). On the JSON-RPC wire, the prompt is sent as the server request `item/commandExecution/requestApproval` (or `item/fileChange/requestApproval`).
 
 ```json
 {
@@ -2314,9 +2319,9 @@ Internal session event recorded when a sandboxed command needs to be escalated o
 | `type` | `"approval"` | — |
 | `sessionId` | `string` | Session identifier |
 | `requestId` | `string` | Unique request ID, mirrored in the JSON-RPC server request |
-| `command` | `string` | The shell command that was denied by the sandbox |
-| `dangerous` | `boolean` | Always `true` — running outside the sandbox is the dangerous action |
-| `reasonCode` | `ApprovalRiskCode` | `"sandbox_denied_escalation"` (see [ApprovalRiskCode](#approvalriskcode)) |
+| `command` | `string` | The shell command (or action) awaiting approval |
+| `dangerous` | `boolean` | `true` for a sandbox escape (running outside the sandbox); `false` for an ordinary approval |
+| `reasonCode` | `ApprovalRiskCode` | `"sandbox_denied_escalation"` for a sandbox escape, else `"requires_manual_review"` (see [ApprovalRiskCode](#approvalriskcode)) |
 
 ---
 

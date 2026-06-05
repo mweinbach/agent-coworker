@@ -25,7 +25,7 @@ crates/cowork-win-sandbox/   Windows native helper (restricted token + Job Objec
 
 `SandboxManager.transform()` is the single abstraction every platform flows
 through. Given the command argv and a policy it selects a backend
-(`macos-seatbelt` | `linux-bwrap` | `none`) and prepends
+(`macos-seatbelt` | `linux-bwrap` | `windows-restricted` | `none`) and prepends
 the appropriate wrapper, mirroring Codex's `SandboxManager::transform`. The bash
 tool (`src/tools/bash.ts`) is the single integration point: it wraps the shell
 candidate before spawning and attaches marker env vars (`COWORK_SANDBOX`,
@@ -101,10 +101,12 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
   must not touch nested metadata; the macOS backend excludes it recursively.
 - **Windows — restricted token** (`crates/cowork-win-sandbox`): a native helper
   runs the child under a restricted (LUA) token inside a kill-on-close Job
-  Object. **Status: the Win32 path requires a Windows CI build to be verified;**
-  per-root ACL filesystem scoping and WFP network isolation are tracked TODOs.
-  Until those are implemented, restrictive Windows policies are treated as
-  backend-unavailable instead of as a filesystem/network sandbox.
+  Object. It IS selected as the backend (so commands run rather than failing
+  closed), providing **process containment only** — per-root ACL filesystem
+  scoping and WFP network isolation are tracked TODOs, so workspace-write /
+  read-only path scoping is **not** enforced yet. The degradation is surfaced as
+  a `[sandbox] …` warning on every Windows command. **Status: the Win32 path
+  still requires a Windows CI build to verify enforcement once implemented.**
 
 ## Verification
 

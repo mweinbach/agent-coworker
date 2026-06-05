@@ -605,17 +605,22 @@ describe("SandboxManager.transform", () => {
     expect(r.warning).toContain("cowork-win-sandbox");
   });
 
-  test("win32 helper is not treated as a filesystem/network sandbox yet", () => {
+  test("win32 runs under the restricted-token helper with a partial-containment warning", () => {
+    const helper = "C:/h/cowork-win-sandbox.exe";
     const r = mgr.transform({
       ...INNER,
       policy: { kind: "workspace-write", writableRoots: ["C:/w"], network: false },
       cwd: "C:/w",
       platform: "win32",
-      capabilities: caps({ windowsHelperPath: "C:/h/cowork-win-sandbox.exe" }),
+      capabilities: caps({ windowsHelperPath: helper }),
     });
-    expect(r.sandbox).toBe("none");
-    expect(r.unsandboxed).toBe(true);
-    expect(r.warning).toContain("does not yet enforce filesystem or network restrictions");
+    // The helper IS selected (process containment), wrapping the inner command.
+    expect(r.sandbox).toBe("windows-restricted");
+    expect(r.unsandboxed).toBe(false);
+    expect(r.file).toBe(helper);
+    expect(r.args).toContain("--mode");
+    // ...but it does not enforce FS/network scoping, which must be surfaced.
+    expect(r.warning).toContain("filesystem and network scoping are not yet enforced");
   });
 });
 

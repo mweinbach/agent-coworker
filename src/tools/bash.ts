@@ -465,14 +465,18 @@ export function createBashTool(ctx: ToolContext) {
         }
       }
 
-      // Surface the "ran without an OS sandbox" warning in the command output
-      // (not just logs) so the model/user can see enforcement was unavailable.
-      // Excluded for the fail-closed case, which already explains itself.
-      const ranWithoutSandbox =
+      // Surface the sandbox warning in the command output (not just logs) so the
+      // model/user can see enforcement was degraded. Excluded for the fail-closed
+      // case, which already explains itself. When a partial backend ran the
+      // command (e.g. the Windows restricted-token helper), don't claim it ran
+      // "without an OS sandbox" — show the warning verbatim instead.
+      const surfaceWarning =
         result.sandboxWarning !== undefined && result.errorCode !== "SANDBOX_REQUIRED";
-      const sandboxNotice = ranWithoutSandbox
-        ? `[sandbox] ${result.sandboxWarning}; command ran without an OS sandbox.\n`
-        : "";
+      const sandboxNotice = !surfaceWarning
+        ? ""
+        : result.sandbox === undefined || result.sandbox === "none"
+          ? `[sandbox] ${result.sandboxWarning}; command ran without an OS sandbox.\n`
+          : `[sandbox] ${result.sandboxWarning}\n`;
       const res = {
         stdout: String(result.stdout ?? ""),
         stderr: sandboxNotice + String(result.stderr ?? ""),

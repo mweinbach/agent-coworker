@@ -4,6 +4,7 @@ import { buildBwrapCommand } from "./bwrap";
 import { findBwrap, findWindowsHelper, hasSeatbelt, isBwrapUsable } from "./detect";
 import type { SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
+import { buildWindowsSandboxCommand } from "./windows";
 
 export { isLikelySandboxDenied } from "./denied";
 export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
@@ -15,7 +16,7 @@ export {
 } from "./policy";
 
 /** Concrete sandbox backend selected for a given platform + policy. */
-export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap";
+export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-restricted";
 
 /** Marker env var set on sandboxed children (mirrors Codex's `CODEX_SANDBOX`). */
 export const SANDBOX_ENV_VAR = "COWORK_SANDBOX";
@@ -155,9 +156,25 @@ export class SandboxManager {
         if (!capabilities.windowsHelperPath) {
           return unavailable("Windows sandbox helper (cowork-win-sandbox.exe) not found");
         }
-        return unavailable(
-          "Windows sandbox helper does not yet enforce filesystem or network restrictions",
+        const wrapped = buildWindowsSandboxCommand(
+          inner,
+          input.policy,
+          input.cwd,
+          capabilities.windowsHelperPath,
         );
+        return {
+          ...wrapped,
+          env: markerEnv("windows-restricted"),
+          sandbox: "windows-restricted",
+          unsandboxed: false,
+          // The helper applies a restricted (LUA) token + kill-on-close Job Object
+          // (process containment), but per-root filesystem ACL scoping and WFP
+          // network isolation are not yet implemented — so workspace-write /
+          // read-only path scoping is NOT enforced here. Surface that clearly.
+          warning:
+            "Windows helper applies restricted-token + Job Object containment only; " +
+            "filesystem and network scoping are not yet enforced.",
+        };
       }
       default:
         return unavailable(`No sandbox backend available for platform "${platform}"`);

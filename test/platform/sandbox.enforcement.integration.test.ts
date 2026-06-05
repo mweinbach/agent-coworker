@@ -94,7 +94,7 @@ seatbeltDescribe("seatbelt enforcement (macOS — run before merge)", () => {
   test("allows reading outside the workspace", () => {
     const ws = tmpDir("sbx-ws-");
     try {
-      expect(runSeatbelt(ws, "cat /etc/hosts")).toBe(0);
+      expect(runSeatbelt(ws, "cat /bin/sh > /dev/null")).toBe(0);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

@@ -238,6 +238,7 @@ export function canonicalizeRoot(p: string): string {
   const tail: string[] = [];
   let cursor = resolved;
   while (true) {
+    if (cursor === path.parse(cursor).root && tail.length > 0) return resolved;
     try {
       const canonical = fs.realpathSync(cursor);
       return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;

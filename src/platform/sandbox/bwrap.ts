@@ -90,6 +90,7 @@ export function buildBwrapCommand(
   // 2. Layer writable roots back on (workspace-write only). /tmp is added as
   // scratch only when it would not over-scope an explicit root under it.
   if (policy.kind === "workspace-write") {
+    const explicitRoots = new Set(policy.writableRoots.map(canonicalizeRoot));
     const writableRoots = withTmpScratch(policy.writableRoots, ["/tmp"]);
 
     for (const root of writableRoots) {
@@ -107,11 +108,21 @@ export function buildBwrapCommand(
       const realRoot = canonicalizeRoot(root);
       flags.push("--bind", realRoot, realRoot);
       if (!isDirectory(realRoot)) continue;
-      // Keep protected metadata read-only. When the path is absent, mask it with
-      // an unwritable empty tmpfs so a workspace-write command cannot *create*
-      // `.git`/`.cowork` (and e.g. install git hooks) under the writable root.
+      // Keep protected metadata read-only. Direct children are masked even when
+      // absent so commands cannot create top-level metadata under a writable root.
+      // Existing nested metadata (submodules/worktrees) is discovered and
+      // re-frozen too; bwrap has no segment-based "deny every .git anywhere"
+      // primitive, so existing recursive masks are the durable mount strategy.
+      const protectedDirs = new Set<string>();
       for (const name of PROTECTED_SUBPATH_NAMES) {
-        const sub = path.join(realRoot, name);
+        protectedDirs.add(path.join(realRoot, name));
+      }
+      if (explicitRoots.has(realRoot)) {
+        for (const dir of collectExistingProtectedMetadataDirs(realRoot, exists, isDirectory)) {
+          protectedDirs.add(dir);
+        }
+      }
+      for (const sub of [...protectedDirs].sort((left, right) => left.length - right.length)) {
         if (exists(sub)) {
           flags.push("--ro-bind", sub, sub);
         } else {
@@ -137,5 +148,46 @@ export function buildBwrapCommand(
 }
 
 function looksLikeFilePath(p: string): boolean {
-  return path.extname(path.basename(p)) !== "";
+  const basename = path.basename(p);
+  return path.extname(basename) !== "" || DOTLESS_FILE_BASENAMES.has(basename);
+}
+
+const DOTLESS_FILE_BASENAMES = new Set([
+  "Brewfile",
+  "Dockerfile",
+  "Gemfile",
+  "LICENSE",
+  "Makefile",
+  "NOTICE",
+  "README",
+]);
+
+function collectExistingProtectedMetadataDirs(
+  root: string,
+  exists: (p: string) => boolean,
+  isDirectory: (p: string) => boolean,
+): string[] {
+  if (!exists(root) || !isDirectory(root)) return [];
+  const found: string[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) continue;
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(current);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry);
+      if (!exists(full) || !isDirectory(full)) continue;
+      if ((PROTECTED_SUBPATH_NAMES as readonly string[]).includes(entry)) {
+        found.push(full);
+        continue;
+      }
+      pending.push(full);
+    }
+  }
+  return found;
 }

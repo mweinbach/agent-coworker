@@ -117,8 +117,12 @@ export function createTools(ctx: ToolContext): Record<string, any> {
   const includeLegacyWebSearch =
     !usesGoogleNativeWebTools(ctx) &&
     (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
+  const scopedChild = (ctx.agentTargetPaths?.length ?? 0) > 0;
   const baseTools = {
-    bash: createBashTool(ctx),
+    // Scoped child agents get path-scoped read/write/edit/glob/grep tools. Do
+    // not expose bash there: the OS sandboxes can constrain writes, but their
+    // practical shell profiles still allow broad filesystem reads.
+    ...(scopedChild ? {} : { bash: createBashTool(ctx) }),
     read: createReadTool(ctx),
     write: createWriteTool(ctx),
     edit: createEditTool(ctx),

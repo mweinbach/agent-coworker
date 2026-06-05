@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import { canonicalizeRoot } from "../src/platform/sandbox/policy";
 import { __internal as codexAppServerClientInternal } from "../src/providers/codexAppServerClient";
 import { createRuntime } from "../src/runtime";
 import { VERSION } from "../src/version";
@@ -772,7 +773,11 @@ rl.on("line", (line) => {
         approvalPolicy: "on-request",
         sandboxPolicy: {
           type: "workspaceWrite",
-          writableRoots: [dir, path.join(dir, "output"), path.join(dir, "uploads")],
+          writableRoots: [
+            canonicalizeRoot(dir),
+            canonicalizeRoot(path.join(dir, "output")),
+            canonicalizeRoot(path.join(dir, "uploads")),
+          ],
           networkAccess: false,
           excludeTmpdirEnvVar: false,
           excludeSlashTmp: underTmp,
@@ -871,7 +876,9 @@ rl.on("line", (line) => {
     // to the child's targetPaths instead of widening to danger-full-access.
     expect(turnStart.approvalPolicy).toBe("never");
     expect(turnStart.sandboxPolicy.type).toBe("workspaceWrite");
-    expect(turnStart.sandboxPolicy.writableRoots).toContain(path.join(dir, "src", "auth"));
+    expect(turnStart.sandboxPolicy.writableRoots).toContain(
+      canonicalizeRoot(path.join(dir, "src", "auth")),
+    );
   });
 
   test.serial("passes read-only sandbox for read-only subagent shell policy", async () => {

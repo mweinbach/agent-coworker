@@ -13,6 +13,7 @@ import {
   SandboxManager,
 } from "../../src/platform/sandbox/index";
 import {
+  canonicalizeRoot,
   filterTargetPathsToWorkspace,
   resolveSandboxPolicy,
   type SandboxPolicy,
@@ -135,13 +136,14 @@ describe("resolveSandboxPolicy", () => {
   test("keeps a workspace that merely lives under a .cowork ancestor", () => {
     // One-off chat workspaces live under ~/.cowork/chats/<id>; the ancestor
     // `.cowork` must NOT cause the workspace root to be dropped.
+    const chatWorkspace = path.join(os.tmpdir(), ".cowork", "chats", "abc");
     const policy = resolveSandboxPolicy({
       config: { mode: "workspace-write" },
-      workingDirectory: "/home/u/.cowork/chats/abc",
+      workingDirectory: chatWorkspace,
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/home/u/.cowork/chats/abc"],
+      writableRoots: [canonicalizeRoot(chatWorkspace)],
       network: true,
     });
   });
@@ -320,6 +322,7 @@ describe("seatbelt argv generation", () => {
   });
 
   test("does not add /tmp or /private/tmp scratch for a /tmp-scoped root (macOS alias)", () => {
+    const scopedRoot = canonicalizeRoot("/tmp/proj/src");
     const policy: SandboxPolicy = {
       kind: "workspace-write",
       writableRoots: ["/tmp/proj/src"],
@@ -333,7 +336,7 @@ describe("seatbelt argv generation", () => {
       false,
     );
     // The scoped root itself stays writable.
-    expect(args.some((a) => a.endsWith("=/tmp/proj/src"))).toBe(true);
+    expect(args.some((a) => a.endsWith(`=${scopedRoot}`))).toBe(true);
   });
 
   test("canonicalizes symlinked writable roots (matches bwrap)", () => {
@@ -439,7 +442,61 @@ describe("bwrap argv generation", () => {
     expect(joinPairs(args, "--bind")).toContain("/work/src/new.ts /work/src/new.ts");
   });
 
+  test("creates common dotless file roots as files", () => {
+    const existing = new Set(["/tmp", "/work"]);
+    const createdDirs: string[] = [];
+    const createdFiles: string[] = [];
+    const fileRoots = new Set<string>();
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/work/Dockerfile", "/work/Makefile"],
+      network: true,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/work", {
+      program: "bwrap",
+      exists: (p) => existing.has(p),
+      ensureDir: (p) => {
+        createdDirs.push(p);
+        existing.add(p);
+      },
+      ensureFile: (p) => {
+        createdFiles.push(p);
+        existing.add(p);
+        fileRoots.add(p);
+      },
+      isDirectory: (p) => !fileRoots.has(p),
+    });
+    expect(createdFiles).toEqual(["/work/Dockerfile", "/work/Makefile"]);
+    expect(createdDirs).not.toContain("/work/Dockerfile");
+    expect(joinPairs(args, "--bind")).toContain("/work/Dockerfile /work/Dockerfile");
+    expect(joinPairs(args, "--bind")).toContain("/work/Makefile /work/Makefile");
+  });
+
+  test("re-freezes existing nested protected metadata under writable roots", () => {
+    const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "bwrap-meta-")));
+    try {
+      fs.mkdirSync(path.join(ws, "src", ".git", "hooks"), { recursive: true });
+      fs.mkdirSync(path.join(ws, "pkg", ".cowork", "state"), { recursive: true });
+      const policy: SandboxPolicy = {
+        kind: "workspace-write",
+        writableRoots: [ws],
+        network: true,
+      };
+      const { args } = buildBwrapCommand(INNER, policy, ws, {
+        program: "bwrap",
+      });
+      const roBinds = joinPairs(args, "--ro-bind");
+      expect(roBinds).toContain(`${path.join(ws, "src", ".git")} ${path.join(ws, "src", ".git")}`);
+      expect(roBinds).toContain(
+        `${path.join(ws, "pkg", ".cowork")} ${path.join(ws, "pkg", ".cowork")}`,
+      );
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   test("does not add /tmp scratch when a root already lives under /tmp", () => {
+    const scopedRoot = canonicalizeRoot("/tmp/proj/src");
     const policy: SandboxPolicy = {
       kind: "workspace-write",
       writableRoots: ["/tmp/proj/src"],
@@ -450,7 +507,7 @@ describe("bwrap argv generation", () => {
       exists: () => true,
     });
     // The scoped root is bound, but /tmp is NOT blanket-bound (would over-scope).
-    expect(joinPairs(args, "--bind")).toContain("/tmp/proj/src /tmp/proj/src");
+    expect(joinPairs(args, "--bind")).toContain(`${scopedRoot} ${scopedRoot}`);
     expect(joinPairs(args, "--bind")).not.toContain("/tmp /tmp");
   });
 });

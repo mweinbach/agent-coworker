@@ -67,6 +67,17 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(11);
   });
 
+  test("omits bash for targetPath-scoped child agents", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(makeCtx(dir, { agentTargetPaths: ["src/auth"] }));
+    expect(tools).not.toHaveProperty("bash");
+    expect(tools).toHaveProperty("read");
+    expect(tools).toHaveProperty("write");
+    expect(tools).toHaveProperty("edit");
+    expect(tools).toHaveProperty("glob");
+    expect(tools).toHaveProperty("grep");
+  });
+
   test("advanced memory swaps the memory tool for recall/readPastConversation", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { advancedMemory: true }) }));

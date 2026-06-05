@@ -839,6 +839,38 @@ rl.on("line", (line) => {
     });
   });
 
+  test.serial("keeps a scoped child within targetPaths even under yolo", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-scoped-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: makeConfig(dir),
+      system: "You are a scoped child.",
+      messages: [{ role: "user", content: "Edit auth" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: true,
+      shellPolicy: "full",
+      agentTargetPaths: [path.join(dir, "src", "auth")],
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as {
+      approvalPolicy: string;
+      sandboxPolicy: { type: string; writableRoots?: string[] };
+    };
+    // YOLO still maps to approvalPolicy "never", but the sandbox must stay scoped
+    // to the child's targetPaths instead of widening to danger-full-access.
+    expect(turnStart.approvalPolicy).toBe("never");
+    expect(turnStart.sandboxPolicy.type).toBe("workspaceWrite");
+    expect(turnStart.sandboxPolicy.writableRoots).toContain(path.join(dir, "src", "auth"));
+  });
+
   test.serial("passes read-only sandbox for read-only subagent shell policy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-readonly-"));
     const script = await writeMockAppServer(dir);

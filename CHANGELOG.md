@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.17 - 2026-06-04
+
+### Added
+
+- **MiniMax provider** — Added a new MiniMax provider with the
+  `MiniMax-M3` model, including runtime reasoning normalization, think-tag
+  scrubbing on streamed titles, and unified `<think>` stripping across
+  surfaced assistant messages and reasoning deltas.
+
+### Fixed
+
+- **Chat model persistence** — Preserved the user's selected chat model
+  across restarts so the picker no longer snaps back to the previous default.
+- **Codex activity trace** — Collapsed codex commentary into the activity
+  trace and covered the normalized replay path with regression tests.
+- **Selector popovers** — Made selector popovers opaque so the model and
+  workspace pickers no longer bleed through the surrounding surface.
+- **Chat title prompts** — Improved the chat title prompt to keep newly
+  generated titles short and on-topic.
+
 ## 1.1.13 - 2026-06-03
 
 ### Added

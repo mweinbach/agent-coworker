@@ -187,29 +187,39 @@ mod win {
             .map_err(|e| format!("OpenProcessToken failed: {e}"))?;
 
             let mut restricted_token = HANDLE::default();
-            CreateRestrictedToken(
+            if let Err(e) = CreateRestrictedToken(
                 process_token,
                 LUA_TOKEN,
                 None, // SidsToDisable
                 None, // PrivilegesToDelete
                 None, // SidsToRestrict
                 &mut restricted_token,
-            )
-            .map_err(|e| format!("CreateRestrictedToken failed: {e}"))?;
+            ) {
+                let _ = CloseHandle(process_token);
+                return Err(format!("CreateRestrictedToken failed: {e}"));
+            }
             let _ = CloseHandle(process_token);
 
             // 2. Create a Job Object that kills the child tree when we exit.
-            let job = CreateJobObjectW(None, PWSTR::null())
-                .map_err(|e| format!("CreateJobObjectW failed: {e}"))?;
+            let job = match CreateJobObjectW(None, PWSTR::null()) {
+                Ok(job) => job,
+                Err(e) => {
+                    let _ = CloseHandle(restricted_token);
+                    return Err(format!("CreateJobObjectW failed: {e}"));
+                }
+            };
             let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject(
+            if let Err(e) = SetInformationJobObject(
                 job,
                 JobObjectExtendedLimitInformation,
                 &limits as *const _ as *const core::ffi::c_void,
                 core::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-            .map_err(|e| format!("SetInformationJobObject failed: {e}"))?;
+            ) {
+                let _ = CloseHandle(restricted_token);
+                let _ = CloseHandle(job);
+                return Err(format!("SetInformationJobObject failed: {e}"));
+            }
 
             // 3. Spawn the command under the restricted token, suspended, so we can
             //    assign it to the Job Object before it runs.
@@ -221,7 +231,7 @@ mod win {
             };
             let mut info = PROCESS_INFORMATION::default();
 
-            CreateProcessAsUserW(
+            if let Err(e) = CreateProcessAsUserW(
                 restricted_token,
                 None,
                 PWSTR(command_line.as_mut_ptr()),
@@ -235,8 +245,11 @@ mod win {
                     .map(|c| windows::core::PCWSTR(c.as_ptr())),
                 &startup,
                 &mut info,
-            )
-            .map_err(|e| format!("CreateProcessAsUserW failed: {e}"))?;
+            ) {
+                let _ = CloseHandle(restricted_token);
+                let _ = CloseHandle(job);
+                return Err(format!("CreateProcessAsUserW failed: {e}"));
+            }
 
             if let Err(e) = AssignProcessToJobObject(job, info.hProcess) {
                 // The child is still suspended; kill it and release every handle

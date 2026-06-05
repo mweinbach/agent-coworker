@@ -113,6 +113,21 @@ seatbeltDescribe("seatbelt enforcement (macOS — run before merge)", () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test("allows writes in a workspace that lives under a .cowork ancestor", () => {
+    // The workspace is itself under a `.cowork` ancestor (like ~/.cowork/chats/<id>).
+    // The metadata exclusion must be relative to the root, so writes here are NOT
+    // denied by the ancestor `.cowork` segment.
+    const base = tmpDir("sbx-cowork-");
+    const ws = path.join(base, ".cowork", "chats", "abc");
+    fs.mkdirSync(ws, { recursive: true });
+    try {
+      expect(runSeatbelt(ws, `printf hi > '${ws}/note.txt'`)).toBe(0);
+      expect(fs.existsSync(path.join(ws, "note.txt"))).toBe(true);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

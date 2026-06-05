@@ -82,9 +82,11 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 - **macOS — Seatbelt** (`seatbelt.ts`): generates a `.sbpl` profile (deny-by-default
   base + dynamic `file-read*`/`file-write*`/network sections, `-D` path params)
   and runs it under `/usr/bin/sandbox-exec`. Pure string/argv generation. Protected
-  metadata (`.git`/`.cowork`) is excluded **recursively** via a path regex
-  (`require-not (regex #"/\.git(/|$)")`), so nested repos/worktrees/submodules at
-  any depth under a writable root stay read-only.
+  metadata (`.git`/`.cowork`) is excluded per writable root via `-D` subpath
+  params (so the exclusion is relative to the root — a workspace that merely lives
+  under a `.cowork` ancestor, e.g. `~/.cowork/chats/<id>`, is not wrongly denied):
+  the direct `.git`/`.cowork` children plus any existing nested ones, matching the
+  bwrap backend.
 - **Linux — bubblewrap** (`bwrap.ts`): `--ro-bind / /` for reads, `--bind` per
   writable root, `--ro-bind` to re-protect `.git`/`.cowork`, `--unshare-net` when
   network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is

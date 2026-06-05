@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import { collectExistingProtectedMetadataDirs } from "./bwrap";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
@@ -145,8 +149,8 @@ export function buildSeatbeltCommand(
 
 /**
  * Build the `(allow file-write* ...)` section for the writable roots, carving
- * out protected metadata (`.git`, `.cowork`) recursively (at any depth under a
- * root) so it stays read-only even though its parent root is writable.
+ * out protected metadata (`.git`, `.cowork`) BELOW each writable root so it
+ * stays read-only even though its parent root is writable.
  */
 function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   // Canonicalize the explicit roots (realpath) first so a symlinked root can't
@@ -155,30 +159,58 @@ function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   // is added afterwards as literal paths; withTmpScratch skips a scratch dir that
   // would over-scope an explicit root under it (macOS /tmp↔/private/tmp aware).
   // Do NOT add cwd here; that would widen a child agent's scope beyond targetPaths.
-  const roots = withTmpScratch(writableRoots.map(canonicalizeRoot), ["/tmp", "/private/tmp"]);
+  const canonicalExplicit = new Set(writableRoots.map(canonicalizeRoot));
+  const roots = withTmpScratch([...canonicalExplicit], ["/tmp", "/private/tmp"]);
 
   // No writable roots → emit NO allow so the base `(deny default)` denies all
   // writes. A bare `(allow file-write*)` with no filters is an UNCONDITIONAL
   // write allow in SBPL, so an empty root set must never reach the allow form.
   if (roots.length === 0) return "";
 
-  // Exclude protected metadata RECURSIVELY: reject any path segment named
-  // `.git`/`.cowork` anywhere under a writable root, not just the root's direct
-  // child. A single path regex covers all depths, so nested repos/worktrees/
-  // submodules — and broad roots like the project root — keep their metadata
-  // read-only. (A per-root `.git` subpath only matched the top-level child.)
-  const excluded = PROTECTED_SUBPATH_NAMES.map(
-    (name) => `(require-not (regex #"/\\${name}(/|$)"))`,
-  ).join(" ");
+  const fsExists = (p: string): boolean => fs.existsSync(p);
+  const fsIsDirectory = (p: string): boolean => {
+    try {
+      return fs.statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  };
 
+  let excludedIndex = 0;
   const components: string[] = [];
   roots.forEach((root, index) => {
     const rootKey = `WRITABLE_ROOT_${index}`;
     params.push({ key: rootKey, value: root });
-    // Allow the exact root path (file-valued scopes use Seatbelt `literal`) and
-    // anything beneath it, minus the protected-metadata segments above.
+    // Allow the exact root path (file-valued scopes use Seatbelt `literal`).
     components.push(`(literal (param "${rootKey}"))`);
-    components.push(`(require-all (subpath (param "${rootKey}")) ${excluded})`);
+
+    // Exclude protected metadata BELOW this root. Passing each one as a -D param
+    // (subpath/literal) keeps the match relative to the root, so a workspace that
+    // merely *lives under* a `.cowork` ancestor (e.g. ~/.cowork/chats/<id>) is not
+    // wrongly denied — unlike a path regex that matches any ancestor segment.
+    // Covers the direct `.git`/`.cowork` children plus any EXISTING nested ones
+    // (submodules/worktrees), matching the bwrap backend; absent nested metadata
+    // is not masked (a documented limitation shared with bwrap).
+    const protectedDirs = new Set<string>();
+    for (const name of PROTECTED_SUBPATH_NAMES) protectedDirs.add(path.join(root, name));
+    // Only scan EXPLICIT writable roots for existing nested metadata — never the
+    // /tmp scratch family (recursively scanning all of /tmp would be slow and
+    // pointless), mirroring the bwrap backend.
+    if (canonicalExplicit.has(root)) {
+      for (const dir of collectExistingProtectedMetadataDirs(root, fsExists, fsIsDirectory)) {
+        protectedDirs.add(dir);
+      }
+    }
+    const excluded: string[] = [];
+    for (const dir of protectedDirs) {
+      const subKey = `WRITABLE_EXCLUDED_${excludedIndex++}`;
+      params.push({ key: subKey, value: dir });
+      excluded.push(
+        `(require-not (subpath (param "${subKey}")))`,
+        `(require-not (literal (param "${subKey}")))`,
+      );
+    }
+    components.push(`(require-all (subpath (param "${rootKey}")) ${excluded.join(" ")})`);
   });
 
   return `(allow file-write*\n${components.join("\n")}\n)`;

@@ -91,7 +91,19 @@ export function buildBwrapCommand(
   // scratch only when it would not over-scope an explicit root under it.
   if (policy.kind === "workspace-write") {
     const explicitRoots = new Set(policy.writableRoots.map(canonicalizeRoot));
-    const writableRoots = withTmpScratch(policy.writableRoots, ["/tmp"]);
+    // Bind ancestor roots before descendants so a later parent bind cannot shadow
+    // an earlier child's protected-metadata masks — e.g. binding /repo after
+    // /repo/src would re-expose /repo/src/.git. Only ancestor/descendant pairs are
+    // reordered; unrelated roots keep their input order (stable sort).
+    const withScratch = withTmpScratch(policy.writableRoots, ["/tmp"]);
+    const canonicalByRoot = new Map(withScratch.map((r) => [r, canonicalizeRoot(r)]));
+    const writableRoots = withScratch.sort((a, b) => {
+      const ca = canonicalByRoot.get(a) as string;
+      const cb = canonicalByRoot.get(b) as string;
+      if (cb.startsWith(`${ca}${path.sep}`)) return -1; // a is an ancestor of b
+      if (ca.startsWith(`${cb}${path.sep}`)) return 1; // b is an ancestor of a
+      return 0; // unrelated → preserve input order
+    });
 
     for (const root of writableRoots) {
       // bwrap bind mount sources must exist. A child's assigned target may not
@@ -162,7 +174,13 @@ const DOTLESS_FILE_BASENAMES = new Set([
   "README",
 ]);
 
-function collectExistingProtectedMetadataDirs(
+/**
+ * Walk `root` and return every EXISTING `.git`/`.cowork` directory under it
+ * (submodules, nested worktrees, …) so a backend can re-protect them. Symlinks
+ * are not followed (see the loop), so a `vendor` -> `/` link can't make it
+ * traverse out of the tree. Shared by the bwrap and Seatbelt backends.
+ */
+export function collectExistingProtectedMetadataDirs(
   root: string,
   exists: (p: string) => boolean,
   isDirectory: (p: string) => boolean,

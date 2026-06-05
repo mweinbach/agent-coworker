@@ -326,27 +326,33 @@ describe("seatbelt argv generation", () => {
     const policyText = args[1];
     expect(policyText).toContain("(allow file-write*");
     expect(policyText).toContain("network-outbound");
-    // writable root passed as a -D binding
+    // writable root + protected metadata (direct children) passed as -D bindings
     expect(args).toContain("-DWRITABLE_ROOT_0=/work");
-    // protected metadata excluded recursively via a path regex (any depth)
-    expect(policyText).toContain('(require-not (regex #"/\\.git(/|$)"))');
-    expect(policyText).toContain('(require-not (regex #"/\\.cowork(/|$)"))');
+    expect(
+      args.some((a) => a.startsWith("-DWRITABLE_EXCLUDED_") && a.endsWith("=/work/.git")),
+    ).toBe(true);
+    expect(
+      args.some((a) => a.startsWith("-DWRITABLE_EXCLUDED_") && a.endsWith("=/work/.cowork")),
+    ).toBe(true);
     // /tmp is always writable scratch
     expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/tmp"))).toBe(true);
   });
 
-  test("workspace-write: excludes nested .git/.cowork recursively (not just direct children)", () => {
+  test("excludes metadata BELOW the root, not ancestor segments (workspace under .cowork)", () => {
+    // One-off chat workspaces live under ~/.cowork/chats/<id>; the exclusion must
+    // target the root's OWN .git/.cowork (passed as -D params, relative to the
+    // root), not the ancestor `.cowork` — which an absolute-path regex would match
+    // and thereby deny every write under the workspace.
     const policy: SandboxPolicy = {
       kind: "workspace-write",
-      writableRoots: ["/repo"],
+      writableRoots: ["/home/me/.cowork/chats/abc"],
       network: true,
     };
     const { args } = buildSeatbeltCommand(INNER, policy);
     const policyText = args[1];
-    // One recursive regex per protected name covers nested cases like
-    // /repo/src/.git/hooks, replacing the old per-root direct-child subpaths.
-    expect(policyText).toContain('(require-not (regex #"/\\.git(/|$)"))');
-    expect(args.some((a) => a.includes("_EXCLUDED_"))).toBe(false);
+    expect(policyText).not.toContain('(require-not (regex #"/\\.cowork(/|$)"))');
+    expect(args.some((a) => a.endsWith("=/home/me/.cowork/chats/abc/.git"))).toBe(true);
+    expect(args.some((a) => a.endsWith("=/home/me/.cowork/chats/abc/.cowork"))).toBe(true);
   });
 
   test("does not add /tmp or /private/tmp scratch for a /tmp-scoped root (macOS alias)", () => {
@@ -498,6 +504,23 @@ describe("bwrap argv generation", () => {
     expect(createdDirs).not.toContain("/work/Dockerfile");
     expect(joinPairs(args, "--bind")).toContain("/work/Dockerfile /work/Dockerfile");
     expect(joinPairs(args, "--bind")).toContain("/work/Makefile /work/Makefile");
+  });
+
+  test("binds ancestor roots before descendant roots (mask ordering)", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/repo/src", "/repo"], // child listed before parent
+      network: true,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/repo/src", {
+      program: "bwrap",
+      exists: () => true,
+    });
+    const binds = joinPairs(args, "--bind");
+    // The parent /repo must bind BEFORE /repo/src, so a later /repo bind can't
+    // shadow /repo/src's metadata masks.
+    expect(binds.indexOf("/repo /repo")).toBeGreaterThanOrEqual(0);
+    expect(binds.indexOf("/repo /repo")).toBeLessThan(binds.indexOf("/repo/src /repo/src"));
   });
 
   test("re-freezes existing nested protected metadata under writable roots", () => {

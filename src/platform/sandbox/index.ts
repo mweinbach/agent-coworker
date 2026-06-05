@@ -2,19 +2,18 @@ import path from "node:path";
 
 import { buildBwrapCommand } from "./bwrap";
 import { findBwrap, findWindowsHelper, hasSeatbelt } from "./detect";
+import type { SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand } from "./windows";
 
-import type { SandboxPolicy } from "./policy";
-
-export type { SandboxPolicy, SandboxConfig, SandboxMode } from "./policy";
+export { isLikelySandboxDenied } from "./denied";
+export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
 export {
-  resolveSandboxPolicy,
+  DEFAULT_SANDBOX_CONFIG,
   deriveWritableRoots,
   policyAllowsNetwork,
-  DEFAULT_SANDBOX_CONFIG,
+  resolveSandboxPolicy,
 } from "./policy";
-export { isLikelySandboxDenied } from "./denied";
 
 /** Concrete sandbox backend selected for a given platform + policy. */
 export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-restricted";
@@ -98,8 +97,7 @@ export class SandboxManager {
     const platform = input.platform ?? process.platform;
     const capabilities = input.capabilities ?? detectCapabilities(platform);
     const inner: SandboxCommand = { file: input.file, args: input.args };
-    const networkRestricted =
-      input.policy.kind !== "danger-full-access" && !input.policy.network;
+    const networkRestricted = input.policy.kind !== "danger-full-access" && !input.policy.network;
     const markerEnv = (sandbox: SandboxType): Record<string, string> => {
       const env: Record<string, string> = {};
       if (sandbox !== "none") env[SANDBOX_ENV_VAR] = sandbox;
@@ -126,7 +124,12 @@ export class SandboxManager {
           return unavailable("macOS Seatbelt unavailable (/usr/bin/sandbox-exec not found)");
         }
         const wrapped = buildSeatbeltCommand(inner, input.policy, input.cwd);
-        return { ...wrapped, env: markerEnv("macos-seatbelt"), sandbox: "macos-seatbelt", unsandboxed: false };
+        return {
+          ...wrapped,
+          env: markerEnv("macos-seatbelt"),
+          sandbox: "macos-seatbelt",
+          unsandboxed: false,
+        };
       }
       case "linux": {
         if (!capabilities.bwrapPath) {
@@ -135,7 +138,12 @@ export class SandboxManager {
         const wrapped = buildBwrapCommand(inner, input.policy, input.cwd, {
           program: capabilities.bwrapPath,
         });
-        return { ...wrapped, env: markerEnv("linux-bwrap"), sandbox: "linux-bwrap", unsandboxed: false };
+        return {
+          ...wrapped,
+          env: markerEnv("linux-bwrap"),
+          sandbox: "linux-bwrap",
+          unsandboxed: false,
+        };
       }
       case "win32": {
         if (!capabilities.windowsHelperPath) {
@@ -147,7 +155,12 @@ export class SandboxManager {
           input.cwd,
           capabilities.windowsHelperPath,
         );
-        return { ...wrapped, env: markerEnv("windows-restricted"), sandbox: "windows-restricted", unsandboxed: false };
+        return {
+          ...wrapped,
+          env: markerEnv("windows-restricted"),
+          sandbox: "windows-restricted",
+          unsandboxed: false,
+        };
       }
       default:
         return unavailable(`No sandbox backend available for platform "${platform}"`);

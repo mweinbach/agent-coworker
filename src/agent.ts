@@ -12,6 +12,7 @@ import {
 } from "./managedSofficeRuntime";
 import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
+import { resolveSandboxPolicy } from "./platform/sandbox";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
 import type {
@@ -21,7 +22,6 @@ import type {
   RuntimeStepOverride,
 } from "./runtime/types";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
-import { resolveSandboxPolicy } from "./platform/sandbox";
 import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./server/agents/roles";
 import { filterToolsForProfile, filterToolsForRole } from "./server/agents/toolPolicy";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
@@ -399,9 +399,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       sandboxPolicy: resolveSandboxPolicy({
         config: config.sandbox,
-        readOnlyRole: params.agentRole
-          ? getAgentRoleDefinition(params.agentRole).readOnly
-          : false,
+        readOnlyRole: params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false,
         workingDirectory: config.workingDirectory,
         outputDirectory: config.outputDirectory,
         targetPaths: params.agentTargetPaths,

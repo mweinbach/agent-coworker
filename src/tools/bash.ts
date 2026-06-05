@@ -5,10 +5,10 @@ import { z } from "zod";
 
 import {
   isLikelySandboxDenied,
-  sandboxManager,
   type SandboxCapabilities,
   type SandboxPolicy,
   type SandboxType,
+  sandboxManager,
 } from "../platform/sandbox";
 import {
   buildPlatformShellCommandWithRuntimePrelude,

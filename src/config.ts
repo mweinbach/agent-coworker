@@ -7,7 +7,6 @@ import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
 import { isA2uiExperimentEnabled } from "./experimental/a2ui/flags";
-import type { SandboxConfig, SandboxMode } from "./platform/sandbox/policy";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
@@ -22,6 +21,7 @@ import {
   describeModelProviderMismatch,
   getSupportedModel,
 } from "./models/registry";
+import type { SandboxConfig, SandboxMode } from "./platform/sandbox/policy";
 import { getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
@@ -464,7 +464,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
-  const sandbox = resolveSandboxConfig(env.AGENT_SANDBOX, (merged as Record<string, unknown>).sandbox);
+  const sandbox = resolveSandboxConfig(
+    env.AGENT_SANDBOX,
+    (merged as Record<string, unknown>).sandbox,
+  );
 
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
     ? (deepMerge(

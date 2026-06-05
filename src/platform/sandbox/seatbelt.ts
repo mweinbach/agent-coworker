@@ -144,8 +144,13 @@ export function buildSeatbeltCommand(
  * even though their parent root is writable.
  */
 function buildWritePolicy(writableRoots: string[], cwd: string, params: DirParam[]): string {
-  // `/tmp` family is always writable scratch space, matching Codex defaults.
-  const roots = dedupe([...writableRoots.map((r) => path.resolve(r)), "/tmp", "/private/tmp"]);
+  // cwd is always writable under workspace-write; the /tmp family is scratch space.
+  const roots = dedupe([
+    path.resolve(cwd),
+    ...writableRoots.map((r) => path.resolve(r)),
+    "/tmp",
+    "/private/tmp",
+  ]);
 
   const components: string[] = [];
   roots.forEach((root, index) => {

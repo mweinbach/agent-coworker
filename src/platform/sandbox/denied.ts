@@ -12,16 +12,16 @@ export interface SandboxDeniedInput {
   exitCode: number;
 }
 
+// Specific signals of an OS-sandbox denial. Kept narrow on purpose: a bare
+// "sandbox" substring matched unrelated output (test names, docs, CLI messages)
+// and spuriously triggered the escalate-on-failure prompt. These mirror Codex's
+// `is_likely_sandbox_denied`.
 const SANDBOX_DENIAL_MARKERS = [
   "operation not permitted",
   "permission denied",
   "read-only file system",
-  "failed to write",
-  "could not write",
-  "cannot create",
   "seccomp",
   "landlock",
-  "sandbox",
 ] as const;
 
 /**

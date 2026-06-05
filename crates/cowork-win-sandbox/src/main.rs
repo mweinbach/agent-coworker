@@ -82,11 +82,13 @@ fn main() -> ExitCode {
 
     #[cfg(windows)]
     {
+        // Use process::exit (not ExitCode) so the child's full 32-bit Windows
+        // exit code is propagated instead of being truncated to a u8.
         match win::run(&opts) {
-            Ok(code) => ExitCode::from(code as u8),
+            Ok(code) => std::process::exit(code as i32),
             Err(err) => {
                 eprintln!("cowork-win-sandbox: {err}");
-                ExitCode::from(2)
+                std::process::exit(2);
             }
         }
     }

@@ -63,7 +63,12 @@ export function isBwrapUsable(program: string): boolean {
         "--unshare-pid",
         "--proc",
         "/proc",
-        "/bin/true",
+        // Run the current runtime executable (always present + executable, and
+        // visible via `--ro-bind / /`) rather than a host-specific path like
+        // `/bin/true`, which may not exist (e.g. NixOS). If namespace setup fails,
+        // bwrap exits non-zero before ever reaching this command.
+        process.execPath,
+        "--version",
       ],
       { timeout: 10_000, stdio: "ignore" },
     );

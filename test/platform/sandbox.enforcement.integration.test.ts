@@ -142,7 +142,10 @@ function bwrapUsable(program: string): boolean {
       "--unshare-pid",
       "--proc",
       "/proc",
-      "/bin/true",
+      // Portable probe command (see detect.ts): the runtime binary always exists,
+      // unlike /bin/true on e.g. NixOS.
+      process.execPath,
+      "--version",
     ],
     { timeout: 15_000 },
   );

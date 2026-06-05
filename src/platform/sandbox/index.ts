@@ -106,21 +106,25 @@ export function detectCapabilities(
  */
 export class SandboxManager {
   transform(input: SandboxTransformInput): SandboxTransformResult {
+    const inner: SandboxCommand = { file: input.file, args: input.args };
+
+    // Full access: never wrap, no warning (this is an explicit choice). Return
+    // BEFORE probing capabilities — detectCapabilities() may synchronously probe
+    // bwrap usability, which is wasted (and potentially slow) work for a command
+    // that will not be sandboxed.
+    if (input.policy.kind === "danger-full-access") {
+      return { ...inner, env: {}, sandbox: "none", unsandboxed: true };
+    }
+
     const platform = input.platform ?? process.platform;
     const capabilities = input.capabilities ?? detectCapabilities(platform);
-    const inner: SandboxCommand = { file: input.file, args: input.args };
-    const networkRestricted = input.policy.kind !== "danger-full-access" && !input.policy.network;
+    const networkRestricted = !input.policy.network;
     const markerEnv = (sandbox: SandboxType): Record<string, string> => {
       const env: Record<string, string> = {};
       if (sandbox !== "none") env[SANDBOX_ENV_VAR] = sandbox;
       if (networkRestricted) env[SANDBOX_NETWORK_DISABLED_ENV_VAR] = "1";
       return env;
     };
-
-    // Full access: never wrap, no warning (this is an explicit choice).
-    if (input.policy.kind === "danger-full-access") {
-      return { ...inner, env: {}, sandbox: "none", unsandboxed: true };
-    }
 
     const unavailable = (warning: string): SandboxTransformResult => ({
       ...inner,

@@ -5,6 +5,7 @@ import {
   getFireworksInferenceAuthConfig,
   resolveFireworksInferenceApiKey,
 } from "./fireworksShared";
+import { MINIMAX_ADAPTER_PROVIDER, MINIMAX_BASE_URL, resolveMinimaxApiKey } from "./minimaxShared";
 import {
   getOpenCodeProviderConfig,
   isOpenCodeModelSupportedByProvider,
@@ -185,6 +186,25 @@ export function createOpenCodeGoModelAdapter(
   savedKey?: string,
 ): ProviderModelAdapter {
   return createOpenCodeModelAdapter("opencode-go", modelId, savedKey);
+}
+
+export function createMinimaxModelAdapter(
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
+  return createModelAdapter(
+    modelId,
+    MINIMAX_ADAPTER_PROVIDER,
+    async () => {
+      const key = resolveMinimaxApiKey({ savedKey });
+      const headers: HeaderMap = {};
+      if (key) {
+        headers.authorization = `Bearer ${key}`;
+      }
+      return headers;
+    },
+    MINIMAX_BASE_URL,
+  );
 }
 
 export function createOpenCodeZenModelAdapter(

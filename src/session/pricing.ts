@@ -15,6 +15,7 @@
  *   - https://www.baseten.co/pricing/
  *   - https://docs.together.ai/docs/serverless-models
  *   - https://docs.fireworks.ai/serverless/pricing
+ *   - https://platform.minimax.io/docs/guides/pricing-paygo
  *
  * Override or extend entries at runtime with
  * `COWORK_MODEL_PRICING_OVERRIDES='{"provider:model":{"inputPerMillion":...,"outputPerMillion":...}}'`.
@@ -181,6 +182,17 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 1.2,
     cachedInputPerMillion: 0.06,
     cacheWriteInputPerMillion: 0.375,
+  },
+
+  // ── MiniMax (https://platform.minimax.io) ────────────────────────────
+  "minimax:MiniMax-M3": {
+    inputPerMillion: 0.6,
+    outputPerMillion: 2.4,
+    cachedInputPerMillion: 0.12,
+    longContextThresholdTokens: 512_000,
+    longContextInputPerMillion: 1.2,
+    longContextOutputPerMillion: 4.8,
+    longContextCachedInputPerMillion: 0.24,
   },
 
   // ── OpenAI ───────────────────────────────────────────────────────────
@@ -381,6 +393,7 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
     provider === "baseten" ||
     provider === "together" ||
     isFireworksInferenceProvider(provider as ProviderName) ||
+    provider === "minimax" ||
     provider === "opencode-zen" ||
     provider === "codex-cli"
   );

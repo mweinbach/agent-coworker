@@ -107,9 +107,32 @@ export function createSocketModule(
       }
       let activeThreadId = threadId;
       try {
+        const runtimeBeforeStart = get().threadRuntimeById[threadId];
+        const workspaceRecord = get().workspaces.find((workspace) => workspace.id === workspaceId);
+        const draftProvider =
+          typeof runtimeBeforeStart?.draftComposerProvider === "string"
+            ? runtimeBeforeStart.draftComposerProvider.trim()
+            : "";
+        const draftModel =
+          typeof runtimeBeforeStart?.draftComposerModel === "string"
+            ? runtimeBeforeStart.draftComposerModel.trim()
+            : "";
+        const defaultProvider =
+          typeof workspaceRecord?.defaultProvider === "string"
+            ? workspaceRecord.defaultProvider.trim()
+            : "";
+        const defaultModel =
+          typeof workspaceRecord?.defaultModel === "string"
+            ? workspaceRecord.defaultModel.trim()
+            : "";
+        const startProvider = draftProvider && draftModel ? draftProvider : defaultProvider;
+        const startModel = draftProvider && draftModel ? draftModel : defaultModel;
         const result = existingSessionId
           ? await resumeJsonRpcThread(get, set, workspaceId, existingSessionId)
-          : await startJsonRpcThread(get, set, workspaceId);
+          : await startJsonRpcThread(get, set, workspaceId, {
+              provider: startProvider,
+              model: startModel,
+            });
         if (isWorkspaceDisposed(workspaceId)) {
           return;
         }

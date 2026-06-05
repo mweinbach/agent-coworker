@@ -130,33 +130,44 @@ export function createMockClient(): CodexAppServerClient {
       );
     }
   };
-  const completeTurn = (
+  const sendAgentMessage = (
     threadId: string,
     turnId: string,
+    itemId: string,
     text: string,
-    extraItems: unknown[] = [],
-    options: { emitUsage?: boolean } = {},
+    phase: string | null,
   ) => {
     sendNotification({
       method: "item/started",
       params: {
         threadId,
         turnId,
-        item: { type: "agentMessage", id: "item_1", text: "", phase: null, memoryCitation: null },
+        item: { type: "agentMessage", id: itemId, text: "", phase, memoryCitation: null },
       },
     });
     sendNotification({
       method: "item/agentMessage/delta",
-      params: { threadId, turnId, itemId: "item_1", delta: text },
+      params: { threadId, turnId, itemId, delta: text },
     });
     sendNotification({
       method: "item/completed",
       params: {
         threadId,
         turnId,
-        item: { type: "agentMessage", id: "item_1", text, phase: null, memoryCitation: null },
+        item: { type: "agentMessage", id: itemId, text, phase, memoryCitation: null },
       },
     });
+  };
+
+  const completeTurn = (
+    threadId: string,
+    turnId: string,
+    text: string,
+    extraItems: unknown[] = [],
+    options: { emitUsage?: boolean; phase?: string | null } = {},
+  ) => {
+    const phase = options.phase ?? null;
+    sendAgentMessage(threadId, turnId, "item_1", text, phase);
     if (options.emitUsage !== false) {
       const tokenUsage = process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("openai-usage-details")
         ? {
@@ -212,7 +223,7 @@ export function createMockClient(): CodexAppServerClient {
           status: "completed",
           items: [
             ...extraItems,
-            { type: "agentMessage", id: "item_1", text, phase: null, memoryCitation: null },
+            { type: "agentMessage", id: "item_1", text, phase, memoryCitation: null },
           ],
           error: null,
         },
@@ -554,21 +565,37 @@ export function createMockClient(): CodexAppServerClient {
               },
             });
           }
-          completeTurn(
-            threadId,
-            turnId,
-            process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("model-gated")
-              ? "fallback ok"
-              : "hello from app-server",
-            [],
-            {
-              emitUsage: !(
-                process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("early-token-usage-wrong") ||
-                process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("early-token-usage-matching") ||
-                process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("cumulative-token-usage")
-              ),
-            },
-          );
+          if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("commentary-and-final")) {
+            const commentaryItem = {
+              type: "agentMessage",
+              id: "item_commentary",
+              text: "working note",
+              phase: "commentary",
+              memoryCitation: null,
+            };
+            sendAgentMessage(threadId, turnId, "item_commentary", "working note", "commentary");
+            completeTurn(threadId, turnId, "final answer", [commentaryItem], {
+              phase: "final_answer",
+            });
+          } else {
+            completeTurn(
+              threadId,
+              turnId,
+              process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("model-gated")
+                ? "fallback ok"
+                : "hello from app-server",
+              [],
+              {
+                emitUsage: !(
+                  process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("early-token-usage-wrong") ||
+                  process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes(
+                    "early-token-usage-matching",
+                  ) ||
+                  process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("cumulative-token-usage")
+                ),
+              },
+            );
+          }
         });
       }
     } else if (method === "turn/steer") {

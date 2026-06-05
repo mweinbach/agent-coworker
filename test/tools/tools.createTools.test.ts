@@ -460,6 +460,23 @@ describe("createTools", () => {
     expect((tools.webSearch as any).description).toContain("EXA_API_KEY");
   });
 
+  test("returns an executable webSearch tool for minimax", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "minimax",
+          model: "MiniMax-M3",
+          preferredChildModel: "MiniMax-M3",
+        }),
+      }),
+    );
+
+    expect((tools.webSearch as any).type).toBeUndefined();
+    expect(typeof (tools.webSearch as any).execute).toBe("function");
+    expect((tools.webSearch as any).description).toContain("EXA_API_KEY");
+  });
+
   test("each tool is executable or provider-native", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));

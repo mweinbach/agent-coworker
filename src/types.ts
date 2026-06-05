@@ -11,6 +11,7 @@ export const PROVIDER_NAMES = [
   "firepass",
   "nvidia",
   "lmstudio",
+  "minimax",
   "opencode-go",
   "opencode-zen",
   "codex-cli",

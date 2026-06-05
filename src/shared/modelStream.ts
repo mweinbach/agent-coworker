@@ -163,6 +163,14 @@ function assistantPhase(value: unknown): string | undefined {
   return phase ? phase : undefined;
 }
 
+function commentaryReasoningStreamId(streamId: string): string {
+  return `commentary:${streamId}`;
+}
+
+function isCommentaryPhase(value: unknown): boolean {
+  return assistantPhase(value) === "commentary";
+}
+
 function mapProviderStreamEvent(
   evt: ModelStreamChunkEvent,
   eventType: string,
@@ -236,10 +244,20 @@ function mapProviderStreamEvent(
   if (normalizedType.includes("output_text") && normalizedType.endsWith(".delta")) {
     const text = asLooseText(payload.delta) ?? asLooseText(payload.text);
     if (text === undefined) return null;
+    const streamId = rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`);
+    if (isCommentaryPhase(payload.phase)) {
+      return {
+        kind: "reasoning_delta",
+        turnId: evt.turnId,
+        streamId: commentaryReasoningStreamId(streamId),
+        mode: "summary",
+        text,
+      };
+    }
     return {
       kind: "assistant_delta",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
+      streamId,
       text,
       ...(assistantPhase(payload.phase) ? { phase: assistantPhase(payload.phase) } : {}),
     };
@@ -249,10 +267,19 @@ function mapProviderStreamEvent(
     normalizedType.includes("output_text") &&
     (normalizedType.endsWith(".done") || normalizedType.endsWith(".completed"))
   ) {
+    const streamId = rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`);
+    if (isCommentaryPhase(payload.phase)) {
+      return {
+        kind: "reasoning_end",
+        turnId: evt.turnId,
+        streamId: commentaryReasoningStreamId(streamId),
+        mode: "summary",
+      };
+    }
     return {
       kind: "assistant_text_end",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
+      streamId,
       ...(assistantPhase(payload.phase) ? { phase: assistantPhase(payload.phase) } : {}),
     };
   }
@@ -261,10 +288,19 @@ function mapProviderStreamEvent(
     normalizedType.includes("output_text") &&
     (normalizedType.endsWith(".start") || normalizedType.endsWith(".started"))
   ) {
+    const streamId = rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`);
+    if (isCommentaryPhase(payload.phase)) {
+      return {
+        kind: "reasoning_start",
+        turnId: evt.turnId,
+        streamId: commentaryReasoningStreamId(streamId),
+        mode: "summary",
+      };
+    }
     return {
       kind: "assistant_text_start",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
+      streamId,
       ...(assistantPhase(payload.phase) ? { phase: assistantPhase(payload.phase) } : {}),
     };
   }
@@ -340,6 +376,14 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
       };
     }
     case "text_start":
+      if (isCommentaryPhase(part.phase)) {
+        return {
+          kind: "reasoning_start",
+          turnId: evt.turnId,
+          streamId: commentaryReasoningStreamId(asString(part.id) ?? `text:${evt.index}`),
+          mode: "summary",
+        };
+      }
       return {
         kind: "assistant_text_start",
         turnId: evt.turnId,
@@ -356,6 +400,15 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
           payload: part,
         };
       }
+      if (isCommentaryPhase(part.phase)) {
+        return {
+          kind: "reasoning_delta",
+          turnId: evt.turnId,
+          streamId: commentaryReasoningStreamId(asString(part.id) ?? `text:${evt.index}`),
+          mode: "summary",
+          text,
+        };
+      }
       return {
         kind: "assistant_delta",
         turnId: evt.turnId,
@@ -365,6 +418,14 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
       };
     }
     case "text_end":
+      if (isCommentaryPhase(part.phase)) {
+        return {
+          kind: "reasoning_end",
+          turnId: evt.turnId,
+          streamId: commentaryReasoningStreamId(asString(part.id) ?? `text:${evt.index}`),
+          mode: "summary",
+        };
+      }
       return {
         kind: "assistant_text_end",
         turnId: evt.turnId,

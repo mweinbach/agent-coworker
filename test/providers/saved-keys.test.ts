@@ -214,6 +214,40 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     });
   });
 
+  test("minimax saved key overrides MINIMAX_API_KEY", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-minimax-key";
+    const envKey = "env-minimax-key";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        minimax: {
+          service: "minimax",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withAuthHome(home, async () => {
+      await withEnv("MINIMAX_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "minimax",
+          model: "MiniMax-M3",
+          preferredChildModel: "MiniMax-M3",
+          userCoworkDir: path.join(home, ".cowork"),
+        });
+
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+      });
+    });
+  });
+
   test("opencode-go saved key overrides OPENCODE_API_KEY", async () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-opencode-key";
@@ -489,6 +523,38 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
           provider: "nvidia",
           model: "nvidia/nemotron-3-super-120b-a12b",
           preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
+          userCoworkDir: path.join(home, ".cowork"),
+        });
+
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${envKey}`);
+      });
+    });
+  });
+
+  test("minimax falls back to MINIMAX_API_KEY when saved entry has no api key", async () => {
+    const { home } = await makeTmpDirs();
+    const envKey = "env-minimax-fallback";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        minimax: {
+          service: "minimax",
+          mode: "oauth_pending",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withAuthHome(home, async () => {
+      await withEnv("MINIMAX_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "minimax",
+          model: "MiniMax-M3",
+          preferredChildModel: "MiniMax-M3",
           userCoworkDir: path.join(home, ".cowork"),
         });
 

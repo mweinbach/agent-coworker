@@ -285,6 +285,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   firepass: "Fire Pass",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
+  minimax: "MiniMax",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "Codex CLI",

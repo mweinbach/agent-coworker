@@ -144,7 +144,7 @@ export function createReasoningProjection(state: ConversationProjectionState) {
     ) {
       return false;
     }
-    return !(update.kind === "assistant_delta" && update.phase === "commentary");
+    return true;
   };
 
   return {

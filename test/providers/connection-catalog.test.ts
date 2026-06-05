@@ -324,6 +324,32 @@ describe("providers/connectionCatalog", () => {
     });
   });
 
+  test("lists MiniMax in the provider catalog with the expected model set", async () => {
+    const payload = await getProviderCatalog({
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+    });
+
+    expect(payload.default.minimax).toBe("MiniMax-M3");
+    expect(payload.all).toContainEqual({
+      id: "minimax",
+      name: "MiniMax",
+      models: [
+        {
+          id: "MiniMax-M3",
+          displayName: "MiniMax M3",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+        },
+      ],
+      defaultModel: "MiniMax-M3",
+    });
+  });
+
   test("connected providers exclude oauth_pending entries", async () => {
     const payload = await getProviderCatalog({
       readCodexAppServerAccountImpl: noCodexAccount,

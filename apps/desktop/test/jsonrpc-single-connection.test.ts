@@ -1174,6 +1174,11 @@ describe("desktop JSON-RPC single connection path", () => {
       "thread/read",
       "turn/start",
     ]);
+    expect(jsonRpcRequests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+      cwd: "/tmp/jsonrpc-workspace",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+    });
     expect(
       jsonRpcRequests.find((entry) => entry.method === "cowork/session/defaults/apply")?.params,
     ).toMatchObject({

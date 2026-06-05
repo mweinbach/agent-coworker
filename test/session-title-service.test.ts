@@ -737,6 +737,36 @@ describe("sessionTitleService", () => {
     });
   });
 
+  test("uses normalized MiniMax title text", async () => {
+    const runTurn = mock(async (_args: any) => ({
+      text: "Write WWDC Preview",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "MiniMax-M3");
+
+    const generateSessionTitle = createNonAppleTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+    });
+
+    const config = makeConfig("minimax");
+    config.model = "MiniMax-M3";
+
+    const result = await generateSessionTitle({
+      config,
+      query: "write a pre WWDC report",
+    });
+
+    expect(result).toEqual({
+      title: "Write WWDC Preview",
+      source: "model",
+      model: "MiniMax-M3",
+    });
+  });
+
   test("asks provider title models for action-first task labels", async () => {
     let capturedPrompt = "";
     const runTurn = mock(async (args: { messages: Array<{ content: string }> }) => {

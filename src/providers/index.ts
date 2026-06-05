@@ -10,6 +10,7 @@ import { codexCliProvider } from "./codex-cli";
 import { firepassProvider, fireworksProvider } from "./fireworksInferenceProvider";
 import { googleProvider } from "./google";
 import { lmstudioProvider } from "./lmstudio";
+import { minimaxProvider } from "./minimax";
 import { nvidiaProvider } from "./nvidia";
 import { openaiProvider } from "./openai";
 import { opencodeGoProvider } from "./opencode-go";
@@ -41,6 +42,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   firepass: firepassProvider,
   nvidia: nvidiaProvider,
   lmstudio: lmstudioProvider,
+  minimax: minimaxProvider,
   "opencode-go": opencodeGoProvider,
   "opencode-zen": opencodeZenProvider,
   "codex-cli": codexCliProvider,
@@ -58,6 +60,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   firepass: { ...PROVIDER_RUNTIMES.firepass, ...PROVIDER_MODEL_CATALOG.firepass },
   nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
   lmstudio: { ...PROVIDER_RUNTIMES.lmstudio, ...PROVIDER_MODEL_CATALOG.lmstudio },
+  minimax: { ...PROVIDER_RUNTIMES.minimax, ...PROVIDER_MODEL_CATALOG.minimax },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },
   "opencode-zen": {
     ...PROVIDER_RUNTIMES["opencode-zen"],

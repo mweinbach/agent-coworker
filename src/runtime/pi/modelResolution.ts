@@ -9,6 +9,7 @@ import {
 } from "../../providers/fireworksShared";
 import { prepareLmStudioModelMetadataForInference } from "../../providers/lmstudio/catalog";
 import { lmStudioOpenAiBaseUrl } from "../../providers/lmstudio/client";
+import { getMinimaxModelSpec, resolveMinimaxApiKey } from "../../providers/minimaxShared";
 import { getNvidiaModelSpec, resolveNvidiaApiKey } from "../../providers/nvidiaShared";
 import {
   getOpenCodeModelPricing,
@@ -265,6 +266,36 @@ function getNvidiaPiModel(modelId: string): PiModel | null {
   };
 }
 
+function getMinimaxPiModel(modelId: string): PiModel | null {
+  const modelSpec = getMinimaxModelSpec(modelId);
+  if (!modelSpec) return null;
+
+  return {
+    id: modelSpec.id,
+    name: modelSpec.name,
+    api: "openai-completions",
+    provider: "minimax",
+    baseUrl: modelSpec.baseUrl,
+    reasoning: modelSpec.reasoning,
+    input: [...modelSpec.input],
+    cost: {
+      input: modelSpec.pricing.input,
+      output: modelSpec.pricing.output,
+      cacheRead: modelSpec.pricing.cacheRead,
+      cacheWrite: modelSpec.pricing.cacheWrite,
+    },
+    contextWindow: modelSpec.contextWindow,
+    maxTokens: modelSpec.maxTokens,
+    compat: {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+      maxTokensField: "max_completion_tokens",
+      thinkingFormat: "openai",
+    },
+  };
+}
+
 export async function resolvePiModel(
   params: RuntimeRunTurnParams,
 ): Promise<ResolvedPiRuntimeModel> {
@@ -352,6 +383,18 @@ export async function resolvePiModel(
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveNvidiaApiKey({
         savedKey: getSavedProviderApiKey(params.config, "nvidia"),
+      }),
+    };
+  }
+
+  if (provider === "minimax") {
+    const model = getMinimaxPiModel(modelId);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider minimax (model: ${modelId}).`);
+    return {
+      model: applySupportedModelMetadata(model, provider, modelId),
+      apiKey: resolveMinimaxApiKey({
+        savedKey: getSavedProviderApiKey(params.config, "minimax"),
       }),
     };
   }

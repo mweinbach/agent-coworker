@@ -30,6 +30,7 @@ import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
 import googleGemini35Flash from "../../config/models/google/gemini-3.5-flash.json";
 import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
+import minimaxM3 from "../../config/models/minimax/MiniMax-M3.json";
 import nvidiaNemotron3Super120bA12b from "../../config/models/nvidia/nvidia-nemotron-3-super-120b-a12b.json";
 import openaiGpt52 from "../../config/models/openai/gpt-5.2.json";
 import openaiGpt52Pro from "../../config/models/openai/gpt-5.2-pro.json";
@@ -63,6 +64,7 @@ const STATIC_MODEL_PROVIDER_NAMES = [
   "fireworks",
   "firepass",
   "nvidia",
+  "minimax",
   "opencode-go",
   "opencode-zen",
   "codex-cli",
@@ -129,6 +131,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   openaiGpt54Nano,
   openaiGpt54Pro,
   nvidiaNemotron3Super120bA12b,
+  minimaxM3,
   opencodeGoGlm5,
   opencodeGoKimiK25,
   opencodeZenBigPickle,
@@ -156,6 +159,7 @@ function buildRegistry(entries: SupportedModel[]) {
     fireworks: [],
     firepass: [],
     nvidia: [],
+    minimax: [],
     "opencode-go": [],
     "opencode-zen": [],
     "codex-cli": [],

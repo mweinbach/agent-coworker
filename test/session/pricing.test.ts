@@ -172,6 +172,18 @@ describe("pricing", () => {
       expect(glm!.outputPerMillion).toBe(3.2);
     });
 
+    it("resolves exact match for minimax M3 pricing", () => {
+      const pricing = resolveModelPricing("minimax", "MiniMax-M3");
+      expect(pricing).not.toBeNull();
+      expect(pricing!.inputPerMillion).toBe(0.6);
+      expect(pricing!.outputPerMillion).toBe(2.4);
+      expect(pricing!.cachedInputPerMillion).toBe(0.12);
+      expect(pricing!.longContextThresholdTokens).toBe(512_000);
+      expect(pricing!.longContextInputPerMillion).toBe(1.2);
+      expect(pricing!.longContextOutputPerMillion).toBe(4.8);
+      expect(pricing!.longContextCachedInputPerMillion).toBe(0.24);
+    });
+
     it("returns null for nvidia models without local pricing", () => {
       expect(resolveModelPricing("nvidia", "nvidia/nemotron-3-super-120b-a12b")).toBeNull();
     });
@@ -320,6 +332,22 @@ describe("pricing", () => {
         outputPerMillion: 14,
       });
     });
+
+    it("lets env overrides replace built-in minimax pricing entries", () => {
+      const env = {
+        COWORK_MODEL_PRICING_OVERRIDES: JSON.stringify({
+          "minimax:MiniMax-M3": {
+            inputPerMillion: 0.5,
+            outputPerMillion: 2,
+          },
+        }),
+      };
+
+      expect(resolveModelPricing("minimax", "MiniMax-M3", env)).toEqual({
+        inputPerMillion: 0.5,
+        outputPerMillion: 2,
+      });
+    });
   });
 
   describe("calculateTokenCost", () => {
@@ -402,6 +430,12 @@ describe("pricing", () => {
       // 100K output @ 18 = 1.8
       const cost = calculateTokenCost(250_000, 100_000, pricing, 50_000);
       expect(cost).toBeCloseTo(2.62, 4);
+    });
+
+    it("applies MiniMax M3 long-context pricing above 512K prompt tokens", () => {
+      const pricing = resolveModelPricing("minimax", "MiniMax-M3")!;
+      const cost = calculateTokenCost(600_000, 100_000, pricing, 100_000);
+      expect(cost).toBeCloseTo(1.104, 6);
     });
   });
 

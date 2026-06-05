@@ -1,5 +1,6 @@
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 
+import { splitThinkTaggedText } from "../shared/thinkTags";
 import type { ModelMessage } from "../types";
 import type { RuntimeUsage } from "./types";
 
@@ -150,6 +151,62 @@ function assistantContentFromModelContent(content: unknown): Array<Record<string
   }
 
   return out;
+}
+
+function minimaxTextPartsFromThinkTaggedText(
+  text: string,
+  sourcePart?: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const split = splitThinkTaggedText(text);
+  const out: Array<Record<string, unknown>> = [];
+  if (split.thinkingText.trim()) {
+    out.push({ type: "thinking", thinking: split.thinkingText });
+  }
+  if (split.visibleText) {
+    out.push({
+      ...(sourcePart ?? { type: "text" }),
+      type: "text",
+      text: split.visibleText,
+    });
+  }
+  return out;
+}
+
+export function normalizePiAssistantRecordForProvider(
+  record: Record<string, unknown>,
+  provider: string,
+): Record<string, unknown> {
+  if (provider !== "minimax") return record;
+
+  if (typeof record.content === "string") {
+    return {
+      ...record,
+      content: minimaxTextPartsFromThinkTaggedText(record.content),
+    };
+  }
+
+  if (!Array.isArray(record.content)) return record;
+
+  const content: Array<unknown> = [];
+  for (const part of record.content) {
+    const partRecord = asRecord(part);
+    if (!partRecord) {
+      content.push(part);
+      continue;
+    }
+    if (partRecord.type !== "text") {
+      content.push(part);
+      continue;
+    }
+    const text = asString(partRecord.text);
+    if (text === undefined) {
+      content.push(part);
+      continue;
+    }
+    content.push(...minimaxTextPartsFromThinkTaggedText(text, partRecord));
+  }
+
+  return { ...record, content };
 }
 
 function normalizeToolResultContentPart(part: unknown): PiToolResultContentPart | null {

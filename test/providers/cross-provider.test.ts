@@ -16,6 +16,7 @@ describe("Cross-provider model creation", () => {
     { name: "fireworks", providerPrefix: "fireworks.completions" },
     { name: "firepass", providerPrefix: "firepass.completions" },
     { name: "nvidia", providerPrefix: "nvidia.completions" },
+    { name: "minimax", providerPrefix: "minimax.completions" },
     { name: "openai", providerPrefix: "openai.responses" },
     { name: "google", providerPrefix: "google.generative-ai" },
     { name: "opencode-go", providerPrefix: "opencode-go.completions" },
@@ -108,6 +109,10 @@ describe("Session reasoning kind mapping", () => {
 
   test("nvidia provider maps to 'reasoning' kind", () => {
     expect(reasoningModeForProvider("nvidia")).toBe("reasoning");
+  });
+
+  test("minimax provider maps to 'reasoning' kind", () => {
+    expect(reasoningModeForProvider("minimax")).toBe("reasoning");
   });
 
   test("opencode-go provider maps to 'reasoning' kind", () => {

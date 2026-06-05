@@ -354,10 +354,14 @@ export async function startJsonRpcThread(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
+  opts?: { provider?: string | null; model?: string | null },
 ): Promise<unknown> {
   const workspace = getWorkspaceById(get, workspaceId);
+  const provider = typeof opts?.provider === "string" ? opts.provider.trim() : "";
+  const model = typeof opts?.model === "string" ? opts.model.trim() : "";
   return await requestJsonRpc(get, set, workspaceId, "thread/start", {
     cwd: workspace?.path,
+    ...(provider && model ? { provider, model } : {}),
   });
 }
 

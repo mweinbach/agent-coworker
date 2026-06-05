@@ -18,14 +18,11 @@ export function createStreamUpdateHandler(
     }
 
     if (update.kind === "assistant_delta") {
-      if (update.phase === "commentary") return;
-      const currentText = update.text;
+      if (!update.text) return;
       const assistantState = assistant.ensureActiveAssistantState(update.turnId);
-      assistantState.text = `${assistantState.text}${currentText}`;
+      assistantState.text = `${assistantState.text}${update.text}`;
       assistant.startAssistantState(update.turnId, assistantState);
-      if (currentText) {
-        state.opts.sink.emitAgentMessageDelta(update.turnId, assistantState.itemId, currentText);
-      }
+      state.opts.sink.emitAgentMessageDelta(update.turnId, assistantState.itemId, update.text);
       return;
     }
 

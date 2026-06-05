@@ -1,3 +1,4 @@
+import { isUsableTargetPath } from "../../platform/sandbox/policy";
 import {
   type AgentExecutionState,
   type AgentInspectResult,
@@ -281,6 +282,27 @@ export class AgentControl {
         ? undefined
         : agentTaskTypeSchema.parse(opts.taskType ?? profile?.defaultTaskType);
     const targetPaths = normalizeAgentTargetPaths(opts.targetPaths);
+    if (targetPaths !== undefined) {
+      // Validate child scope here so BOTH the spawnAgent tool and the JSON-RPC
+      // agent-spawn path are covered. The stored targetPaths feed the built-in
+      // file tools (write/edit/read) AND the OS sandbox, so an empty,
+      // out-of-workspace, escaping, or `.git`/`.cowork` scope must be rejected
+      // before the child runs. Children inherit the parent workspace.
+      if (targetPaths.length === 0) {
+        throw new Error(
+          "Child agent targetPaths must not be empty; omit it for whole-workspace scope.",
+        );
+      }
+      const invalid = targetPaths.filter(
+        (p) => !isUsableTargetPath(routed.config.workingDirectory, p),
+      );
+      if (invalid.length > 0) {
+        throw new Error(
+          "Child agent targetPaths must be inside the workspace and outside .git/.cowork; " +
+            `invalid: ${invalid.join(", ")}`,
+        );
+      }
+    }
     const childSystem = await this.deps.loadAgentPrompt(routed.config, role, profile);
     const binding: SessionBinding = {
       session: null,

@@ -120,23 +120,40 @@ export function filterTargetPathsToWorkspace(
   const realBase = canonicalizeRoot(base);
   const roots = new Set<string>();
   for (const p of targetPaths) {
-    const resolved = path.resolve(base, p);
-    // Logical check first (cheap; also covers paths that don't exist yet).
-    if (!isWithinWorkspace(base, resolved) || rootCrossesProtectedMetadata(base, resolved)) {
-      continue;
-    }
-    // Then resolve symlinks and re-check: an in-workspace symlink whose real
-    // target escapes the workspace (e.g. `src/link` -> `/home/user/secrets`)
-    // must not become a writable root, or the OS sandbox would bind/allow the
-    // real target outside scope. Add the canonical path so the backends bind and
-    // enforce the verified one.
-    const real = canonicalizeRoot(resolved);
-    if (!isWithinWorkspace(realBase, real) || rootCrossesProtectedMetadata(realBase, real)) {
-      continue;
-    }
-    roots.add(real);
+    const real = resolveUsableTargetPath(base, realBase, p);
+    if (real !== null) roots.add(real);
   }
   return [...roots];
+}
+
+/**
+ * Whether `p` is a usable child scope: it stays within the workspace both
+ * logically AND after resolving symlinks, and does not cross protected metadata
+ * (`.git`/`.cowork`). Used to reject invalid child scopes at spawn time so the
+ * stored targetPaths (consumed by both the OS sandbox and the built-in file
+ * tools) are always valid.
+ */
+export function isUsableTargetPath(workingDirectory: string, p: string): boolean {
+  const base = path.resolve(workingDirectory);
+  return resolveUsableTargetPath(base, canonicalizeRoot(base), p) !== null;
+}
+
+/** Resolve `p` to its canonical writable root if it is a usable scope, else null. */
+function resolveUsableTargetPath(base: string, realBase: string, p: string): string | null {
+  const resolved = path.resolve(base, p);
+  // Logical check first (cheap; also covers paths that don't exist yet).
+  if (!isWithinWorkspace(base, resolved) || rootCrossesProtectedMetadata(base, resolved)) {
+    return null;
+  }
+  // Then resolve symlinks and re-check: an in-workspace symlink whose real target
+  // escapes the workspace (e.g. `src/link` -> `/home/user/secrets`) must not
+  // become a writable root, or the OS sandbox would bind/allow the real target
+  // outside scope. Return the canonical path so the backends bind/enforce it.
+  const real = canonicalizeRoot(resolved);
+  if (!isWithinWorkspace(realBase, real) || rootCrossesProtectedMetadata(realBase, real)) {
+    return null;
+  }
+  return real;
 }
 
 /** Whether `root` is the workspace `base` or nested under it. */

@@ -134,6 +134,11 @@ export class DelegateRunner {
       log: delegateContext.log,
       askUser: delegateContext.askUser,
       approveCommand: delegateContext.approveCommand,
+      // Forward the child's scope + shell policy so provider runtimes (e.g. the
+      // Codex app-server) constrain native FS/shell tools the same way the
+      // built-in tools are: scoped to targetPaths and read-only for read-only roles.
+      agentTargetPaths: delegateContext.agentTargetPaths,
+      shellPolicy: delegateContext.shellPolicy,
       ...(telemetry
         ? { telemetryContext: { functionId: "agent.delegate", metadata: { role: opts.role } } }
         : {}),

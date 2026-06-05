@@ -176,6 +176,36 @@ describe("bash tool", () => {
     expect(res.exitCode).toBe(0);
   });
 
+  test("sandboxed run inherits process.env when no toolEnv is set", async () => {
+    const dir = await tmpDir();
+    let observedEnv: Record<string, string | undefined> | undefined;
+    process.env.COWORK_TEST_INHERIT = "yes";
+    try {
+      await bashInternal.runShellCommandWithExec({
+        command: "echo hi",
+        cwd: dir,
+        platform: "linux",
+        policy: { kind: "workspace-write", writableRoots: [dir], network: true },
+        capabilities: { seatbelt: false, bwrapPath: "/usr/bin/bwrap", windowsHelperPath: null },
+        // no `env` (toolEnv) — mirrors a raw delegate context.
+        execRunner: async (
+          _file: string,
+          _args: string[],
+          execOpts?: { env?: Record<string, string | undefined> },
+        ) => {
+          observedEnv = execOpts?.env;
+          return { stdout: "hi\n", stderr: "", exitCode: 0 };
+        },
+      });
+    } finally {
+      delete process.env.COWORK_TEST_INHERIT;
+    }
+    // The sandboxed branch must inherit the parent env (HOME/PATH/etc.), not just
+    // the sandbox markers, which still overlay it.
+    expect(observedEnv?.COWORK_TEST_INHERIT).toBe("yes");
+    expect(observedEnv?.COWORK_SANDBOX).toBeDefined();
+  });
+
   test("passes tool environment into shell execution", async () => {
     const dir = await tmpDir();
     let observedEnv: Record<string, string | undefined> | undefined;

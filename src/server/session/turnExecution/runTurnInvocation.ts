@@ -31,7 +31,7 @@ export type RunTurnInvocationDeps = {
   getA2uiSurfaceManager?: A2uiSurfaceManagerProvider;
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string) => Promise<boolean>;
+  approveCommand: (command: string, opts?: { reason?: string }) => Promise<boolean>;
   updateTodos: (todos: TodoItem[]) => void;
   tracker: TurnStreamTracker;
   includeRawChunks: boolean;
@@ -173,7 +173,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
             },
       log: (line) => log(line),
       askUser: (q, opts) => askUser(q, opts),
-      approveCommand: (cmd) => approveCommand(cmd),
+      approveCommand: (cmd, opts) => approveCommand(cmd, opts),
       updateTodos: (todos) => updateTodos(todos),
       discoveredSkills: context.state.discoveredSkills,
       maxSteps,

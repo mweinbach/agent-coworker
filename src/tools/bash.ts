@@ -269,7 +269,11 @@ async function runShellCommandWithExec(
       maxBuffer,
       signal: opts.abortSignal,
       timeoutMs: opts.timeoutMs,
-      env: { ...opts.env, ...wrapped.env },
+      // Passing an `env` object replaces (not merges) the child environment, so
+      // fall back to `process.env` when no toolEnv is set (e.g. a raw delegate
+      // context) — otherwise sandboxed commands would lose HOME/PATH/etc. that
+      // the unsandboxed path inherits. Sandbox markers overlay last.
+      env: { ...(opts.env ?? process.env), ...wrapped.env },
     });
     return { ...result, sandbox: wrapped.sandbox, sandboxWarning: wrapped.warning };
   }

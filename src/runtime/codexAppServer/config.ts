@@ -280,6 +280,7 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     readOnlyRole: params.shellPolicy === "no_project_write",
     workingDirectory: params.config.workingDirectory,
     outputDirectory: params.config.outputDirectory,
+    targetPaths: params.agentTargetPaths,
   });
 }
 

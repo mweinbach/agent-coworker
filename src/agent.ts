@@ -623,6 +623,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           ...(params.registerSteerHandler
             ? { registerSteerHandler: params.registerSteerHandler }
             : {}),
+          agentTargetPaths: params.agentTargetPaths,
           askUser,
           approveCommand,
           updateTodos,

@@ -110,8 +110,8 @@ export function createUserMessageTurnRunner(
     return await interactionManager.askUser(question, options);
   };
 
-  const approveCommand = async (command: string) => {
-    return await interactionManager.approveCommand(command);
+  const approveCommand = async (command: string, opts?: { reason?: string }) => {
+    return await interactionManager.approveCommand(command, opts);
   };
 
   const updateTodos = (todos: import("../../../types").TodoItem[]) => {

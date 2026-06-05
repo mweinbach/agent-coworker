@@ -233,7 +233,7 @@ describe("spawnAgent tool", () => {
     ).rejects.toThrow("targetPaths entries must not be empty");
   });
 
-  test("rejects targetPaths that all resolve outside the workspace", async () => {
+  test("rejects targetPaths that resolve outside the workspace", async () => {
     // The throw happens before agentControl is required, so a bare ctx suffices.
     const tool: any = createSpawnAgentTool(makeCtx());
     await expect(
@@ -242,7 +242,24 @@ describe("spawnAgent tool", () => {
         // workspace is /tmp/spawn-agent-tool; both escape it.
         targetPaths: ["/etc/passwd", "../../sibling"],
       }),
-    ).rejects.toThrow("must include at least one path inside the workspace");
+    ).rejects.toThrow("targetPaths must be inside the workspace and outside .git/.cowork");
+  });
+
+  test("rejects a mixed scope where any entry is protected metadata", async () => {
+    const tool: any = createSpawnAgentTool(makeCtx());
+    await expect(
+      tool.execute({
+        message: "Investigate this failure",
+        targetPaths: [".git/hooks", "src/ok"],
+      }),
+    ).rejects.toThrow("invalid: .git/hooks");
+  });
+
+  test("rejects an empty targetPaths list instead of widening to the whole workspace", async () => {
+    const tool: any = createSpawnAgentTool(makeCtx());
+    await expect(
+      tool.execute({ message: "Investigate this failure", targetPaths: [] }),
+    ).rejects.toThrow("targetPaths must not be empty");
   });
 
   test("maps deprecated forkContext to explicit contextMode for direct compatibility", async () => {

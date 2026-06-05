@@ -251,6 +251,49 @@ describe("bash tool", () => {
     expect(result.stderr).toContain("Refusing to run unsandboxed");
   });
 
+  test("requires approval before the unsandboxed fallback (requireBackend=false)", async () => {
+    const calls: string[] = [];
+    const approve = mock(async () => false); // user declines
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "rm -rf /",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "workspace-write", writableRoots: ["/tmp"], network: true },
+      requireBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).toHaveBeenCalled();
+    expect(calls).toEqual([]); // declined → never executed
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+  });
+
+  test("runs the unsandboxed fallback once approved", async () => {
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "workspace-write", writableRoots: ["/tmp"], network: true },
+      requireBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      approveUnsandboxed: async () => true,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls.length).toBeGreaterThan(0); // executed after approval
+    expect(result.exitCode).toBe(0);
+    expect(result.sandbox).toBe("none");
+  });
+
   test("does not prompt for approval when a sandboxed command succeeds", async () => {
     const dir = await tmpDir();
     const approveFn = mock(async () => true);

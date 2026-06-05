@@ -144,6 +144,14 @@ type RunShellCommandOpts = {
   policy?: SandboxPolicy;
   /** When true, fail closed instead of running unsandboxed if no backend is available. */
   requireBackend?: boolean;
+  /**
+   * Called before falling back to an UNSANDBOXED run because no OS sandbox backend
+   * is available (restrictive policy + `requireBackend: false`). Running with full
+   * filesystem access is a privilege increase, so the caller may prompt; return
+   * false to refuse. Not consulted for `danger-full-access` (intentional full
+   * access) or when a backend is available.
+   */
+  approveUnsandboxed?: () => Promise<boolean>;
   /** Injectable sandbox capabilities (for tests). */
   capabilities?: SandboxCapabilities;
   /** Injectable existence check for shell selection (for tests). */
@@ -278,6 +286,29 @@ async function runShellCommandWithExec(
     return { ...result, sandbox: wrapped.sandbox, sandboxWarning: wrapped.warning };
   }
 
+  // Restrictive policy but no backend available (requireBackend=false): falling
+  // back to an unsandboxed run grants full filesystem access, so require approval
+  // first — mirroring the escalate-on-failure prompt — rather than running and
+  // only warning afterwards. danger-full-access is intentional full access and is
+  // not gated here; under YOLO the approval auto-returns true.
+  if (
+    policy &&
+    policy.kind !== "danger-full-access" &&
+    probe &&
+    probe.sandbox === "none" &&
+    opts.approveUnsandboxed &&
+    !(await opts.approveUnsandboxed())
+  ) {
+    return {
+      stdout: "",
+      stderr: `Refusing to run unsandboxed: ${probe.warning ?? "OS sandbox backend unavailable"} (declined).`,
+      exitCode: 1,
+      errorCode: "SANDBOX_REQUIRED",
+      sandbox: "none",
+      sandboxWarning: probe.warning,
+    };
+  }
+
   // Unsandboxed: try shell candidates until one is not missing (ENOENT).
   for (const candidate of plan) {
     const result = await opts.execRunner(candidate.file, candidate.args, {
@@ -389,6 +420,10 @@ export function createBashTool(ctx: ToolContext) {
         timeoutMs,
         env: ctx.toolEnv,
         requireBackend: sandboxConfig.requireBackend,
+        // Prompt before running unsandboxed when no backend is available. Uses a
+        // non-"sandbox_denied" reason so YOLO auto-approves (the user opted into
+        // requireBackend=false) while a non-YOLO session still confirms.
+        approveUnsandboxed: () => ctx.approveCommand(command, { reason: "sandbox_unavailable" }),
       };
 
       let result = await runner({ ...baseArgs, policy });

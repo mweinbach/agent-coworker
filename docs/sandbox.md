@@ -63,7 +63,8 @@ write nowhere useful.
 - `mode`: `auto` | `read-only` | `workspace-write` | `danger-full-access`
 - `network`: allow outbound network inside the sandbox (default `true`)
 - `requireBackend`: fail closed when the selected OS sandbox backend is unavailable
-  (default `true`; set `false` to run unsandboxed with a surfaced warning)
+  (default `true`; set `false` to fall back to an unsandboxed run — which still
+  prompts for approval in a non-YOLO session, then surfaces a warning)
 - env override: `AGENT_SANDBOX=<mode>`
 
 ## Escalate-on-failure

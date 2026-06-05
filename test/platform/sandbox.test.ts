@@ -157,6 +157,33 @@ describe("resolveSandboxPolicy", () => {
       network: true,
     });
   });
+
+  test("includes the project root for a subdirectory working directory", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write", network: true },
+      workingDirectory: "/repo/src",
+      projectRoot: "/repo",
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/repo/src", "/repo"],
+      network: true,
+    });
+  });
+
+  test("drops output/uploads roots that sit inside protected metadata", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write", network: true },
+      workingDirectory: "/work",
+      outputDirectory: ".git/out",
+      uploadsDirectory: ".cowork/up",
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/work"],
+      network: true,
+    });
+  });
 });
 
 describe("filterTargetPathsToWorkspace", () => {

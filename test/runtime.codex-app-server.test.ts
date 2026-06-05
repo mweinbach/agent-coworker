@@ -761,6 +761,9 @@ rl.on("line", (line) => {
       });
 
       const requests = await readCapturedRequests(capturePath);
+      // The test workspace lives under the OS temp dir; on Linux that is /tmp, so
+      // the broad /tmp scratch is excluded (the workspace itself stays writable).
+      const underTmp = dir.startsWith("/tmp/") || dir.startsWith("/private/tmp/");
       expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
@@ -772,7 +775,7 @@ rl.on("line", (line) => {
           writableRoots: [dir, path.join(dir, "output"), path.join(dir, "uploads")],
           networkAccess: false,
           excludeTmpdirEnvVar: false,
-          excludeSlashTmp: false,
+          excludeSlashTmp: underTmp,
         },
       });
     },

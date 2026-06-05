@@ -376,6 +376,7 @@ export function createBashTool(ctx: ToolContext) {
           config: sandboxConfig,
           readOnlyRole: ctx.agentRole ? getAgentRoleDefinition(ctx.agentRole).readOnly : false,
           workingDirectory: ctx.config.workingDirectory,
+          projectRoot: path.dirname(ctx.config.projectCoworkDir),
           outputDirectory: ctx.config.outputDirectory,
           uploadsDirectory: ctx.config.uploadsDirectory,
           targetPaths: ctx.agentTargetPaths,

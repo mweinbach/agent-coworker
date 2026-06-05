@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { z } from "zod";
 
 import {
@@ -401,6 +403,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         config: config.sandbox,
         readOnlyRole: params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false,
         workingDirectory: config.workingDirectory,
+        projectRoot: path.dirname(config.projectCoworkDir),
         outputDirectory: config.outputDirectory,
         uploadsDirectory: config.uploadsDirectory,
         targetPaths: params.agentTargetPaths,

@@ -53,6 +53,8 @@ export interface ResolveSandboxPolicyInput {
   /** Read-only role flag (explorer/research/reviewer). Forces read-only filesystem. */
   readOnlyRole?: boolean;
   workingDirectory: string;
+  /** Project root (parent of the .cowork dir); writable for file-tool parity. */
+  projectRoot?: string;
   outputDirectory?: string;
   /** Uploads directory; writable for parity with the built-in file tools. */
   uploadsDirectory?: string;
@@ -95,13 +97,18 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
   if (input.targetPaths && input.targetPaths.length > 0) {
     return filterTargetPathsToWorkspace(base, input.targetPaths);
   }
-  const roots = new Set<string>([base]);
-  if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
-  // Mirror the built-in file tools' write roots: an uploads dir configured
-  // outside the working directory is still a legitimate write target, so binding
-  // it avoids forcing a full-access escalation just to write alongside uploads.
-  if (input.uploadsDirectory) roots.add(path.resolve(base, input.uploadsDirectory));
-  return [...roots];
+  // Mirror the built-in file tools' write roots (project root + cwd + output +
+  // uploads) so unscoped workspace-write bash can write the same locations as
+  // write/edit without forcing a full-access escalation (e.g. a root-level
+  // package.json when workingDirectory is a subdirectory).
+  const candidates = [base];
+  if (input.projectRoot) candidates.push(path.resolve(input.projectRoot));
+  if (input.outputDirectory) candidates.push(path.resolve(base, input.outputDirectory));
+  if (input.uploadsDirectory) candidates.push(path.resolve(base, input.uploadsDirectory));
+  // Drop any root that sits inside the workspace's protected metadata, so a
+  // mis-pointed output/uploads dir (e.g. under .git/.cowork) can't re-open the
+  // metadata writes the backends promise to keep read-only.
+  return [...new Set(candidates.filter((root) => !rootCrossesProtectedMetadata(base, root)))];
 }
 
 /**

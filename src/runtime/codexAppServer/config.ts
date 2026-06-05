@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import {
   ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
   renderArtifactRuntimeInstructions,
@@ -270,7 +272,13 @@ export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPo
     writableRoots: sandbox.writableRoots,
     networkAccess: sandbox.network,
     excludeTmpdirEnvVar: false,
-    excludeSlashTmp: false,
+    // Don't grant broad /tmp as implicit scratch when a writable root is nested
+    // under it (e.g. a /tmp checkout scoped to a subdir). Mirrors the local
+    // bwrap/Seatbelt backends, which skip a scratch root that contains an
+    // assigned root; otherwise Codex-native tools could write sibling /tmp paths.
+    excludeSlashTmp: sandbox.writableRoots.some(
+      (root) => root.startsWith("/tmp/") || root.startsWith("/private/tmp/"),
+    ),
   };
 }
 
@@ -279,6 +287,7 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     config: codexSandboxConfig(params),
     readOnlyRole: params.shellPolicy === "no_project_write",
     workingDirectory: params.config.workingDirectory,
+    projectRoot: path.dirname(params.config.projectCoworkDir),
     outputDirectory: params.config.outputDirectory,
     uploadsDirectory: params.config.uploadsDirectory,
     targetPaths: params.agentTargetPaths,

@@ -117,12 +117,24 @@ export function filterTargetPathsToWorkspace(
   targetPaths: readonly string[],
 ): string[] {
   const base = path.resolve(workingDirectory);
+  const realBase = canonicalizeRoot(base);
   const roots = new Set<string>();
   for (const p of targetPaths) {
     const resolved = path.resolve(base, p);
-    if (isWithinWorkspace(base, resolved) && !rootCrossesProtectedMetadata(base, resolved)) {
-      roots.add(resolved);
+    // Logical check first (cheap; also covers paths that don't exist yet).
+    if (!isWithinWorkspace(base, resolved) || rootCrossesProtectedMetadata(base, resolved)) {
+      continue;
     }
+    // Then resolve symlinks and re-check: an in-workspace symlink whose real
+    // target escapes the workspace (e.g. `src/link` -> `/home/user/secrets`)
+    // must not become a writable root, or the OS sandbox would bind/allow the
+    // real target outside scope. Add the canonical path so the backends bind and
+    // enforce the verified one.
+    const real = canonicalizeRoot(resolved);
+    if (!isWithinWorkspace(realBase, real) || rootCrossesProtectedMetadata(realBase, real)) {
+      continue;
+    }
+    roots.add(real);
   }
   return [...roots];
 }

@@ -123,7 +123,10 @@ export function buildSeatbeltCommand(
   sections.push("; allow read-only file operations\n(allow file-read*)");
 
   if (policy.kind === "workspace-write") {
-    sections.push(buildWritePolicy(policy.writableRoots, params));
+    // Empty roots yield no write section, leaving the base `(deny default)` to
+    // deny all writes (fail closed) rather than an unconditional allow.
+    const writeSection = buildWritePolicy(policy.writableRoots, params);
+    if (writeSection) sections.push(writeSection);
   }
 
   // `danger-full-access` never reaches here (handled as SandboxType.none).
@@ -156,10 +159,20 @@ function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   // Do NOT add cwd here; that would widen a child agent's scope beyond targetPaths.
   const roots = withTmpScratch(writableRoots.map(canonicalizeRoot), ["/tmp", "/private/tmp"]);
 
+  // No writable roots → emit NO allow so the base `(deny default)` denies all
+  // writes. A bare `(allow file-write*)` with no filters is an UNCONDITIONAL
+  // write allow in SBPL, so an empty root set must never reach the allow form.
+  if (roots.length === 0) return "";
+
   const components: string[] = [];
   roots.forEach((root, index) => {
     const rootKey = `WRITABLE_ROOT_${index}`;
     params.push({ key: rootKey, value: root });
+
+    // Allow the root path itself: Seatbelt matches exact files with `literal`,
+    // so a file-valued scope (e.g. `src/new.ts`) can be written directly rather
+    // than only paths beneath it.
+    components.push(`(literal (param "${rootKey}"))`);
 
     const excluded: string[] = [];
     PROTECTED_SUBPATH_NAMES.forEach((name, subIndex) => {

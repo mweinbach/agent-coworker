@@ -162,6 +162,23 @@ describe("filterTargetPathsToWorkspace", () => {
       filterTargetPathsToWorkspace("/work/project", ["/etc/passwd", "../../x", ".cowork/secrets"]),
     ).toEqual([]);
   });
+
+  test("drops an in-workspace symlink whose real target escapes the workspace", () => {
+    const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tp-ws-")));
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tp-out-")));
+    try {
+      fs.mkdirSync(path.join(ws, "src"));
+      // `src/link` -> external dir (escape); `src/ok` is a legit in-workspace dir.
+      fs.symlinkSync(outside, path.join(ws, "src", "link"));
+      fs.mkdirSync(path.join(ws, "src", "ok"));
+      const roots = filterTargetPathsToWorkspace(ws, ["src/link", "src/ok"]);
+      // The escaping symlink is dropped; the legit root is kept (canonicalized).
+      expect(roots).toEqual([path.join(ws, "src", "ok")]);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("seatbelt argv generation", () => {

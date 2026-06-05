@@ -26,6 +26,8 @@ export interface BuildBwrapOptions {
   program?: string;
   /** Existence predicate; injectable for deterministic tests. */
   exists?: (p: string) => boolean;
+  /** Create a directory (recursively); injectable for deterministic tests. */
+  ensureDir?: (p: string) => void;
 }
 
 /**
@@ -40,6 +42,15 @@ export function buildBwrapCommand(
 ): BwrapCommand {
   const program = opts.program ?? BWRAP_PROGRAM;
   const exists = opts.exists ?? ((p: string) => fs.existsSync(p));
+  const ensureDir =
+    opts.ensureDir ??
+    ((p: string) => {
+      try {
+        fs.mkdirSync(p, { recursive: true });
+      } catch {
+        // best effort: if we cannot create the root, it is skipped below
+      }
+    });
 
   const flags: string[] = ["--new-session", "--die-with-parent"];
 
@@ -48,12 +59,15 @@ export function buildBwrapCommand(
 
   // 2. Layer writable roots back on (workspace-write only).
   if (policy.kind === "workspace-write") {
-    const writableRoots = dedupe([
-      ...policy.writableRoots.map((r) => path.resolve(r)),
-      "/tmp",
-    ]).filter((root) => exists(root));
+    const writableRoots = dedupe([...policy.writableRoots.map((r) => path.resolve(r)), "/tmp"]);
 
     for (const root of writableRoots) {
+      // bwrap bind mount sources must exist. A child's assigned target dir may
+      // not exist yet (e.g. `mkdir src/new-feature` is the first command), so
+      // create it rather than dropping it — otherwise only /tmp stays writable
+      // and the child can't work in its own scope (Linux/macOS parity).
+      if (!exists(root)) ensureDir(root);
+      if (!exists(root)) continue; // creation failed; can't bind a missing source
       flags.push("--bind", root, root);
       // Re-freeze protected metadata subpaths under the writable root.
       for (const name of PROTECTED_SUBPATH_NAMES) {

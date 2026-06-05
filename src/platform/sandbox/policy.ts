@@ -87,7 +87,18 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
     roots.add(path.resolve(base));
     if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
   }
-  return [...roots];
+  // Never grant a writable root that is itself inside protected metadata
+  // (`.git`, `.cowork`). The backend carve-outs only re-freeze those dirs
+  // *beneath* a writable root, so a root that already lives inside one would
+  // otherwise stay writable and let a scoped child install git hooks or mutate
+  // `.cowork` state — a privilege-escalation vector.
+  return [...roots].filter((root) => !pathHasProtectedComponent(root));
+}
+
+/** Whether any path segment of `absPath` is a protected metadata directory name. */
+function pathHasProtectedComponent(absPath: string): boolean {
+  const segments = absPath.split(/[/\\]+/).filter(Boolean);
+  return segments.some((seg) => (PROTECTED_SUBPATH_NAMES as readonly string[]).includes(seg));
 }
 
 /** Whether the policy permits outbound network access. */

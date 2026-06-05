@@ -80,6 +80,14 @@ async function copyBundledResourceDirs(outDir: string): Promise<string[]> {
     bundledDirs.push(dir);
   }
 
+  const sandboxDir = path.join(root, "dist", "sandbox");
+  if (await pathExists(sandboxDir)) {
+    const dest = path.join(outDir, "sandbox");
+    await rmrf(dest);
+    await copyDir(sandboxDir, dest);
+    bundledDirs.push("sandbox");
+  }
+
   if (process.env.COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME === "1") {
     const runtimeSource = await resolveCodexPrimaryRuntimeSource();
     if (!runtimeSource) {
@@ -199,6 +207,11 @@ async function main() {
       `Cross-compiling cowork-server is unsupported for ${target.platform}/${target.arch} on ${process.platform}/${process.arch}`,
     );
   }
+
+  await runCommand(["bun", "scripts/build_sandbox_helpers.ts"], {
+    cwd: root,
+    env: process.env,
+  });
 
   await runCommand(
     [

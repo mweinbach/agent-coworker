@@ -6,9 +6,11 @@ import {
   buildPlatformShellExecutionPlan,
 } from "../platform/shell";
 import {
-  getShellCommandPathScopeViolation,
-  getShellCommandPolicyViolation,
-} from "../server/agents/commandPolicy";
+  buildSandboxedExecutionPlan,
+  resolveSandboxPolicy,
+  type SandboxExecutionPlan,
+  type SandboxPolicy,
+} from "../sandbox";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -129,6 +131,7 @@ async function runShellCommand(opts: {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   env?: Record<string, string | undefined>;
+  sandboxPolicy?: SandboxPolicy;
 }): Promise<ExecResult> {
   return await runShellCommandWithExec({
     ...opts,
@@ -144,6 +147,7 @@ let runShellCommandOverrideForTests:
       abortSignal?: AbortSignal;
       timeoutMs?: number;
       env?: Record<string, string | undefined>;
+      sandboxPolicy?: SandboxPolicy;
     }) => Promise<ExecResult>)
   | null = null;
 
@@ -153,6 +157,7 @@ async function runShellCommandWithExec(opts: {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   env?: Record<string, string | undefined>;
+  sandboxPolicy?: SandboxPolicy;
   platform: NodeJS.Platform;
   execRunner: ExecRunner;
 }): Promise<ExecResult> {
@@ -166,7 +171,24 @@ async function runShellCommandWithExec(opts: {
   const plan = buildPlatformShellExecutionPlan(opts.platform, command);
 
   for (const candidate of plan) {
-    const result = await opts.execRunner(candidate.file, candidate.args, {
+    const sandboxedCandidate: SandboxExecutionPlan = opts.sandboxPolicy
+      ? buildSandboxedExecutionPlan({
+          platform: opts.platform,
+          policy: opts.sandboxPolicy,
+          command: candidate,
+          cwd: opts.cwd,
+        })
+      : candidate;
+    if (sandboxedCandidate.unavailableReason) {
+      return {
+        stdout: "",
+        stderr: sandboxedCandidate.unavailableReason,
+        exitCode: 126,
+        errorCode: "SANDBOX_UNAVAILABLE",
+      };
+    }
+
+    const result = await opts.execRunner(sandboxedCandidate.file, sandboxedCandidate.args, {
       cwd: opts.cwd,
       maxBuffer,
       signal: opts.abortSignal,
@@ -185,11 +207,12 @@ async function runShellCommandWithExec(opts: {
 }
 
 function buildBashToolDescription(): string {
-  return `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
+  return `Execute a shell command. Commands run through the platform sandbox unless the session is in danger-full-access/yolo mode. Use for git, npm, docker, system operations, and anything requiring the shell.
 
 Platform notes:
-- Windows: runs in PowerShell, preferring \`pwsh\` and falling back to \`powershell.exe\`
-- macOS/Linux: runs in bash (or sh fallback)
+- Windows: runs in PowerShell, preferring \`pwsh\` and falling back to \`powershell.exe\`; sandboxing requires the native restricted-token helper
+- macOS: runs in bash (or sh fallback) inside Seatbelt via \`/usr/bin/sandbox-exec\`
+- Linux: runs in bash (or sh fallback) inside the Cowork Landlock helper
 
 IMPORTANT: Prefer dedicated tools over bash equivalents:
 - Reading files: use read (not cat/head/tail)
@@ -232,39 +255,16 @@ export function createBashTool(ctx: ToolContext) {
         MAX_TIMEOUT_SECONDS,
       );
       const timeoutMs = resolvedTimeoutSeconds * 1000;
+      const sandboxPolicy = resolveSandboxPolicy({
+        config: ctx.config,
+        shellPolicy: ctx.shellPolicy,
+        yolo: ctx.yolo,
+        targetPaths: ctx.agentTargetPaths,
+      });
       ctx.log(`tool> bash ${JSON.stringify({ command, timeoutSeconds: resolvedTimeoutSeconds })}`);
 
       if (ctx.abortSignal?.aborted) {
         const res = { stdout: "", stderr: "Command aborted.", exitCode: 130 };
-        ctx.log(`tool< bash ${JSON.stringify(res)}`);
-        return res;
-      }
-
-      const shellPolicyViolation = getShellCommandPolicyViolation(command, ctx.shellPolicy);
-      if (shellPolicyViolation) {
-        const res = {
-          stdout: "",
-          stderr:
-            `Command blocked by shell policy "${shellPolicyViolation.shellPolicy}": ` +
-            `${shellPolicyViolation.reason}. Use read/test/build commands or a write-capable role instead.`,
-          exitCode: 1,
-        };
-        ctx.log(`tool< bash ${JSON.stringify(res)}`);
-        return res;
-      }
-
-      const pathScopeViolation = getShellCommandPathScopeViolation(command, {
-        workingDirectory: ctx.config.workingDirectory,
-        targetPaths: ctx.agentTargetPaths,
-      });
-      if (pathScopeViolation) {
-        const res = {
-          stdout: "",
-          stderr:
-            `Command blocked by targetPaths: ${pathScopeViolation.targetPath} is outside this child agent's assigned target paths. ` +
-            "Use a path inside targetPaths or ask the parent to spawn a child with a broader scope.",
-          exitCode: 1,
-        };
         ctx.log(`tool< bash ${JSON.stringify(res)}`);
         return res;
       }
@@ -283,6 +283,7 @@ export function createBashTool(ctx: ToolContext) {
           abortSignal: ctx.abortSignal,
           timeoutMs,
           env: ctx.toolEnv,
+          sandboxPolicy,
         })
           .then(({ stdout, stderr, exitCode }) => {
             const res = {
@@ -315,6 +316,7 @@ export const __internal = {
       abortSignal?: AbortSignal;
       timeoutMs?: number;
       env?: Record<string, string | undefined>;
+      sandboxPolicy?: SandboxPolicy;
     }) => Promise<ExecResult>,
   ) {
     runShellCommandOverrideForTests = runner;

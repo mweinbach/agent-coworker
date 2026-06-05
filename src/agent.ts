@@ -396,6 +396,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
+      yolo: params.yolo,
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,

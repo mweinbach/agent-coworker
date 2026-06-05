@@ -770,7 +770,7 @@ rl.on("line", (line) => {
         sandboxPolicy: {
           type: "workspaceWrite",
           writableRoots: [dir],
-          networkAccess: true,
+          networkAccess: false,
           excludeTmpdirEnvVar: false,
           excludeSlashTmp: false,
         },
@@ -834,7 +834,7 @@ rl.on("line", (line) => {
     });
     expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
       approvalPolicy: "never",
-      sandboxPolicy: { type: "readOnly", networkAccess: true },
+      sandboxPolicy: { type: "readOnly", networkAccess: false },
     });
   });
 });

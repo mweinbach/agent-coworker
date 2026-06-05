@@ -79,6 +79,9 @@ export interface ToolContext {
   /** Effective shell mutation policy. Defaults to "full" when omitted. */
   shellPolicy?: AgentShellPolicy;
 
+  /** When true, shell execution uses danger-full-access instead of an OS sandbox. */
+  yolo?: boolean;
+
   /** Environment variables inherited by child processes launched from tools. */
   toolEnv?: Record<string, string | undefined>;
 

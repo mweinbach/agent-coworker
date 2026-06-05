@@ -210,11 +210,11 @@ describe("bash read-only shell policy", () => {
     expect(getShellCommandPolicyViolation('echo "git add ."', "no_project_write")).toBeNull();
   });
 
-  test("blocks mutating commands before approval or execution", async () => {
+  test("routes read-only role commands through a read-only sandbox policy", async () => {
     const dir = await tmpDir();
     const approveCommand = mock(async () => true);
     const runShell = mock(async () => ({
-      stdout: "should not run",
+      stdout: "sandboxed\n",
       stderr: "",
       exitCode: 0,
     }));
@@ -229,10 +229,18 @@ describe("bash read-only shell policy", () => {
 
     const res = await tool.execute({ command: "touch blocked.txt" });
 
-    expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain('Command blocked by shell policy "no_project_write"');
-    expect(approveCommand).not.toHaveBeenCalled();
-    expect(runShell).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(0);
+    expect(approveCommand).toHaveBeenCalledWith("touch blocked.txt");
+    expect(runShell).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "touch blocked.txt",
+        cwd: dir,
+        sandboxPolicy: expect.objectContaining({
+          mode: "read-only",
+          platformSandboxRequired: true,
+        }),
+      }),
+    );
   });
 
   test("allows verification commands under no_project_write", async () => {
@@ -260,19 +268,25 @@ describe("bash read-only shell policy", () => {
       exitCode: 0,
     });
     expect(approveCommand).toHaveBeenCalledWith("bun run typecheck");
-    expect(runShell).toHaveBeenCalledWith({
-      command: "bun run typecheck",
-      cwd: dir,
-      abortSignal: undefined,
-      timeoutMs: 300000,
-    });
+    expect(runShell).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "bun run typecheck",
+        cwd: dir,
+        abortSignal: undefined,
+        timeoutMs: 300000,
+        sandboxPolicy: expect.objectContaining({
+          mode: "read-only",
+          platformSandboxRequired: true,
+        }),
+      }),
+    );
   });
 
-  test("blocks obvious shell writes outside child agent targetPaths before approval", async () => {
+  test("narrows child agent writable roots to targetPaths in sandbox policy", async () => {
     const dir = await tmpDir();
     const approveCommand = mock(async () => true);
     const runShell = mock(async () => ({
-      stdout: "should not run",
+      stdout: "ok\n",
       stderr: "",
       exitCode: 0,
     }));
@@ -285,21 +299,16 @@ describe("bash read-only shell policy", () => {
       }),
     );
 
-    const blocked = await tool.execute({ command: "echo nope > src/bar/out.txt" });
-
-    expect(blocked.exitCode).toBe(1);
-    expect(blocked.stderr).toContain("Command blocked by targetPaths");
-    expect(approveCommand).not.toHaveBeenCalled();
-    expect(runShell).not.toHaveBeenCalled();
-
     const allowed = await tool.execute({ command: "echo ok > src/foo/out.txt" });
     expect(allowed.exitCode).toBe(0);
     expect(approveCommand).toHaveBeenCalledWith("echo ok > src/foo/out.txt");
-    expect(runShell).toHaveBeenCalledWith({
-      command: "echo ok > src/foo/out.txt",
-      cwd: dir,
-      abortSignal: undefined,
-      timeoutMs: 300000,
+    expect(runShell.mock.calls[0]?.[0].sandboxPolicy).toMatchObject({
+      mode: "workspace-write",
+      platformSandboxRequired: true,
+      fileSystem: {
+        kind: "restricted",
+        writableRoots: [{ root: path.join(dir, "src", "foo") }],
+      },
     });
   });
 });

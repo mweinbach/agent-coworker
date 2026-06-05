@@ -424,6 +424,12 @@ async function main() {
 
   await fs.mkdir(distDir, { recursive: true });
   await rmrf(path.join(distDir, "server"));
+  if (platform === process.platform && arch === process.arch) {
+    await runCommand(["bun", "scripts/build_sandbox_helpers.ts"], {
+      cwd: root,
+      env: process.env,
+    });
+  }
 
   const cache = await loadCache(cachePath);
 
@@ -433,7 +439,9 @@ async function main() {
     path.join(root, "prompts"),
     path.join(root, "apps", "desktop", "electron", "services", "sidecar.ts"),
     path.join(root, "scripts", "build_desktop_resources.ts"),
+    path.join(root, "scripts", "build_sandbox_helpers.ts"),
     path.join(root, "scripts", "releaseBuildUtils.ts"),
+    path.join(root, "native"),
     path.join(root, "package.json"),
     path.join(root, "bun.lock"),
     path.join(root, "tsconfig.json"),
@@ -491,6 +499,8 @@ async function main() {
   const sidecarManifestPath = path.join(desktopBinariesDir, "cowork-server-manifest.json");
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
   const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
+  const sandboxHelpersSrc = path.join(root, "dist", "sandbox");
+  const sandboxHelpersDest = path.join(desktopBinariesDir, "sandbox");
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
   const compiledManagedSofficeHelperPath = path.join(
@@ -515,9 +525,11 @@ async function main() {
     (useBundledBunRuntime
       ? !(await pathExists(bundledBunPath)) ||
         !(await pathExists(bundledEntrypointPath)) ||
-        !(await pathExists(bundledManagedSofficeHelperPath))
+        !(await pathExists(bundledManagedSofficeHelperPath)) ||
+        !(await pathExists(sandboxHelpersDest))
       : !(await pathExists(sidecarOutfile)) ||
-        !(await pathExists(compiledManagedSofficeHelperPath)));
+        !(await pathExists(compiledManagedSofficeHelperPath)) ||
+        !(await pathExists(sandboxHelpersDest)));
 
   if (sidecarNeedsBuild) {
     const entry = path.join(root, "src", "server", "index.ts");
@@ -595,6 +607,15 @@ async function main() {
     await fs.writeFile(sidecarManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   } else {
     console.log("[resources] sidecar: cached");
+  }
+
+  if (await pathExists(sandboxHelpersSrc)) {
+    await rmrf(sandboxHelpersDest);
+    await copyDir(sandboxHelpersSrc, sandboxHelpersDest);
+    console.log("[resources] sandbox helpers: updated");
+  } else {
+    await rmrf(sandboxHelpersDest);
+    console.log("[resources] sandbox helpers: unavailable for this platform");
   }
 
   await removeLegacyCodexAppServerBinaries(desktopBinariesDir);

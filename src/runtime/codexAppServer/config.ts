@@ -256,11 +256,11 @@ export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApproval
 export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPolicy {
   const sandbox = codexSandboxMode(params);
   if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
-  if (sandbox === "read-only") return { type: "readOnly", networkAccess: true };
+  if (sandbox === "read-only") return { type: "readOnly", networkAccess: false };
   return {
     type: "workspaceWrite",
     writableRoots: [params.config.workingDirectory],
-    networkAccess: true,
+    networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };

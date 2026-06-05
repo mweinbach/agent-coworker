@@ -75,8 +75,11 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
   and runs it under `/usr/bin/sandbox-exec`. Pure string/argv generation.
 - **Linux — bubblewrap** (`bwrap.ts`): `--ro-bind / /` for reads, `--bind` per
   writable root, `--ro-bind` to re-protect `.git`/`.cowork`, `--unshare-net` when
-  network is restricted, plus user/pid namespaces and a fresh `/proc`. Requires
-  `bwrap` on `PATH`; if absent the command runs unsandboxed with a logged warning.
+  network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is
+  resolved only from trusted system dirs (`/usr/bin`, `/bin`, …) or an absolute
+  `COWORK_BWRAP_PATH` — never `$PATH` — so a workspace-planted binary can't hijack
+  it. If absent the command runs unsandboxed with a surfaced warning (or fails
+  closed when `sandbox.requireBackend` is set).
   (The in-process seccomp layer Codex adds is not ported — bwrap alone provides
   filesystem + network + namespace isolation.)
 - **Windows — restricted token** (`crates/cowork-win-sandbox`): a native helper

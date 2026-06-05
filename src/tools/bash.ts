@@ -141,6 +141,8 @@ type RunShellCommandOpts = {
   env?: Record<string, string | undefined>;
   /** Sandbox policy to enforce. Omit or use danger-full-access to run unsandboxed. */
   policy?: SandboxPolicy;
+  /** When true, fail closed instead of running unsandboxed if no backend is available. */
+  requireBackend?: boolean;
   /** Injectable sandbox capabilities (for tests). */
   capabilities?: SandboxCapabilities;
   /** Injectable existence check for shell selection (for tests). */
@@ -159,6 +161,18 @@ let runShellCommandOverrideForTests:
   | ((opts: RunShellCommandOpts) => Promise<ShellRunResult>)
   | null = null;
 
+/** Read the search-path env var case-insensitively (Windows uses `Path`, not `PATH`). */
+function readPathVar(env: Record<string, string | undefined> | undefined): string {
+  const source = env ?? process.env;
+  for (const key of Object.keys(source)) {
+    if (key.toUpperCase() === "PATH") {
+      const value = source[key];
+      if (value) return value;
+    }
+  }
+  return process.env.PATH ?? "";
+}
+
 /**
  * Resolve the first shell candidate to a concrete program path. Absolute
  * candidates are checked with `exists`; bare names (e.g. `pwsh`,
@@ -172,7 +186,7 @@ function resolveInnerCandidate(
   env: Record<string, string | undefined> | undefined,
   platform: NodeJS.Platform,
 ): { file: string; args: string[] } | null {
-  const pathDirs = (env?.PATH ?? process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const pathDirs = readPathVar(env).split(path.delimiter).filter(Boolean);
   const exts = platform === "win32" ? ["", ".exe", ".cmd", ".bat", ".com"] : [""];
   for (const candidate of plan) {
     if (path.isAbsolute(candidate.file)) {
@@ -215,6 +229,24 @@ async function runShellCommandWithExec(
           capabilities: opts.capabilities,
         })
       : null;
+
+  // Fail closed when configured to require a backend that is unavailable.
+  if (
+    policy &&
+    policy.kind !== "danger-full-access" &&
+    opts.requireBackend &&
+    probe &&
+    probe.sandbox === "none"
+  ) {
+    return {
+      stdout: "",
+      stderr: `Refusing to run unsandboxed: ${probe.warning ?? "OS sandbox backend unavailable"} (sandbox.requireBackend is enabled).`,
+      exitCode: 1,
+      errorCode: "SANDBOX_REQUIRED",
+      sandbox: "none",
+      sandboxWarning: probe.warning,
+    };
+  }
 
   if (policy && probe && probe.sandbox !== "none") {
     // Resolve the inner shell to a concrete program BEFORE wrapping. Once wrapped
@@ -345,6 +377,7 @@ export function createBashTool(ctx: ToolContext) {
         abortSignal: ctx.abortSignal,
         timeoutMs,
         env: ctx.toolEnv,
+        requireBackend: ctx.config.sandbox?.requireBackend,
       };
 
       let result = await runner({ ...baseArgs, policy });
@@ -370,9 +403,17 @@ export function createBashTool(ctx: ToolContext) {
         }
       }
 
+      // Surface the "ran without an OS sandbox" warning in the command output
+      // (not just logs) so the model/user can see enforcement was unavailable.
+      // Excluded for the fail-closed case, which already explains itself.
+      const ranWithoutSandbox =
+        result.sandboxWarning !== undefined && result.errorCode !== "SANDBOX_REQUIRED";
+      const sandboxNotice = ranWithoutSandbox
+        ? `[sandbox] ${result.sandboxWarning}; command ran without an OS sandbox.\n`
+        : "";
       const res = {
         stdout: String(result.stdout ?? ""),
-        stderr: String(result.stderr ?? ""),
+        stderr: sandboxNotice + String(result.stderr ?? ""),
         exitCode: result.exitCode,
       };
       const redactedRes = {

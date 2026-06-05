@@ -65,8 +65,10 @@ export function findWindowsHelper(
   candidateDirs: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
+  // Require an absolute override path (like COWORK_BWRAP_PATH) so a relative
+  // value can't resolve a workspace-controlled executable as the sandbox wrapper.
   const override = env.COWORK_WIN_SANDBOX_HELPER;
-  if (override) {
+  if (override && path.isAbsolute(override)) {
     try {
       if (fs.existsSync(override)) return override;
     } catch {

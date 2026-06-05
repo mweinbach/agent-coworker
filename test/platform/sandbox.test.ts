@@ -100,6 +100,20 @@ describe("resolveSandboxPolicy", () => {
       network: true,
     });
   });
+
+  test("keeps a workspace that merely lives under a .cowork ancestor", () => {
+    // One-off chat workspaces live under ~/.cowork/chats/<id>; the ancestor
+    // `.cowork` must NOT cause the workspace root to be dropped.
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write" },
+      workingDirectory: "/home/u/.cowork/chats/abc",
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/home/u/.cowork/chats/abc"],
+      network: true,
+    });
+  });
 });
 
 describe("seatbelt argv generation", () => {

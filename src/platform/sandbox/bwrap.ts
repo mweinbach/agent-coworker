@@ -68,11 +68,20 @@ export function buildBwrapCommand(
       // and the child can't work in its own scope (Linux/macOS parity).
       if (!exists(root)) ensureDir(root);
       if (!exists(root)) continue; // creation failed; can't bind a missing source
-      flags.push("--bind", root, root);
-      // Re-freeze protected metadata subpaths under the writable root.
+      // Bind the canonical path so a symlinked root can't smuggle write access
+      // to an unexpected target through a different logical path.
+      const realRoot = canonicalize(root);
+      flags.push("--bind", realRoot, realRoot);
+      // Keep protected metadata read-only. When the path is absent, mask it with
+      // an unwritable empty tmpfs so a workspace-write command cannot *create*
+      // `.git`/`.cowork` (and e.g. install git hooks) under the writable root.
       for (const name of PROTECTED_SUBPATH_NAMES) {
-        const sub = path.join(root, name);
-        if (exists(sub)) flags.push("--ro-bind", sub, sub);
+        const sub = path.join(realRoot, name);
+        if (exists(sub)) {
+          flags.push("--ro-bind", sub, sub);
+        } else {
+          flags.push("--perms", "555", "--tmpfs", sub, "--remount-ro", sub);
+        }
       }
     }
   }
@@ -94,4 +103,13 @@ export function buildBwrapCommand(
 
 function dedupe(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+/** Resolve a path to its canonical (symlink-free) form; fall back to the input. */
+function canonicalize(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
 }

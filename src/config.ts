@@ -132,6 +132,7 @@ function resolveSandboxConfig(envMode: string | undefined, raw: unknown): Sandbo
   return {
     mode,
     network: typeof obj.network === "boolean" ? obj.network : true,
+    requireBackend: typeof obj.requireBackend === "boolean" ? obj.requireBackend : false,
   };
 }
 

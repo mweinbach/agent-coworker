@@ -24,6 +24,12 @@ export interface SandboxConfig {
   mode: SandboxMode;
   /** Outbound network access inside the sandbox. Defaults to `true`. */
   network?: boolean;
+  /**
+   * When `true`, refuse to run a restrictive (read-only/workspace-write) command
+   * if the platform sandbox backend is unavailable, instead of running it
+   * unsandboxed with a warning. Defaults to `false` (run + warn).
+   */
+  requireBackend?: boolean;
 }
 
 export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = { mode: "workspace-write", network: true };
@@ -87,17 +93,27 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
     roots.add(path.resolve(base));
     if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
   }
-  // Never grant a writable root that is itself inside protected metadata
-  // (`.git`, `.cowork`). The backend carve-outs only re-freeze those dirs
-  // *beneath* a writable root, so a root that already lives inside one would
-  // otherwise stay writable and let a scoped child install git hooks or mutate
-  // `.cowork` state — a privilege-escalation vector.
-  return [...roots].filter((root) => !pathHasProtectedComponent(root));
+  // Never grant a writable root that is itself inside the workspace's protected
+  // metadata (`.git`, `.cowork`). The check is relative to the workspace so a
+  // workspace that merely *lives under* a `.cowork` ancestor (e.g. a one-off
+  // chat workspace under `~/.cowork/chats/<id>`) is not wrongly dropped — only
+  // roots whose path *within* the workspace crosses `.git`/`.cowork` are
+  // rejected (the backend carve-outs only re-freeze those dirs beneath a root,
+  // so a root already inside one would otherwise stay writable).
+  return [...roots].filter((root) => !rootCrossesProtectedMetadata(base, root));
 }
 
-/** Whether any path segment of `absPath` is a protected metadata directory name. */
-function pathHasProtectedComponent(absPath: string): boolean {
-  const segments = absPath.split(/[/\\]+/).filter(Boolean);
+/**
+ * Whether `root`, expressed relative to the workspace `base`, passes through a
+ * protected metadata directory. Roots outside the workspace are not treated as
+ * project metadata here.
+ */
+function rootCrossesProtectedMetadata(base: string, root: string): boolean {
+  const relative = path.relative(path.resolve(base), path.resolve(root));
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const segments = relative.split(/[/\\]+/).filter(Boolean);
   return segments.some((seg) => (PROTECTED_SUBPATH_NAMES as readonly string[]).includes(seg));
 }
 

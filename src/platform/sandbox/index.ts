@@ -133,7 +133,10 @@ export class SandboxManager {
       }
       case "linux": {
         if (!capabilities.bwrapPath) {
-          return unavailable("Linux sandbox unavailable (bubblewrap/`bwrap` not found on PATH)");
+          return unavailable(
+            "Linux sandbox unavailable: `bwrap` not found in a trusted system dir " +
+              "(install bubblewrap to /usr/bin or set COWORK_BWRAP_PATH to an absolute path)",
+          );
         }
         const wrapped = buildBwrapCommand(inner, input.policy, input.cwd, {
           program: capabilities.bwrapPath,

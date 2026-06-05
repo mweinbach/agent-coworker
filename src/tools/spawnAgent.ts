@@ -1,4 +1,6 @@
+import path from "node:path";
 import { z } from "zod";
+
 import { isUsableTargetPath } from "../platform/sandbox/policy";
 import {
   AGENT_ROLE_VALUES,
@@ -129,7 +131,12 @@ export function createSpawnAgentTool(ctx: ToolContext) {
         // a mixed scope (e.g. [".git/hooks", "src/ok"]) still write protected
         // metadata via write/edit. Children inherit the parent workspace.
         const invalid = normalizedTargetPaths.filter(
-          (p) => !isUsableTargetPath(ctx.config.workingDirectory, p),
+          (p) =>
+            !isUsableTargetPath(
+              ctx.config.workingDirectory,
+              p,
+              path.dirname(ctx.config.projectCoworkDir),
+            ),
         );
         if (invalid.length > 0) {
           throw new Error(

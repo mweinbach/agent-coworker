@@ -219,6 +219,22 @@ describe("resolveSandboxPolicy", () => {
       fs.rmSync(ws, { recursive: true, force: true });
     }
   });
+
+  test("drops a metadata root under the project root for a subdir working dir", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write", network: true },
+      workingDirectory: "/repo/src",
+      projectRoot: "/repo",
+      // Output dir mis-pointed at the project root's .git — must NOT be writable,
+      // even though it is outside the subdirectory working directory.
+      outputDirectory: "/repo/.git/hooks",
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/repo/src", "/repo"],
+      network: true,
+    });
+  });
 });
 
 describe("filterTargetPathsToWorkspace", () => {
@@ -270,6 +286,18 @@ describe("filterTargetPathsToWorkspace", () => {
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  test("contains scopes within the PROJECT root for a subdirectory working dir", () => {
+    // workingDirectory is a subdir; the project root is the parent. Relative
+    // entries resolve against the working dir, but containment is the project root.
+    expect(filterTargetPathsToWorkspace("/repo/src", ["../package.json", "auth"], "/repo")).toEqual(
+      ["/repo/package.json", "/repo/src/auth"],
+    );
+    // Escaping the project root, or crossing protected metadata, is still rejected.
+    expect(
+      filterTargetPathsToWorkspace("/repo/src", ["../../outside", "../.git/hooks"], "/repo"),
+    ).toEqual([]);
   });
 });
 

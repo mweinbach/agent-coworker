@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { isUsableTargetPath } from "../../platform/sandbox/policy";
 import {
   type AgentExecutionState,
@@ -294,7 +296,12 @@ export class AgentControl {
         );
       }
       const invalid = targetPaths.filter(
-        (p) => !isUsableTargetPath(routed.config.workingDirectory, p),
+        (p) =>
+          !isUsableTargetPath(
+            routed.config.workingDirectory,
+            p,
+            path.dirname(routed.config.projectCoworkDir),
+          ),
       );
       if (invalid.length > 0) {
         throw new Error(

@@ -101,7 +101,7 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
 export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] {
   const base = path.resolve(input.workingDirectory);
   if (input.targetPaths && input.targetPaths.length > 0) {
-    return filterTargetPathsToWorkspace(base, input.targetPaths);
+    return filterTargetPathsToWorkspace(base, input.targetPaths, input.projectRoot);
   }
   // Mirror the built-in file tools' write roots (project root + cwd + output +
   // uploads) so unscoped workspace-write bash can write the same locations as
@@ -111,16 +111,18 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
   if (input.projectRoot) candidates.push(path.resolve(input.projectRoot));
   if (input.outputDirectory) candidates.push(path.resolve(base, input.outputDirectory));
   if (input.uploadsDirectory) candidates.push(path.resolve(base, input.uploadsDirectory));
-  // Canonicalize each root before the metadata check, then drop any that sit
-  // inside the workspace's protected metadata. Canonicalizing first ensures a
-  // symlinked output/uploads dir (e.g. `uploads` -> `.git/hooks`) can't slip
-  // protected metadata in as a writable root the backends would later resolve.
-  const realBase = canonicalizeRoot(base);
+  // Canonicalize each root, then drop any inside protected metadata. The metadata
+  // check is relative to the PROJECT root (the outermost writable boundary), not
+  // just the working directory — otherwise an output/uploads/project root such as
+  // `<repo>/.git/hooks` would look "outside" a subdirectory workingDirectory and
+  // slip through the `.git`/`.cowork` carve-out. Canonicalizing first also stops a
+  // symlinked dir (e.g. `uploads` -> `.git/hooks`) from sneaking metadata in.
+  const reference = canonicalizeRoot(input.projectRoot ? path.resolve(input.projectRoot) : base);
   return [
     ...new Set(
       candidates
         .map(canonicalizeRoot)
-        .filter((root) => !rootCrossesProtectedMetadata(realBase, root)),
+        .filter((root) => !rootCrossesProtectedMetadata(reference, root)),
     ),
   ];
 }
@@ -142,12 +144,14 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
 export function filterTargetPathsToWorkspace(
   workingDirectory: string,
   targetPaths: readonly string[],
+  projectRoot?: string,
 ): string[] {
-  const base = path.resolve(workingDirectory);
-  const realBase = canonicalizeRoot(base);
+  const resolveBase = path.resolve(workingDirectory);
+  const containRoot = projectRoot ? path.resolve(projectRoot) : resolveBase;
+  const realContainRoot = canonicalizeRoot(containRoot);
   const roots = new Set<string>();
   for (const p of targetPaths) {
-    const real = resolveUsableTargetPath(base, realBase, p);
+    const real = resolveUsableTargetPath(resolveBase, containRoot, realContainRoot, p);
     if (real !== null) roots.add(real);
   }
   return [...roots];
@@ -160,24 +164,48 @@ export function filterTargetPathsToWorkspace(
  * stored targetPaths (consumed by both the OS sandbox and the built-in file
  * tools) are always valid.
  */
-export function isUsableTargetPath(workingDirectory: string, p: string): boolean {
-  const base = path.resolve(workingDirectory);
-  return resolveUsableTargetPath(base, canonicalizeRoot(base), p) !== null;
+export function isUsableTargetPath(
+  workingDirectory: string,
+  p: string,
+  projectRoot?: string,
+): boolean {
+  const resolveBase = path.resolve(workingDirectory);
+  const containRoot = projectRoot ? path.resolve(projectRoot) : resolveBase;
+  return (
+    resolveUsableTargetPath(resolveBase, containRoot, canonicalizeRoot(containRoot), p) !== null
+  );
 }
 
-/** Resolve `p` to its canonical writable root if it is a usable scope, else null. */
-function resolveUsableTargetPath(base: string, realBase: string, p: string): string | null {
-  const resolved = path.resolve(base, p);
+/**
+ * Resolve `p` (relative entries against `resolveBase`, the child's working
+ * directory) to its canonical writable root if it is a usable scope, else null.
+ * Containment and the protected-metadata check use `containRoot` (the project
+ * root), so a child in a subdirectory workspace may still scope to project-root
+ * files (e.g. `../package.json`) while escapes outside the project — and
+ * `.git`/`.cowork` — are rejected.
+ */
+function resolveUsableTargetPath(
+  resolveBase: string,
+  containRoot: string,
+  realContainRoot: string,
+  p: string,
+): string | null {
+  const resolved = path.resolve(resolveBase, p);
   // Logical check first (cheap; also covers paths that don't exist yet).
-  if (!isWithinWorkspace(base, resolved) || rootCrossesProtectedMetadata(base, resolved)) {
+  if (
+    !isWithinWorkspace(containRoot, resolved) ||
+    rootCrossesProtectedMetadata(containRoot, resolved)
+  ) {
     return null;
   }
   // Then resolve symlinks and re-check: an in-workspace symlink whose real target
-  // escapes the workspace (e.g. `src/link` -> `/home/user/secrets`) must not
-  // become a writable root, or the OS sandbox would bind/allow the real target
-  // outside scope. Return the canonical path so the backends bind/enforce it.
+  // escapes (e.g. `src/link` -> `/home/user/secrets`) must not become a writable
+  // root. Return the canonical path so the backends bind/enforce it.
   const real = canonicalizeRoot(resolved);
-  if (!isWithinWorkspace(realBase, real) || rootCrossesProtectedMetadata(realBase, real)) {
+  if (
+    !isWithinWorkspace(realContainRoot, real) ||
+    rootCrossesProtectedMetadata(realContainRoot, real)
+  ) {
     return null;
   }
   return real;

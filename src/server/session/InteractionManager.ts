@@ -142,11 +142,16 @@ export class InteractionManager {
    * Request approval to escalate a command out of the OS sandbox. Under the
    * escalate-on-failure model the OS sandbox is the enforcement boundary, so
    * this is only invoked when a sandboxed command failed in a way that looks
-   * like a sandbox denial and the agent wants to retry it unsandboxed. YOLO
-   * mode auto-approves the escalation.
+   * like a sandbox denial and the agent wants to retry it unsandboxed.
+   *
+   * YOLO auto-approves normal command execution, but lifting the OS sandbox to
+   * full-disk access is a higher trust boundary, so the `sandbox_denied`
+   * escalation always prompts — even under YOLO. The sandbox-denial heuristic is
+   * intentionally broad (EACCES/EPERM markers), so auto-approving it under YOLO
+   * could silently grant full access on an unrelated failure.
    */
-  async approveCommand(command: string, _opts?: { reason?: string }) {
-    if (this.opts.isYolo()) return true;
+  async approveCommand(command: string, opts?: { reason?: string }) {
+    if (this.opts.isYolo() && opts?.reason !== "sandbox_denied") return true;
 
     const requestId = makeId();
     const pending = Promise.withResolvers<boolean>();

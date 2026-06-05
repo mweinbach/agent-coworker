@@ -124,7 +124,8 @@ Each tool is a factory function accepting a `ToolContext` with access to:
 - `config` — Current agent configuration
 - `log()` — Emit log output
 - `askUser()` — Prompt user for input
-- `approveCommand()` — Request approval for risky commands
+- `approveCommand()` — Request approval to escalate a sandbox-denied command out of the OS sandbox (see [Sandbox](./sandbox.md))
+- `sandboxPolicy` — Resolved OS sandbox policy enforced for `bash` execution
 - `updateTodos()` — Update progress indicators
 
 ### 4. Providers (`src/providers/`)

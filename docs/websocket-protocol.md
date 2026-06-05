@@ -1376,7 +1376,14 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | "requires_manual_review"
 | "file_read_command_requires_review"
 | "outside_allowed_scope"
+| "sandbox_denied_escalation"
 ```
+
+Command execution is enforced by the OS sandbox (see [Sandbox](./sandbox.md)).
+Under the escalate-on-failure model the only approval prompt that occurs at
+runtime is `"sandbox_denied_escalation"`: a sandboxed command failed in a way
+that looks like a sandbox denial and the agent is asking whether to re-run it
+without the sandbox. The other codes are retained for snapshot compatibility.
 
 ### ServerErrorCode
 
@@ -2289,7 +2296,7 @@ Client guidance:
 
 ### approval
 
-Internal session event recorded when the harness needs command approval. On the JSON-RPC wire, the same prompt is sent as the server request `item/commandExecution/requestApproval`.
+Internal session event recorded when a sandboxed command needs to be escalated out of the OS sandbox. The OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this prompt is emitted only when a sandboxed command failed in a way that looks like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure). Approving re-runs the command with full access; rejecting returns the sandbox failure to the model. YOLO mode auto-approves. On the JSON-RPC wire, the same prompt is sent as the server request `item/commandExecution/requestApproval`.
 
 ```json
 {
@@ -2298,7 +2305,7 @@ Internal session event recorded when the harness needs command approval. On the 
   "requestId": "req-def",
   "command": "rm -rf /tmp/build",
   "dangerous": true,
-  "reasonCode": "matches_dangerous_pattern"
+  "reasonCode": "sandbox_denied_escalation"
 }
 ```
 
@@ -2307,9 +2314,9 @@ Internal session event recorded when the harness needs command approval. On the 
 | `type` | `"approval"` | — |
 | `sessionId` | `string` | Session identifier |
 | `requestId` | `string` | Unique request ID, mirrored in the JSON-RPC server request |
-| `command` | `string` | The shell command requesting approval |
-| `dangerous` | `boolean` | Whether the command matches dangerous patterns |
-| `reasonCode` | `ApprovalRiskCode` | Why approval is needed (see [ApprovalRiskCode](#approvalriskcode)) |
+| `command` | `string` | The shell command that was denied by the sandbox |
+| `dangerous` | `boolean` | Always `true` — running outside the sandbox is the dangerous action |
+| `reasonCode` | `ApprovalRiskCode` | `"sandbox_denied_escalation"` (see [ApprovalRiskCode](#approvalriskcode)) |
 
 ---
 

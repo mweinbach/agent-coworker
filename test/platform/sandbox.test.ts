@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
 import { isLikelySandboxDenied } from "../../src/platform/sandbox/denied";
+import { findBwrapProbeCommand } from "../../src/platform/sandbox/detect";
 import {
   DEFAULT_SANDBOX_CONFIG,
   SANDBOX_ENV_VAR,
@@ -25,9 +26,14 @@ import {
 import { buildWindowsSandboxCommand } from "../../src/platform/sandbox/windows";
 
 const INNER = { file: "/bin/bash", args: ["-lc", "echo hi"] };
+const posixBackendDescribe = process.platform === "win32" ? describe.skip : describe;
 
 function caps(overrides: Partial<SandboxCapabilities> = {}): SandboxCapabilities {
   return { seatbelt: false, bwrapPath: null, windowsHelperPath: null, ...overrides };
+}
+
+function testRoot(value: string): string {
+  return canonicalizeRoot(value);
 }
 
 describe("resolveSandboxPolicy", () => {
@@ -57,18 +63,27 @@ describe("resolveSandboxPolicy", () => {
     // access just because the workspace config is danger-full-access.
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project/src/auth"],
+      writableRoots: [testRoot("/work/project/src/auth")],
       network: true,
     });
   });
 
-  test("read-only role forces read-only even on auto", () => {
+  test("read-only role forbids project writes while preserving temp scratch", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },
       readOnlyRole: true,
       workingDirectory: "/w",
     });
+    expect(policy.kind).toBe("no-project-write");
+  });
+
+  test("explicit read-only mode remains fully read-only", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "read-only", network: false },
+      workingDirectory: "/w",
+    });
     expect(policy.kind).toBe("read-only");
+    expect(policy).toEqual({ kind: "read-only", network: false });
   });
 
   test("workspace-write derives writable roots from cwd + output dir", () => {
@@ -79,7 +94,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project", "/work/out"],
+      writableRoots: [testRoot("/work/project"), testRoot("/work/out")],
       network: false,
     });
   });
@@ -93,18 +108,18 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project/pkg-a"],
+      writableRoots: [testRoot("/work/project/pkg-a")],
       network: true,
     });
   });
 
-  test("read-only role stays read-only even under danger-full-access", () => {
+  test("read-only role keeps project writes disabled even under danger-full-access", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "danger-full-access" },
       readOnlyRole: true,
       workingDirectory: "/work/project",
     });
-    expect(policy.kind).toBe("read-only");
+    expect(policy.kind).toBe("no-project-write");
   });
 
   test("relative targetPaths resolve against the workspace, not process cwd", () => {
@@ -115,7 +130,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project/src/auth"],
+      writableRoots: [testRoot("/work/project/src/auth")],
       network: true,
     });
   });
@@ -128,8 +143,8 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project/docs/v1.0"],
-      writableRootKinds: { "/work/project/docs/v1.0": "directory" },
+      writableRoots: [testRoot("/work/project/docs/v1.0")],
+      writableRootKinds: { [testRoot("/work/project/docs/v1.0")]: "directory" },
       network: true,
     });
   });
@@ -142,7 +157,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project/src/ok"],
+      writableRoots: [testRoot("/work/project/src/ok")],
       network: true,
     });
   });
@@ -170,7 +185,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project/src/ok"],
+      writableRoots: [testRoot("/work/project/src/ok")],
       network: true,
     });
   });
@@ -184,7 +199,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work/project", "/work/out", "/work/uploads"],
+      writableRoots: [testRoot("/work/project"), testRoot("/work/out"), testRoot("/work/uploads")],
       network: true,
     });
   });
@@ -197,7 +212,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/repo/src", "/repo"],
+      writableRoots: [testRoot("/repo/src"), testRoot("/repo")],
       network: true,
     });
   });
@@ -211,7 +226,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/work"],
+      writableRoots: [testRoot("/work")],
       network: true,
     });
   });
@@ -245,7 +260,7 @@ describe("resolveSandboxPolicy", () => {
     });
     expect(policy).toEqual({
       kind: "workspace-write",
-      writableRoots: ["/repo/src", "/repo"],
+      writableRoots: [testRoot("/repo/src"), testRoot("/repo")],
       network: true,
     });
   });
@@ -260,7 +275,7 @@ describe("filterTargetPathsToWorkspace", () => {
         "../sibling",
         ".git/hooks",
       ]),
-    ).toEqual(["/work/project/src/ok"]);
+    ).toEqual([testRoot("/work/project/src/ok")]);
   });
 
   test("returns empty when every entry is outside the workspace or protected", () => {
@@ -306,7 +321,7 @@ describe("filterTargetPathsToWorkspace", () => {
     // workingDirectory is a subdir; the project root is the parent. Relative
     // entries resolve against the working dir, but containment is the project root.
     expect(filterTargetPathsToWorkspace("/repo/src", ["../package.json", "auth"], "/repo")).toEqual(
-      ["/repo/package.json", "/repo/src/auth"],
+      [testRoot("/repo/package.json"), testRoot("/repo/src/auth")],
     );
     // Escaping the project root, or crossing protected metadata, is still rejected.
     expect(
@@ -315,7 +330,7 @@ describe("filterTargetPathsToWorkspace", () => {
   });
 });
 
-describe("seatbelt argv generation", () => {
+posixBackendDescribe("seatbelt argv generation", () => {
   test("read-only: prepends sandbox-exec, allows read, no file-write section", () => {
     const policy: SandboxPolicy = { kind: "read-only", network: false };
     const { file, args } = buildSeatbeltCommand(INNER, policy);
@@ -328,6 +343,19 @@ describe("seatbelt argv generation", () => {
     expect(policyText).not.toContain("network-outbound");
     // command appended after the -- separator
     expect(args.slice(-4)).toEqual(["--", "/bin/bash", "-lc", "echo hi"]);
+  });
+
+  test("no-project-write: allows temp scratch but no project writable roots", () => {
+    const policy: SandboxPolicy = { kind: "no-project-write", network: false };
+    const { args } = buildSeatbeltCommand(INNER, policy);
+    const policyText = args[1];
+    expect(policyText).toContain("(allow file-read*)");
+    expect(policyText).toContain("(allow file-write*");
+    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/tmp"))).toBe(true);
+    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/private/tmp"))).toBe(
+      true,
+    );
+    expect(args.some((a) => a.includes("=/work"))).toBe(false);
   });
 
   test("workspace-write: emits write rules with -D params and protects .git/.cowork", () => {
@@ -413,7 +441,7 @@ describe("seatbelt argv generation", () => {
   });
 });
 
-describe("bwrap argv generation", () => {
+posixBackendDescribe("bwrap argv generation", () => {
   const allExist = { exists: () => true, program: "bwrap" };
 
   test("read-only: ro-bind root, unshare-net when network off", () => {
@@ -424,6 +452,16 @@ describe("bwrap argv generation", () => {
     expect(args).toContain("--unshare-net");
     expect(args).not.toContain("--bind"); // no writable roots
     expect(args.slice(-4)).toEqual(["--", "/bin/bash", "-lc", "echo hi"]);
+  });
+
+  test("no-project-write: binds only temp scratch and unshares network when off", () => {
+    const policy: SandboxPolicy = { kind: "no-project-write", network: false };
+    const { args } = buildBwrapCommand(INNER, policy, "/work", allExist);
+    const binds = joinPairs(args, "--bind");
+    const tmpRoot = canonicalizeRoot("/tmp");
+    expect(binds).toContain(`${tmpRoot} ${tmpRoot}`);
+    expect(binds).not.toContain("/work /work");
+    expect(args).toContain("--unshare-net");
   });
 
   test("workspace-write: binds writable roots, re-freezes .git, keeps network when enabled", () => {
@@ -643,6 +681,21 @@ describe("windows wrapper", () => {
     expect(args).not.toContain("--allow-network");
     expect(args.slice(-4)).toEqual(["--", "/bin/bash", "-lc", "echo hi"]);
   });
+
+  test("no-project-write: helper uses read-only mode without writable roots", () => {
+    const policy: SandboxPolicy = { kind: "no-project-write", network: true };
+    const { args } = buildWindowsSandboxCommand(
+      INNER,
+      policy,
+      "/work",
+      "C:/h/cowork-win-sandbox.exe",
+    );
+    expect(args).toContain("--mode");
+    expect(args).toContain("read-only");
+    expect(args).not.toContain("no-project-write");
+    expect(args).not.toContain("--writable-root");
+    expect(args).toContain("--allow-network");
+  });
 });
 
 describe("SandboxManager.transform", () => {
@@ -732,6 +785,14 @@ describe("SandboxManager.transform", () => {
     expect(r.args).toContain("--mode");
     // ...but it does not enforce FS/network scoping, which must be surfaced.
     expect(r.warning).toContain("filesystem and network scoping are not yet enforced");
+  });
+});
+
+describe("sandbox detection", () => {
+  test("bwrap probe uses a tiny host utility instead of the current runtime executable", () => {
+    const probe = findBwrapProbeCommand((p) => p === "/run/current-system/sw/bin/env");
+    expect(probe).toBe("/run/current-system/sw/bin/env");
+    expect(probe).not.toBe(process.execPath);
   });
 });
 

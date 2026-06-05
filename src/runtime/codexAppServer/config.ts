@@ -254,6 +254,7 @@ export async function resolveEffectiveCodexModel(
 export function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode {
   const policy = resolveCodexCoworkSandboxPolicy(params);
   if (policy.kind === "danger-full-access") return "danger-full-access";
+  if (policy.kind === "no-project-write") return "workspace-write";
   return policy.kind;
 }
 
@@ -267,16 +268,17 @@ export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPo
   if (sandbox.kind === "read-only") {
     return { type: "readOnly", networkAccess: sandbox.network };
   }
+  const writableRoots = sandbox.kind === "workspace-write" ? sandbox.writableRoots : [];
   return {
     type: "workspaceWrite",
-    writableRoots: sandbox.writableRoots,
+    writableRoots,
     networkAccess: sandbox.network,
     excludeTmpdirEnvVar: false,
     // Don't grant broad /tmp as implicit scratch when a writable root is nested
     // under it (e.g. a /tmp checkout scoped to a subdir). Mirrors the local
     // bwrap/Seatbelt backends, which skip a scratch root that contains an
     // assigned root; otherwise Codex-native tools could write sibling /tmp paths.
-    excludeSlashTmp: sandbox.writableRoots.some(
+    excludeSlashTmp: writableRoots.some(
       (root) => root.startsWith("/tmp/") || root.startsWith("/private/tmp/"),
     ),
   };

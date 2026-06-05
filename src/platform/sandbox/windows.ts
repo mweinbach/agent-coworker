@@ -41,7 +41,8 @@ export function buildWindowsSandboxCommand(
     return inner;
   }
 
-  const args: string[] = ["--mode", policy.kind];
+  const helperMode = policy.kind === "no-project-write" ? "read-only" : policy.kind;
+  const args: string[] = ["--mode", helperMode];
 
   if (policy.kind === "workspace-write") {
     for (const root of policy.writableRoots) {

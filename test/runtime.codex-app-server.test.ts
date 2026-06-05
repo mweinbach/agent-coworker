@@ -909,7 +909,7 @@ rl.on("line", (line) => {
     });
   });
 
-  test.serial("passes read-only sandbox for read-only subagent shell policy", async () => {
+  test.serial("passes no-project-write sandbox for read-only subagent shell policy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-readonly-"));
     const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
@@ -931,11 +931,17 @@ rl.on("line", (line) => {
     const requests = await readCapturedRequests(capturePath);
     expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
       approvalPolicy: "never",
-      sandbox: "read-only",
+      sandbox: "workspace-write",
     });
     expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
       approvalPolicy: "never",
-      sandboxPolicy: { type: "readOnly", networkAccess: true },
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: true,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
     });
   });
 });

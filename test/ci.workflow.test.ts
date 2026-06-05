@@ -43,6 +43,18 @@ describe("main CI workflow", () => {
   test("runs Windows path and desktop smoke coverage", () => {
     expect(workflow).toContain("windows-smoke:");
     expect(workflow).toContain("runs-on: windows-latest");
+    expect(workflow).toContain("- name: Windows sandbox helper enforcement");
+    expect(workflow).toContain(
+      "cargo build --release --manifest-path crates\\cowork-win-sandbox\\Cargo.toml",
+    );
+    expect(workflow).toContain(
+      '$helperPath = Join-Path (Get-Location) "crates\\cowork-win-sandbox\\target\\release\\cowork-win-sandbox.exe"',
+    );
+    expect(workflow).toContain("COWORK_WIN_SANDBOX_HELPER=$helperPath");
+    expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER=%CD%");
+    expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
+    expect(workflow).toContain("test/platform/sandbox.test.ts");
+    expect(workflow).toContain("test/build-desktop-resources.test.ts");
     expect(workflow).toContain("- name: Windows path and desktop smoke tests");
     expect(workflow).toContain("apps/desktop/test/ipc-security.test.ts");
     expect(workflow).toContain("apps/desktop/test/file-preview-modal.test.tsx");

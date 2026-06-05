@@ -172,13 +172,13 @@ export async function handleServerRequest(
     method === "item/commandExecution/requestApproval" ||
     method === "item/fileChange/requestApproval"
   ) {
-    const isReadOnlyFileApproval =
+    const isNoProjectWriteFileApproval =
       params.shellPolicy === "no_project_write" &&
       params.yolo !== true &&
       method === "item/fileChange/requestApproval";
     const approved =
       params.yolo === true ||
-      (!isReadOnlyFileApproval &&
+      (!isNoProjectWriteFileApproval &&
         (await params.approveCommand?.(approvalPromptForRequest(request))) === true);
     return { decision: approved ? "accept" : "decline" };
   }

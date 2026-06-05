@@ -404,7 +404,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         // Honor an explicit `no_project_write` shell policy even without an
         // agentRole; otherwise this precomputed policy (preferred by the bash
         // tool over deriving from shellPolicy) would run mutating commands with
-        // project write access despite the read-only shell policy.
+        // project write access despite the no-project-write shell policy.
         readOnlyRole:
           (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
           (params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole)) === "no_project_write",

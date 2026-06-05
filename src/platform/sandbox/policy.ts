@@ -11,6 +11,7 @@ import path from "node:path";
 export type SandboxPolicy =
   | { kind: "danger-full-access" }
   | { kind: "read-only"; network: boolean }
+  | { kind: "no-project-write"; network: boolean }
   | {
       kind: "workspace-write";
       /** Absolute roots the sandboxed process may write to (beyond temp dirs). */
@@ -54,7 +55,7 @@ export const PROTECTED_SUBPATH_NAMES = [".git", ".cowork"] as const;
 
 export interface ResolveSandboxPolicyInput {
   config?: SandboxConfig;
-  /** Read-only role flag (explorer/research/reviewer). Forces read-only filesystem. */
+  /** Read-only role flag (explorer/research/reviewer). Forbids project writes. */
   readOnlyRole?: boolean;
   workingDirectory: string;
   /** Project root (parent of the .cowork dir); writable for file-tool parity. */
@@ -75,11 +76,16 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
   const config = input.config ?? DEFAULT_SANDBOX_CONFIG;
   const network = config.network ?? true;
 
-  // Read-only roles (explorer/reviewer/research) are a hard floor: they always
-  // resolve to a read-only filesystem and are never escalated — even when the
-  // configured mode is danger-full-access. This must be checked before the
-  // danger-full-access short-circuit below.
-  if (input.readOnlyRole || config.mode === "read-only") {
+  // Read-only roles (explorer/reviewer/research) are a hard floor: they must not
+  // write project files and are never escalated — even when the configured mode
+  // is danger-full-access. They still get temp scratch space for verifier tools
+  // that need to compile, diff, or stage transient files.
+  if (input.readOnlyRole) {
+    return { kind: "no-project-write", network };
+  }
+
+  // Explicit user-configured read-only stays fully immutable.
+  if (config.mode === "read-only") {
     return { kind: "read-only", network };
   }
 

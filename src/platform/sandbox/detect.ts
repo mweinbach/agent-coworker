@@ -35,7 +35,30 @@ const TRUSTED_BWRAP_DIRS = [
   "/run/current-system/sw/bin", // NixOS
 ];
 
+const BWRAP_PROBE_COMMANDS = [
+  "/usr/bin/true",
+  "/bin/true",
+  "/run/current-system/sw/bin/true",
+  "/usr/bin/env",
+  "/bin/env",
+  "/run/current-system/sw/bin/env",
+];
+
 const bwrapUsabilityCache = new Map<string, boolean>();
+
+/** Find a tiny host command that should exit successfully inside `--ro-bind / /`. */
+export function findBwrapProbeCommand(
+  exists: (p: string) => boolean = fs.existsSync,
+): string | null {
+  for (const candidate of BWRAP_PROBE_COMMANDS) {
+    try {
+      if (exists(candidate)) return candidate;
+    } catch {
+      // ignore unreadable paths and keep trying trusted candidates
+    }
+  }
+  return null;
+}
 
 /**
  * Whether `bwrap` at `program` can actually create the namespaces the sandbox
@@ -51,6 +74,11 @@ export function isBwrapUsable(program: string): boolean {
   if (cached !== undefined) return cached;
   let usable = false;
   try {
+    const probeCommand = findBwrapProbeCommand();
+    if (!probeCommand) {
+      bwrapUsabilityCache.set(program, false);
+      return false;
+    }
     const probe = spawnSync(
       program,
       [
@@ -63,12 +91,10 @@ export function isBwrapUsable(program: string): boolean {
         "--unshare-pid",
         "--proc",
         "/proc",
-        // Run the current runtime executable (always present + executable, and
-        // visible via `--ro-bind / /`) rather than a host-specific path like
-        // `/bin/true`, which may not exist (e.g. NixOS). If namespace setup fails,
-        // bwrap exits non-zero before ever reaching this command.
-        process.execPath,
-        "--version",
+        // Use a tiny host utility that exits 0. Do not probe with process.execPath:
+        // in packaged desktop builds that is the cowork-server sidecar, which
+        // rejects `--version` and makes a usable bwrap look unavailable.
+        probeCommand,
       ],
       { timeout: 10_000, stdio: "ignore" },
     );

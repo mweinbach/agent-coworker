@@ -2298,7 +2298,7 @@ Client guidance:
 
 Internal session event recorded when an action needs user approval. There are two kinds:
 
-1. **Sandbox-denial escalation** (`dangerous: true`, `reasonCode: "sandbox_denied_escalation"`): the OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this is emitted when a sandboxed command failed like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure). Approving re-runs the command with full access; rejecting returns the sandbox failure to the model.
+1. **Sandbox-denial escalation** (`dangerous: true`, `reasonCode: "sandbox_denied_escalation"`): the OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this is emitted when a sandboxed command failed like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure), or when a restrictive command would fall back to unsandboxed execution because no backend is available. Approving runs the command with full access; rejecting returns the sandbox failure/refusal to the model.
 2. **Ordinary approval** (`dangerous: false`, `reasonCode: "requires_manual_review"`): a provider/tool approval that is NOT a sandbox escape — e.g. the Codex app-server `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` prompts, routed through `approveCommand` without a sandbox reason. Clients should render these as normal approval prompts, not as "escape the sandbox".
 
 YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always prompts (it is not auto-approved under YOLO). On the JSON-RPC wire, the prompt is sent as the server request `item/commandExecution/requestApproval` (or `item/fileChange/requestApproval`).

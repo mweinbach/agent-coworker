@@ -124,10 +124,11 @@ export function buildSeatbeltCommand(
   // Read access: Codex grants full-disk read in all sandboxed modes.
   sections.push("; allow read-only file operations\n(allow file-read*)");
 
-  if (policy.kind === "workspace-write") {
-    // Empty roots yield no write section, leaving the base `(deny default)` to
-    // deny all writes (fail closed) rather than an unconditional allow.
-    const writeSection = buildWritePolicy(policy.writableRoots, params);
+  if (policy.kind === "workspace-write" || policy.kind === "no-project-write") {
+    // Empty explicit roots still get temp scratch via buildWritePolicy. Fully
+    // immutable read-only mode skips this branch and leaves all writes denied.
+    const writableRoots = policy.kind === "workspace-write" ? policy.writableRoots : [];
+    const writeSection = buildWritePolicy(writableRoots, params);
     if (writeSection) sections.push(writeSection);
   }
 

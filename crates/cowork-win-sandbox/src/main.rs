@@ -225,6 +225,11 @@ mod win {
             //    assign it to the Job Object before it runs.
             let mut command_line = wide(&build_command_line(&opts.command));
             let cwd_wide = opts.cwd.as_ref().map(|c| wide(c));
+            let cwd_ptr = cwd_wide
+                .as_ref()
+                .map_or(windows::core::PCWSTR::null(), |c| {
+                    windows::core::PCWSTR(c.as_ptr())
+                });
             let startup = STARTUPINFOW {
                 cb: core::mem::size_of::<STARTUPINFOW>() as u32,
                 ..Default::default()
@@ -240,9 +245,7 @@ mod win {
                 true, // inherit std handles for stdio passthrough
                 CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
                 None,
-                cwd_wide
-                    .as_ref()
-                    .map(|c| windows::core::PCWSTR(c.as_ptr())),
+                cwd_ptr,
                 &startup,
                 &mut info,
             ) {

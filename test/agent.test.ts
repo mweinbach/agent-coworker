@@ -1023,12 +1023,12 @@ describe("runTurn", () => {
     expect(toolCtx.onSessionUsageBudgetUpdated).toBe(onSessionUsageBudgetUpdated);
   });
 
-  test("explicit no_project_write shell policy yields a read-only sandbox without an agentRole", async () => {
+  test("explicit no_project_write shell policy yields a no-project-write sandbox without an agentRole", async () => {
     await runTurn(makeParams({ shellPolicy: "no_project_write" }));
     const toolCtx = mockCreateTools.mock.calls[0]?.[0] as any;
     // The precomputed sandbox policy (preferred by the bash tool) must honor the
-    // read-only shell policy even when no agentRole is set.
-    expect(toolCtx.sandboxPolicy.kind).toBe("read-only");
+    // no-project-write shell policy even when no agentRole is set.
+    expect(toolCtx.sandboxPolicy.kind).toBe("no-project-write");
   });
 
   // -------------------------------------------------------------------------

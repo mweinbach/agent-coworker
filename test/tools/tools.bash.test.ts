@@ -295,6 +295,31 @@ describe("bash tool", () => {
     expect(result.errorCode).toBe("SANDBOX_REQUIRED");
   });
 
+  test("labels an unsandboxed fallback approval as a sandbox escape", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => false);
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: true, requireBackend: false },
+      }),
+    });
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      await opts.approveUnsandboxed?.();
+      return {
+        stdout: "",
+        stderr: "declined",
+        exitCode: 1,
+        errorCode: "SANDBOX_REQUIRED",
+        sandbox: "none",
+      };
+    });
+
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "touch outside" });
+    expect(approveFn).toHaveBeenCalledWith("touch outside", { reason: "sandbox_denied" });
+  });
+
   test("runs the unsandboxed fallback once approved", async () => {
     const calls: string[] = [];
     const result = await bashInternal.runShellCommandWithExec({

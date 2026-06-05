@@ -454,12 +454,15 @@ export function createBashTool(ctx: ToolContext) {
           targetPaths: ctx.agentTargetPaths,
         });
       const runner = runShellCommandOverrideForTests ?? runShellCommand;
-      // Read-only roles and scoped children (targetPaths) are hard floors: their
-      // read-only / scope guarantee must be ENFORCED by the backend, never just
-      // process-contained or relaxed to an unsandboxed run. They fail closed
-      // unless an enforcing backend (Seatbelt/bwrap) is available. Only an
+      // Read-only/no-project-write roles and scoped children (targetPaths) are
+      // hard floors: their write/scope guarantee must be ENFORCED by the backend,
+      // never just process-contained or relaxed to an unsandboxed run. They fail
+      // closed unless an enforcing backend (Seatbelt/bwrap) is available. Only an
       // unscoped workspace-write session may take the approved unsandboxed fallback.
-      const isHardFloor = policy.kind === "read-only" || (ctx.agentTargetPaths?.length ?? 0) > 0;
+      const isHardFloor =
+        policy.kind === "read-only" ||
+        policy.kind === "no-project-write" ||
+        (ctx.agentTargetPaths?.length ?? 0) > 0;
       const baseArgs = {
         command,
         cwd: ctx.config.workingDirectory,
@@ -468,10 +471,10 @@ export function createBashTool(ctx: ToolContext) {
         env: ctx.toolEnv,
         requireBackend: sandboxConfig.requireBackend,
         requireEnforcingBackend: isHardFloor,
-        // Prompt before running unsandboxed when no backend is available. Uses a
-        // non-"sandbox_denied" reason so YOLO auto-approves (the user opted into
-        // requireBackend=false) while a non-YOLO session still confirms.
-        approveUnsandboxed: () => ctx.approveCommand(command, { reason: "sandbox_unavailable" }),
+        // Prompt before running unsandboxed when no backend is available. This
+        // is still a sandbox escape, so label it with the sandbox-denied reason
+        // used by the approval layer's protected escalation path.
+        approveUnsandboxed: () => ctx.approveCommand(command, { reason: "sandbox_denied" }),
       };
 
       let result = await runner({ ...baseArgs, policy });
@@ -534,15 +537,7 @@ export const __internal = {
   buildBashToolDescription,
   buildShellExecutionPlan: buildPlatformShellExecutionPlan,
   runShellCommandWithExec,
-  setRunShellCommandForTests(
-    runner: (opts: {
-      command: string;
-      cwd: string;
-      abortSignal?: AbortSignal;
-      timeoutMs?: number;
-      env?: Record<string, string | undefined>;
-    }) => Promise<ExecResult>,
-  ) {
+  setRunShellCommandForTests(runner: (opts: RunShellCommandOpts) => Promise<ShellRunResult>) {
     runShellCommandOverrideForTests = runner;
   },
   resetRunShellCommandForTests() {

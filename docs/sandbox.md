@@ -38,13 +38,16 @@ candidate before spawning and attaches marker env vars (`COWORK_SANDBOX`,
 | Policy | Filesystem | Network |
 |--------|-----------|---------|
 | `read-only` | full disk read, no writes | per `network` |
+| `no-project-write` | full disk read; temp scratch writable; no project writable roots | per `network` |
 | `workspace-write` | full read; writes limited to `writableRoots` (cwd, output dir, child `targetPaths`) + temp; `.git`/`.cowork` stay read-only | per `network` |
 | `danger-full-access` | unrestricted (no sandbox) | unrestricted |
 
 The policy is resolved per turn in `src/agent.ts` from the agent role and config:
-read-only roles (`explorer`, `research`, `reviewer`) → `read-only`; write-capable
-roles → `workspace-write`. Child-agent `targetPaths` become the writable roots,
-so write scope is enforced by the OS rather than by parsing the command.
+read-only roles (`explorer`, `research`, `reviewer`) → `no-project-write` so
+verifier tooling can use temp files without mutating the workspace; write-capable
+roles → `workspace-write`. Explicit `sandbox.mode: "read-only"` stays fully
+immutable. Child-agent `targetPaths` become the writable roots, so write scope is
+enforced by the OS rather than by parsing the command.
 
 `targetPaths` are clamped to the workspace: entries that resolve outside it (e.g.
 an absolute `/home/user/.ssh`) or inside protected metadata (`.git`/`.cowork`) are
@@ -76,10 +79,9 @@ a sandboxed command fails in a way that looks like a sandbox denial
 (`denied.ts:isLikelySandboxDenied` — "operation not permitted", "read-only file
 system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 `approval` event, reason `sandbox_denied_escalation`) whether to re-run it with
-`danger-full-access`. YOLO mode auto-approves ordinary sandbox-unavailable
-fallback prompts, but still prompts for this sandbox-denial escalation because it
-lifts an already-enforcing command to full access. This mirrors Codex's
-`with_escalated_permissions` flow.
+`danger-full-access`. Unsandboxed fallback because a backend is unavailable uses
+the same protected sandbox-denial approval path, since it also grants full
+filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
 
 ## Per-platform backends
 
@@ -109,13 +111,16 @@ lifts an already-enforcing command to full access. This mirrors Codex's
   runs the child under a restricted (LUA) token inside a kill-on-close Job
   Object, providing **process containment only**. Per-root ACL filesystem scoping
   and WFP network isolation are tracked TODOs, so workspace-write / read-only
-  path scoping is **not** enforced yet. With the default `requireBackend: true`,
+  path scoping is **not** enforced yet. `no-project-write` maps through the
+  helper's existing read-only flag until filesystem scoping exists. With the
+  default `requireBackend: true`,
   bash fails closed instead of treating that helper as an enforcing backend; set
   `requireBackend: false` to opt into the degraded helper path, where every
-  Windows command gets a `[sandbox] …` warning. **Status: the Win32 path still
-  requires a Windows CI build to verify enforcement once implemented.**
-  Desktop Windows resource builds compile and copy `cowork-win-sandbox.exe` into
-  the packaged `resources/binaries` directory.
+  Windows command gets a `[sandbox] …` warning. CI builds the helper and runs the
+  Windows sandbox smoke tests so the current fail-closed/degraded behavior stays
+  covered until full filesystem enforcement lands. Desktop Windows resource
+  builds compile and copy `cowork-win-sandbox.exe` into the packaged
+  `resources/binaries` directory.
 
 ## Verification
 

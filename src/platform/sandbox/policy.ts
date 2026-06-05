@@ -55,14 +55,16 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
   const config = input.config ?? DEFAULT_SANDBOX_CONFIG;
   const network = config.network ?? true;
 
-  if (config.mode === "danger-full-access") {
-    return { kind: "danger-full-access" };
+  // Read-only roles (explorer/reviewer/research) are a hard floor: they always
+  // resolve to a read-only filesystem and are never escalated — even when the
+  // configured mode is danger-full-access. This must be checked before the
+  // danger-full-access short-circuit below.
+  if (input.readOnlyRole || config.mode === "read-only") {
+    return { kind: "read-only", network };
   }
 
-  // Read-only roles (explorer/reviewer/research) force a read-only filesystem
-  // regardless of the configured mode.
-  if (config.mode === "read-only" || input.readOnlyRole) {
-    return { kind: "read-only", network };
+  if (config.mode === "danger-full-access") {
+    return { kind: "danger-full-access" };
   }
 
   // `workspace-write` and `auto` (for write-capable roles) both resolve here.
@@ -76,11 +78,14 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
  */
 export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] {
   const roots = new Set<string>();
+  // Relative paths (e.g. a child's `targetPaths: ["src/auth"]`) must resolve
+  // against the workspace, not the server process cwd.
+  const base = input.workingDirectory;
   if (input.targetPaths && input.targetPaths.length > 0) {
-    for (const p of input.targetPaths) roots.add(path.resolve(p));
+    for (const p of input.targetPaths) roots.add(path.resolve(base, p));
   } else {
-    roots.add(path.resolve(input.workingDirectory));
-    if (input.outputDirectory) roots.add(path.resolve(input.outputDirectory));
+    roots.add(path.resolve(base));
+    if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
   }
   return [...roots];
 }

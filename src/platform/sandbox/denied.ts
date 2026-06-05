@@ -19,6 +19,7 @@ export interface SandboxDeniedInput {
 const SANDBOX_DENIAL_MARKERS = [
   "operation not permitted",
   "permission denied",
+  "access is denied", // Windows restricted-token / ACL denials
   "read-only file system",
   "seccomp",
   "landlock",

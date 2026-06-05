@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   isLikelySandboxDenied,
+  resolveSandboxPolicy,
   type SandboxCapabilities,
   type SandboxPolicy,
   type SandboxType,
@@ -14,6 +15,7 @@ import {
   buildPlatformShellCommandWithRuntimePrelude,
   buildPlatformShellExecutionPlan,
 } from "../platform/shell";
+import { getAgentRoleDefinition } from "../server/agents/roles";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -289,7 +291,20 @@ export function createBashTool(ctx: ToolContext) {
       // The OS sandbox (src/platform/sandbox) is the enforcement boundary. We
       // run the command inside it and only fall back to prompting the user when
       // a sandboxed command fails in a way that looks like a sandbox denial.
-      const policy: SandboxPolicy = ctx.sandboxPolicy ?? { kind: "danger-full-access" };
+      //
+      // If a ToolContext was built without a resolved sandboxPolicy (e.g. an
+      // alternate delegate path), derive one here from the role + config rather
+      // than defaulting to full access, so read-only roles and targetPaths stay
+      // enforced instead of silently running unsandboxed.
+      const policy: SandboxPolicy =
+        ctx.sandboxPolicy ??
+        resolveSandboxPolicy({
+          config: ctx.config.sandbox,
+          readOnlyRole: ctx.agentRole ? getAgentRoleDefinition(ctx.agentRole).readOnly : false,
+          workingDirectory: ctx.config.workingDirectory,
+          outputDirectory: ctx.config.outputDirectory,
+          targetPaths: ctx.agentTargetPaths,
+        });
       const runner = runShellCommandOverrideForTests ?? runShellCommand;
       const baseArgs = {
         command,

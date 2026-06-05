@@ -18,17 +18,38 @@ export function hasSeatbelt(): boolean {
   }
 }
 
-/** Locate the `bwrap` executable on PATH, or `null` if not installed. */
+/**
+ * Trusted absolute locations to look for `bwrap`. We deliberately do NOT search
+ * `$PATH`: a workspace-write command could plant an executable at a
+ * workspace-controlled PATH entry (e.g. `node_modules/.bin/bwrap`) and, since
+ * that wrapper runs as `argv[0]` of the next bash call, escape the sandbox. Only
+ * root-owned system directories (or an explicit `COWORK_BWRAP_PATH`) are trusted.
+ */
+const TRUSTED_BWRAP_DIRS = [
+  "/usr/bin",
+  "/bin",
+  "/usr/local/bin",
+  "/usr/sbin",
+  "/sbin",
+  "/run/current-system/sw/bin", // NixOS
+];
+
+/** Locate the `bwrap` executable in a trusted system location, or `null`. */
 export function findBwrap(env: NodeJS.ProcessEnv = process.env): string | null {
-  const rawPath = env.PATH;
-  if (!rawPath) return null;
-  for (const dir of rawPath.split(path.delimiter)) {
-    if (!dir) continue;
+  const override = env.COWORK_BWRAP_PATH;
+  if (override && path.isAbsolute(override)) {
+    try {
+      if (fs.existsSync(override)) return override;
+    } catch {
+      // fall through to the trusted-dir search
+    }
+  }
+  for (const dir of TRUSTED_BWRAP_DIRS) {
     const candidate = path.join(dir, "bwrap");
     try {
       if (fs.existsSync(candidate)) return candidate;
     } catch {
-      // ignore unreadable PATH entries
+      // ignore unreadable directories
     }
   }
   return null;

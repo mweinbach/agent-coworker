@@ -119,8 +119,8 @@ mod win {
     };
     use windows::Win32::System::Threading::{
         CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
-        ResumeThread, WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-        INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
+        ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED,
+        CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
     };
     use windows::Win32::Security::{TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY};
 
@@ -238,8 +238,16 @@ mod win {
             )
             .map_err(|e| format!("CreateProcessAsUserW failed: {e}"))?;
 
-            AssignProcessToJobObject(job, info.hProcess)
-                .map_err(|e| format!("AssignProcessToJobObject failed: {e}"))?;
+            if let Err(e) = AssignProcessToJobObject(job, info.hProcess) {
+                // The child is still suspended; kill it and release every handle
+                // so a failed job assignment can't leak a suspended orphan.
+                let _ = TerminateProcess(info.hProcess, 1);
+                let _ = CloseHandle(info.hThread);
+                let _ = CloseHandle(info.hProcess);
+                let _ = CloseHandle(restricted_token);
+                let _ = CloseHandle(job);
+                return Err(format!("AssignProcessToJobObject failed: {e}"));
+            }
             ResumeThread(info.hThread);
 
             // 4. Wait for completion and propagate the exit code.

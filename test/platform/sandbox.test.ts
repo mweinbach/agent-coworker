@@ -120,6 +120,20 @@ describe("resolveSandboxPolicy", () => {
     });
   });
 
+  test("preserves explicit directory intent for targetPaths with trailing separators", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "auto" },
+      workingDirectory: "/work/project",
+      targetPaths: ["docs/v1.0/"],
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/work/project/docs/v1.0"],
+      writableRootKinds: { "/work/project/docs/v1.0": "directory" },
+      network: true,
+    });
+  });
+
   test("drops writable roots inside protected metadata (.git/.cowork)", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },
@@ -343,16 +357,18 @@ describe("seatbelt argv generation", () => {
     // target the root's OWN .git/.cowork (passed as -D params, relative to the
     // root), not the ancestor `.cowork` — which an absolute-path regex would match
     // and thereby deny every write under the workspace.
+    const root = "/home/me/.cowork/chats/abc";
+    const canonicalRoot = canonicalizeRoot(root);
     const policy: SandboxPolicy = {
       kind: "workspace-write",
-      writableRoots: ["/home/me/.cowork/chats/abc"],
+      writableRoots: [root],
       network: true,
     };
     const { args } = buildSeatbeltCommand(INNER, policy);
     const policyText = args[1];
     expect(policyText).not.toContain('(require-not (regex #"/\\.cowork(/|$)"))');
-    expect(args.some((a) => a.endsWith("=/home/me/.cowork/chats/abc/.git"))).toBe(true);
-    expect(args.some((a) => a.endsWith("=/home/me/.cowork/chats/abc/.cowork"))).toBe(true);
+    expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".git")}`))).toBe(true);
+    expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".cowork")}`))).toBe(true);
   });
 
   test("does not add /tmp or /private/tmp scratch for a /tmp-scoped root (macOS alias)", () => {
@@ -424,6 +440,23 @@ describe("bwrap argv generation", () => {
     // network enabled => no unshare-net
     expect(args).not.toContain("--unshare-net");
     expect(args).toContain("--chdir");
+  });
+
+  test("does not create absent protected metadata mountpoints on the host", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/work"],
+      network: true,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/work", {
+      program: "bwrap",
+      exists: (p) => p === "/work" || p === "/tmp",
+      isDirectory: (p) => p === "/work" || p === "/tmp",
+    });
+    expect(joinPairs(args, "--ro-bind")).not.toContain("/work/.git /work/.git");
+    expect(joinPairs(args, "--ro-bind")).not.toContain("/work/.cowork /work/.cowork");
+    expect(args).not.toContain("--tmpfs");
+    expect(args).not.toContain("--remount-ro");
   });
 
   test("creates and binds nonexistent writable roots", () => {
@@ -504,6 +537,33 @@ describe("bwrap argv generation", () => {
     expect(createdDirs).not.toContain("/work/Dockerfile");
     expect(joinPairs(args, "--bind")).toContain("/work/Dockerfile /work/Dockerfile");
     expect(joinPairs(args, "--bind")).toContain("/work/Makefile /work/Makefile");
+  });
+
+  test("creates dotted roots with explicit directory intent as directories", () => {
+    const existing = new Set(["/tmp", "/work", "/work/docs"]);
+    const createdDirs: string[] = [];
+    const createdFiles: string[] = [];
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/work/docs/v1.0"],
+      writableRootKinds: { "/work/docs/v1.0": "directory" },
+      network: true,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/work", {
+      program: "bwrap",
+      exists: (p) => existing.has(p),
+      ensureDir: (p) => {
+        createdDirs.push(p);
+        existing.add(p);
+      },
+      ensureFile: (p) => {
+        createdFiles.push(p);
+        existing.add(p);
+      },
+    });
+    expect(createdDirs).toContain("/work/docs/v1.0");
+    expect(createdFiles).not.toContain("/work/docs/v1.0");
+    expect(joinPairs(args, "--bind")).toContain("/work/docs/v1.0 /work/docs/v1.0");
   });
 
   test("binds ancestor roots before descendant roots (mask ordering)", () => {

@@ -227,17 +227,16 @@ bwrapDescribe("bubblewrap enforcement (Linux)", () => {
     }
   });
 
-  // NOTE: nested `.git` (e.g. /repo/src/.git/hooks) is intentionally NOT asserted
-  // here — bwrap masks only the top-level `.git`/`.cowork` under each root
-  // (documented limitation in docs/sandbox.md; macOS Seatbelt excludes them
-  // recursively via a path regex).
+  // Existing nested `.git`/`.cowork` metadata is covered by the bwrap argv unit
+  // tests. This integration file stays focused on the portable enforcement
+  // cases that run quickly under the real backend.
 });
 
 // ---------------------------------------------------------------------------
 // Windows — restricted-token helper
 // ---------------------------------------------------------------------------
 const winHelperPath =
-  process.env.COWORK_WIN_SANDBOX_PATH ??
+  process.env.COWORK_WIN_SANDBOX_HELPER ??
   path.resolve("crates/cowork-win-sandbox/target/release/cowork-win-sandbox.exe");
 const windowsDescribe =
   process.platform === "win32" && fs.existsSync(winHelperPath) ? describe : describe.skip;

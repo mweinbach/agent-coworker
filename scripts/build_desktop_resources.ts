@@ -16,6 +16,7 @@ import {
   shouldUseBundledBunRuntime,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
+import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import {
   buildBunBundle,
   copyDir,
@@ -27,7 +28,7 @@ import {
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 8;
+const CACHE_VERSION = 9;
 const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join("assets", "managed-soffice-helper.mjs");
 
 type DesktopResourcesCache = {
@@ -43,6 +44,7 @@ type DesktopResourcesCache = {
   artifactRuntimeFingerprint: string | null;
   foundationModelsSdkFingerprint: string | null;
   windowsAiElectronFingerprint: string | null;
+  windowsSandboxHelperFingerprint: string | null;
   docsFingerprint: string | null;
   bundledBunRuntimeVersion: string | null;
 };
@@ -123,6 +125,8 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
         typeof parsed.foundationModelsSdkFingerprint !== "string") ||
       (parsed.windowsAiElectronFingerprint !== null &&
         typeof parsed.windowsAiElectronFingerprint !== "string") ||
+      (parsed.windowsSandboxHelperFingerprint !== null &&
+        typeof parsed.windowsSandboxHelperFingerprint !== "string") ||
       (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string") ||
       (parsed.bundledBunRuntimeVersion !== null &&
         typeof parsed.bundledBunRuntimeVersion !== "string")
@@ -217,6 +221,64 @@ async function syncCopiedDir(opts: {
   await rmrf(opts.dest);
   await copyDir(opts.src, opts.dest);
   console.log(`[resources] ${opts.label}: updated`);
+}
+
+async function syncWindowsSandboxHelper(opts: {
+  root: string;
+  dest: string;
+  previousFingerprint: string | null;
+  nextFingerprint: string | null;
+  platform: NodeJS.Platform;
+  arch: string;
+  commandRunner?: typeof runCommand;
+}): Promise<void> {
+  if (opts.platform !== "win32" || opts.nextFingerprint === null) {
+    await fs.rm(opts.dest, { force: true });
+    console.log("[resources] Windows sandbox helper: disabled");
+    return;
+  }
+
+  const needsBuild =
+    opts.previousFingerprint !== opts.nextFingerprint || !(await pathExists(opts.dest));
+  if (!needsBuild) {
+    console.log("[resources] Windows sandbox helper: cached");
+    return;
+  }
+
+  const crateDir = path.join(opts.root, "crates", "cowork-win-sandbox");
+  const manifestPath = path.join(crateDir, "Cargo.toml");
+  const runner = opts.commandRunner ?? runCommand;
+  const rustTarget = resolveWindowsRustTarget(opts.arch);
+  await runner(["rustup", "target", "add", rustTarget], {
+    cwd: opts.root,
+  });
+  await runner(
+    ["cargo", "build", "--release", "--manifest-path", manifestPath, "--target", rustTarget],
+    {
+      cwd: opts.root,
+    },
+  );
+
+  const builtHelper = path.join(
+    crateDir,
+    "target",
+    rustTarget,
+    "release",
+    WINDOWS_SANDBOX_HELPER_NAME,
+  );
+  if (!(await pathExists(builtHelper))) {
+    throw new Error(`Windows sandbox helper build did not produce ${builtHelper}`);
+  }
+
+  await fs.mkdir(path.dirname(opts.dest), { recursive: true });
+  await fs.copyFile(builtHelper, opts.dest);
+  console.log(`[resources] Windows sandbox helper: updated ${path.relative(opts.root, opts.dest)}`);
+}
+
+function resolveWindowsRustTarget(arch: string): string {
+  if (arch === "x64") return "x86_64-pc-windows-msvc";
+  if (arch === "arm64") return "aarch64-pc-windows-msvc";
+  throw new Error(`Unsupported Windows sandbox helper architecture: ${arch}`);
 }
 
 async function ensureFoundationModelsSdkInputs(root: string): Promise<{
@@ -480,6 +542,17 @@ async function main() {
   const windowsAiElectronFingerprint = windowsAiElectronInputs
     ? await fingerprintInputs(windowsAiElectronInputs.fingerprintTargets, root)
     : null;
+  const windowsSandboxHelperInputs =
+    platform === "win32"
+      ? [
+          path.join(root, "crates", "cowork-win-sandbox", "Cargo.toml"),
+          path.join(root, "crates", "cowork-win-sandbox", "Cargo.lock"),
+          path.join(root, "crates", "cowork-win-sandbox", "src"),
+        ]
+      : null;
+  const windowsSandboxHelperFingerprint = windowsSandboxHelperInputs
+    ? await fingerprintInputs(windowsSandboxHelperInputs, root)
+    : null;
   const docsFingerprint = includeDocs ? await fingerprintInputs([docsSrc], root) : null;
   const sidecarFingerprint = await fingerprintInputs(sidecarInputs, root);
 
@@ -491,6 +564,7 @@ async function main() {
   const sidecarManifestPath = path.join(desktopBinariesDir, "cowork-server-manifest.json");
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
   const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
+  const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
   const compiledManagedSofficeHelperPath = path.join(
@@ -676,6 +750,15 @@ async function main() {
     arch,
   });
 
+  await syncWindowsSandboxHelper({
+    root,
+    dest: windowsSandboxHelperDest,
+    previousFingerprint: cache?.windowsSandboxHelperFingerprint ?? null,
+    nextFingerprint: windowsSandboxHelperFingerprint,
+    platform,
+    arch,
+  });
+
   const docsDest = path.join(distDir, "docs");
   if (!includeDocs) {
     await rmrf(docsDest);
@@ -703,6 +786,7 @@ async function main() {
     artifactRuntimeFingerprint,
     foundationModelsSdkFingerprint,
     windowsAiElectronFingerprint,
+    windowsSandboxHelperFingerprint,
     docsFingerprint,
     bundledBunRuntimeVersion,
   });
@@ -763,5 +847,6 @@ export const __internal = {
   syncFoundationModelsSdk,
   ensureWindowsAiElectronInputs,
   syncWindowsAiElectronPackage,
+  syncWindowsSandboxHelper,
   pruneStaleDesktopBinaryArtifacts,
 };

@@ -251,6 +251,28 @@ describe("bash tool", () => {
     expect(result.stderr).toContain("Refusing to run unsandboxed");
   });
 
+  test("fails closed when requireBackend sees only a non-enforcing backend", async () => {
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: false },
+      requireBackend: true,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls).toEqual([]);
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+    expect(result.stderr).toContain("requires filesystem/network enforcement");
+    expect(result.sandboxWarning).toContain("filesystem and network scoping are not yet enforced");
+  });
+
   test("requires approval before the unsandboxed fallback (requireBackend=false)", async () => {
     const calls: string[] = [];
     const approve = mock(async () => false); // user declines

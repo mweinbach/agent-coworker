@@ -50,7 +50,9 @@ so write scope is enforced by the OS rather than by parsing the command.
 an absolute `/home/user/.ssh`) or inside protected metadata (`.git`/`.cowork`) are
 dropped so they never become shell-writable. A spawn whose `targetPaths` all drop
 out is rejected up front with a clear error rather than running a child that can
-write nowhere useful.
+write nowhere useful. When a not-yet-existing scoped target is a directory whose
+name looks file-like (for example `docs/v1.0/`), keep the trailing slash so Linux
+creates a directory bind source rather than an empty file.
 
 ## Configuration
 
@@ -63,8 +65,8 @@ write nowhere useful.
 - `mode`: `auto` | `read-only` | `workspace-write` | `danger-full-access`
 - `network`: allow outbound network inside the sandbox (default `true`)
 - `requireBackend`: fail closed when the selected OS sandbox backend is unavailable
-  (default `true`; set `false` to fall back to an unsandboxed run — which still
-  prompts for approval in a non-YOLO session, then surfaces a warning)
+  or cannot enforce filesystem/network scope (default `true`; set `false` to
+  allow an explicitly degraded fallback, which still surfaces a warning)
 - env override: `AGENT_SANDBOX=<mode>`
 
 ## Escalate-on-failure
@@ -74,7 +76,9 @@ a sandboxed command fails in a way that looks like a sandbox denial
 (`denied.ts:isLikelySandboxDenied` — "operation not permitted", "read-only file
 system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 `approval` event, reason `sandbox_denied_escalation`) whether to re-run it with
-`danger-full-access`. YOLO mode auto-approves. This mirrors Codex's
+`danger-full-access`. YOLO mode auto-approves ordinary sandbox-unavailable
+fallback prompts, but still prompts for this sandbox-denial escalation because it
+lifts an already-enforcing command to full access. This mirrors Codex's
 `with_escalated_permissions` flow.
 
 ## Per-platform backends
@@ -96,19 +100,22 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
   surfaced warning when `sandbox.requireBackend` is explicitly `false`.
   (The in-process seccomp layer Codex adds is not ported — bwrap alone provides
   filesystem + network + namespace isolation.)
-  **Limitation:** the `.git`/`.cowork` re-protection is bind-based, so it masks
-  only the **top-level** metadata under each writable root; nested metadata
-  (e.g. a submodule's `/repo/src/.git`) is not re-frozen because per-command
-  recursive enumeration is impractical. Prefer narrow `targetPaths` when a child
-  must not touch nested metadata; the macOS backend excludes it recursively.
+  **Limitation:** the `.git`/`.cowork` re-protection is bind-based. It re-freezes
+  metadata directories that already exist under explicit writable roots, including
+  nested submodule/worktree metadata, but it does not fabricate missing metadata
+  mountpoints because doing so can create host directories during sandbox setup.
+  Prefer narrow `targetPaths` when a child must not create new metadata paths.
 - **Windows — restricted token** (`crates/cowork-win-sandbox`): a native helper
   runs the child under a restricted (LUA) token inside a kill-on-close Job
-  Object. It IS selected as the backend (so commands run rather than failing
-  closed), providing **process containment only** — per-root ACL filesystem
-  scoping and WFP network isolation are tracked TODOs, so workspace-write /
-  read-only path scoping is **not** enforced yet. The degradation is surfaced as
-  a `[sandbox] …` warning on every Windows command. **Status: the Win32 path
-  still requires a Windows CI build to verify enforcement once implemented.**
+  Object, providing **process containment only**. Per-root ACL filesystem scoping
+  and WFP network isolation are tracked TODOs, so workspace-write / read-only
+  path scoping is **not** enforced yet. With the default `requireBackend: true`,
+  bash fails closed instead of treating that helper as an enforcing backend; set
+  `requireBackend: false` to opt into the degraded helper path, where every
+  Windows command gets a `[sandbox] …` warning. **Status: the Win32 path still
+  requires a Windows CI build to verify enforcement once implemented.**
+  Desktop Windows resource builds compile and copy `cowork-win-sandbox.exe` into
+  the packaged `resources/binaries` directory.
 
 ## Verification
 
@@ -122,6 +129,7 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
   `bwrap`/user namespaces). Run it before merging:
   - macOS: `bun test test/platform/sandbox.enforcement.integration.test.ts`
   - Linux (bubblewrap host): same command (auto-detects `bwrap`).
-  - Windows: build the helper (`cargo build --release` in `crates/cowork-win-sandbox`),
-    then point `COWORK_WIN_SANDBOX_PATH` at the `.exe` (or use the default
-    `target/release` path) and run the same command.
+  - Windows: build the helper (`cargo build --release --manifest-path
+    crates/cowork-win-sandbox/Cargo.toml`), then point
+    `COWORK_WIN_SANDBOX_HELPER` at the `.exe` (or use the packaged/default
+    `resources/binaries` lookup) and run the same command.

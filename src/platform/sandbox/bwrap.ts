@@ -91,6 +91,12 @@ export function buildBwrapCommand(
   // scratch only when it would not over-scope an explicit root under it.
   if (policy.kind === "workspace-write") {
     const explicitRoots = new Set(policy.writableRoots.map(canonicalizeRoot));
+    const explicitRootKinds = new Map(
+      Object.entries(policy.writableRootKinds ?? {}).map(([root, kind]) => [
+        canonicalizeRoot(root),
+        kind,
+      ]),
+    );
     // Bind ancestor roots before descendants so a later parent bind cannot shadow
     // an earlier child's protected-metadata masks — e.g. binding /repo after
     // /repo/src would re-expose /repo/src/.git. Only ancestor/descendant pairs are
@@ -111,7 +117,9 @@ export function buildBwrapCommand(
       // file-like roots. Otherwise Linux either drops the scope or creates a
       // directory where the child intended to create a file.
       if (!exists(root)) {
-        if (looksLikeFilePath(root)) ensureFile(root);
+        const rootKind = explicitRootKinds.get(canonicalizeRoot(root));
+        if (rootKind === "directory") ensureDir(root);
+        else if (rootKind === "file" || looksLikeFilePath(root)) ensureFile(root);
         else ensureDir(root);
       }
       if (!exists(root)) continue; // creation failed; can't bind a missing source
@@ -120,14 +128,14 @@ export function buildBwrapCommand(
       const realRoot = canonicalizeRoot(root);
       flags.push("--bind", realRoot, realRoot);
       if (!isDirectory(realRoot)) continue;
-      // Keep protected metadata read-only. Direct children are masked even when
-      // absent so commands cannot create top-level metadata under a writable root.
-      // Existing nested metadata (submodules/worktrees) is discovered and
-      // re-frozen too; bwrap has no segment-based "deny every .git anywhere"
-      // primitive, so existing recursive masks are the durable mount strategy.
+      // Keep existing protected metadata read-only. Do not fabricate absent
+      // `.git`/`.cowork` mountpoints under the host root: bwrap may create missing
+      // destinations before mounting, which would mutate the user's workspace just
+      // to set up the sandbox.
       const protectedDirs = new Set<string>();
       for (const name of PROTECTED_SUBPATH_NAMES) {
-        protectedDirs.add(path.join(realRoot, name));
+        const direct = path.join(realRoot, name);
+        if (exists(direct)) protectedDirs.add(direct);
       }
       if (explicitRoots.has(realRoot)) {
         for (const dir of collectExistingProtectedMetadataDirs(realRoot, exists, isDirectory)) {
@@ -135,11 +143,7 @@ export function buildBwrapCommand(
         }
       }
       for (const sub of [...protectedDirs].sort((left, right) => left.length - right.length)) {
-        if (exists(sub)) {
-          flags.push("--ro-bind", sub, sub);
-        } else {
-          flags.push("--perms", "555", "--tmpfs", sub, "--remount-ro", sub);
-        }
+        flags.push("--ro-bind", sub, sub);
       }
     }
   }

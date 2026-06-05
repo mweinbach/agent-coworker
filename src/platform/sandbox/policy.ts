@@ -15,8 +15,12 @@ export type SandboxPolicy =
       kind: "workspace-write";
       /** Absolute roots the sandboxed process may write to (beyond temp dirs). */
       writableRoots: string[];
+      /** Optional creation hint for missing writable roots. */
+      writableRootKinds?: Record<string, WritableRootKind>;
       network: boolean;
     };
+
+export type WritableRootKind = "directory" | "file";
 
 /** User/role-facing configuration mode. `auto` resolves from role + working dirs. */
 export type SandboxMode = "auto" | "read-only" | "workspace-write" | "danger-full-access";
@@ -90,7 +94,7 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
 
   // `workspace-write` and `auto` (for write-capable roles) both resolve here, as
   // do scoped children under a danger-full-access config (held to their scope).
-  return { kind: "workspace-write", writableRoots: deriveWritableRoots(input), network };
+  return { kind: "workspace-write", ...deriveWritableRootInfo(input), network };
 }
 
 /**
@@ -99,9 +103,35 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
  * directory and output directory are writable.
  */
 export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] {
+  return deriveWritableRootInfo(input).writableRoots;
+}
+
+function deriveWritableRootInfo(input: ResolveSandboxPolicyInput): {
+  writableRoots: string[];
+  writableRootKinds?: Record<string, WritableRootKind>;
+} {
   const base = path.resolve(input.workingDirectory);
   if (input.targetPaths && input.targetPaths.length > 0) {
-    return filterTargetPathsToWorkspace(base, input.targetPaths, input.projectRoot);
+    const roots = new Set<string>();
+    const rootKinds = new Map<string, WritableRootKind>();
+    const containRoot = input.projectRoot ? path.resolve(input.projectRoot) : base;
+    const realContainRoot = canonicalizeRoot(containRoot);
+    for (const p of input.targetPaths) {
+      const real = resolveUsableTargetPath(base, containRoot, realContainRoot, p);
+      if (real === null) continue;
+      roots.add(real);
+      const kind = targetPathWritableRootKind(p);
+      if (kind) rootKinds.set(real, kind);
+    }
+    const writableRoots = [...roots];
+    const writableRootKinds = Object.fromEntries(
+      writableRoots
+        .filter((root) => rootKinds.has(root))
+        .map((root) => [root, rootKinds.get(root) as WritableRootKind]),
+    );
+    return Object.keys(writableRootKinds).length > 0
+      ? { writableRoots, writableRootKinds }
+      : { writableRoots };
   }
   // Mirror the built-in file tools' write roots (project root + cwd + output +
   // uploads) so unscoped workspace-write bash can write the same locations as
@@ -118,13 +148,15 @@ export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] 
   // slip through the `.git`/`.cowork` carve-out. Canonicalizing first also stops a
   // symlinked dir (e.g. `uploads` -> `.git/hooks`) from sneaking metadata in.
   const reference = canonicalizeRoot(input.projectRoot ? path.resolve(input.projectRoot) : base);
-  return [
-    ...new Set(
-      candidates
-        .map(canonicalizeRoot)
-        .filter((root) => !rootCrossesProtectedMetadata(reference, root)),
-    ),
-  ];
+  return {
+    writableRoots: [
+      ...new Set(
+        candidates
+          .map(canonicalizeRoot)
+          .filter((root) => !rootCrossesProtectedMetadata(reference, root)),
+      ),
+    ],
+  };
 }
 
 /**
@@ -209,6 +241,10 @@ function resolveUsableTargetPath(
     return null;
   }
   return real;
+}
+
+function targetPathWritableRootKind(p: string): WritableRootKind | undefined {
+  return /[/\\]$/.test(p.trim()) ? "directory" : undefined;
 }
 
 /** Whether `root` is the workspace `base` or nested under it. */

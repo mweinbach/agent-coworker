@@ -246,6 +246,9 @@ async function runShellCommandWithExec(
         })
       : null;
 
+  const backendDoesNotEnforceScope =
+    !probe || probe.sandbox === "none" || probe.enforcesScope !== true;
+
   // Hard-floor contexts (read-only roles, scoped children) require a backend that
   // actually ENFORCES the policy, not just process containment. A non-enforcing
   // backend (e.g. the Windows restricted-token helper) or no backend must fail
@@ -254,7 +257,7 @@ async function runShellCommandWithExec(
     policy &&
     policy.kind !== "danger-full-access" &&
     opts.requireEnforcingBackend &&
-    (!probe || probe.sandbox === "none" || !probe.enforcesScope)
+    backendDoesNotEnforceScope
   ) {
     return {
       stdout: "",
@@ -266,21 +269,27 @@ async function runShellCommandWithExec(
     };
   }
 
-  // Fail closed when configured to require a backend that is unavailable.
+  // Fail closed when configured to require an enforcing backend. A helper that
+  // only contains the process (currently Windows) is a degraded opt-in path when
+  // `requireBackend` is false, not enough to satisfy the default safety contract.
   if (
     policy &&
     policy.kind !== "danger-full-access" &&
     opts.requireBackend &&
-    probe &&
-    probe.sandbox === "none"
+    backendDoesNotEnforceScope
   ) {
+    const reason = probe?.warning ?? "OS sandbox backend unavailable";
+    const stderr =
+      probe && probe.sandbox !== "none"
+        ? `Refusing to run: ${reason} (sandbox.requireBackend is enabled and requires filesystem/network enforcement).`
+        : `Refusing to run unsandboxed: ${reason} (sandbox.requireBackend is enabled).`;
     return {
       stdout: "",
-      stderr: `Refusing to run unsandboxed: ${probe.warning ?? "OS sandbox backend unavailable"} (sandbox.requireBackend is enabled).`,
+      stderr,
       exitCode: 1,
       errorCode: "SANDBOX_REQUIRED",
       sandbox: "none",
-      sandboxWarning: probe.warning,
+      sandboxWarning: probe?.warning,
     };
   }
 

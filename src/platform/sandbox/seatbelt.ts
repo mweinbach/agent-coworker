@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { PROTECTED_SUBPATH_NAMES, type SandboxPolicy } from "./policy";
+import { PROTECTED_SUBPATH_NAMES, type SandboxPolicy, withTmpScratch } from "./policy";
 
 /**
  * macOS Seatbelt sandbox generation. Ported from OpenAI Codex
@@ -144,10 +144,10 @@ export function buildSeatbeltCommand(
  */
 function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   // Use exactly the resolved writable roots (which already include cwd for the
-  // non-targetPaths case) plus the /tmp scratch family. Do NOT unconditionally
-  // add cwd here — that would widen a child agent's scope beyond its targetPaths,
-  // diverging from the Linux bwrap backend.
-  const roots = dedupe([...writableRoots.map((r) => path.resolve(r)), "/tmp", "/private/tmp"]);
+  // non-targetPaths case) plus the /tmp scratch family — but skip a scratch dir
+  // that would over-scope an explicit root under it. Do NOT add cwd here; that
+  // would widen a child agent's scope beyond its targetPaths.
+  const roots = withTmpScratch(writableRoots, ["/tmp", "/private/tmp"]);
 
   const components: string[] = [];
   roots.forEach((root, index) => {
@@ -172,8 +172,4 @@ function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   });
 
   return `(allow file-write*\n${components.join("\n")}\n)`;
-}
-
-function dedupe(values: string[]): string[] {
-  return [...new Set(values)];
 }

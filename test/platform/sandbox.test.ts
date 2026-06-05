@@ -114,6 +114,19 @@ describe("resolveSandboxPolicy", () => {
       network: true,
     });
   });
+
+  test("drops absolute/escaping targetPaths outside the workspace", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "auto" },
+      workingDirectory: "/work/project",
+      targetPaths: ["/home/user/.ssh", "../sibling", "src/ok"],
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: ["/work/project/src/ok"],
+      network: true,
+    });
+  });
 });
 
 describe("seatbelt argv generation", () => {
@@ -198,6 +211,21 @@ describe("bwrap argv generation", () => {
     // The missing target dir is created so the child can work in its own scope.
     expect(created).toContain("/work/new-feature");
     expect(joinPairs(args, "--bind")).toContain("/work/new-feature /work/new-feature");
+  });
+
+  test("does not add /tmp scratch when a root already lives under /tmp", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/tmp/proj/src"],
+      network: true,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/tmp/proj/src", {
+      program: "bwrap",
+      exists: () => true,
+    });
+    // The scoped root is bound, but /tmp is NOT blanket-bound (would over-scope).
+    expect(joinPairs(args, "--bind")).toContain("/tmp/proj/src /tmp/proj/src");
+    expect(joinPairs(args, "--bind")).not.toContain("/tmp /tmp");
   });
 });
 

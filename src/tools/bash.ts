@@ -387,15 +387,20 @@ export function createBashTool(ctx: ToolContext) {
 
       // Escalate-on-failure: when a sandboxed command fails in a way that looks
       // like a sandbox denial, ask the user whether to re-run it unsandboxed.
-      // Read-only policies (including read-only roles) are never escalated —
-      // escalating one to full access would violate the read-only floor — so
-      // only workspace-write may be lifted to danger-full-access.
+      // Never escalate (a) read-only policies — that would violate the read-only
+      // floor, or (b) a scoped child (with targetPaths) — escalating to full
+      // access would bypass the child's scope entirely (especially under YOLO,
+      // where approval auto-returns true). Only an unscoped workspace-write
+      // session may be lifted to danger-full-access.
       const wasSandboxed = result.sandbox !== undefined && result.sandbox !== "none";
+      const isScopedChild = (ctx.agentTargetPaths?.length ?? 0) > 0;
+      const networkRestricted = policy.kind !== "danger-full-access" && !policy.network;
       if (
         policy.kind === "workspace-write" &&
+        !isScopedChild &&
         wasSandboxed &&
         result.exitCode !== 0 &&
-        isLikelySandboxDenied(result)
+        isLikelySandboxDenied(result, { networkRestricted })
       ) {
         const approved = await ctx.approveCommand(command, { reason: "sandbox_denied" });
         if (approved) {

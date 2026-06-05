@@ -26,14 +26,38 @@ const SANDBOX_DENIAL_MARKERS = [
 ] as const;
 
 /**
+ * Network-isolation failures surface as connectivity/DNS errors, not the
+ * filesystem markers above. These are only treated as denials when the policy
+ * actually restricts network (otherwise they are real network errors).
+ */
+const NETWORK_DENIAL_MARKERS = [
+  "network is unreachable",
+  "network is down",
+  "could not resolve host",
+  "temporary failure in name resolution",
+  "name or service not known",
+  "no address associated with hostname",
+] as const;
+
+/**
  * Exit codes that almost always indicate a non-sandbox failure (e.g. command
  * not found, not executable, or a clean exit), so we never treat them as a
  * sandbox denial.
  */
 const NON_SANDBOX_EXIT_CODES = new Set([0, 126, 127]);
 
-export function isLikelySandboxDenied(output: SandboxDeniedInput): boolean {
+export function isLikelySandboxDenied(
+  output: SandboxDeniedInput,
+  opts?: { networkRestricted?: boolean },
+): boolean {
   if (NON_SANDBOX_EXIT_CODES.has(output.exitCode)) return false;
   const haystack = `${output.stdout}\n${output.stderr}`.toLowerCase();
-  return SANDBOX_DENIAL_MARKERS.some((marker) => haystack.includes(marker));
+  if (SANDBOX_DENIAL_MARKERS.some((marker) => haystack.includes(marker))) return true;
+  // When network is restricted by policy, namespace isolation failures look like
+  // network errors; treat those as denials so the escalation prompt can offer
+  // the documented retry-with-network path.
+  if (opts?.networkRestricted && NETWORK_DENIAL_MARKERS.some((m) => haystack.includes(m))) {
+    return true;
+  }
+  return false;
 }

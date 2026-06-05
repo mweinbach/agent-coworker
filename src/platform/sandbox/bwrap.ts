@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { PROTECTED_SUBPATH_NAMES, type SandboxPolicy } from "./policy";
+import { PROTECTED_SUBPATH_NAMES, type SandboxPolicy, withTmpScratch } from "./policy";
 
 /**
  * Linux bubblewrap (`bwrap`) sandbox generation. Ported from OpenAI Codex
@@ -57,9 +57,10 @@ export function buildBwrapCommand(
   // 1. Read-only view of the whole filesystem + a minimal writable /dev.
   flags.push("--ro-bind", "/", "/", "--dev", "/dev");
 
-  // 2. Layer writable roots back on (workspace-write only).
+  // 2. Layer writable roots back on (workspace-write only). /tmp is added as
+  // scratch only when it would not over-scope an explicit root under it.
   if (policy.kind === "workspace-write") {
-    const writableRoots = dedupe([...policy.writableRoots.map((r) => path.resolve(r)), "/tmp"]);
+    const writableRoots = withTmpScratch(policy.writableRoots, ["/tmp"]);
 
     for (const root of writableRoots) {
       // bwrap bind mount sources must exist. A child's assigned target dir may
@@ -99,10 +100,6 @@ export function buildBwrapCommand(
   flags.push("--", inner.file, ...inner.args);
 
   return { file: program, args: flags };
-}
-
-function dedupe(values: string[]): string[] {
-  return [...new Set(values)];
 }
 
 /** Resolve a path to its canonical (symlink-free) form; fall back to the input. */

@@ -365,6 +365,25 @@ describe("bash tool", () => {
     expect(res.exitCode).toBe(1);
   });
 
+  test("does not escalate a scoped child's targetPath denial (even in yolo)", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => true); // simulates yolo auto-approve
+    const ctx = makeCtx(dir, { agentTargetPaths: [path.join(dir, "src")] });
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot touch '../outside': Read-only file system",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    const res = await t.execute({ command: "touch ../outside" });
+    // Escalating a scoped child to full access would bypass its targetPaths.
+    expect(approveFn).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(1);
+  });
+
   test("returns aborted exit code when turn signal is aborted", async () => {
     const dir = await tmpDir();
     const controller = new AbortController();

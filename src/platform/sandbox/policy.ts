@@ -83,30 +83,39 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
  * directory and output directory are writable.
  */
 export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] {
+  const base = path.resolve(input.workingDirectory);
   const roots = new Set<string>();
-  // Relative paths (e.g. a child's `targetPaths: ["src/auth"]`) must resolve
-  // against the workspace, not the server process cwd.
-  const base = input.workingDirectory;
   if (input.targetPaths && input.targetPaths.length > 0) {
-    for (const p of input.targetPaths) roots.add(path.resolve(base, p));
+    for (const p of input.targetPaths) {
+      // Relative paths (e.g. `["src/auth"]`) resolve against the workspace, not
+      // the server process cwd. A child's targetPaths must stay WITHIN the
+      // workspace and outside its protected metadata: an absolute/escaping entry
+      // like `/home/user/.ssh` must not become shell-writable just because it was
+      // named as a target (the file tools already restrict to the workspace, and
+      // the OS sandbox must not be looser).
+      const resolved = path.resolve(base, p);
+      if (isWithinWorkspace(base, resolved) && !rootCrossesProtectedMetadata(base, resolved)) {
+        roots.add(resolved);
+      }
+    }
   } else {
-    roots.add(path.resolve(base));
+    roots.add(base);
     if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
   }
-  // Never grant a writable root that is itself inside the workspace's protected
-  // metadata (`.git`, `.cowork`). The check is relative to the workspace so a
-  // workspace that merely *lives under* a `.cowork` ancestor (e.g. a one-off
-  // chat workspace under `~/.cowork/chats/<id>`) is not wrongly dropped — only
-  // roots whose path *within* the workspace crosses `.git`/`.cowork` are
-  // rejected (the backend carve-outs only re-freeze those dirs beneath a root,
-  // so a root already inside one would otherwise stay writable).
-  return [...roots].filter((root) => !rootCrossesProtectedMetadata(base, root));
+  return [...roots];
+}
+
+/** Whether `root` is the workspace `base` or nested under it. */
+function isWithinWorkspace(base: string, root: string): boolean {
+  const relative = path.relative(base, root);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 /**
  * Whether `root`, expressed relative to the workspace `base`, passes through a
- * protected metadata directory. Roots outside the workspace are not treated as
- * project metadata here.
+ * protected metadata directory (`.git`/`.cowork`). The check is relative so a
+ * workspace that merely *lives under* a `.cowork` ancestor (e.g. a one-off chat
+ * workspace under `~/.cowork/chats/<id>`) is not wrongly dropped.
  */
 function rootCrossesProtectedMetadata(base: string, root: string): boolean {
   const relative = path.relative(path.resolve(base), path.resolve(root));
@@ -115,6 +124,20 @@ function rootCrossesProtectedMetadata(base: string, root: string): boolean {
   }
   const segments = relative.split(/[/\\]+/).filter(Boolean);
   return segments.some((seg) => (PROTECTED_SUBPATH_NAMES as readonly string[]).includes(seg));
+}
+
+/**
+ * Add temp scratch dirs (e.g. `/tmp`) to a set of writable roots, but skip any
+ * scratch dir that is an ancestor of an existing root. Otherwise a child scoped
+ * to a target under `/tmp` (e.g. `/tmp/proj/src`) would get all of `/tmp` made
+ * writable, defeating the scope.
+ */
+export function withTmpScratch(writableRoots: string[], scratch: string[]): string[] {
+  const resolved = writableRoots.map((r) => path.resolve(r));
+  const extra = scratch.filter(
+    (s) => !resolved.some((r) => r === s || r.startsWith(`${s}${path.sep}`)),
+  );
+  return [...new Set([...resolved, ...extra])];
 }
 
 /** Whether the policy permits outbound network access. */

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
 import { isLikelySandboxDenied } from "../../src/platform/sandbox/denied";
@@ -209,6 +212,29 @@ describe("seatbelt argv generation", () => {
     );
     // The scoped root itself stays writable.
     expect(args.some((a) => a.endsWith("=/tmp/proj/src"))).toBe(true);
+  });
+
+  test("canonicalizes symlinked writable roots (matches bwrap)", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "sb-canon-"));
+    try {
+      const real = path.join(base, "real");
+      fs.mkdirSync(real);
+      const link = path.join(base, "link");
+      fs.symlinkSync(real, link);
+      const policy: SandboxPolicy = {
+        kind: "workspace-write",
+        writableRoots: [link],
+        network: true,
+      };
+      const { args } = buildSeatbeltCommand(INNER, policy);
+      // The -D param must reference the resolved real path, not the logical
+      // symlink, so a symlinked root can't grant writes outside its target.
+      const resolved = fs.realpathSync(link);
+      expect(args).toContain(`-DWRITABLE_ROOT_0=${resolved}`);
+      expect(args).not.toContain(`-DWRITABLE_ROOT_0=${link}`);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

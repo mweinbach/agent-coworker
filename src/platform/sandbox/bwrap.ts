@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { PROTECTED_SUBPATH_NAMES, type SandboxPolicy, withTmpScratch } from "./policy";
+import {
+  canonicalizeRoot,
+  PROTECTED_SUBPATH_NAMES,
+  type SandboxPolicy,
+  withTmpScratch,
+} from "./policy";
 
 /**
  * Linux bubblewrap (`bwrap`) sandbox generation. Ported from OpenAI Codex
@@ -99,7 +104,7 @@ export function buildBwrapCommand(
       if (!exists(root)) continue; // creation failed; can't bind a missing source
       // Bind the canonical path so a symlinked root can't smuggle write access
       // to an unexpected target through a different logical path.
-      const realRoot = canonicalize(root);
+      const realRoot = canonicalizeRoot(root);
       flags.push("--bind", realRoot, realRoot);
       if (!isDirectory(realRoot)) continue;
       // Keep protected metadata read-only. When the path is absent, mask it with
@@ -129,15 +134,6 @@ export function buildBwrapCommand(
   flags.push("--", inner.file, ...inner.args);
 
   return { file: program, args: flags };
-}
-
-/** Resolve a path to its canonical (symlink-free) form; fall back to the input. */
-function canonicalize(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
-  }
 }
 
 function looksLikeFilePath(p: string): boolean {

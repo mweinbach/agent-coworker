@@ -1,6 +1,11 @@
 import path from "node:path";
 
-import { PROTECTED_SUBPATH_NAMES, type SandboxPolicy, withTmpScratch } from "./policy";
+import {
+  canonicalizeRoot,
+  PROTECTED_SUBPATH_NAMES,
+  type SandboxPolicy,
+  withTmpScratch,
+} from "./policy";
 
 /**
  * macOS Seatbelt sandbox generation. Ported from OpenAI Codex
@@ -143,11 +148,13 @@ export function buildSeatbeltCommand(
  * even though their parent root is writable.
  */
 function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
-  // Use exactly the resolved writable roots (which already include cwd for the
-  // non-targetPaths case) plus the /tmp scratch family — but skip a scratch dir
-  // that would over-scope an explicit root under it. Do NOT add cwd here; that
-  // would widen a child agent's scope beyond its targetPaths.
-  const roots = withTmpScratch(writableRoots, ["/tmp", "/private/tmp"]);
+  // Canonicalize the explicit roots (realpath) first so a symlinked root can't
+  // grant writes to an unexpected target via a different logical path — matching
+  // the Linux bwrap backend, which binds canonical paths. The /tmp scratch family
+  // is added afterwards as literal paths; withTmpScratch skips a scratch dir that
+  // would over-scope an explicit root under it (macOS /tmp↔/private/tmp aware).
+  // Do NOT add cwd here; that would widen a child agent's scope beyond targetPaths.
+  const roots = withTmpScratch(writableRoots.map(canonicalizeRoot), ["/tmp", "/private/tmp"]);
 
   const components: string[] = [];
   roots.forEach((root, index) => {

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 /**
@@ -166,6 +167,15 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
     return !canonicalRoots.some((cr) => cr === cs || cr.startsWith(`${cs}${path.sep}`));
   });
   return [...new Set([...resolved, ...extra])];
+}
+
+/** Resolve a path to its canonical (symlink-free) form; fall back to the input. */
+export function canonicalizeRoot(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 /**

@@ -250,20 +250,24 @@ mod win {
             }
             ResumeThread(info.hThread);
 
-            // 4. Wait for completion and propagate the exit code.
-            if WaitForSingleObject(info.hProcess, INFINITE) != WAIT_OBJECT_0 {
-                return Err("WaitForSingleObject failed".to_string());
-            }
-            let mut exit_code: u32 = 0;
-            GetExitCodeProcess(info.hProcess, &mut exit_code)
-                .map_err(|e| format!("GetExitCodeProcess failed: {e}"))?;
+            // 4. Wait for completion and read the exit code, then release every
+            //    handle on all paths (success or error) to avoid leaks.
+            let result = if WaitForSingleObject(info.hProcess, INFINITE) != WAIT_OBJECT_0 {
+                Err("WaitForSingleObject failed".to_string())
+            } else {
+                let mut exit_code: u32 = 0;
+                match GetExitCodeProcess(info.hProcess, &mut exit_code) {
+                    Ok(()) => Ok(exit_code),
+                    Err(e) => Err(format!("GetExitCodeProcess failed: {e}")),
+                }
+            };
 
             let _ = CloseHandle(info.hThread);
             let _ = CloseHandle(info.hProcess);
             let _ = CloseHandle(restricted_token);
             let _ = CloseHandle(job);
 
-            Ok(exit_code)
+            result
         }
     }
 }

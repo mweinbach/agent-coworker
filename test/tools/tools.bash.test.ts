@@ -345,6 +345,26 @@ describe("bash tool", () => {
     expect(res.exitCode).toBe(2);
   });
 
+  test("never escalates a read-only policy to full access", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => true);
+    const ctx = makeCtx(dir);
+    ctx.approveCommand = approveFn;
+    ctx.sandboxPolicy = { kind: "read-only", network: false };
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot create 'x': Read-only file system",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    const res = await t.execute({ command: "touch x" });
+    // Read-only roles must not be lifted to danger-full-access on denial.
+    expect(approveFn).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(1);
+  });
+
   test("returns aborted exit code when turn signal is aborted", async () => {
     const dir = await tmpDir();
     const controller = new AbortController();

@@ -159,6 +159,36 @@ let runShellCommandOverrideForTests:
   | ((opts: RunShellCommandOpts) => Promise<ShellRunResult>)
   | null = null;
 
+/**
+ * Resolve the first shell candidate to a concrete program path. Absolute
+ * candidates are checked with `exists`; bare names (e.g. `pwsh`,
+ * `powershell.exe`) are searched on PATH (also trying common executable
+ * extensions on Windows). Returns the candidate with its `file` rewritten to the
+ * resolved path, or `null` when none resolve.
+ */
+function resolveInnerCandidate(
+  plan: { file: string; args: string[] }[],
+  exists: (p: string) => boolean,
+  env: Record<string, string | undefined> | undefined,
+  platform: NodeJS.Platform,
+): { file: string; args: string[] } | null {
+  const pathDirs = (env?.PATH ?? process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const exts = platform === "win32" ? ["", ".exe", ".cmd", ".bat", ".com"] : [""];
+  for (const candidate of plan) {
+    if (path.isAbsolute(candidate.file)) {
+      if (exists(candidate.file)) return candidate;
+      continue;
+    }
+    for (const dir of pathDirs) {
+      for (const ext of exts) {
+        const resolved = path.join(dir, candidate.file + ext);
+        if (exists(resolved)) return { file: resolved, args: candidate.args };
+      }
+    }
+  }
+  return null;
+}
+
 async function runShellCommandWithExec(
   opts: RunShellCommandOpts & { platform: NodeJS.Platform; execRunner: ExecRunner },
 ): Promise<ShellRunResult> {
@@ -187,9 +217,12 @@ async function runShellCommandWithExec(
       : null;
 
   if (policy && probe && probe.sandbox !== "none") {
-    // Resolve the inner shell before wrapping: first existing absolute candidate,
-    // otherwise the first candidate (a bare name resolved via PATH at exec time).
-    const inner = plan.find((c) => path.isAbsolute(c.file) && exists(c.file)) ?? plan[0];
+    // Resolve the inner shell to a concrete program BEFORE wrapping. Once wrapped
+    // the sandbox binary is argv[0], so the ENOENT-based shell fallback used in
+    // the unsandboxed loop can no longer see a missing inner shell. Pick the
+    // first candidate that resolves (absolute path that exists, or a bare name
+    // found on PATH — e.g. powershell.exe when pwsh is absent), else the first.
+    const inner = resolveInnerCandidate(plan, exists, opts.env, opts.platform) ?? plan[0];
     const wrapped = sandboxManager.transform({
       file: inner.file,
       args: inner.args,
@@ -258,7 +291,7 @@ Timeout: commands default to a ${DEFAULT_TIMEOUT_SECONDS}s timeout and are kille
 
 export function createBashTool(ctx: ToolContext) {
   const description = ctx.agentTargetPaths?.length
-    ? `${buildBashToolDescription()}\n\nChild targetPaths scope: obvious file operands and write redirections are blocked when they fall outside this child agent's assigned targetPaths. Shell commands with dynamically computed paths cannot be fully proven statically; prefer read/write/edit/glob/grep for scoped file access.`
+    ? `${buildBashToolDescription()}\n\nChild targetPaths scope: the OS sandbox makes only your assigned targetPaths (plus temp) writable — writes elsewhere are denied at the OS level, not by parsing the command. Reads are not path-scoped for bash; prefer read/write/edit/glob/grep when you need strictly scoped file access.`
     : buildBashToolDescription();
   return defineTool({
     description,
@@ -321,8 +354,16 @@ export function createBashTool(ctx: ToolContext) {
 
       // Escalate-on-failure: when a sandboxed command fails in a way that looks
       // like a sandbox denial, ask the user whether to re-run it unsandboxed.
+      // Read-only policies (including read-only roles) are never escalated —
+      // escalating one to full access would violate the read-only floor — so
+      // only workspace-write may be lifted to danger-full-access.
       const wasSandboxed = result.sandbox !== undefined && result.sandbox !== "none";
-      if (wasSandboxed && result.exitCode !== 0 && isLikelySandboxDenied(result)) {
+      if (
+        policy.kind === "workspace-write" &&
+        wasSandboxed &&
+        result.exitCode !== 0 &&
+        isLikelySandboxDenied(result)
+      ) {
         const approved = await ctx.approveCommand(command, { reason: "sandbox_denied" });
         if (approved) {
           result = await runner({ ...baseArgs, policy: { kind: "danger-full-access" } });

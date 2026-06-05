@@ -9,7 +9,11 @@ import {
   type SandboxCapabilities,
   SandboxManager,
 } from "../../src/platform/sandbox/index";
-import { resolveSandboxPolicy, type SandboxPolicy } from "../../src/platform/sandbox/policy";
+import {
+  filterTargetPathsToWorkspace,
+  resolveSandboxPolicy,
+  type SandboxPolicy,
+} from "../../src/platform/sandbox/policy";
 import {
   buildSeatbeltCommand,
   MACOS_SEATBELT_EXECUTABLE,
@@ -135,6 +139,25 @@ describe("resolveSandboxPolicy", () => {
       writableRoots: ["/work/project/src/ok"],
       network: true,
     });
+  });
+});
+
+describe("filterTargetPathsToWorkspace", () => {
+  test("keeps in-workspace paths and drops external/protected ones", () => {
+    expect(
+      filterTargetPathsToWorkspace("/work/project", [
+        "src/ok",
+        "/home/user/.ssh",
+        "../sibling",
+        ".git/hooks",
+      ]),
+    ).toEqual(["/work/project/src/ok"]);
+  });
+
+  test("returns empty when every entry is outside the workspace or protected", () => {
+    expect(
+      filterTargetPathsToWorkspace("/work/project", ["/etc/passwd", "../../x", ".cowork/secrets"]),
+    ).toEqual([]);
   });
 });
 

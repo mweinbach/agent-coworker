@@ -1,5 +1,5 @@
 import { z } from "zod";
-
+import { filterTargetPathsToWorkspace } from "../platform/sandbox/policy";
 import {
   AGENT_ROLE_VALUES,
   agentContextModeSchema,
@@ -9,7 +9,6 @@ import {
   normalizeAgentTargetPaths,
   resolveAgentSpawnContextOptions,
 } from "../shared/agents";
-
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -114,6 +113,24 @@ export function createSpawnAgentTool(ctx: ToolContext) {
         throw new Error("spawnAgent nickname must not be empty");
       }
       const normalizedTargetPaths = normalizeAgentTargetPaths(targetPaths);
+      if (normalizedTargetPaths && normalizedTargetPaths.length > 0) {
+        // Reject a scope that resolves to nothing usable up front: if every
+        // entry is outside the workspace or inside protected metadata
+        // (`.git`/`.cowork`), the child could write nowhere useful and bash
+        // would silently fall back to temp-only — fail fast with a clear error
+        // instead. Children inherit the parent workspace, so resolve against it.
+        const usable = filterTargetPathsToWorkspace(
+          ctx.config.workingDirectory,
+          normalizedTargetPaths,
+        );
+        if (usable.length === 0) {
+          throw new Error(
+            "spawnAgent targetPaths must include at least one path inside the workspace; " +
+              "paths outside the workspace or inside .git/.cowork are not valid scopes " +
+              `(got: ${normalizedTargetPaths.join(", ")})`,
+          );
+        }
+      }
       const resolvedContext = resolveAgentSpawnContextOptions({
         contextMode,
         briefing,

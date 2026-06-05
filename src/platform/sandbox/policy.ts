@@ -89,23 +89,39 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
  */
 export function deriveWritableRoots(input: ResolveSandboxPolicyInput): string[] {
   const base = path.resolve(input.workingDirectory);
-  const roots = new Set<string>();
   if (input.targetPaths && input.targetPaths.length > 0) {
-    for (const p of input.targetPaths) {
-      // Relative paths (e.g. `["src/auth"]`) resolve against the workspace, not
-      // the server process cwd. A child's targetPaths must stay WITHIN the
-      // workspace and outside its protected metadata: an absolute/escaping entry
-      // like `/home/user/.ssh` must not become shell-writable just because it was
-      // named as a target (the file tools already restrict to the workspace, and
-      // the OS sandbox must not be looser).
-      const resolved = path.resolve(base, p);
-      if (isWithinWorkspace(base, resolved) && !rootCrossesProtectedMetadata(base, resolved)) {
-        roots.add(resolved);
-      }
+    return filterTargetPathsToWorkspace(base, input.targetPaths);
+  }
+  const roots = new Set<string>([base]);
+  if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
+  return [...roots];
+}
+
+/**
+ * Resolve child `targetPaths` to absolute writable roots, keeping only those
+ * that stay WITHIN the workspace and outside its protected metadata.
+ *
+ * Relative entries (e.g. `["src/auth"]`) resolve against the workspace, not the
+ * server process cwd. Absolute/escaping entries like `/home/user/.ssh` and
+ * `.git`/`.cowork` paths are dropped — they must never become shell-writable
+ * just because they were named as a target (the file tools already restrict to
+ * the workspace, and the OS sandbox must not be looser).
+ *
+ * The result is empty when no entry is a usable scope; callers must reject such
+ * a spawn rather than silently running a child that can write nowhere useful
+ * (see `spawnAgent`).
+ */
+export function filterTargetPathsToWorkspace(
+  workingDirectory: string,
+  targetPaths: readonly string[],
+): string[] {
+  const base = path.resolve(workingDirectory);
+  const roots = new Set<string>();
+  for (const p of targetPaths) {
+    const resolved = path.resolve(base, p);
+    if (isWithinWorkspace(base, resolved) && !rootCrossesProtectedMetadata(base, resolved)) {
+      roots.add(resolved);
     }
-  } else {
-    roots.add(base);
-    if (input.outputDirectory) roots.add(path.resolve(base, input.outputDirectory));
   }
   return [...roots];
 }

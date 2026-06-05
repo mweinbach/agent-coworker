@@ -46,6 +46,12 @@ read-only roles (`explorer`, `research`, `reviewer`) → `read-only`; write-capa
 roles → `workspace-write`. Child-agent `targetPaths` become the writable roots,
 so write scope is enforced by the OS rather than by parsing the command.
 
+`targetPaths` are clamped to the workspace: entries that resolve outside it (e.g.
+an absolute `/home/user/.ssh`) or inside protected metadata (`.git`/`.cowork`) are
+dropped so they never become shell-writable. A spawn whose `targetPaths` all drop
+out is rejected up front with a clear error rather than running a child that can
+write nowhere useful.
+
 ## Configuration
 
 `config.sandbox` (built-in default in `config/defaults.json`):

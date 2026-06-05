@@ -233,6 +233,18 @@ describe("spawnAgent tool", () => {
     ).rejects.toThrow("targetPaths entries must not be empty");
   });
 
+  test("rejects targetPaths that all resolve outside the workspace", async () => {
+    // The throw happens before agentControl is required, so a bare ctx suffices.
+    const tool: any = createSpawnAgentTool(makeCtx());
+    await expect(
+      tool.execute({
+        message: "Investigate this failure",
+        // workspace is /tmp/spawn-agent-tool; both escape it.
+        targetPaths: ["/etc/passwd", "../../sibling"],
+      }),
+    ).rejects.toThrow("must include at least one path inside the workspace");
+  });
+
   test("maps deprecated forkContext to explicit contextMode for direct compatibility", async () => {
     const summary = makeSummary();
     const spawn = mock(async () => summary);

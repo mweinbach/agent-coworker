@@ -6,6 +6,7 @@ import type {
   ServerErrorCode,
   ServerErrorSource,
 } from "../../types";
+import { classifyCommandDetailed } from "../../utils/approval";
 import { ASK_SKIP_TOKEN, type SessionEvent } from "../protocol";
 
 function makeId(): string {
@@ -151,15 +152,16 @@ export class InteractionManager {
    * own command/file approvals here without a reason — those are ordinary
    * approvals, not sandbox escapes.
    *
-   * YOLO auto-approves normal command execution, but lifting the OS sandbox to
-   * full-disk access is a higher trust boundary, so the `sandbox_denied`
-   * escalation always prompts — even under YOLO. The sandbox-denial heuristic is
-   * intentionally broad (EACCES/EPERM markers), so auto-approving it under YOLO
-   * could silently grant full access on an unrelated failure.
+   * YOLO auto-approves command execution, including sandbox-denial retries.
+   * Hard-floor contexts (read-only roles and scoped children) never call this
+   * escalation path, so headless YOLO runs cannot hang on an unanswerable prompt.
    */
   async approveCommand(command: string, opts?: ApproveCommandOptions) {
     const isSandboxEscalation = opts?.reason === "sandbox_denied";
-    if (this.opts.isYolo() && !isSandboxEscalation) return true;
+    if (this.opts.isYolo()) return true;
+
+    const classification = isSandboxEscalation ? null : classifyCommandDetailed(command);
+    if (classification?.autoApprove) return true;
 
     const requestId = makeId();
     const pending = Promise.withResolvers<boolean>();
@@ -170,13 +172,13 @@ export class InteractionManager {
     // approvals and must not be mislabeled as a sandbox escalation.
     const reasonCode: ApprovalRiskCode = isSandboxEscalation
       ? "sandbox_denied_escalation"
-      : "requires_manual_review";
+      : (classification?.reasonCode ?? "requires_manual_review");
     const evt: Extract<SessionEvent, { type: "approval" }> = {
       type: "approval",
       sessionId: this.opts.sessionId,
       requestId,
       command,
-      dangerous: isSandboxEscalation,
+      dangerous: isSandboxEscalation || classification?.dangerous === true,
       reasonCode,
       // Sandbox context lets clients render a clear, inline approval ("re-run
       // with full access?") instead of a generic command-approval modal.

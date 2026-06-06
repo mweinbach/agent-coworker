@@ -41,11 +41,11 @@ function testRoot(value: string): string {
 }
 
 describe("resolveSandboxPolicy", () => {
-  test("default sandbox config fails closed when a backend is unavailable", () => {
+  test("default sandbox config allows approved fallback when a backend is unavailable", () => {
     expect(DEFAULT_SANDBOX_CONFIG).toEqual({
       mode: "workspace-write",
       network: true,
-      requireBackend: true,
+      requireBackend: false,
     });
   });
 
@@ -55,6 +55,14 @@ describe("resolveSandboxPolicy", () => {
       workingDirectory: "/w",
     });
     expect(policy.kind).toBe("danger-full-access");
+  });
+
+  test("danger-full-access preserves an explicitly disabled network policy", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "danger-full-access", network: false },
+      workingDirectory: "/w",
+    });
+    expect(policy).toEqual({ kind: "danger-full-access", network: false });
   });
 
   test("a scoped child stays scoped even under a danger-full-access config", () => {
@@ -200,6 +208,19 @@ describe("resolveSandboxPolicy", () => {
     expect(policy).toEqual({
       kind: "workspace-write",
       writableRoots: [testRoot("/work/project/src/ok")],
+      network: true,
+    });
+  });
+
+  test("keeps in-workspace names that merely start with '..'", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "auto" },
+      workingDirectory: "/work/project",
+      targetPaths: ["..foo"],
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: [testRoot("/work/project/..foo")],
       network: true,
     });
   });
@@ -528,6 +549,13 @@ posixBackendDescribe("bwrap argv generation", () => {
     expect(args).toContain("--chdir");
   });
 
+  test("danger-full-access can still disable network", () => {
+    const policy: SandboxPolicy = { kind: "danger-full-access", network: false };
+    const { args } = buildBwrapCommand(INNER, policy, "/work", allExist);
+    expect(joinPairs(args, "--bind")).toContain("/ /");
+    expect(args).toContain("--unshare-net");
+  });
+
   test("does not create absent protected metadata mountpoints on the host", () => {
     const policy: SandboxPolicy = {
       kind: "workspace-write",
@@ -545,7 +573,7 @@ posixBackendDescribe("bwrap argv generation", () => {
     expect(args).not.toContain("--remount-ro");
   });
 
-  test("creates and binds nonexistent writable roots", () => {
+  test("skips nonexistent writable roots without an explicit kind hint", () => {
     const existing = new Set(["/tmp"]);
     const created: string[] = [];
     const policy: SandboxPolicy = {
@@ -561,12 +589,13 @@ posixBackendDescribe("bwrap argv generation", () => {
         existing.add(p);
       },
     });
-    // The missing target dir is created so the child can work in its own scope.
-    expect(created).toContain("/work/new-feature");
-    expect(joinPairs(args, "--bind")).toContain("/work/new-feature /work/new-feature");
+    // Missing roots are not guessed as files or dirs; callers must provide a
+    // writableRootKinds hint before sandbox setup mutates the host filesystem.
+    expect(created).toEqual([]);
+    expect(joinPairs(args, "--bind")).not.toContain("/work/new-feature /work/new-feature");
   });
 
-  test("creates file-like missing writable roots as files", () => {
+  test("does not guess dotted missing writable roots as files", () => {
     const existing = new Set(["/tmp", "/work/src"]);
     const fileRoots = new Set<string>();
     const createdDirs: string[] = [];
@@ -590,19 +619,20 @@ posixBackendDescribe("bwrap argv generation", () => {
       },
       isDirectory: (p) => !fileRoots.has(p),
     });
-    expect(createdFiles).toContain("/work/src/new.ts");
     expect(createdDirs).not.toContain("/work/src/new.ts");
-    expect(joinPairs(args, "--bind")).toContain("/work/src/new.ts /work/src/new.ts");
+    expect(createdFiles).not.toContain("/work/src/new.ts");
+    expect(joinPairs(args, "--bind")).not.toContain("/work/src/new.ts /work/src/new.ts");
   });
 
-  test("creates common dotless file roots as files", () => {
-    const existing = new Set(["/tmp", "/work"]);
+  test("creates explicitly hinted file roots as files", () => {
+    const existing = new Set(["/tmp", "/work/src"]);
     const createdDirs: string[] = [];
     const createdFiles: string[] = [];
     const fileRoots = new Set<string>();
     const policy: SandboxPolicy = {
       kind: "workspace-write",
-      writableRoots: ["/work/Dockerfile", "/work/Makefile"],
+      writableRoots: ["/work/src/new.ts"],
+      writableRootKinds: { "/work/src/new.ts": "file" },
       network: true,
     };
     const { args } = buildBwrapCommand(INNER, policy, "/work", {
@@ -619,10 +649,9 @@ posixBackendDescribe("bwrap argv generation", () => {
       },
       isDirectory: (p) => !fileRoots.has(p),
     });
-    expect(createdFiles).toEqual(["/work/Dockerfile", "/work/Makefile"]);
-    expect(createdDirs).not.toContain("/work/Dockerfile");
-    expect(joinPairs(args, "--bind")).toContain("/work/Dockerfile /work/Dockerfile");
-    expect(joinPairs(args, "--bind")).toContain("/work/Makefile /work/Makefile");
+    expect(createdFiles).toContain("/work/src/new.ts");
+    expect(createdDirs).not.toContain("/work/src/new.ts");
+    expect(joinPairs(args, "--bind")).toContain("/work/src/new.ts /work/src/new.ts");
   });
 
   test("creates dotted roots with explicit directory intent as directories", () => {
@@ -667,6 +696,20 @@ posixBackendDescribe("bwrap argv generation", () => {
     // shadow /repo/src's metadata masks.
     expect(binds.indexOf("/repo /repo")).toBeGreaterThanOrEqual(0);
     expect(binds.indexOf("/repo /repo")).toBeLessThan(binds.indexOf("/repo/src /repo/src"));
+  });
+
+  test("binds ancestor roots before descendants even when unrelated roots separate them", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/repo/a/b", "/x", "/repo"],
+      network: true,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/repo/a/b", {
+      program: "bwrap",
+      exists: () => true,
+    });
+    const binds = joinPairs(args, "--bind");
+    expect(binds.indexOf("/repo /repo")).toBeLessThan(binds.indexOf("/repo/a/b /repo/a/b"));
   });
 
   test("re-freezes existing nested protected metadata under writable roots", () => {
@@ -762,6 +805,19 @@ describe("SandboxManager.transform", () => {
     expect(r.warning).toBeUndefined();
     expect(r.file).toBe("/bin/bash");
     expect(r.env).toEqual({});
+  });
+
+  test("danger-full-access with network disabled still wraps when a backend is available", () => {
+    const r = mgr.transform({
+      ...INNER,
+      policy: { kind: "danger-full-access", network: false },
+      cwd: "/w",
+      platform: "linux",
+      capabilities: caps({ bwrapPath: "/usr/bin/bwrap" }),
+    });
+    expect(r.sandbox).toBe("linux-bwrap");
+    expect(r.unsandboxed).toBe(false);
+    expect(r.env[SANDBOX_NETWORK_DISABLED_ENV_VAR]).toBe("1");
   });
 
   test("darwin with seatbelt => wraps and sets marker env", () => {
@@ -870,6 +926,17 @@ describe("isLikelySandboxDenied", () => {
       isLikelySandboxDenied({ stdout: "", stderr: "bash: foo: command not found", exitCode: 127 }),
     ).toBe(false);
   });
+
+  test("ignores common non-sandbox permission failures", () => {
+    expect(
+      isLikelySandboxDenied({
+        stdout: "",
+        stderr:
+          "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+        exitCode: 128,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("classifySandboxDenial", () => {
@@ -901,6 +968,13 @@ describe("classifySandboxDenial", () => {
     expect(classifySandboxDenial({ stdout: "ok", stderr: "", exitCode: 0 })).toBeNull();
     expect(
       classifySandboxDenial({ stdout: "", stderr: "some normal error", exitCode: 2 }),
+    ).toBeNull();
+    expect(
+      classifySandboxDenial({
+        stdout: "",
+        stderr: "git@github.com: Permission denied (publickey).",
+        exitCode: 128,
+      }),
     ).toBeNull();
   });
 

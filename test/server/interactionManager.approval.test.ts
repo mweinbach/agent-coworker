@@ -28,16 +28,11 @@ describe("InteractionManager.approveCommand", () => {
     expect(events).toEqual([]);
   });
 
-  test("YOLO still prompts for a sandbox-denied escalation (no silent full access)", async () => {
+  test("YOLO auto-approves a sandbox-denied escalation without prompting", async () => {
     const { manager, events } = makeManager({ yolo: true, promptResult: false });
     const approved = await manager.approveCommand("cat /etc/shadow", { reason: "sandbox_denied" });
-    // The decision came from the prompt, not the YOLO short-circuit.
-    expect(approved).toBe(false);
-    expect(
-      events.some(
-        (evt) => evt.type === "approval" && evt.reasonCode === "sandbox_denied_escalation",
-      ),
-    ).toBe(true);
+    expect(approved).toBe(true);
+    expect(events).toEqual([]);
   });
 
   test("non-YOLO escalation honors the prompt response", async () => {
@@ -46,12 +41,19 @@ describe("InteractionManager.approveCommand", () => {
     expect(approved).toBe(true);
   });
 
-  test("labels a non-sandbox approval as a normal review, not a sandbox escalation", async () => {
+  test("classifies a dangerous non-sandbox approval as dangerous", async () => {
     const { manager, events } = makeManager({ yolo: false, promptResult: true });
     await manager.approveCommand("rm -rf build"); // no reason → ordinary approval
     const evt = events.find((e) => e.type === "approval");
-    expect(evt?.type === "approval" && evt.reasonCode).toBe("requires_manual_review");
-    expect(evt?.type === "approval" && evt.dangerous).toBe(false);
+    expect(evt?.type === "approval" && evt.reasonCode).toBe("matches_dangerous_pattern");
+    expect(evt?.type === "approval" && evt.dangerous).toBe(true);
+  });
+
+  test("auto-approves a safe non-sandbox approval without prompting", async () => {
+    const { manager, events } = makeManager({ yolo: false, promptResult: false });
+    const approved = await manager.approveCommand("git status");
+    expect(approved).toBe(true);
+    expect(events).toEqual([]);
   });
 
   test("carries sandbox detail + category on the escalation event", async () => {

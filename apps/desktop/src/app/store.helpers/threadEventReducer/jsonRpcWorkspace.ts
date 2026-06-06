@@ -387,8 +387,13 @@ export function createJsonRpcWorkspaceModule(
       if (fromThreadId in nextSandboxApprovals) {
         const migrated = nextSandboxApprovals[fromThreadId];
         delete nextSandboxApprovals[fromThreadId];
-        if (migrated && !(toThreadId in nextSandboxApprovals)) {
-          nextSandboxApprovals[toThreadId] = migrated;
+        if (migrated) {
+          const existing = nextSandboxApprovals[toThreadId] ?? [];
+          const seenRequestIds = new Set(existing.map((approval) => approval.requestId));
+          nextSandboxApprovals[toThreadId] = [
+            ...existing,
+            ...migrated.filter((approval) => !seenRequestIds.has(approval.requestId)),
+          ];
         }
       }
 

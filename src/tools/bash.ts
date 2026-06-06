@@ -8,6 +8,7 @@ import {
   DEFAULT_SANDBOX_CONFIG,
   describeSandboxDenial,
   isLikelySandboxDenied,
+  policyAllowsNetwork,
   resolveSandboxPolicy,
   type SandboxCapabilities,
   type SandboxPolicy,
@@ -19,11 +20,34 @@ import {
   buildPlatformShellExecutionPlan,
 } from "../platform/shell";
 import { getAgentRoleDefinition } from "../server/agents/roles";
+import { classifyCommandDetailed } from "../utils/approval";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
 const DEFAULT_TIMEOUT_SECONDS = 300; // 5 minutes
 const MAX_TIMEOUT_SECONDS = 600; // 10 minutes
+
+const SANDBOX_ENV_ALLOWLIST = new Set([
+  "CI",
+  "COLORTERM",
+  "COMSPEC",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LOGNAME",
+  "PATH",
+  "PATHEXT",
+  "SHELL",
+  "SystemRoot",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "USER",
+  "USERNAME",
+  "WINDIR",
+]);
 
 // Patterns that may indicate secrets in command output
 const SECRET_PATTERNS = [
@@ -41,6 +65,15 @@ function redactSecrets(text: string): string {
     });
   }
   return result;
+}
+
+function minimalSandboxEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of SANDBOX_ENV_ALLOWLIST) {
+    const value = source[key];
+    if (typeof value === "string") env[key] = value;
+  }
+  return env;
 }
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
@@ -235,12 +268,15 @@ async function runShellCommandWithExec(
   const plan = buildPlatformShellExecutionPlan(opts.platform, command);
   const policy = opts.policy;
 
-  // Determine whether an OS sandbox applies (independent of which shell we pick).
-  const probe =
+  const inner =
     policy && plan.length > 0
+      ? (resolveInnerCandidate(plan, exists, opts.env, opts.platform) ?? plan[0])
+      : null;
+  const transformed =
+    policy && inner
       ? sandboxManager.transform({
-          file: plan[0].file,
-          args: [],
+          file: inner.file,
+          args: inner.args,
           policy,
           cwd: opts.cwd,
           platform: opts.platform,
@@ -248,8 +284,10 @@ async function runShellCommandWithExec(
         })
       : null;
 
+  const requiresSandboxEnforcement =
+    policy !== undefined && (policy.kind !== "danger-full-access" || !policyAllowsNetwork(policy));
   const backendDoesNotEnforceScope =
-    !probe || probe.sandbox === "none" || probe.enforcesScope !== true;
+    !transformed || transformed.sandbox === "none" || transformed.enforcesScope !== true;
 
   // Hard-floor contexts (read-only roles, scoped children) require a backend that
   // actually ENFORCES the policy, not just process containment. A non-enforcing
@@ -257,32 +295,27 @@ async function runShellCommandWithExec(
   // closed — never run such a context unenforced, and never offer a fallback.
   if (
     policy &&
-    policy.kind !== "danger-full-access" &&
+    requiresSandboxEnforcement &&
     opts.requireEnforcingBackend &&
     backendDoesNotEnforceScope
   ) {
     return {
       stdout: "",
-      stderr: `Refusing to run: this context requires an enforcing OS sandbox, which is unavailable (${probe?.warning ?? "no backend"}).`,
+      stderr: `Refusing to run: this context requires an enforcing OS sandbox, which is unavailable (${transformed?.warning ?? "no backend"}).`,
       exitCode: 1,
       errorCode: "SANDBOX_REQUIRED",
       sandbox: "none",
-      sandboxWarning: probe?.warning,
+      sandboxWarning: transformed?.warning,
     };
   }
 
   // Fail closed when configured to require an enforcing backend. A helper that
   // only contains the process (currently Windows) is a degraded opt-in path when
   // `requireBackend` is false, not enough to satisfy the default safety contract.
-  if (
-    policy &&
-    policy.kind !== "danger-full-access" &&
-    opts.requireBackend &&
-    backendDoesNotEnforceScope
-  ) {
-    const reason = probe?.warning ?? "OS sandbox backend unavailable";
+  if (policy && requiresSandboxEnforcement && opts.requireBackend && backendDoesNotEnforceScope) {
+    const reason = transformed?.warning ?? "OS sandbox backend unavailable";
     const stderr =
-      probe && probe.sandbox !== "none"
+      transformed && transformed.sandbox !== "none"
         ? `Refusing to run: ${reason} (sandbox.requireBackend is enabled and requires filesystem/network enforcement).`
         : `Refusing to run unsandboxed: ${reason} (sandbox.requireBackend is enabled).`;
     return {
@@ -291,37 +324,22 @@ async function runShellCommandWithExec(
       exitCode: 1,
       errorCode: "SANDBOX_REQUIRED",
       sandbox: "none",
-      sandboxWarning: probe?.warning,
+      sandboxWarning: transformed?.warning,
     };
   }
 
-  if (policy && probe && probe.sandbox !== "none") {
-    // Resolve the inner shell to a concrete program BEFORE wrapping. Once wrapped
-    // the sandbox binary is argv[0], so the ENOENT-based shell fallback used in
-    // the unsandboxed loop can no longer see a missing inner shell. Pick the
-    // first candidate that resolves (absolute path that exists, or a bare name
-    // found on PATH — e.g. powershell.exe when pwsh is absent), else the first.
-    const inner = resolveInnerCandidate(plan, exists, opts.env, opts.platform) ?? plan[0];
-    const wrapped = sandboxManager.transform({
-      file: inner.file,
-      args: inner.args,
-      policy,
-      cwd: opts.cwd,
-      platform: opts.platform,
-      capabilities: opts.capabilities,
-    });
-    const result = await opts.execRunner(wrapped.file, wrapped.args, {
+  if (policy && transformed && transformed.sandbox !== "none") {
+    const result = await opts.execRunner(transformed.file, transformed.args, {
       cwd: opts.cwd,
       maxBuffer,
       signal: opts.abortSignal,
       timeoutMs: opts.timeoutMs,
-      // Passing an `env` object replaces (not merges) the child environment, so
-      // fall back to `process.env` when no toolEnv is set (e.g. a raw delegate
-      // context) — otherwise sandboxed commands would lose HOME/PATH/etc. that
-      // the unsandboxed path inherits. Sandbox markers overlay last.
-      env: { ...(opts.env ?? process.env), ...wrapped.env },
+      // Passing an `env` object replaces (not merges) the child environment.
+      // Sandboxed commands receive either the explicit toolEnv or a minimal
+      // compatibility allowlist, then sandbox marker vars overlay last.
+      env: { ...(opts.env ?? minimalSandboxEnv()), ...transformed.env },
     });
-    return { ...result, sandbox: wrapped.sandbox, sandboxWarning: wrapped.warning };
+    return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
   }
 
   // Restrictive policy but no backend available (requireBackend=false): falling
@@ -331,19 +349,19 @@ async function runShellCommandWithExec(
   // not gated here; under YOLO the approval auto-returns true.
   if (
     policy &&
-    policy.kind !== "danger-full-access" &&
-    probe &&
-    probe.sandbox === "none" &&
+    requiresSandboxEnforcement &&
+    transformed &&
+    transformed.sandbox === "none" &&
     opts.approveUnsandboxed &&
     !(await opts.approveUnsandboxed())
   ) {
     return {
       stdout: "",
-      stderr: `Refusing to run unsandboxed: ${probe.warning ?? "OS sandbox backend unavailable"} (declined).`,
+      stderr: `Refusing to run unsandboxed: ${transformed.warning ?? "OS sandbox backend unavailable"} (declined).`,
       exitCode: 1,
       errorCode: "SANDBOX_REQUIRED",
       sandbox: "none",
-      sandboxWarning: probe.warning,
+      sandboxWarning: transformed.warning,
     };
   }
 
@@ -357,7 +375,7 @@ async function runShellCommandWithExec(
       env: opts.env,
     });
     if (result.errorCode !== "ENOENT") {
-      return { ...result, sandbox: "none", sandboxWarning: probe?.warning };
+      return { ...result, sandbox: "none", sandboxWarning: transformed?.warning };
     }
   }
 
@@ -367,7 +385,7 @@ async function runShellCommandWithExec(
     exitCode: 1,
     errorCode: "ENOENT",
     sandbox: "none",
-    sandboxWarning: probe?.warning,
+    sandboxWarning: transformed?.warning,
   };
 }
 
@@ -455,6 +473,16 @@ export function createBashTool(ctx: ToolContext) {
           uploadsDirectory: ctx.config.uploadsDirectory,
           targetPaths: ctx.agentTargetPaths,
         });
+      const preExecClassification = classifyCommandDetailed(command);
+      if (!preExecClassification.autoApprove && !(await ctx.approveCommand(command))) {
+        const res = {
+          stdout: "",
+          stderr: "Command was not approved.",
+          exitCode: 1,
+        };
+        ctx.log(`tool< bash ${JSON.stringify(res)}`);
+        return res;
+      }
       const runner = runShellCommandOverrideForTests ?? runShellCommand;
       // Read-only/no-project-write roles and scoped children (targetPaths) are
       // hard floors: their write/scope guarantee must be ENFORCED by the backend,
@@ -490,7 +518,8 @@ export function createBashTool(ctx: ToolContext) {
       }
 
       // Escalate-on-failure: when a sandboxed command fails in a way that looks
-      // like a sandbox denial, ask the user whether to re-run it unsandboxed.
+      // like a sandbox denial, ask the user whether to retry with the blocked
+      // capability widened.
       // Never escalate (a) read-only policies — that would violate the read-only
       // floor, or (b) a scoped child (with targetPaths) — escalating to full
       // access would bypass the child's scope entirely (especially under YOLO,
@@ -516,7 +545,11 @@ export function createBashTool(ctx: ToolContext) {
           detail: describeSandboxDenial(category),
         });
         if (approved) {
-          result = await runner({ ...baseArgs, policy: { kind: "danger-full-access" } });
+          const retryPolicy: SandboxPolicy =
+            category === "network"
+              ? { ...policy, network: true }
+              : { kind: "danger-full-access", network: policy.network };
+          result = await runner({ ...baseArgs, policy: retryPolicy });
         }
       }
 

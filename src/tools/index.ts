@@ -135,15 +135,17 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     todoWrite: createTodoWriteTool(ctx),
     ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     skill: createSkillTool(ctx),
-    ...(ctx.config.advancedMemory
-      ? {
-          recallMemory: createRecallMemoryTool(ctx),
-          readPastConversation: createReadPastConversationTool(ctx),
-          manageMemory: createManageMemoryTool(ctx),
-        }
-      : (ctx.config.enableMemory ?? true)
-        ? { memory: createMemoryTool(ctx) }
-        : {}),
+    ...(scopedChild
+      ? {}
+      : ctx.config.advancedMemory
+        ? {
+            recallMemory: createRecallMemoryTool(ctx),
+            readPastConversation: createReadPastConversationTool(ctx),
+            manageMemory: createManageMemoryTool(ctx),
+          }
+        : (ctx.config.enableMemory ?? true)
+          ? { memory: createMemoryTool(ctx) }
+          : {}),
     ...(resolveExperimentalA2uiConfig(ctx.config) && ctx.applyA2uiEnvelope
       ? {
           a2ui: (

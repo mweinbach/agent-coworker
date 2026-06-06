@@ -87,6 +87,20 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("manageMemory");
   });
 
+  test("omits memory tools for targetPath-scoped child agents", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        agentTargetPaths: ["src/auth"],
+        config: makeConfig(dir, { advancedMemory: true }),
+      }),
+    );
+    expect(tools).not.toHaveProperty("memory");
+    expect(tools).not.toHaveProperty("recallMemory");
+    expect(tools).not.toHaveProperty("readPastConversation");
+    expect(tools).not.toHaveProperty("manageMemory");
+  });
+
   test("default (advanced memory off) keeps the legacy memory tool", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));

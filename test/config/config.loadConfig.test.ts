@@ -80,7 +80,7 @@ describe("loadConfig", () => {
     expect(cfg.memoryGenerationModel).toBe("together:moonshotai/Kimi-K2.5");
   });
 
-  test("sandbox defaults require a backend unless explicitly disabled", async () => {
+  test("sandbox defaults allow approved fallback unless a backend is explicitly required", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -93,11 +93,11 @@ describe("loadConfig", () => {
     expect(cfg.sandbox).toEqual({
       mode: "workspace-write",
       network: true,
-      requireBackend: true,
+      requireBackend: false,
     });
 
     await writeJson(path.join(cwd, ".cowork", "config.json"), {
-      sandbox: { requireBackend: false },
+      sandbox: { requireBackend: true },
     });
 
     const relaxed = await loadConfig({
@@ -107,7 +107,7 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(relaxed.sandbox?.requireBackend).toBe(false);
+    expect(relaxed.sandbox?.requireBackend).toBe(true);
   });
 
   test("provider override uses provider-default model when no model is set", async () => {

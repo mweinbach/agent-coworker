@@ -1,5 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
+
+import { canonicalizePathForBoundaryCheckSync, isPathInside } from "../../utils/paths";
 
 /**
  * High-level sandbox policy, modeled on OpenAI Codex's `SandboxPolicy`
@@ -9,7 +10,7 @@ import path from "node:path";
  * sandbox invocation.
  */
 export type SandboxPolicy =
-  | { kind: "danger-full-access" }
+  | { kind: "danger-full-access"; network?: boolean }
   | { kind: "read-only"; network: boolean }
   | { kind: "no-project-write"; network: boolean }
   | {
@@ -33,8 +34,8 @@ export interface SandboxConfig {
   /**
    * When `true`, refuse to run a restrictive (read-only/workspace-write) command
    * if the platform sandbox backend is unavailable, instead of running it
-   * unsandboxed with a warning. Defaults to `true` so the OS sandbox remains
-   * the enforcement boundary unless the user explicitly opts out.
+   * unsandboxed after an approval. Defaults to `false` so a stock install still
+   * works on hosts without a bundled sandbox backend; set to `true` to fail closed.
    */
   requireBackend?: boolean;
 }
@@ -42,7 +43,7 @@ export interface SandboxConfig {
 export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   mode: "workspace-write",
   network: true,
-  requireBackend: true,
+  requireBackend: false,
 };
 
 /**
@@ -97,7 +98,9 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
   // hand Codex-native shell/write tools the whole filesystem).
   const scoped = (input.targetPaths?.length ?? 0) > 0;
   if (config.mode === "danger-full-access" && !scoped) {
-    return { kind: "danger-full-access" };
+    return network === false
+      ? { kind: "danger-full-access", network: false }
+      : { kind: "danger-full-access" };
   }
 
   // `workspace-write` and `auto` (for write-capable roles) both resolve here, as
@@ -235,20 +238,14 @@ function resolveUsableTargetPath(
 ): string | null {
   const resolved = path.resolve(resolveBase, p);
   // Logical check first (cheap; also covers paths that don't exist yet).
-  if (
-    !isWithinWorkspace(containRoot, resolved) ||
-    rootCrossesProtectedMetadata(containRoot, resolved)
-  ) {
+  if (!isPathInside(containRoot, resolved) || rootCrossesProtectedMetadata(containRoot, resolved)) {
     return null;
   }
   // Then resolve symlinks and re-check: an in-workspace symlink whose real target
   // escapes (e.g. `src/link` -> `/home/user/secrets`) must not become a writable
   // root. Return the canonical path so the backends bind/enforce it.
   const real = canonicalizeRoot(resolved);
-  if (
-    !isWithinWorkspace(realContainRoot, real) ||
-    rootCrossesProtectedMetadata(realContainRoot, real)
-  ) {
+  if (!isPathInside(realContainRoot, real) || rootCrossesProtectedMetadata(realContainRoot, real)) {
     return null;
   }
   return real;
@@ -256,12 +253,6 @@ function resolveUsableTargetPath(
 
 function targetPathWritableRootKind(p: string): WritableRootKind | undefined {
   return /[/\\]$/.test(p.trim()) ? "directory" : undefined;
-}
-
-/** Whether `root` is the workspace `base` or nested under it. */
-function isWithinWorkspace(base: string, root: string): boolean {
-  const relative = path.relative(base, root);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 /**
@@ -309,22 +300,7 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
  * back to the resolved logical path when nothing can be resolved.
  */
 export function canonicalizeRoot(p: string): string {
-  const resolved = path.resolve(p);
-  const tail: string[] = [];
-  let cursor = resolved;
-  while (true) {
-    if (cursor === path.parse(cursor).root && tail.length > 0) return resolved;
-    try {
-      const canonical = fs.realpathSync(cursor);
-      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
-    } catch (err) {
-      if ((err as { code?: string }).code !== "ENOENT") return resolved;
-      const parent = path.dirname(cursor);
-      if (parent === cursor) return resolved;
-      tail.push(path.basename(cursor));
-      cursor = parent;
-    }
-  }
+  return canonicalizePathForBoundaryCheckSync(p);
 }
 
 /**
@@ -342,5 +318,5 @@ function canonicalTmpAlias(p: string): string {
 
 /** Whether the policy permits outbound network access. */
 export function policyAllowsNetwork(policy: SandboxPolicy): boolean {
-  return policy.kind === "danger-full-access" || policy.network;
+  return policy.kind === "danger-full-access" ? policy.network !== false : policy.network;
 }

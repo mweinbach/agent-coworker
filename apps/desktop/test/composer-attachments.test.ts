@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { MAX_ATTACHMENT_INLINE_BYTE_SIZE } from "../../../src/shared/attachments";
+import { RUNTIME } from "../src/app/store.helpers/runtimeState";
 import {
   appendAttachmentSkippedNotes,
   buildAttachmentSkippedNote,
@@ -10,6 +11,7 @@ import {
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 afterEach(() => {
+  RUNTIME.jsonRpcSockets.clear();
   if (originalWindowDescriptor) {
     Object.defineProperty(globalThis, "window", originalWindowDescriptor);
     return;
@@ -110,6 +112,74 @@ describe("composerAttachments", () => {
           mimeType: "audio/mpeg",
         },
       ],
+      skippedNotes: [],
+    });
+  });
+
+  test("falls back to socket upload when desktop copy fails", async () => {
+    let arrayBufferCalls = 0;
+    const workspacePath = "/Users/test/Project";
+    const uploadedPath = "/Users/test/Project/uploads/audio.mp3";
+    const requests: unknown[] = [];
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        cowork: {
+          getPathForFile() {
+            return "/Users/test/Downloads/audio.mp3";
+          },
+          async copyFileToWorkspaceUploads() {
+            throw new Error("copy failed");
+          },
+        },
+      },
+    });
+
+    RUNTIME.jsonRpcSockets.set("workspace-1", {
+      readyPromise: Promise.resolve(),
+      connect() {},
+      async request(method: string, params: unknown) {
+        requests.push({ method, params });
+        return { event: { filename: "audio.mp3", path: uploadedPath } };
+      },
+      respond() {
+        return true;
+      },
+    } as never);
+
+    const fakeFile = {
+      async arrayBuffer() {
+        arrayBufferCalls += 1;
+        return new Uint8Array([1, 2, 3]).buffer;
+      },
+    } as unknown as File;
+
+    const result = await resolveComposerAttachmentsForWorkspace(
+      () =>
+        ({
+          workspaces: [{ id: "workspace-1", path: workspacePath }],
+          workspaceRuntimeById: {
+            "workspace-1": { serverUrl: "ws://test" },
+          },
+        }) as never,
+      (() => {}) as never,
+      "workspace-1",
+      [
+        {
+          filename: "audio.mp3",
+          mimeType: "audio/mpeg",
+          size: MAX_ATTACHMENT_INLINE_BYTE_SIZE + 1,
+          file: fakeFile,
+          signature: "audio",
+        },
+      ],
+    );
+
+    expect(arrayBufferCalls).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(result).toEqual({
+      attachments: [{ filename: "audio.mp3", path: uploadedPath, mimeType: "audio/mpeg" }],
       skippedNotes: [],
     });
   });

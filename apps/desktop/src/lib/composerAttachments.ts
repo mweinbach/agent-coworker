@@ -115,6 +115,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       workspaceId,
       attachment,
     );
+    let desktopUploadError: string | null = null;
     if (desktopUpload.attempted) {
       if ("uploaded" in desktopUpload) {
         resolvedAttachments.push({
@@ -122,10 +123,10 @@ export async function resolveComposerAttachmentsForWorkspace(
           path: desktopUpload.uploaded.path,
           mimeType: attachment.mimeType,
         });
+        continue;
       } else {
-        skippedNotes.push(buildAttachmentSkippedNote(attachment.filename, desktopUpload.error));
+        desktopUploadError = desktopUpload.error;
       }
-      continue;
     }
 
     const buffer = await attachment.file.arrayBuffer();
@@ -138,9 +139,10 @@ export async function resolveComposerAttachmentsForWorkspace(
       base64,
     );
     if (!uploaded.path) {
-      skippedNotes.push(
-        buildAttachmentSkippedNote(attachment.filename, "upload to the project folder failed"),
-      );
+      const reason = desktopUploadError
+        ? `${desktopUploadError}; upload to the project folder failed`
+        : "upload to the project folder failed";
+      skippedNotes.push(buildAttachmentSkippedNote(attachment.filename, reason));
       continue;
     }
     resolvedAttachments.push({

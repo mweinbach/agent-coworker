@@ -254,7 +254,7 @@ export async function resolveEffectiveCodexModel(
 export function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode {
   const policy = resolveCodexCoworkSandboxPolicy(params);
   if (policy.kind === "danger-full-access") return "danger-full-access";
-  if (policy.kind === "no-project-write") return "workspace-write";
+  if (policy.kind === "no-project-write") return "read-only";
   return policy.kind;
 }
 
@@ -265,7 +265,7 @@ export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApproval
 export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPolicy {
   const sandbox = resolveCodexCoworkSandboxPolicy(params);
   if (sandbox.kind === "danger-full-access") return { type: "dangerFullAccess" };
-  if (sandbox.kind === "read-only") {
+  if (sandbox.kind === "read-only" || sandbox.kind === "no-project-write") {
     return { type: "readOnly", networkAccess: sandbox.network };
   }
   const writableRoots = sandbox.kind === "workspace-write" ? sandbox.writableRoots : [];

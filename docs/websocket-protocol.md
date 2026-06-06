@@ -1380,10 +1380,11 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 ```
 
 Command execution is enforced by the OS sandbox (see [Sandbox](./sandbox.md)).
-Under the escalate-on-failure model the only approval prompt that occurs at
-runtime is `"sandbox_denied_escalation"`: a sandboxed command failed in a way
-that looks like a sandbox denial and the agent is asking whether to re-run it
-without the sandbox. The other codes are retained for snapshot compatibility.
+Dangerous commands are classified before execution and may emit
+`"matches_dangerous_pattern"` or `"requires_manual_review"` approvals. A
+`"sandbox_denied_escalation"` approval means a sandboxed command failed in a way
+that looks like a sandbox denial and the agent is asking whether to retry with
+the specific blocked capability widened.
 
 ### ServerErrorCode
 

@@ -85,7 +85,11 @@ export function buildBwrapCommand(
   const flags: string[] = ["--new-session", "--die-with-parent"];
 
   // 1. Read-only view of the whole filesystem + a minimal writable /dev.
-  flags.push("--ro-bind", "/", "/", "--dev", "/dev");
+  if (policy.kind === "danger-full-access") {
+    flags.push("--bind", "/", "/", "--dev", "/dev");
+  } else {
+    flags.push("--ro-bind", "/", "/", "--dev", "/dev");
+  }
 
   // 2. Layer writable roots back on. /tmp is added as scratch only when it would
   // not over-scope an explicit root under it. no-project-write has no explicit
@@ -99,28 +103,27 @@ export function buildBwrapCommand(
     );
     // Bind ancestor roots before descendants so a later parent bind cannot shadow
     // an earlier child's protected-metadata masks — e.g. binding /repo after
-    // /repo/src would re-expose /repo/src/.git. Only ancestor/descendant pairs are
-    // reordered; unrelated roots keep their input order (stable sort).
+    // /repo/src would re-expose /repo/src/.git. Use a total order so separated
+    // ancestor/descendant pairs are still ordered deterministically.
     const withScratch = withTmpScratch(policyWritableRoots, ["/tmp"]);
     const canonicalByRoot = new Map(withScratch.map((r) => [r, canonicalizeRoot(r)]));
     const writableRoots = withScratch.sort((a, b) => {
       const ca = canonicalByRoot.get(a) as string;
       const cb = canonicalByRoot.get(b) as string;
-      if (cb.startsWith(`${ca}${path.sep}`)) return -1; // a is an ancestor of b
-      if (ca.startsWith(`${cb}${path.sep}`)) return 1; // b is an ancestor of a
-      return 0; // unrelated → preserve input order
+      const depthA = ca.split(path.sep).filter(Boolean).length;
+      const depthB = cb.split(path.sep).filter(Boolean).length;
+      if (depthA !== depthB) return depthA - depthB;
+      return ca.localeCompare(cb);
     });
 
     for (const root of writableRoots) {
-      // bwrap bind mount sources must exist. A child's assigned target may not
-      // exist yet, so create a directory for dir-like roots and an empty file for
-      // file-like roots. Otherwise Linux either drops the scope or creates a
-      // directory where the child intended to create a file.
+      // bwrap bind mount sources must exist. Only create missing sources when
+      // the policy carries an explicit kind hint; otherwise skip the root rather
+      // than guessing and mutating the host workspace with the wrong inode type.
       if (!exists(root)) {
         const rootKind = explicitRootKinds.get(canonicalizeRoot(root));
         if (rootKind === "directory") ensureDir(root);
-        else if (rootKind === "file" || looksLikeFilePath(root)) ensureFile(root);
-        else ensureDir(root);
+        else if (rootKind === "file") ensureFile(root);
       }
       if (!exists(root)) continue; // creation failed; can't bind a missing source
       // Bind the canonical path so a symlinked root can't smuggle write access
@@ -152,7 +155,8 @@ export function buildBwrapCommand(
   flags.push("--unshare-user", "--unshare-pid", "--proc", "/proc");
 
   // 4. Network isolation unless explicitly enabled.
-  const networkEnabled = policy.kind !== "danger-full-access" && policy.network;
+  const networkEnabled =
+    policy.kind === "danger-full-access" ? policy.network !== false : policy.network;
   if (!networkEnabled) flags.push("--unshare-net");
 
   // 5. Enter the command's working directory inside the new mount view.
@@ -162,21 +166,6 @@ export function buildBwrapCommand(
 
   return { file: program, args: flags };
 }
-
-function looksLikeFilePath(p: string): boolean {
-  const basename = path.basename(p);
-  return path.extname(basename) !== "" || DOTLESS_FILE_BASENAMES.has(basename);
-}
-
-const DOTLESS_FILE_BASENAMES = new Set([
-  "Brewfile",
-  "Dockerfile",
-  "Gemfile",
-  "LICENSE",
-  "Makefile",
-  "NOTICE",
-  "README",
-]);
 
 /**
  * Walk `root` and return every EXISTING `.git`/`.cowork` directory under it

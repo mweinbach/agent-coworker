@@ -48,12 +48,26 @@ const NETWORK_DENIAL_MARKERS = [
  */
 const NON_SANDBOX_EXIT_CODES = new Set([0, 126, 127]);
 
+const NON_SANDBOX_FAILURE_MARKERS = [
+  "permission denied (publickey)",
+  "permission denied, please try again",
+  "authentication failed",
+  "fatal: could not read from remote repository",
+  "publickey,password",
+  "403 forbidden",
+] as const;
+
+function hasNonSandboxFailureMarker(haystack: string): boolean {
+  return NON_SANDBOX_FAILURE_MARKERS.some((marker) => haystack.includes(marker));
+}
+
 export function isLikelySandboxDenied(
   output: SandboxDeniedInput,
   opts?: { networkRestricted?: boolean },
 ): boolean {
   if (NON_SANDBOX_EXIT_CODES.has(output.exitCode)) return false;
   const haystack = `${output.stdout}\n${output.stderr}`.toLowerCase();
+  if (hasNonSandboxFailureMarker(haystack)) return false;
   if (SANDBOX_DENIAL_MARKERS.some((marker) => haystack.includes(marker))) return true;
   // When network is restricted by policy, namespace isolation failures look like
   // network errors; treat those as denials so the escalation prompt can offer
@@ -76,6 +90,7 @@ export function classifySandboxDenial(
 ): SandboxDenialCategory | null {
   if (NON_SANDBOX_EXIT_CODES.has(output.exitCode)) return null;
   const haystack = `${output.stdout}\n${output.stderr}`.toLowerCase();
+  if (hasNonSandboxFailureMarker(haystack)) return null;
   if (SANDBOX_DENIAL_MARKERS.some((marker) => haystack.includes(marker))) return "filesystem";
   if (opts?.networkRestricted && NETWORK_DENIAL_MARKERS.some((m) => haystack.includes(m))) {
     return "network";

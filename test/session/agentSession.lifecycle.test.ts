@@ -339,7 +339,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        const approved = await params.approveCommand("npm install");
+        const approved = await params.approveCommand("npm publish");
         return {
           text: approved ? "approved" : "denied",
           reasoningText: undefined,
@@ -352,7 +352,7 @@ describe("AgentSession", () => {
 
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
-      expect(approvalEvt.command).toBe("npm install");
+      expect(approvalEvt.command).toBe("npm publish");
       // A no-reason approval is an ordinary review, not a sandbox escalation.
       expect(approvalEvt.reasonCode).toBe("requires_manual_review");
 
@@ -367,7 +367,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        const approved = await params.approveCommand("npm install");
+        const approved = await params.approveCommand("npm publish");
         return {
           text: approved ? "approved" : "denied",
           reasoningText: undefined,
@@ -390,7 +390,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        await params.approveCommand("npm install");
+        await params.approveCommand("npm publish");
         return { text: "done", reasoningText: undefined, responseMessages: [] };
       });
 
@@ -437,7 +437,7 @@ describe("AgentSession", () => {
       });
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        await params.approveCommand("npm install").catch(() => {});
+        await params.approveCommand("npm publish").catch(() => {});
         return { text: "", reasoningText: undefined, responseMessages: [] };
       });
 
@@ -453,7 +453,7 @@ describe("AgentSession", () => {
       const sessionAny = session as any;
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        const approved = await params.approveCommand("npm install");
+        const approved = await params.approveCommand("npm publish");
         return {
           text: approved ? "approved" : "denied",
           reasoningText: undefined,
@@ -551,7 +551,7 @@ describe("AgentSession", () => {
 
       let approvalPromise!: Promise<boolean>;
       mockRunTurn.mockImplementation(async (params: any) => {
-        approvalPromise = params.approveCommand("npm install");
+        approvalPromise = params.approveCommand("npm publish");
         try {
           await approvalPromise;
         } catch {
@@ -654,7 +654,7 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async (params: any) => {
         askPromise = params.askUser("ask?");
-        approvalPromise = params.approveCommand("npm install");
+        approvalPromise = params.approveCommand("npm publish");
         try {
           await Promise.all([askPromise, approvalPromise]);
         } catch {

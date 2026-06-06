@@ -3,7 +3,7 @@
   "sandbox": {
     "mode": "workspace-write",
     "network": true,
-    "requireBackend": true
+    "requireBackend": false
   },
   "userName": "",
   "knowledgeCutoff": "End of May 2025",

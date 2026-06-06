@@ -312,7 +312,11 @@ describe("resolveSandboxPolicy", () => {
         workingDirectory: ws,
         uploadsDirectory: "uploads",
       });
-      expect(policy).toEqual({ kind: "workspace-write", writableRoots: [ws], network: true });
+      expect(policy).toEqual({
+        kind: "workspace-write",
+        writableRoots: [canonicalizeRoot(ws)],
+        network: true,
+      });
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
@@ -363,7 +367,7 @@ describe("filterTargetPathsToWorkspace", () => {
       fs.mkdirSync(path.join(ws, "src", "ok"));
       const roots = filterTargetPathsToWorkspace(ws, ["src/link", "src/ok"]);
       // The escaping symlink is dropped; the legit root is kept (canonicalized).
-      expect(roots).toEqual([path.join(ws, "src", "ok")]);
+      expect(roots).toEqual([canonicalizeRoot(path.join(ws, "src", "ok"))]);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });
@@ -379,7 +383,7 @@ describe("filterTargetPathsToWorkspace", () => {
       fs.symlinkSync(outside, path.join(ws, "src", "link"));
       const roots = filterTargetPathsToWorkspace(ws, ["src/link/new.ts", "src/ok.ts"]);
       // The escaping parent is resolved via the existing prefix and dropped.
-      expect(roots).toEqual([path.join(ws, "src", "ok.ts")]);
+      expect(roots).toEqual([canonicalizeRoot(path.join(ws, "src", "ok.ts"))]);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });

@@ -63,6 +63,8 @@ export interface ResolveSandboxPolicyInput {
   outputDirectory?: string;
   /** Uploads directory; writable for parity with the built-in file tools. */
   uploadsDirectory?: string;
+  /** Cowork-managed runtime/cache roots that tool commands may mutate. */
+  toolRuntimeWritableRoots?: readonly string[];
   /** Child-agent enforced scope; when present these become the only writable roots. */
   targetPaths?: readonly string[] | null;
 }
@@ -140,13 +142,16 @@ function deriveWritableRootInfo(input: ResolveSandboxPolicyInput): {
       : { writableRoots };
   }
   // Mirror the built-in file tools' write roots (project root + cwd + output +
-  // uploads) so unscoped workspace-write bash can write the same locations as
-  // write/edit without forcing a full-access escalation (e.g. a root-level
-  // package.json when workingDirectory is a subdirectory).
+  // uploads), plus Cowork-owned tool runtime caches, so unscoped workspace-write
+  // bash can write the same locations as write/edit and maintain runtime deps
+  // without forcing a full-access escalation.
   const candidates = [base];
   if (input.projectRoot) candidates.push(path.resolve(input.projectRoot));
   if (input.outputDirectory) candidates.push(path.resolve(base, input.outputDirectory));
   if (input.uploadsDirectory) candidates.push(path.resolve(base, input.uploadsDirectory));
+  for (const root of input.toolRuntimeWritableRoots ?? []) {
+    if (root.trim()) candidates.push(path.resolve(root));
+  }
   // Canonicalize each root, then drop any inside protected metadata. The metadata
   // check is relative to the PROJECT root (the outermost writable boundary), not
   // just the working directory — otherwise an output/uploads/project root such as

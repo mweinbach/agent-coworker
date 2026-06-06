@@ -7,6 +7,8 @@ import {
   prepareArtifactRuntimeToolEnv,
   renderArtifactRuntimeInstructions,
 } from "./artifactRuntime";
+import { ARTIFACT_RUNTIME_ENV_DIR } from "./artifactRuntime/constants";
+import { artifactRuntimeCacheRoot } from "./artifactRuntime/runtimeDiscovery";
 import { getModel as realGetModel } from "./config";
 import {
   prepareManagedSofficeToolEnv,
@@ -275,6 +277,21 @@ function providerOwnsExecutableTools(config: AgentConfig): boolean {
   return config.provider === "codex-cli";
 }
 
+function collectToolRuntimeWritableRoots(
+  config: AgentConfig,
+  env: Record<string, string | undefined> | undefined,
+): string[] | undefined {
+  const artifactRuntimeDir = env?.[ARTIFACT_RUNTIME_ENV_DIR]?.trim();
+  if (!artifactRuntimeDir) return undefined;
+
+  const cacheRoot = artifactRuntimeCacheRoot(resolveAuthHomeDir(config));
+  const relativeToCache = path.relative(path.resolve(cacheRoot), path.resolve(artifactRuntimeDir));
+  const runtimeIsInCache =
+    relativeToCache === "" ||
+    (!relativeToCache.startsWith("..") && !path.isAbsolute(relativeToCache));
+  return runtimeIsInCache ? [cacheRoot] : undefined;
+}
+
 async function prepareTurnToolEnv(
   params: Pick<RunTurnParams, "config" | "toolEnv" | "log">,
 ): Promise<Record<string, string | undefined> | undefined> {
@@ -413,6 +430,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         projectRoot: path.dirname(config.projectCoworkDir),
         outputDirectory: config.outputDirectory,
         uploadsDirectory: config.uploadsDirectory,
+        toolRuntimeWritableRoots: collectToolRuntimeWritableRoots(config, turnToolEnv),
         targetPaths: params.agentTargetPaths,
       }),
       agentControl: params.agentControl,

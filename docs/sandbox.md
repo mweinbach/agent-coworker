@@ -39,7 +39,7 @@ candidate before spawning and attaches marker env vars (`COWORK_SANDBOX`,
 |--------|-----------|---------|
 | `read-only` | full disk read, no writes | per `network` |
 | `no-project-write` | full disk read; temp scratch writable; no project writable roots | per `network` |
-| `workspace-write` | full read; writes limited to `writableRoots` (cwd, output dir, child `targetPaths`) + temp; `.git`/`.cowork` stay read-only | per `network` |
+| `workspace-write` | full read; writes limited to `writableRoots` (cwd, output dir, Cowork tool runtime caches, child `targetPaths`) + temp; `.git`/`.cowork` stay read-only | per `network` |
 | `danger-full-access` | unrestricted (no sandbox) | unrestricted |
 
 The policy is resolved per turn in `src/agent.ts` from the agent role and config:
@@ -60,6 +60,12 @@ protected metadata). The built-in `read`/`glob`/`grep` tools mirror this:
 root + its declared skill paths (`pluginReadRoots`), and reads outside the project
 are not constrained by a scoped child's `targetPaths`, so scoped agents can still
 load global skills and plugins.
+
+When the artifact runtime is active from Cowork's managed cache
+(`~/.cache/cowork/artifact-runtime`), that cache is writable for unscoped
+`workspace-write` turns. This lets bundled Python/Node tooling maintain runtime
+dependencies without asking for full disk access. Scoped child agents and
+read-only/no-project-write roles do not receive this extra writable root.
 
 Note on namespaces: the canonical runtime skill/plugin roots are `.cowork/` and
 `~/.cowork/` (project + user) plus the built-in dir. `.agents/` is the

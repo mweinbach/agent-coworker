@@ -208,6 +208,40 @@ describe("resolveSandboxPolicy", () => {
     });
   });
 
+  test("includes Cowork tool runtime caches in unscoped workspace-write roots", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write", network: true },
+      workingDirectory: "/work/project",
+      outputDirectory: "/work/out",
+      uploadsDirectory: "/work/uploads",
+      toolRuntimeWritableRoots: ["/Users/test/.cache/cowork/artifact-runtime"],
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: [
+        testRoot("/work/project"),
+        testRoot("/work/out"),
+        testRoot("/work/uploads"),
+        testRoot("/Users/test/.cache/cowork/artifact-runtime"),
+      ],
+      network: true,
+    });
+  });
+
+  test("does not widen scoped child targetPaths with tool runtime caches", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write", network: true },
+      workingDirectory: "/work/project",
+      targetPaths: ["src/only"],
+      toolRuntimeWritableRoots: ["/Users/test/.cache/cowork/artifact-runtime"],
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: [testRoot("/work/project/src/only")],
+      network: true,
+    });
+  });
+
   test("includes the project root for a subdirectory working directory", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "workspace-write", network: true },

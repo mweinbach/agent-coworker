@@ -256,6 +256,44 @@ describe("artifact runtime bootstrap", () => {
     }
   });
 
+  test("skips dangling symlinks in a legacy runtime payload", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-dangling-symlink-"));
+    const legacyRoot = await writeFakeLegacyCodexRuntime(home);
+    const pkgconfigDir = path.join(legacyRoot, "dependencies", "python", "lib", "pkgconfig");
+    await fs.mkdir(pkgconfigDir, { recursive: true });
+    const brokenLink = path.join(pkgconfigDir, "python3.pc");
+    let symlinkCreated = false;
+    try {
+      await fs.symlink("missing-python3.pc", brokenLink);
+      symlinkCreated = true;
+    } catch {
+      symlinkCreated = false;
+    }
+
+    try {
+      if (!symlinkCreated) return; // environment cannot create symlinks; nothing to assert
+
+      const logLines: string[] = [];
+      const cacheDir = path.join(home, ".cache", "cowork", "artifact-runtime");
+      const result = await ensureArtifactRuntimeReady({
+        homedir: home,
+        env: {},
+        allowNetwork: false,
+        log: (line) => logLines.push(line),
+      });
+
+      expect(result?.migration).toMatchObject({ status: "migrated", source: legacyRoot });
+      expect(result?.runtime.status).toBe("available");
+      await expect(fs.lstat(path.join(cacheDir, "dependencies", "python"))).resolves.toBeDefined();
+      await expect(
+        fs.lstat(path.join(cacheDir, "dependencies", "python", "lib", "pkgconfig", "python3.pc")),
+      ).rejects.toThrow();
+      expect(logLines.join("\n")).not.toContain("Artifact runtime migration failed");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("never throws when the legacy migration copy fails", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-migrate-fail-"));
     await writeFakeLegacyCodexRuntime(home);

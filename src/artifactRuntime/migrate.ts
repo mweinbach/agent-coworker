@@ -35,6 +35,21 @@ async function legacyRuntimeRoots(home: string): Promise<string[]> {
 // marketplace, not bundled into the runtime).
 const RUNTIME_PAYLOAD_ENTRIES = ["node", "dependencies", "python", "runtime.json"] as const;
 
+async function shouldCopyRuntimePath(src: string): Promise<boolean> {
+  const stat = await fs.lstat(src);
+  if (!stat.isSymbolicLink()) return true;
+
+  try {
+    await fs.stat(src);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function findLegacyArtifactRuntimeRoot(home: string): Promise<string | null> {
   for (const root of await legacyRuntimeRoots(home)) {
     if (await findArtifactToolNamespace([root])) return root;
@@ -71,6 +86,7 @@ export async function migrateLegacyArtifactRuntime(opts: {
           recursive: true,
           force: true,
           dereference: true,
+          filter: shouldCopyRuntimePath,
         });
       }
     }

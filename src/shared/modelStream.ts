@@ -611,18 +611,34 @@ function nativeWebSearchArgs(item: Record<string, unknown>): Record<string, unkn
   return action ? { action } : undefined;
 }
 
-function mapNativeWebSearchRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate[] {
-  if (evt.format !== "openai-responses-v1") return [];
+function codexAppServerRawResponseItem(
+  evt: ModelStreamRawEvent,
+): { method: string; item: Record<string, unknown> } | null {
+  if (evt.format !== "codex-app-server-v2") return null;
 
-  const event = asPartRecord(evt.event);
-  const eventType = asString(event.type);
+  const envelope = asPartRecord(evt.event);
+  const message = asPartRecord(envelope.message);
+  const method = asString(message.method);
+  if (!method) return null;
+
+  const params = asPartRecord(message.params);
+  const item = asPartRecord(params.item);
+  if (Object.keys(item).length === 0) return null;
+
+  return { method, item };
+}
+
+function mapNativeWebSearchRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate[] {
+  const appServerItem = codexAppServerRawResponseItem(evt);
+  const event = appServerItem ? {} : asPartRecord(evt.event);
+  const eventType = appServerItem?.method ?? asString(event.type);
   if (!eventType) return [];
 
-  const item = asPartRecord(event.item);
+  const item = appServerItem?.item ?? asPartRecord(event.item);
   if (item.type !== "web_search_call") return [];
 
   const key = rawProviderKey(item, `native-web-search:${evt.turnId}:${evt.index}`);
-  if (eventType === "response.output_item.added") {
+  if (evt.format === "openai-responses-v1" && eventType === "response.output_item.added") {
     return [
       {
         kind: "tool_input_start",
@@ -634,7 +650,11 @@ function mapNativeWebSearchRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate
     ];
   }
 
-  if (eventType === "response.output_item.done") {
+  if (
+    (evt.format === "openai-responses-v1" && eventType === "response.output_item.done") ||
+    (evt.format === "codex-app-server-v2" &&
+      (eventType === "rawResponseItem/completed" || eventType === "rawResponseItem/done"))
+  ) {
     return [
       {
         kind: "tool_result",

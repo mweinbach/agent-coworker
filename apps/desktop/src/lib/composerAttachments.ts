@@ -73,6 +73,11 @@ export type ResolvedComposerAttachments = {
   skippedNotes: string[];
 };
 
+type DesktopUploadAttempt =
+  | { attempted: false }
+  | { attempted: true; uploaded: { filename: string; path: string } }
+  | { attempted: true; error: string };
+
 export async function resolveComposerAttachmentsForWorkspace(
   get: StoreGet,
   set: StoreSet,
@@ -90,12 +95,12 @@ export async function resolveComposerAttachmentsForWorkspace(
       continue;
     }
 
-    const buffer = await attachment.file.arrayBuffer();
-    const base64 = encodeArrayBufferToBase64(buffer);
     const canInline =
       attachment.size <= MAX_ATTACHMENT_INLINE_BYTE_SIZE &&
       inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
     if (canInline) {
+      const buffer = await attachment.file.arrayBuffer();
+      const base64 = encodeArrayBufferToBase64(buffer);
       inlineByteLength += attachment.size;
       resolvedAttachments.push({
         filename: attachment.filename,
@@ -105,6 +110,26 @@ export async function resolveComposerAttachmentsForWorkspace(
       continue;
     }
 
+    const desktopUpload = await tryCopyDesktopAttachmentToWorkspaceUploads(
+      get,
+      workspaceId,
+      attachment,
+    );
+    if (desktopUpload.attempted) {
+      if ("uploaded" in desktopUpload) {
+        resolvedAttachments.push({
+          filename: desktopUpload.uploaded.filename,
+          path: desktopUpload.uploaded.path,
+          mimeType: attachment.mimeType,
+        });
+      } else {
+        skippedNotes.push(buildAttachmentSkippedNote(attachment.filename, desktopUpload.error));
+      }
+      continue;
+    }
+
+    const buffer = await attachment.file.arrayBuffer();
+    const base64 = encodeArrayBufferToBase64(buffer);
     const uploaded = await uploadJsonRpcWorkspaceFile(
       get,
       set,
@@ -126,4 +151,57 @@ export async function resolveComposerAttachmentsForWorkspace(
   }
 
   return { attachments: resolvedAttachments, skippedNotes };
+}
+
+async function tryCopyDesktopAttachmentToWorkspaceUploads(
+  get: StoreGet,
+  workspaceId: string,
+  attachment: ComposerAttachmentFile,
+): Promise<DesktopUploadAttempt> {
+  const desktopApi = typeof window === "undefined" ? undefined : window.cowork;
+  if (!desktopApi?.getPathForFile || !desktopApi.copyFileToWorkspaceUploads) {
+    return { attempted: false };
+  }
+
+  const workspace = get().workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace?.path) {
+    return { attempted: true, error: "project folder was unavailable" };
+  }
+
+  const sourcePath = desktopApi.getPathForFile(attachment.file);
+  if (!sourcePath) {
+    return { attempted: true, error: "desktop file path was unavailable" };
+  }
+
+  try {
+    const uploadsDirectory = resolveWorkspaceUploadsDirectory(get, workspaceId);
+    const uploaded = await desktopApi.copyFileToWorkspaceUploads({
+      workspacePath: workspace.path,
+      sourcePath,
+      filename: attachment.filename,
+      ...(uploadsDirectory ? { uploadsDirectory } : {}),
+    });
+    return { attempted: true, uploaded };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      attempted: true,
+      error: detail ? `copy to the project upload folder failed: ${detail}` : "copy failed",
+    };
+  }
+}
+
+function resolveWorkspaceUploadsDirectory(get: StoreGet, workspaceId: string): string | null {
+  const runtime = get().workspaceRuntimeById[workspaceId];
+  const candidates: unknown[] = [runtime?.controlSessionConfig, runtime?.controlConfig];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const value = (candidate as { uploadsDirectory?: unknown }).uploadsDirectory;
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
 }

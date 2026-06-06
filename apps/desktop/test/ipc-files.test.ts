@@ -345,6 +345,70 @@ describe("files IPC", () => {
     await fs.rm(tempWorkspace, { recursive: true, force: true });
   });
 
+  test("copyFileToWorkspaceUploads copies local files into workspace uploads and dedupes names", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-upload-copy-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-upload-copy-source-"));
+    const sourcePath = path.join(sourceDir, "audio.mp3");
+    const uploadsDir = path.join(tempWorkspace, "User Uploads");
+    await fs.mkdir(uploadsDir, { recursive: true });
+    await fs.writeFile(sourcePath, "new audio", "utf-8");
+    await fs.writeFile(path.join(uploadsDir, "audio.mp3"), "existing audio", "utf-8");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads);
+    expect(handler).toBeDefined();
+
+    const result = await handler?.(
+      { sender: {} },
+      {
+        workspacePath: tempWorkspace,
+        sourcePath,
+        filename: "audio.mp3",
+      },
+    );
+
+    const copiedPath = path.join(uploadsDir, "audio_1.mp3");
+    expect(result).toEqual({ filename: "audio_1.mp3", path: copiedPath });
+    expect(await fs.readFile(copiedPath, "utf-8")).toBe("new audio");
+    expect(await fs.readFile(path.join(uploadsDir, "audio.mp3"), "utf-8")).toBe("existing audio");
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(sourceDir, { recursive: true, force: true });
+  });
+
   test("readFile returns full UTF-8 content from approved roots", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
     const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-read-file-ws-"));

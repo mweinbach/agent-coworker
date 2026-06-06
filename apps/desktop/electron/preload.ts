@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { z } from "zod";
 import {
   type DesktopFeatureFlagOverrides,
@@ -14,6 +14,7 @@ import type { PersistedState } from "../src/app/types";
 import {
   type CaptureProductEventInput,
   type ConfirmActionInput,
+  type CopyFileToWorkspaceUploadsInput,
   type CopyPathInput,
   type CreateDirectoryInput,
   type CreateOneOffChatWorkspaceInput,
@@ -62,6 +63,7 @@ import {
 import {
   captureProductEventInputSchema,
   confirmActionInputSchema,
+  copyFileToWorkspaceUploadsInputSchema,
   copyPathInputSchema,
   copyTextInputSchema,
   createDirectoryInputSchema,
@@ -207,6 +209,14 @@ function assertCopyPathInput(opts: CopyPathInput): void {
 
 function assertCopyTextInput(text: unknown): void {
   parseWithSchema(copyTextInputSchema, text, "copyText text");
+}
+
+function assertCopyFileToWorkspaceUploadsInput(opts: CopyFileToWorkspaceUploadsInput): void {
+  parseWithSchema(
+    copyFileToWorkspaceUploadsInputSchema,
+    opts,
+    "copyFileToWorkspaceUploads options",
+  );
 }
 
 function assertCreateDirectoryInput(opts: CreateDirectoryInput): void {
@@ -601,6 +611,19 @@ const desktopApi = Object.freeze<DesktopApi>({
   copyText: (text: string) => {
     assertCopyTextInput(text);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyText, text);
+  },
+
+  getPathForFile: (file: unknown) => {
+    try {
+      return webUtils.getPathForFile(file as File) || null;
+    } catch {
+      return null;
+    }
+  },
+
+  copyFileToWorkspaceUploads: (opts: CopyFileToWorkspaceUploadsInput) => {
+    assertCopyFileToWorkspaceUploadsInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads, opts);
   },
 
   createDirectory: (opts: CreateDirectoryInput) => {

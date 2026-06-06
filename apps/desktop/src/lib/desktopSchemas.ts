@@ -27,6 +27,7 @@ import type {
   CaptureProductEventInput,
   ConfirmActionInput,
   ContextMenuItem,
+  CopyFileToWorkspaceUploadsInput,
   CopyPathInput,
   CreateDirectoryInput,
   CreateOneOffChatWorkspaceInput,
@@ -435,6 +436,14 @@ export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> =
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;
 export const copyTextInputSchema = z.string();
+export const copyFileToWorkspaceUploadsInputSchema: z.ZodType<CopyFileToWorkspaceUploadsInput> = z
+  .object({
+    workspacePath: nonEmptyStringSchema,
+    sourcePath: nonEmptyStringSchema,
+    filename: validatedSegmentSchema,
+    uploadsDirectory: nonEmptyStringSchema.optional(),
+  })
+  .strict();
 export const trashPathInputSchema: z.ZodType<TrashPathInput> = sharedPathSchema;
 
 export const createDirectoryInputSchema: z.ZodType<CreateDirectoryInput> = z.object({

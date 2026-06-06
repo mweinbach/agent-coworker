@@ -209,6 +209,18 @@ export type CopyPathInput = {
   path: string;
 };
 
+export type CopyFileToWorkspaceUploadsInput = {
+  workspacePath: string;
+  sourcePath: string;
+  filename: string;
+  uploadsDirectory?: string;
+};
+
+export type CopyFileToWorkspaceUploadsOutput = {
+  filename: string;
+  path: string;
+};
+
 export type CreateDirectoryInput = {
   parentPath: string;
   name: string;
@@ -503,6 +515,10 @@ export interface DesktopApi {
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
   copyText(text: string): Promise<void>;
+  getPathForFile?(file: unknown): string | null;
+  copyFileToWorkspaceUploads?(
+    opts: CopyFileToWorkspaceUploadsInput,
+  ): Promise<CopyFileToWorkspaceUploadsOutput>;
   createDirectory(opts: CreateDirectoryInput): Promise<void>;
   renamePath(opts: RenamePathInput): Promise<void>;
   trashPath(opts: TrashPathInput): Promise<void>;
@@ -573,6 +589,7 @@ export const DESKTOP_IPC_CHANNELS = {
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",
   copyText: "desktop:copyText",
+  copyFileToWorkspaceUploads: "desktop:copyFileToWorkspaceUploads",
   createDirectory: "desktop:createDirectory",
   renamePath: "desktop:renamePath",
   trashPath: "desktop:trashPath",

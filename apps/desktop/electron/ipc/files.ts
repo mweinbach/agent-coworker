@@ -7,7 +7,11 @@ import { promisify } from "node:util";
 
 import type * as Electron from "electron";
 
+import { MAX_ATTACHMENT_UPLOAD_BYTE_SIZE } from "../../../../src/shared/attachments";
+import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../../src/utils/paths";
 import {
+  type CopyFileToWorkspaceUploadsInput,
+  type CopyFileToWorkspaceUploadsOutput,
   type CopyPathInput,
   type CreateDirectoryInput,
   DESKTOP_IPC_CHANNELS,
@@ -25,6 +29,7 @@ import {
   type WriteFileInput,
 } from "../../src/lib/desktopApi";
 import {
+  copyFileToWorkspaceUploadsInputSchema,
   copyPathInputSchema,
   copyTextInputSchema,
   createDirectoryInputSchema,
@@ -57,6 +62,7 @@ const require = createRequire(import.meta.url);
 const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
 
 export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
+const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
@@ -274,6 +280,19 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads,
+    async (_event, args: CopyFileToWorkspaceUploadsInput) => {
+      const input = parseWithSchema(
+        copyFileToWorkspaceUploadsInputSchema,
+        args,
+        "copyFileToWorkspaceUploads options",
+      );
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      return await copyFileToWorkspaceUploads(workspaceRoots.getApprovedWorkspaceRoots(), input);
+    },
+  );
+
+  handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.createDirectory,
     async (_event, args: CreateDirectoryInput) => {
       const input = parseWithSchema(createDirectoryInputSchema, args, "createDirectory options");
@@ -307,6 +326,80 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
       throw new Error(`Unable to move to Trash: ${trashDetail}`);
     }
   });
+}
+
+async function copyFileToWorkspaceUploads(
+  workspaceRoots: string[],
+  input: CopyFileToWorkspaceUploadsInput,
+): Promise<CopyFileToWorkspaceUploadsOutput> {
+  const safeWorkspacePath = resolveAllowedDirectoryPath(workspaceRoots, input.workspacePath);
+  const sourcePath = path.resolve(input.sourcePath);
+  const sourceStat = await fs.stat(sourcePath).catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to read source file: ${detail}`);
+  });
+  if (!sourceStat.isFile()) {
+    throw new Error("Source path is not a file");
+  }
+  if (sourceStat.size > MAX_ATTACHMENT_UPLOAD_BYTE_SIZE) {
+    throw new Error("File too large to upload (max 100MB)");
+  }
+
+  const safeName = path.basename(input.filename);
+  if (!safeName || safeName === "." || safeName === "..") {
+    throw new Error("Invalid filename");
+  }
+
+  const requestedUploadsDir = input.uploadsDirectory
+    ? path.resolve(input.uploadsDirectory)
+    : path.resolve(safeWorkspacePath, DEFAULT_WORKSPACE_UPLOADS_DIR_NAME);
+  let resolvedUploadsDir: string;
+  try {
+    resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
+      safeWorkspacePath,
+      requestedUploadsDir,
+    );
+  } catch {
+    throw new Error("Uploads directory resolves outside the workspace.");
+  }
+
+  await fs.mkdir(resolvedUploadsDir, { recursive: true });
+  try {
+    resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
+      safeWorkspacePath,
+      resolvedUploadsDir,
+    );
+  } catch {
+    throw new Error("Uploads directory resolves outside the workspace.");
+  }
+
+  const ext = path.extname(safeName);
+  const base = safeName.slice(0, safeName.length - ext.length);
+  let targetPath = path.resolve(resolvedUploadsDir, safeName);
+  if (!isPathInside(resolvedUploadsDir, targetPath)) {
+    throw new Error("Invalid filename (path traversal)");
+  }
+
+  let counter = 1;
+  while (await fileExists(targetPath)) {
+    targetPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
+    if (!isPathInside(resolvedUploadsDir, targetPath)) {
+      throw new Error("Invalid filename (path traversal)");
+    }
+    counter += 1;
+  }
+
+  await fs.copyFile(sourcePath, targetPath);
+  return { filename: path.basename(targetPath), path: targetPath };
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type AppCandidate = {

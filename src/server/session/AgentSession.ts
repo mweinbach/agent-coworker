@@ -522,6 +522,7 @@ export class AgentSession {
       triggerMemoryGeneration: () => this.triggerMemoryGeneration(),
       getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
+      onAdvancedMemoryChanged: async (folder) => await this.onAdvancedMemoryChanged(folder),
       guardBusy: () => this.guardBusy(),
       emitTelemetry: (name, status, attributes, durationMs) =>
         this.emitTelemetry(name, status, attributes, durationMs),
@@ -1100,6 +1101,11 @@ export class AgentSession {
     }
     await this.emitAdvancedMemories(resolvedFolder);
     await this.refreshSystemPromptWithSkills("session.advanced_memory_delete");
+  }
+
+  async onAdvancedMemoryChanged(folder: string): Promise<void> {
+    await this.emitAdvancedMemories(folder);
+    await this.refreshSystemPromptWithSkills("tool.manage_memory");
   }
 
   async generateAdvancedMemoryForHistory(folder?: string) {

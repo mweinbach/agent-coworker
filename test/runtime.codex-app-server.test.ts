@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
 import { canonicalizeRoot } from "../src/platform/sandbox/policy";
 import { __internal as codexAppServerClientInternal } from "../src/providers/codexAppServerClient";
 import { createRuntime } from "../src/runtime";
@@ -785,6 +786,45 @@ rl.on("line", (line) => {
       });
     },
   );
+
+  test.serial("adds only the active advanced-memory folder to Codex writable roots", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-memory-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-memory-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+    const config = {
+      ...makeConfig(dir),
+      advancedMemory: true,
+      memoriesDir,
+      sandbox: { mode: "workspace-write" as const, network: false },
+    };
+    const activeMemoryRoot = path.join(memoriesDir, resolveMemoryFolderName(config));
+    const chatsMemoryRoot = path.join(memoriesDir, CHATS_FOLDER);
+
+    const runtime = createRuntime(config);
+    await runtime.runTurn({
+      config,
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: false,
+      shellPolicy: "full",
+      approveCommand: async () => true,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
+      | { sandboxPolicy?: { writableRoots?: string[] } }
+      | undefined;
+    const writableRoots = turnStart?.sandboxPolicy?.writableRoots ?? [];
+    expect(writableRoots).toContain(canonicalizeRoot(activeMemoryRoot));
+    expect(writableRoots).not.toContain(canonicalizeRoot(chatsMemoryRoot));
+  });
 
   test.serial("passes configured read-only sandbox to Codex app-server turns", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-config-ro-"));

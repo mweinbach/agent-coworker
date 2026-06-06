@@ -1,3 +1,5 @@
+import { discoverSkills } from "../../src/skills";
+import { loadSkillBodyByName } from "../../src/skills/loadSkillBody";
 import {
   afterEach,
   bashInternal,
@@ -37,10 +39,30 @@ import {
   z,
 } from "./tools.harness";
 
+const repoRoot = path.resolve(import.meta.dir, "../..");
+
 describe("skill tool", () => {
   function skillDoc(name: string, description: string, body: string): string {
     return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", body].join("\n");
   }
+
+  test("discovers and loads the bundled memories skill", async () => {
+    const dir = await tmpDir();
+    const config = makeConfig(dir, {
+      skillsDirs: [path.join(repoRoot, "skills")],
+    });
+
+    const discovered = await discoverSkills(config.skillsDirs);
+    expect(discovered.find((skill) => skill.name === "memories")).toMatchObject({
+      name: "memories",
+      description: expect.stringContaining("long-term memories"),
+      enabled: true,
+    });
+
+    const loaded = await loadSkillBodyByName(config, "memories");
+    expect(loaded?.body).toContain("manageMemory");
+    expect(loaded?.body).toContain("Writes always go to the active memory folder");
+  });
 
   test("loads skill from SKILL.md in directory", async () => {
     const dir = await tmpDir();

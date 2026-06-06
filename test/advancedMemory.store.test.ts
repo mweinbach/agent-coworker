@@ -8,7 +8,9 @@ import {
   CHATS_FOLDER,
   MEMORY_INDEX_HEADING,
   normalizeMemoryFolderName,
+  resolveAdvancedMemoryAccessRoots,
   resolveMemoryFolderName,
+  slugifyMemoryName,
 } from "../src/advancedMemory/store";
 import type { AgentConfig } from "../src/types";
 
@@ -94,6 +96,7 @@ describe("AdvancedMemoryStore", () => {
     const section = await store.renderPromptSection("proj");
     expect(section).toContain("## Memory");
     expect(section).toContain("recallMemory");
+    expect(section).toContain("manageMemory");
     expect(section).toContain("proj memory");
     expect(section).toContain("chat memory");
   });
@@ -110,6 +113,13 @@ describe("normalizeMemoryFolderName", () => {
     for (const folder of ["", ".", "..", "../project", "nested/project", "nested\\project"]) {
       expect(() => normalizeMemoryFolderName(folder)).toThrow("Invalid memory folder");
     }
+  });
+});
+
+describe("slugifyMemoryName", () => {
+  test("normalizes names the same way memory files do", () => {
+    expect(slugifyMemoryName(" Preference Note.md ")).toBe("preference-note");
+    expect(slugifyMemoryName("!!!")).toBe("memory");
   });
 });
 
@@ -144,5 +154,28 @@ describe("resolveMemoryFolderName", () => {
     expect(resolveMemoryFolderName(first)).toMatch(/^app-[a-f0-9]{12}$/);
     expect(resolveMemoryFolderName(second)).toMatch(/^app-[a-f0-9]{12}$/);
     expect(resolveMemoryFolderName(first)).not.toBe(resolveMemoryFolderName(second));
+  });
+});
+
+describe("resolveAdvancedMemoryAccessRoots", () => {
+  test("project workspaces write active folder and read active plus chats", () => {
+    const config = {
+      workingDirectory: "/home/user/My Project",
+      projectCoworkDir: "/home/user/My Project/.cowork",
+      memoriesDir: "/home/user/.cowork/memories",
+    } as AgentConfig;
+    const activeFolder = resolveMemoryFolderName(config);
+
+    expect(resolveAdvancedMemoryAccessRoots(config)).toEqual({
+      memoriesDir: "/home/user/.cowork/memories",
+      activeFolder,
+      readableFolders: [activeFolder, CHATS_FOLDER],
+      writableFolder: activeFolder,
+      readRoots: [
+        path.join("/home/user/.cowork/memories", activeFolder),
+        path.join("/home/user/.cowork/memories", CHATS_FOLDER),
+      ],
+      writeRoots: [path.join("/home/user/.cowork/memories", activeFolder)],
+    });
   });
 });

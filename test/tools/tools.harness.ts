@@ -11,6 +11,7 @@ import { createEditTool } from "../../src/tools/edit";
 import { createGlobTool } from "../../src/tools/glob";
 import { createGrepTool } from "../../src/tools/grep";
 import { createTools, listSessionToolNames } from "../../src/tools/index";
+import { createManageMemoryTool } from "../../src/tools/manageMemory";
 import { createMemoryTool } from "../../src/tools/memory";
 import { createReadTool } from "../../src/tools/read";
 import { createSkillTool } from "../../src/tools/skill";
@@ -31,6 +32,7 @@ export {
   createEditTool,
   createGlobTool,
   createGrepTool,
+  createManageMemoryTool,
   createMemoryTool,
   createReadTool,
   createSkillTool,

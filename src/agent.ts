@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { z } from "zod";
 
+import { resolveAdvancedMemoryWriteRoots } from "./advancedMemory/store";
 import {
   ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
   prepareArtifactRuntimeToolEnv,
@@ -119,6 +120,7 @@ export interface RunTurnParams {
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  onAdvancedMemoryChanged?: (folder: string) => void | Promise<void>;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
@@ -416,6 +418,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentRole: params.agentRole,
       agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
+      sessionId: params.sessionId,
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       sandboxPolicy: resolveSandboxPolicy({
         config: config.sandbox,
@@ -430,13 +433,17 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         projectRoot: path.dirname(config.projectCoworkDir),
         outputDirectory: config.outputDirectory,
         uploadsDirectory: config.uploadsDirectory,
-        toolRuntimeWritableRoots: collectToolRuntimeWritableRoots(config, turnToolEnv),
+        toolRuntimeWritableRoots: [
+          ...(collectToolRuntimeWritableRoots(config, turnToolEnv) ?? []),
+          ...resolveAdvancedMemoryWriteRoots(config),
+        ],
         targetPaths: params.agentTargetPaths,
       }),
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
+      onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);

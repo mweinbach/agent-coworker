@@ -12,6 +12,7 @@ import type { ToolContext } from "./context";
 import { createEditTool } from "./edit";
 import { createGlobTool } from "./glob";
 import { createGrepTool } from "./grep";
+import { createManageMemoryTool } from "./manageMemory";
 import { createMemoryTool } from "./memory";
 import {
   createCloseAgentTool,
@@ -87,7 +88,7 @@ export function listSessionToolNames(
     "todoWrite",
     "skill",
     ...(config.advancedMemory
-      ? ["recallMemory", "readPastConversation"]
+      ? ["recallMemory", "readPastConversation", "manageMemory"]
       : (config.enableMemory ?? true)
         ? ["memory"]
         : []),
@@ -138,6 +139,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
       ? {
           recallMemory: createRecallMemoryTool(ctx),
           readPastConversation: createReadPastConversationTool(ctx),
+          manageMemory: createManageMemoryTool(ctx),
         }
       : (ctx.config.enableMemory ?? true)
         ? { memory: createMemoryTool(ctx) }

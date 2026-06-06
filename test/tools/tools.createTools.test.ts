@@ -78,12 +78,13 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("grep");
   });
 
-  test("advanced memory swaps the memory tool for recall/readPastConversation", async () => {
+  test("advanced memory swaps the memory tool for advanced memory tools", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { advancedMemory: true }) }));
     expect(tools).not.toHaveProperty("memory");
     expect(tools).toHaveProperty("recallMemory");
     expect(tools).toHaveProperty("readPastConversation");
+    expect(tools).toHaveProperty("manageMemory");
   });
 
   test("default (advanced memory off) keeps the legacy memory tool", async () => {
@@ -92,6 +93,7 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("memory");
     expect(tools).not.toHaveProperty("recallMemory");
     expect(tools).not.toHaveProperty("readPastConversation");
+    expect(tools).not.toHaveProperty("manageMemory");
   });
 
   test("listSessionToolNames reflects advanced memory swap", () => {
@@ -103,6 +105,7 @@ describe("createTools", () => {
     });
     expect(advanced).toContain("recallMemory");
     expect(advanced).toContain("readPastConversation");
+    expect(advanced).toContain("manageMemory");
     expect(advanced).not.toContain("memory");
 
     const legacy = listSessionToolNames({
@@ -112,6 +115,7 @@ describe("createTools", () => {
     });
     expect(legacy).toContain("memory");
     expect(legacy).not.toContain("recallMemory");
+    expect(legacy).not.toContain("manageMemory");
   });
 
   test("hides legacy webSearch for codex-cli by default", async () => {
@@ -170,6 +174,24 @@ describe("createTools", () => {
     const dynamicTools = filterToolsForCodexDynamicBoundary(rawTools);
     expect(dynamicTools).toHaveProperty("webSearch");
     expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("webSearch");
+  });
+
+  test("exposes manageMemory through the Codex dynamic tool boundary", async () => {
+    const dir = await tmpDir();
+    const rawTools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "codex-cli",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          advancedMemory: true,
+        }),
+      }),
+    );
+
+    const dynamicTools = filterToolsForCodexDynamicBoundary(rawTools);
+    expect(dynamicTools).toHaveProperty("manageMemory");
+    expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("manageMemory");
   });
 
   test("listSessionToolNames reports legacy codex-cli webSearch when configured", () => {

@@ -86,6 +86,7 @@ describe("package manifest", () => {
     expect(paths).not.toContain("prompts/system-models/.research/openai-guide.md");
     expect(paths).toContain("prompts/system.md");
     expect(paths).toContain("skills/documents/SKILL.md");
+    expect(paths).toContain("skills/memories/SKILL.md");
     expect(paths).toContain("skills/presentations/SKILL.md");
     expect(paths).toContain("skills/spreadsheets/SKILL.md");
     expect(paths).not.toContain("skills/presentations/dev/run_prompt_battle.mjs");

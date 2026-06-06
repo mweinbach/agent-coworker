@@ -81,6 +81,16 @@ describe("resolveSandboxPolicy", () => {
     expect(policy.kind).toBe("no-project-write");
   });
 
+  test("read-only role is not widened by advanced-memory writable roots", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write" },
+      readOnlyRole: true,
+      workingDirectory: "/work/project",
+      toolRuntimeWritableRoots: ["/home/user/.cowork/memories/project-active"],
+    });
+    expect(policy).toEqual({ kind: "no-project-write", network: true });
+  });
+
   test("explicit read-only mode remains fully read-only", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "read-only", network: false },

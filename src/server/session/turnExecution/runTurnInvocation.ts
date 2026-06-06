@@ -35,6 +35,7 @@ export type RunTurnInvocationDeps = {
   updateTodos: (todos: TodoItem[]) => void;
   tracker: TurnStreamTracker;
   includeRawChunks: boolean;
+  onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   setAcceptingSteers: (accepting: boolean) => void;
 };
 
@@ -50,6 +51,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     updateTodos,
     tracker,
     includeRawChunks,
+    onAdvancedMemoryChanged,
     setAcceptingSteers,
   } = deps;
 
@@ -180,6 +182,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       yolo: context.state.yolo,
       enableMcp: context.state.config.enableMcp,
       sessionId: context.id,
+      onAdvancedMemoryChanged,
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,
       agentRole: context.state.sessionInfo.role,

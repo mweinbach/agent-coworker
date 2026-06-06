@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
 import type { AgentConfig } from "../src/types";
 import {
   assertReadPathAllowed,
@@ -315,6 +316,43 @@ describe("assertWritePathAllowed", () => {
     await expect(assertWritePathAllowed(target, cfg, "write")).resolves.toBe(path.resolve(target));
   });
 
+  test("allows advanced-memory writes only inside the active folder", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-write-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const cfg = makeConfig(dir);
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFolder = resolveMemoryFolderName(cfg);
+    const activeFile = path.join(memoriesDir, activeFolder, "memory.md");
+    const chatsFile = path.join(memoriesDir, CHATS_FOLDER, "memory.md");
+    const siblingFile = path.join(memoriesDir, "other-project", "memory.md");
+
+    expect(isWritePathAllowed(activeFile, cfg)).toBe(true);
+    expect(isWritePathAllowed(chatsFile, cfg)).toBe(false);
+    expect(isWritePathAllowed(siblingFile, cfg)).toBe(false);
+    await expect(assertWritePathAllowed(activeFile, cfg, "write")).resolves.toBe(
+      path.resolve(activeFile),
+    );
+    await expect(assertWritePathAllowed(chatsFile, cfg, "write")).rejects.toThrow(/blocked/i);
+    await expect(assertWritePathAllowed(siblingFile, cfg, "write")).rejects.toThrow(/blocked/i);
+  });
+
+  test("targetPath-scoped children cannot write the active memory folder", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-scoped-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-scoped-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const cfg = makeConfig(dir);
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFile = path.join(memoriesDir, resolveMemoryFolderName(cfg), "memory.md");
+    const targetPaths = [path.join(dir, "src")];
+
+    await expect(assertWritePathAllowed(activeFile, cfg, "write", targetPaths)).rejects.toThrow(
+      /targetPaths/,
+    );
+  });
+
   test("rejects symlink segment escapes", async () => {
     if (process.platform === "win32") return;
 
@@ -388,6 +426,19 @@ describe("isReadPathAllowed", () => {
     ).toBe(true);
   });
 
+  test("advanced-memory reads include active and chats folders", () => {
+    const cfg = makeConfig(PROJECT);
+    const memoriesDir =
+      process.platform === "win32" ? "C:\\cowork-memory-home" : "/cowork-memory-home";
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFolder = resolveMemoryFolderName(cfg);
+
+    expect(isReadPathAllowed(path.join(memoriesDir, activeFolder, "memory.md"), cfg)).toBe(true);
+    expect(isReadPathAllowed(path.join(memoriesDir, CHATS_FOLDER, "memory.md"), cfg)).toBe(true);
+    expect(isReadPathAllowed(path.join(memoriesDir, "other", "memory.md"), cfg)).toBe(false);
+  });
+
   test("denies reads outside allowed roots", () => {
     const cfg = makeConfig(PROJECT);
     expect(isReadPathAllowed("/etc/passwd", cfg)).toBe(false);
@@ -413,6 +464,27 @@ describe("assertReadPathAllowed", () => {
     const cfg = makeConfig(dir);
     const target = path.join(dir, "src", "file.txt");
     await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
+  });
+
+  test("allows advanced-memory reads from active and chats folders only", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-read-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-read-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const cfg = makeConfig(dir);
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFolder = resolveMemoryFolderName(cfg);
+    const activeFile = path.join(memoriesDir, activeFolder, "memory.md");
+    const chatsFile = path.join(memoriesDir, CHATS_FOLDER, "memory.md");
+    const siblingFile = path.join(memoriesDir, "other-project", "memory.md");
+
+    await expect(assertReadPathAllowed(activeFile, cfg, "read")).resolves.toBe(
+      path.resolve(activeFile),
+    );
+    await expect(assertReadPathAllowed(chatsFile, cfg, "read")).resolves.toBe(
+      path.resolve(chatsFile),
+    );
+    await expect(assertReadPathAllowed(siblingFile, cfg, "read")).rejects.toThrow(/blocked/i);
   });
 
   test("rejects symlink segment escapes", async () => {

@@ -2,15 +2,20 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import {
+  resolveAdvancedMemoryReadRoots,
+  resolveAdvancedMemoryWriteRoots,
+} from "../advancedMemory/store";
 import { discoverPlugins } from "../plugins/discovery";
 import { readPluginManifest } from "../plugins/manifest";
 import type { AgentConfig } from "../types";
 import { isPathInside } from "./paths";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
-const WRITE_ROOT_LABEL = "workingDirectory/outputDirectory/uploadsDirectory/project root";
+const WRITE_ROOT_LABEL =
+  "workingDirectory/outputDirectory/uploadsDirectory/project root/active advanced-memory folder";
 const READ_ROOT_LABEL =
-  "workingDirectory/outputDirectory/uploadsDirectory/project root/skills directories/plugin roots";
+  "workingDirectory/outputDirectory/uploadsDirectory/project root/skills directories/plugin roots/advanced-memory folders";
 
 function writeRoots(config: AgentConfig): string[] {
   const projectRoot = path.dirname(config.projectCoworkDir);
@@ -19,12 +24,14 @@ function writeRoots(config: AgentConfig): string[] {
     config.workingDirectory,
     ...(config.outputDirectory ? [config.outputDirectory] : []),
     ...(config.uploadsDirectory ? [config.uploadsDirectory] : []),
+    ...resolveAdvancedMemoryWriteRoots(config),
   ];
 }
 
 function readRoots(config: AgentConfig): string[] {
   return [
     ...writeRoots(config),
+    ...resolveAdvancedMemoryReadRoots(config),
     ...config.skillsDirs.filter(Boolean),
     ...(config.workspacePluginsDir ? [config.workspacePluginsDir] : []),
     ...(config.userPluginsDir ? [config.userPluginsDir] : []),

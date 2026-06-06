@@ -51,6 +51,7 @@ export type UserMessageTurnRunnerDeps = {
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
   buildUserMessageContent: UserMessageAttachmentHelpers["buildUserMessageContent"];
   validateUploadedFileAttachments: UserMessageAttachmentHelpers["validateUploadedFileAttachments"];
+  onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   getA2uiSurfaceManager?: () => {
     applyUnknown: (
       value: unknown,
@@ -89,6 +90,7 @@ export function createUserMessageTurnRunner(
     classifyTurnError,
     buildUserMessageContent,
     validateUploadedFileAttachments,
+    onAdvancedMemoryChanged,
     getA2uiSurfaceManager,
   } = deps;
 
@@ -202,6 +204,7 @@ export function createUserMessageTurnRunner(
       updateTodos,
       tracker,
       includeRawChunks,
+      onAdvancedMemoryChanged,
       setAcceptingSteers: (accepting) => {
         context.state.acceptingSteers = accepting;
       },

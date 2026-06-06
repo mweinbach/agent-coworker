@@ -96,21 +96,24 @@ The runtime boundary lives in `src/runtime/`:
 Built-in capabilities exposed to the agent:
 
 
-| Tool           | Purpose                        | Approval Required |
-| -------------- | ------------------------------ | ----------------- |
-| `bash`         | Shell command execution        | Conditional       |
-| `read`         | Read file contents             | No                |
-| `write`        | Create/overwrite files         | Yes (write path)  |
-| `edit`         | In-place text edits            | Yes (write path)  |
-| `glob`         | Find files by pattern          | No                |
-| `grep`         | Search file contents           | No                |
-| `webSearch`    | Search the web                 | No                |
-| `webFetch`     | Fetch web content              | No                |
-| `AskUserQuestion` | Ask user questions          | No                |
-| `todoWrite`    | Update progress list           | No                |
-| `spawnAgent`   | Delegate to a child agent      | No                |
-| `skill`        | Load skill instructions        | No                |
-| `memory`       | Read/write persistent memory   | No                |
+| Tool           | Purpose                                      | Approval Required |
+| -------------- | -------------------------------------------- | ----------------- |
+| `bash`         | Shell command execution                      | Conditional       |
+| `read`         | Read file contents                           | No                |
+| `write`        | Create/overwrite files                       | Yes (write path)  |
+| `edit`         | In-place text edits                          | Yes (write path)  |
+| `glob`         | Find files by pattern                        | No                |
+| `grep`         | Search file contents                         | No                |
+| `webSearch`    | Search the web                               | No                |
+| `webFetch`     | Fetch web content                            | No                |
+| `AskUserQuestion` | Ask user questions                        | No                |
+| `todoWrite`    | Update progress list                         | No                |
+| `spawnAgent`   | Delegate to a child agent                    | No                |
+| `skill`        | Load skill instructions                      | No                |
+| `memory`       | Legacy SQLite persistent memory              | No                |
+| `recallMemory` | Read advanced file-based memory              | No                |
+| `manageMemory` | List/create/edit active advanced memory      | No                |
+| `readPastConversation` | Read prior conversation transcripts | No                |
 
 
 When agent control is enabled, the following tools are also available: `listAgents`, `sendAgentInput`, `waitForAgent`, `inspectAgent`, `resumeAgent`, `closeAgent`.

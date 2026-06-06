@@ -68,6 +68,9 @@ export interface ToolContext {
   /** Structured run intent for the active session/turn. */
   harnessContext?: HarnessContextState | null;
 
+  /** Active session id, used for memory provenance and session-scoped tool state. */
+  sessionId?: string;
+
   /** Optional role for child-agent tool filtering. */
   agentRole?: AgentRole;
 
@@ -98,6 +101,9 @@ export interface ToolContext {
 
   /** Notify the session when tool-driven budget changes should be persisted/emitted immediately. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
+
+  /** Notify the session when an advanced-memory tool mutates a memory folder. */
+  onAdvancedMemoryChanged?: (folder: string) => void | Promise<void>;
 
   /**
    * Apply an A2UI v0.9 envelope to the session's surface state. Returns a

@@ -1,5 +1,5 @@
 import path from "node:path";
-
+import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import {
   ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
   renderArtifactRuntimeInstructions,
@@ -292,6 +292,7 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     projectRoot: path.dirname(params.config.projectCoworkDir),
     outputDirectory: params.config.outputDirectory,
     uploadsDirectory: params.config.uploadsDirectory,
+    toolRuntimeWritableRoots: resolveAdvancedMemoryWriteRoots(params.config),
     targetPaths: params.agentTargetPaths,
   });
 }

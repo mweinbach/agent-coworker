@@ -47,6 +47,7 @@ export class TurnExecutionManager {
           warning?: string;
         };
       };
+      onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
     },
   ) {
     const classifyTurnError = createTurnErrorClassifier(this.context);
@@ -74,6 +75,7 @@ export class TurnExecutionManager {
       validateUploadedFileAttachments: attachmentHelpers.validateUploadedFileAttachments,
       getA2uiSurfaceManager: this.deps.getA2uiSurfaceManager,
       triggerMemoryGeneration: this.deps.triggerMemoryGeneration,
+      onAdvancedMemoryChanged: this.deps.onAdvancedMemoryChanged,
     });
   }
 

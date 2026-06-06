@@ -274,6 +274,41 @@ describe("artifact runtime bootstrap", () => {
     }
   });
 
+  test("surfaces legacy migration failure through bootstrap without crashing startup", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-bootstrap-fail-"));
+    await writeFakeLegacyCodexRuntime(home);
+    const coworkCacheParent = path.join(home, ".cache", "cowork");
+    await fs.writeFile(coworkCacheParent, "not a directory", "utf-8");
+    const logs: string[] = [];
+
+    try {
+      const result = await ensureArtifactRuntimeReady({
+        homedir: home,
+        env: {},
+        allowNetwork: false,
+        log: (line) => logs.push(line),
+      });
+
+      expect(result?.migration.status).toBe("failed");
+      expect(result?.migration.reason).toBeTruthy();
+      expect(result?.runtime.status).toBe("missing");
+      expect(result?.artifactTool.status).toBe("missing");
+      expect(result?.archive).toMatchObject({
+        status: "skipped",
+      });
+      expect(result?.archive.reason).toContain("COWORK_ARTIFACT_RUNTIME_ARCHIVE_URL");
+      expect(logs.some((line) => line.includes("Artifact runtime migration failed"))).toBe(true);
+
+      const state = JSON.parse(await fs.readFile(result?.stateFile ?? "", "utf-8"));
+      expect(state.migratedFrom).toBeUndefined();
+      expect(state.runtimeSource).toBeUndefined();
+      expect(state.artifactSource).toBeUndefined();
+      await expect(fs.readFile(coworkCacheParent, "utf-8")).resolves.toBe("not a directory");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("prefers a fresh download over legacy migration under force", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-migrate-force-"));
     await writeFakeLegacyCodexRuntime(home);

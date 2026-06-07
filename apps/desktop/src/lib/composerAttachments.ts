@@ -78,11 +78,16 @@ type DesktopUploadAttempt =
   | { attempted: true; uploaded: { filename: string; path: string } }
   | { attempted: true; error: string };
 
+type ResolveComposerAttachmentOptions = {
+  threadId?: string | null;
+};
+
 export async function resolveComposerAttachmentsForWorkspace(
   get: StoreGet,
   set: StoreSet,
   workspaceId: string,
   attachments: readonly ComposerAttachmentFile[],
+  options: ResolveComposerAttachmentOptions = {},
 ): Promise<ResolvedComposerAttachments> {
   let inlineByteLength = 0;
   const resolvedAttachments: FileAttachmentInput[] = [];
@@ -114,6 +119,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       get,
       workspaceId,
       attachment,
+      options.threadId ?? null,
     );
     let desktopUploadError: string | null = null;
     if (desktopUpload.attempted) {
@@ -159,6 +165,7 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
   get: StoreGet,
   workspaceId: string,
   attachment: ComposerAttachmentFile,
+  threadId: string | null,
 ): Promise<DesktopUploadAttempt> {
   const desktopApi = typeof window === "undefined" ? undefined : window.cowork;
   if (!desktopApi?.getPathForFile || !desktopApi.copyFileToWorkspaceUploads) {
@@ -176,7 +183,7 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
   }
 
   try {
-    const uploadsDirectory = resolveWorkspaceUploadsDirectory(get, workspaceId);
+    const uploadsDirectory = resolveWorkspaceUploadsDirectory(get, workspaceId, threadId);
     const uploaded = await desktopApi.copyFileToWorkspaceUploads({
       workspacePath: workspace.path,
       sourcePath,
@@ -193,16 +200,18 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
   }
 }
 
-function resolveWorkspaceUploadsDirectory(get: StoreGet, workspaceId: string): string | null {
+function resolveWorkspaceUploadsDirectory(
+  get: StoreGet,
+  workspaceId: string,
+  threadId: string | null,
+): string | null {
   const state = get();
   const runtime = state.workspaceRuntimeById[workspaceId];
-  const selectedThreadId =
-    state.selectedThreadId &&
-    state.threads.find((thread) => thread.id === state.selectedThreadId)?.workspaceId ===
-      workspaceId
-      ? state.selectedThreadId
+  const targetThreadId =
+    threadId && state.threads.find((thread) => thread.id === threadId)?.workspaceId === workspaceId
+      ? threadId
       : null;
-  const threadRuntime = selectedThreadId ? state.threadRuntimeById[selectedThreadId] : null;
+  const threadRuntime = targetThreadId ? state.threadRuntimeById[targetThreadId] : null;
   const candidates: unknown[] = [
     threadRuntime?.sessionConfig,
     threadRuntime?.config,

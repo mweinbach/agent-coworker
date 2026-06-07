@@ -898,6 +898,7 @@ export function createThreadActions(
           set,
           workspaceId,
           opts.attachmentFiles.map(createComposerAttachmentFile),
+          { threadId },
         );
         resolvedAttachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
         firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);

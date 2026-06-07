@@ -116,11 +116,12 @@ describe("composerAttachments", () => {
     });
   });
 
-  test("uses selected thread uploads directory before workspace control config", async () => {
+  test("uses sending thread uploads directory before workspace control config", async () => {
     const copyCalls: unknown[] = [];
     const sourcePath = "/Users/test/Downloads/audio.mp3";
     const workspacePath = "/Users/test/Project";
     const threadUploadsDirectory = "/Users/test/Project/Thread Uploads";
+    const selectedThreadUploadsDirectory = "/Users/test/Project/Selected Thread Uploads";
 
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -149,13 +150,19 @@ describe("composerAttachments", () => {
     const result = await resolveComposerAttachmentsForWorkspace(
       () =>
         ({
-          selectedThreadId: "thread-1",
+          selectedThreadId: "thread-2",
           workspaces: [{ id: "workspace-1", path: workspacePath }],
-          threads: [{ id: "thread-1", workspaceId: "workspace-1" }],
+          threads: [
+            { id: "thread-1", workspaceId: "workspace-1" },
+            { id: "thread-2", workspaceId: "workspace-1" },
+          ],
           threadRuntimeById: {
             "thread-1": {
               sessionConfig: { uploadsDirectory: threadUploadsDirectory },
               config: { uploadsDirectory: "/Users/test/Project/Older Thread Uploads" },
+            },
+            "thread-2": {
+              sessionConfig: { uploadsDirectory: selectedThreadUploadsDirectory },
             },
           },
           workspaceRuntimeById: {
@@ -178,6 +185,7 @@ describe("composerAttachments", () => {
           signature: "audio",
         },
       ],
+      { threadId: "thread-1" },
     );
 
     expect(copyCalls).toEqual([

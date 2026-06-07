@@ -528,6 +528,7 @@ export function ChatView() {
   const resolvePendingAttachmentsForSend = useCallback(
     async (
       workspaceId: string,
+      threadId: string,
       attachments: readonly ComposerAttachmentFile[],
     ): Promise<FileAttachmentInput[]> => {
       const resolved = await resolveComposerAttachmentsForWorkspace(
@@ -535,6 +536,7 @@ export function ChatView() {
         useAppStore.setState,
         workspaceId,
         attachments,
+        { threadId },
       );
       if (resolved.skippedNotes.length > 0) {
         const detail = resolved.skippedNotes.join(" ");
@@ -566,7 +568,11 @@ export function ChatView() {
         try {
           const attachments =
             pendingAttachments.length > 0
-              ? await resolvePendingAttachmentsForSend(targetWorkspaceId, pendingAttachments)
+              ? await resolvePendingAttachmentsForSend(
+                  targetWorkspaceId,
+                  targetThreadId,
+                  pendingAttachments,
+                )
               : undefined;
           const attachmentSignature =
             attachments && attachments.length > 0 ? buildAttachmentSignature(attachments) : null;

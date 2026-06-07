@@ -183,6 +183,38 @@ describe("manageMemory tool", () => {
     expect((await store.readMemory(activeFolder, "existing"))?.body).toBe("Original body.");
   });
 
+  test("rejects mutating actions when sandbox policy is no-project-write", async () => {
+    const config = makeConfig(dir, { advancedMemory: true, memoriesDir });
+    const activeFolder = resolveMemoryFolderName(config);
+    await store.writeMemory(activeFolder, {
+      name: "Existing",
+      description: "Existing memory",
+      body: "Original body.",
+    });
+    const tool = createManageMemoryTool(
+      makeCtx(dir, {
+        config,
+        sandboxPolicy: { kind: "no-project-write", network: false },
+      }),
+    );
+
+    const listResult = (await tool.execute({ action: "list" })) as ListResult;
+    expect(listResult.activeFolder).toBe(activeFolder);
+    await expect(
+      tool.execute({
+        action: "create",
+        name: "Nope",
+        description: "Should not write",
+        body: "Blocked.",
+      }),
+    ).rejects.toThrow(/no-project-write/);
+    await expect(
+      tool.execute({ action: "edit", slug: "existing", body: "Blocked." }),
+    ).rejects.toThrow(/no-project-write/);
+    await expect(tool.execute({ action: "refresh_index" })).rejects.toThrow(/no-project-write/);
+    expect((await store.readMemory(activeFolder, "existing"))?.body).toBe("Original body.");
+  });
+
   test("reads active memories first and can target chats read-only context", async () => {
     const config = makeConfig(dir, { advancedMemory: true, memoriesDir });
     const activeFolder = resolveMemoryFolderName(config);

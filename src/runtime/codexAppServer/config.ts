@@ -11,6 +11,7 @@ import {
   resolveSandboxPolicy,
   type SandboxConfig,
 } from "../../platform/sandbox";
+import { tmpScratchRoots } from "../../platform/sandbox/policy";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
@@ -254,7 +255,7 @@ export async function resolveEffectiveCodexModel(
 export function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode {
   const policy = resolveCodexCoworkSandboxPolicy(params);
   if (policy.kind === "danger-full-access") return "danger-full-access";
-  if (policy.kind === "no-project-write") return "read-only";
+  if (policy.kind === "no-project-write") return "workspace-write";
   return policy.kind;
 }
 
@@ -269,10 +270,13 @@ export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPo
       ? { type: "dangerFullAccess", networkAccess: false }
       : { type: "dangerFullAccess" };
   }
-  if (sandbox.kind === "read-only" || sandbox.kind === "no-project-write") {
+  if (sandbox.kind === "read-only") {
     return { type: "readOnly", networkAccess: sandbox.network };
   }
-  const writableRoots = sandbox.kind === "workspace-write" ? sandbox.writableRoots : [];
+  const writableRoots =
+    sandbox.kind === "workspace-write"
+      ? sandbox.writableRoots
+      : tmpScratchRoots(sandbox.projectRoots ?? [], ["/tmp", "/private/tmp"]);
   return {
     type: "workspaceWrite",
     writableRoots,

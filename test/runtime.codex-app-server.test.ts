@@ -982,38 +982,49 @@ rl.on("line", (line) => {
   });
 
   test.serial(
-    "passes read-only Codex sandbox for no-project-write subagent shell policy",
+    "passes scratch-only Codex workspace-write sandbox for no-project-write subagent shell policy",
     async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-readonly-"));
+      const dir = await fs.mkdtemp(
+        path.join(process.cwd(), ".tmp-cowork-codex-app-server-scratch-"),
+      );
       const script = await writeMockAppServer(dir);
       const capturePath = path.join(dir, "requests.jsonl");
       process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
       process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
       process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
-      const runtime = createRuntime(makeConfig(dir));
-      await runtime.runTurn({
-        config: makeConfig(dir),
-        system: "You are a read-only child agent.",
-        messages: [{ role: "user", content: "Inspect only" }],
-        tools: {},
-        maxSteps: 1,
-        yolo: true,
-        shellPolicy: "no_project_write",
-      });
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        await runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are a no-project-write child agent.",
+          messages: [{ role: "user", content: "Inspect only" }],
+          tools: {},
+          maxSteps: 1,
+          yolo: true,
+          shellPolicy: "no_project_write",
+        });
 
-      const requests = await readCapturedRequests(capturePath);
-      expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
-        approvalPolicy: "never",
-        sandbox: "read-only",
-      });
-      expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
-        approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "readOnly",
-          networkAccess: true,
-        },
-      });
+        const requests = await readCapturedRequests(capturePath);
+        expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+          approvalPolicy: "never",
+          sandbox: "workspace-write",
+        });
+        expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "workspaceWrite",
+            networkAccess: true,
+          },
+        });
+        const sandboxPolicy = requests.find((entry) => entry.method === "turn/start")?.params
+          ?.sandboxPolicy;
+        expect(sandboxPolicy?.writableRoots).toContain("/tmp");
+        expect(sandboxPolicy?.writableRoots).toContain("/private/tmp");
+        expect(sandboxPolicy?.writableRoots).not.toContain(dir);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     },
   );
 

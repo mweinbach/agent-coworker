@@ -784,7 +784,10 @@ export async function startH3MobileServer(
       if (updated && latestTrustedDevice?.deviceId === updated.deviceId) {
         latestTrustedDevice = updated;
       }
-      if (updated && allowedPatch.conversations === false) {
+      if (
+        updated &&
+        (allowedPatch.conversations === false || allowedPatch.workspaceSettings === false)
+      ) {
         closeDeviceConnection(updated.deviceId);
       }
       return summarizeTrustedDevice(updated);

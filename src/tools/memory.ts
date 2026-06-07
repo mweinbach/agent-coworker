@@ -21,8 +21,9 @@ function defaultWriteKey(key?: string): string {
 }
 
 function assertSandboxAllowsMemoryMutation(ctx: ToolContext): void {
-  if (ctx.sandboxPolicy?.kind === "read-only") {
-    throw new Error("memory mutation blocked: sandbox is read-only.");
+  const sandboxKind = ctx.sandboxPolicy?.kind;
+  if (sandboxKind === "read-only" || sandboxKind === "no-project-write") {
+    throw new Error(`memory mutation blocked: sandbox is ${sandboxKind}.`);
   }
 }
 

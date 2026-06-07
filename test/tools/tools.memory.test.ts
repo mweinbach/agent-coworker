@@ -127,6 +127,19 @@ describe("memory tool", () => {
     expect(await t.execute({ action: "read", key: "pref" })).toContain("not found");
   });
 
+  test("rejects mutating actions when sandbox policy is no-project-write", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: false } }),
+    );
+
+    await expect(t.execute({ action: "write", key: "pref", content: "No writes" })).rejects.toThrow(
+      /no-project-write/,
+    );
+    await expect(t.execute({ action: "delete", key: "pref" })).rejects.toThrow(/no-project-write/);
+    expect(await t.execute({ action: "read", key: "pref" })).toContain("not found");
+  });
+
   test("searches sqlite-backed memory entries", async () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));

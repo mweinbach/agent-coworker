@@ -226,7 +226,7 @@ describe("artifact runtime bootstrap", () => {
       if (process.platform === "win32") {
         await fs.symlink(realDir, linkPath, "junction");
       } else {
-        await fs.symlink(path.join("..", "real-pkg"), linkPath);
+        await fs.symlink("real-pkg", linkPath);
       }
       symlinkCreated = true;
     } catch {
@@ -269,6 +269,36 @@ describe("artifact runtime bootstrap", () => {
       const result = await migrateLegacyArtifactRuntime({ home, cacheDir });
       expect(result.status).toBe("failed");
       expect(result.reason).toBeTruthy();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("bootstrap reports failed legacy migration without crashing startup", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-artifact-bootstrap-fail-"));
+    await writeFakeLegacyCodexRuntime(home);
+    const coworkCacheParent = path.join(home, ".cache", "cowork");
+    await fs.writeFile(coworkCacheParent, "not a directory", "utf-8");
+    const logLines: string[] = [];
+
+    try {
+      const result = await ensureArtifactRuntimeReady({
+        homedir: home,
+        env: {},
+        allowNetwork: false,
+        log: (line) => logLines.push(line),
+      });
+
+      expect(result?.migration.status).toBe("failed");
+      expect(result?.migration.reason).toBeTruthy();
+      expect(result?.runtime.status).toBe("missing");
+      expect(result?.artifactTool.status).toBe("missing");
+      expect(logLines.some((line) => line.includes("Artifact runtime migration failed"))).toBe(
+        true,
+      );
+      await expect(
+        fs.stat(path.join(home, ".cache", "cowork", "artifact-runtime")),
+      ).rejects.toThrow();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

@@ -108,6 +108,14 @@ function consumeAuthorizedUploadSource(
   return source;
 }
 
+function getAuthorizedUploadSource(
+  authorizedUploadSources: AuthorizedUploadSources,
+  ownerKey: UploadAuthorizationOwnerKey,
+  sourcePath: string,
+): AuthorizedUploadSource | null {
+  return authorizedUploadSources.get(ownerKey)?.get(sourcePath) ?? null;
+}
+
 function uploadSourceIdentityFromStat(stat: {
   dev: number;
   ino: number;
@@ -462,7 +470,7 @@ async function copyFileToWorkspaceUploads(
   // Fail closed before touching the source: only paths the renderer picker
   // authorized via getPathForFile may be copied. Otherwise an arbitrary path
   // could be read into the workspace and exfiltrated as an attachment.
-  const authorizedSource = consumeAuthorizedUploadSource(
+  const authorizedSource = getAuthorizedUploadSource(
     authorizedUploadSources,
     uploadAuthorizationOwnerKey,
     sourcePath,
@@ -472,55 +480,69 @@ async function copyFileToWorkspaceUploads(
       "Upload source path is not authorized. Select the file through the desktop file picker.",
     );
   }
-  const sourceHandle = await openAuthorizedUploadSource(sourcePath, authorizedSource);
+  if (authorizedSource.size > MAX_ATTACHMENT_UPLOAD_BYTE_SIZE) {
+    throw new Error("File too large to upload (max 100MB)");
+  }
+
+  const safeName = path.basename(input.filename);
+  if (!safeName || safeName === "." || safeName === "..") {
+    throw new Error("Invalid filename");
+  }
+
+  const requestedUploadsDir = input.uploadsDirectory
+    ? path.resolve(safeWorkspacePath, input.uploadsDirectory)
+    : path.resolve(safeWorkspacePath, DEFAULT_WORKSPACE_UPLOADS_DIR_NAME);
+  let resolvedUploadsDir: string;
+  try {
+    resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
+      safeWorkspacePath,
+      requestedUploadsDir,
+    );
+  } catch {
+    throw new Error("Uploads directory resolves outside the workspace.");
+  }
+
+  await fs.mkdir(resolvedUploadsDir, { recursive: true });
+  try {
+    resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
+      safeWorkspacePath,
+      resolvedUploadsDir,
+    );
+  } catch {
+    throw new Error("Uploads directory resolves outside the workspace.");
+  }
+
+  const ext = path.extname(safeName);
+  const base = safeName.slice(0, safeName.length - ext.length);
+  let targetPath = path.resolve(resolvedUploadsDir, safeName);
+  if (!isPathInside(resolvedUploadsDir, targetPath)) {
+    throw new Error("Invalid filename (path traversal)");
+  }
+
+  let counter = 1;
+  while (await fileExists(targetPath)) {
+    targetPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
+    if (!isPathInside(resolvedUploadsDir, targetPath)) {
+      throw new Error("Invalid filename (path traversal)");
+    }
+    counter += 1;
+  }
+
+  const consumedSource = consumeAuthorizedUploadSource(
+    authorizedUploadSources,
+    uploadAuthorizationOwnerKey,
+    sourcePath,
+  );
+  if (!consumedSource) {
+    throw new Error(
+      "Upload source path is not authorized. Select the file through the desktop file picker.",
+    );
+  }
+  const sourceHandle = await openAuthorizedUploadSource(sourcePath, consumedSource);
   try {
     const sourceStat = await sourceHandle.stat();
     if (sourceStat.size > MAX_ATTACHMENT_UPLOAD_BYTE_SIZE) {
       throw new Error("File too large to upload (max 100MB)");
-    }
-
-    const safeName = path.basename(input.filename);
-    if (!safeName || safeName === "." || safeName === "..") {
-      throw new Error("Invalid filename");
-    }
-
-    const requestedUploadsDir = input.uploadsDirectory
-      ? path.resolve(safeWorkspacePath, input.uploadsDirectory)
-      : path.resolve(safeWorkspacePath, DEFAULT_WORKSPACE_UPLOADS_DIR_NAME);
-    let resolvedUploadsDir: string;
-    try {
-      resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
-        safeWorkspacePath,
-        requestedUploadsDir,
-      );
-    } catch {
-      throw new Error("Uploads directory resolves outside the workspace.");
-    }
-
-    await fs.mkdir(resolvedUploadsDir, { recursive: true });
-    try {
-      resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
-        safeWorkspacePath,
-        resolvedUploadsDir,
-      );
-    } catch {
-      throw new Error("Uploads directory resolves outside the workspace.");
-    }
-
-    const ext = path.extname(safeName);
-    const base = safeName.slice(0, safeName.length - ext.length);
-    let targetPath = path.resolve(resolvedUploadsDir, safeName);
-    if (!isPathInside(resolvedUploadsDir, targetPath)) {
-      throw new Error("Invalid filename (path traversal)");
-    }
-
-    let counter = 1;
-    while (await fileExists(targetPath)) {
-      targetPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
-      if (!isPathInside(resolvedUploadsDir, targetPath)) {
-        throw new Error("Invalid filename (path traversal)");
-      }
-      counter += 1;
     }
 
     await fs.writeFile(targetPath, await sourceHandle.readFile(), { flag: "wx" });

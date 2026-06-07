@@ -151,6 +151,38 @@ describe("manageMemory tool", () => {
     ).rejects.toThrow("read-only");
   });
 
+  test("rejects mutating actions when sandbox policy is read-only", async () => {
+    const config = makeConfig(dir, { advancedMemory: true, memoriesDir });
+    const activeFolder = resolveMemoryFolderName(config);
+    await store.writeMemory(activeFolder, {
+      name: "Existing",
+      description: "Existing memory",
+      body: "Original body.",
+    });
+    const tool = createManageMemoryTool(
+      makeCtx(dir, {
+        config,
+        sandboxPolicy: { kind: "read-only", network: false },
+      }),
+    );
+
+    const listResult = (await tool.execute({ action: "list" })) as ListResult;
+    expect(listResult.activeFolder).toBe(activeFolder);
+    await expect(
+      tool.execute({
+        action: "create",
+        name: "Nope",
+        description: "Should not write",
+        body: "Blocked.",
+      }),
+    ).rejects.toThrow(/read-only/);
+    await expect(
+      tool.execute({ action: "edit", slug: "existing", body: "Blocked." }),
+    ).rejects.toThrow(/read-only/);
+    await expect(tool.execute({ action: "refresh_index" })).rejects.toThrow(/read-only/);
+    expect((await store.readMemory(activeFolder, "existing"))?.body).toBe("Original body.");
+  });
+
   test("reads active memories first and can target chats read-only context", async () => {
     const config = makeConfig(dir, { advancedMemory: true, memoriesDir });
     const activeFolder = resolveMemoryFolderName(config);

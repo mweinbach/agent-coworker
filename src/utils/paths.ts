@@ -11,11 +11,18 @@ export function resolveMaybeRelative(p: string, baseDir: string): string {
 export function isPathInside(parent: string, child: string): boolean {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
 
+  return rel === "" || !isRelativePathOutsideRoot(rel);
+}
+
+function isRelativePathOutsideRoot(relativePath: string): boolean {
   // On Windows, crossing drive letters (or UNC roots) returns an absolute
   // relative result (e.g. "D:\\target"), which must be treated as outside.
-  if (path.isAbsolute(rel)) return false;
-
-  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== "..");
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
 }
 
 /**
@@ -36,7 +43,7 @@ export const PROTECTED_METADATA_DIR_NAMES = [".git", ".cowork"] as const;
  */
 export function pathCrossesProtectedMetadata(base: string, target: string): boolean {
   const relative = path.relative(path.resolve(base), path.resolve(target));
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relative === "" || isRelativePathOutsideRoot(relative)) {
     return false;
   }
   return relative

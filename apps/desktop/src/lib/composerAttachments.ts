@@ -194,8 +194,21 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
 }
 
 function resolveWorkspaceUploadsDirectory(get: StoreGet, workspaceId: string): string | null {
-  const runtime = get().workspaceRuntimeById[workspaceId];
-  const candidates: unknown[] = [runtime?.controlSessionConfig, runtime?.controlConfig];
+  const state = get();
+  const runtime = state.workspaceRuntimeById[workspaceId];
+  const selectedThreadId =
+    state.selectedThreadId &&
+    state.threads.find((thread) => thread.id === state.selectedThreadId)?.workspaceId ===
+      workspaceId
+      ? state.selectedThreadId
+      : null;
+  const threadRuntime = selectedThreadId ? state.threadRuntimeById[selectedThreadId] : null;
+  const candidates: unknown[] = [
+    threadRuntime?.sessionConfig,
+    threadRuntime?.config,
+    runtime?.controlSessionConfig,
+    runtime?.controlConfig,
+  ];
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object") {
       continue;

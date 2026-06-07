@@ -112,6 +112,12 @@ function assertWritableSource(input: ManageMemoryInput, activeFolder: string): v
   }
 }
 
+function assertSandboxAllowsMemoryMutation(ctx: ToolContext): void {
+  if (ctx.sandboxPolicy?.kind === "read-only") {
+    throw new Error("manageMemory mutation blocked: sandbox is read-only.");
+  }
+}
+
 async function notifyMemoryChanged(ctx: ToolContext, folder: string): Promise<void> {
   await ctx.onAdvancedMemoryChanged?.(folder);
 }
@@ -175,6 +181,7 @@ export function createManageMemoryTool(ctx: ToolContext) {
       }
 
       if (input.action === "create") {
+        assertSandboxAllowsMemoryMutation(ctx);
         assertWritableSource(input, access.activeFolder);
         const name = requireString(input.name, "create name");
         const description = requireString(input.description, "create description");
@@ -204,6 +211,7 @@ export function createManageMemoryTool(ctx: ToolContext) {
       }
 
       if (input.action === "edit") {
+        assertSandboxAllowsMemoryMutation(ctx);
         assertWritableSource(input, access.activeFolder);
         const slug = requireString(input.slug, "edit slug");
         const memory = await store.editMemory(access.activeFolder, slug, {
@@ -228,6 +236,7 @@ export function createManageMemoryTool(ctx: ToolContext) {
         };
       }
 
+      assertSandboxAllowsMemoryMutation(ctx);
       await store.regenerateIndex(access.activeFolder);
       await notifyMemoryChanged(ctx, access.activeFolder);
       return {

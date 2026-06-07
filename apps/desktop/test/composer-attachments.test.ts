@@ -116,6 +116,81 @@ describe("composerAttachments", () => {
     });
   });
 
+  test("uses selected thread uploads directory before workspace control config", async () => {
+    const copyCalls: unknown[] = [];
+    const sourcePath = "/Users/test/Downloads/audio.mp3";
+    const workspacePath = "/Users/test/Project";
+    const threadUploadsDirectory = "/Users/test/Project/Thread Uploads";
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        cowork: {
+          getPathForFile() {
+            return sourcePath;
+          },
+          async copyFileToWorkspaceUploads(opts: unknown) {
+            copyCalls.push(opts);
+            return {
+              filename: "audio.mp3",
+              path: `${threadUploadsDirectory}/audio.mp3`,
+            };
+          },
+        },
+      },
+    });
+
+    const fakeFile = {
+      async arrayBuffer() {
+        throw new Error("oversized desktop file should not be read in the renderer");
+      },
+    } as unknown as File;
+
+    const result = await resolveComposerAttachmentsForWorkspace(
+      () =>
+        ({
+          selectedThreadId: "thread-1",
+          workspaces: [{ id: "workspace-1", path: workspacePath }],
+          threads: [{ id: "thread-1", workspaceId: "workspace-1" }],
+          threadRuntimeById: {
+            "thread-1": {
+              sessionConfig: { uploadsDirectory: threadUploadsDirectory },
+              config: { uploadsDirectory: "/Users/test/Project/Older Thread Uploads" },
+            },
+          },
+          workspaceRuntimeById: {
+            "workspace-1": {
+              controlSessionConfig: {
+                uploadsDirectory: "/Users/test/Project/Workspace Session Uploads",
+              },
+              controlConfig: { uploadsDirectory: "/Users/test/Project/Workspace Uploads" },
+            },
+          },
+        }) as never,
+      (() => {}) as never,
+      "workspace-1",
+      [
+        {
+          filename: "audio.mp3",
+          mimeType: "audio/mpeg",
+          size: MAX_ATTACHMENT_INLINE_BYTE_SIZE + 1,
+          file: fakeFile,
+          signature: "audio",
+        },
+      ],
+    );
+
+    expect(copyCalls).toEqual([
+      {
+        workspacePath,
+        sourcePath,
+        filename: "audio.mp3",
+        uploadsDirectory: threadUploadsDirectory,
+      },
+    ]);
+    expect(result.attachments[0]?.path).toBe(`${threadUploadsDirectory}/audio.mp3`);
+  });
+
   test("falls back to socket upload when a desktop file has no OS path", async () => {
     let arrayBufferCalls = 0;
     const workspacePath = "/Users/test/Project";

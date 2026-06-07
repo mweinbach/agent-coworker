@@ -20,6 +20,12 @@ function defaultWriteKey(key?: string): string {
   return key?.trim() ? key : "hot";
 }
 
+function assertSandboxAllowsMemoryMutation(ctx: ToolContext): void {
+  if (ctx.sandboxPolicy?.kind === "read-only") {
+    throw new Error("memory mutation blocked: sandbox is read-only.");
+  }
+}
+
 export function createMemoryTool(ctx: ToolContext, _opts: { execFileImpl?: unknown } = {}) {
   const memoryStore = new MemoryStore(
     ctx.config.projectMemoryDbPath ?? path.join(ctx.config.projectCoworkDir, "memory.sqlite"),
@@ -63,6 +69,7 @@ Actions:
       }
 
       if (action === "write") {
+        assertSandboxAllowsMemoryMutation(ctx);
         if (!content?.trim()) throw new Error("content is required for write action");
         if (ctx.config.memoryRequireApproval ?? false) {
           const answer = await ctx.askUser("Allow saving this memory?", ["approve", "deny"]);
@@ -78,6 +85,7 @@ Actions:
       }
 
       if (action === "delete") {
+        assertSandboxAllowsMemoryMutation(ctx);
         if (!key?.trim()) throw new Error("key is required for delete action");
         const removed = await memoryStore.remove(scopeFromInput(scope), key);
         return removed ? `Memory deleted: ${key}` : `Memory key "${key}" not found.`;

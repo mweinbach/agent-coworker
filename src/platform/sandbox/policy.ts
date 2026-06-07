@@ -295,8 +295,11 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
 }
 
 export function tmpScratchRoots(blockedRoots: string[], scratch: string[]): string[] {
-  const blocked = new Set(blockedRoots.map((root) => path.resolve(root)));
-  return withTmpScratch(blockedRoots, scratch).filter((root) => !blocked.has(path.resolve(root)));
+  const canonicalBlockedRoots = blockedRoots.map(canonicalizeRoot);
+  const blocked = new Set(canonicalBlockedRoots.map((root) => path.resolve(root)));
+  return withTmpScratch(canonicalBlockedRoots, scratch).filter(
+    (root) => !blocked.has(path.resolve(root)),
+  );
 }
 
 /**

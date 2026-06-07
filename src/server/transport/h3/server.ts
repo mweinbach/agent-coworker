@@ -589,6 +589,14 @@ export async function startH3MobileServer(
     httpConnections.set(deviceId, connection);
     return connection;
   };
+  const closeDeviceConnection = (deviceId: string): void => {
+    const connection = httpConnections.get(deviceId);
+    if (!connection) {
+      return;
+    }
+    httpConnections.delete(deviceId);
+    connection.close();
+  };
 
   const createTicket = (port: number): CoworkPairingTicket => ({
     v: 1,
@@ -776,14 +784,13 @@ export async function startH3MobileServer(
       if (updated && latestTrustedDevice?.deviceId === updated.deviceId) {
         latestTrustedDevice = updated;
       }
+      if (updated && allowedPatch.conversations === false) {
+        closeDeviceConnection(updated.deviceId);
+      }
       return summarizeTrustedDevice(updated);
     },
     async revokeTrustedDevice(deviceId: string) {
-      const connection = httpConnections.get(deviceId);
-      if (connection) {
-        httpConnections.delete(deviceId);
-        connection.close();
-      }
+      closeDeviceConnection(deviceId);
       const removed = await forgetH3TrustedDevice(options.storeRootPath, deviceId);
       if (latestTrustedDevice?.deviceId === deviceId) {
         const state = await loadH3PairingStoreState(options.storeRootPath);

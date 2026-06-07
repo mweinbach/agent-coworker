@@ -108,6 +108,43 @@ describe("DelegateRunner", () => {
     );
   });
 
+  test("resolves sandbox policy before creating delegate tools", async () => {
+    const runTurn = mock(async () => ({
+      text: "ok",
+      reasoningText: undefined as string | undefined,
+      responseMessages: [],
+    }));
+    const createRuntime = mock(() => ({ runTurn }));
+    const createTools = mock(() => ({
+      read: { type: "builtin" },
+    }));
+    const runner = new DelegateRunner({
+      loadAgentPrompt: async () => "delegate system prompt",
+      buildRuntimeTelemetrySettings: async () => null,
+      buildGooglePrepareStep: () => undefined,
+      createRuntime,
+      createTools,
+    });
+
+    await runner.run({
+      config: makeConfig({
+        provider: "opencode-zen",
+        model: "glm-5",
+        sandbox: { mode: "read-only", network: false },
+      }),
+      role: "worker",
+      message: "Run inside read-only sandbox",
+      askUser: async () => "",
+      approveCommand: async () => true,
+      log: () => {},
+    });
+
+    expect(createTools).toHaveBeenCalledTimes(1);
+    expect(createTools.mock.calls[0]?.[0]).toMatchObject({
+      sandboxPolicy: { kind: "read-only", network: false },
+    });
+  });
+
   test("codex app-server delegates keep Cowork dynamic tools while filtering native execution tools", async () => {
     const runTurn = mock(async () => ({
       text: "ok",

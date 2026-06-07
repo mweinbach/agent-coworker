@@ -33,8 +33,11 @@ export function createWriteTool(ctx: ToolContext) {
       ctx.log(
         `tool> write ${JSON.stringify({ filePath, chars: content.length, mode: resolvedMode })}`,
       );
-      if (ctx.sandboxPolicy?.kind === "read-only") {
-        throw new Error("write blocked: sandbox mode is read-only");
+      if (
+        ctx.sandboxPolicy?.kind === "read-only" ||
+        ctx.sandboxPolicy?.kind === "no-project-write"
+      ) {
+        throw new Error(`write blocked: sandbox mode is ${ctx.sandboxPolicy.kind}`);
       }
 
       const abs = await assertWritePathAllowed(

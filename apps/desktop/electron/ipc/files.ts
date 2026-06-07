@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
-import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import fs, { type FileHandle } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -68,7 +69,16 @@ const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
 const MAX_AUTHORIZED_UPLOAD_SOURCES_PER_SENDER = 64;
 
 type UploadAuthorizationOwnerKey = string;
-type AuthorizedUploadSources = Map<UploadAuthorizationOwnerKey, Set<string>>;
+type AuthorizedUploadSource = {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+};
+type AuthorizedUploadSources = Map<
+  UploadAuthorizationOwnerKey,
+  Map<string, AuthorizedUploadSource>
+>;
 
 function uploadAuthorizationOwnerKey(
   event: Electron.IpcMainInvokeEvent,
@@ -83,10 +93,11 @@ function consumeAuthorizedUploadSource(
   authorizedUploadSources: AuthorizedUploadSources,
   ownerKey: UploadAuthorizationOwnerKey,
   sourcePath: string,
-): boolean {
+): AuthorizedUploadSource | null {
   const ownerSources = authorizedUploadSources.get(ownerKey);
-  if (!ownerSources?.has(sourcePath)) {
-    return false;
+  const source = ownerSources?.get(sourcePath);
+  if (!ownerSources || !source) {
+    return null;
   }
 
   ownerSources.delete(sourcePath);
@@ -94,7 +105,44 @@ function consumeAuthorizedUploadSource(
     authorizedUploadSources.delete(ownerKey);
   }
 
-  return true;
+  return source;
+}
+
+function uploadSourceIdentityFromStat(stat: {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+}): AuthorizedUploadSource {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
+}
+
+function uploadSourceIdentityMatches(
+  expected: AuthorizedUploadSource,
+  actual: AuthorizedUploadSource,
+): boolean {
+  return (
+    expected.dev === actual.dev &&
+    expected.ino === actual.ino &&
+    expected.size === actual.size &&
+    expected.mtimeMs === actual.mtimeMs
+  );
+}
+
+async function readUploadSourceIdentity(sourcePath: string): Promise<AuthorizedUploadSource> {
+  const sourceStat = await fs.lstat(sourcePath);
+  if (sourceStat.isSymbolicLink()) {
+    throw new Error("Upload source path must not be a symbolic link.");
+  }
+  if (!sourceStat.isFile()) {
+    throw new Error("Upload source path must be a file.");
+  }
+  return uploadSourceIdentityFromStat(sourceStat);
 }
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
@@ -104,21 +152,22 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   // resolved from a real user-selected File. Authorizations are scoped to the
   // sender frame and consumed on copy so another renderer cannot reuse them.
   const authorizedUploadSources: AuthorizedUploadSources = new Map();
-  const rememberAuthorizedUploadSource = (
+  const rememberAuthorizedUploadSource = async (
     ownerKey: UploadAuthorizationOwnerKey,
     sourcePath: string,
-  ): void => {
+  ): Promise<void> => {
     const resolved = path.resolve(sourcePath);
+    const sourceIdentity = await readUploadSourceIdentity(resolved);
     let ownerSources = authorizedUploadSources.get(ownerKey);
     if (!ownerSources) {
-      ownerSources = new Set();
+      ownerSources = new Map();
       authorizedUploadSources.set(ownerKey, ownerSources);
     }
 
     ownerSources.delete(resolved);
-    ownerSources.add(resolved);
+    ownerSources.set(resolved, sourceIdentity);
     while (ownerSources.size > MAX_AUTHORIZED_UPLOAD_SOURCES_PER_SENDER) {
-      const oldest = ownerSources.values().next().value;
+      const oldest = ownerSources.keys().next().value;
       if (oldest === undefined) break;
       ownerSources.delete(oldest);
     }
@@ -344,7 +393,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         args,
         "authorizeUploadSource options",
       );
-      rememberAuthorizedUploadSource(uploadAuthorizationOwnerKey(event), input.sourcePath);
+      await rememberAuthorizedUploadSource(uploadAuthorizationOwnerKey(event), input.sourcePath);
     },
   );
 
@@ -413,70 +462,107 @@ async function copyFileToWorkspaceUploads(
   // Fail closed before touching the source: only paths the renderer picker
   // authorized via getPathForFile may be copied. Otherwise an arbitrary path
   // could be read into the workspace and exfiltrated as an attachment.
-  if (
-    !consumeAuthorizedUploadSource(authorizedUploadSources, uploadAuthorizationOwnerKey, sourcePath)
-  ) {
+  const authorizedSource = consumeAuthorizedUploadSource(
+    authorizedUploadSources,
+    uploadAuthorizationOwnerKey,
+    sourcePath,
+  );
+  if (!authorizedSource) {
     throw new Error(
       "Upload source path is not authorized. Select the file through the desktop file picker.",
     );
   }
-  const sourceStat = await fs.stat(sourcePath).catch((error: unknown) => {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to read source file: ${detail}`);
-  });
-  if (!sourceStat.isFile()) {
-    throw new Error("Source path is not a file");
-  }
-  if (sourceStat.size > MAX_ATTACHMENT_UPLOAD_BYTE_SIZE) {
-    throw new Error("File too large to upload (max 100MB)");
-  }
-
-  const safeName = path.basename(input.filename);
-  if (!safeName || safeName === "." || safeName === "..") {
-    throw new Error("Invalid filename");
-  }
-
-  const requestedUploadsDir = input.uploadsDirectory
-    ? path.resolve(safeWorkspacePath, input.uploadsDirectory)
-    : path.resolve(safeWorkspacePath, DEFAULT_WORKSPACE_UPLOADS_DIR_NAME);
-  let resolvedUploadsDir: string;
+  const sourceHandle = await openAuthorizedUploadSource(sourcePath, authorizedSource);
   try {
-    resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
-      safeWorkspacePath,
-      requestedUploadsDir,
-    );
-  } catch {
-    throw new Error("Uploads directory resolves outside the workspace.");
-  }
+    const sourceStat = await sourceHandle.stat();
+    if (sourceStat.size > MAX_ATTACHMENT_UPLOAD_BYTE_SIZE) {
+      throw new Error("File too large to upload (max 100MB)");
+    }
 
-  await fs.mkdir(resolvedUploadsDir, { recursive: true });
-  try {
-    resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
-      safeWorkspacePath,
-      resolvedUploadsDir,
-    );
-  } catch {
-    throw new Error("Uploads directory resolves outside the workspace.");
-  }
+    const safeName = path.basename(input.filename);
+    if (!safeName || safeName === "." || safeName === "..") {
+      throw new Error("Invalid filename");
+    }
 
-  const ext = path.extname(safeName);
-  const base = safeName.slice(0, safeName.length - ext.length);
-  let targetPath = path.resolve(resolvedUploadsDir, safeName);
-  if (!isPathInside(resolvedUploadsDir, targetPath)) {
-    throw new Error("Invalid filename (path traversal)");
-  }
+    const requestedUploadsDir = input.uploadsDirectory
+      ? path.resolve(safeWorkspacePath, input.uploadsDirectory)
+      : path.resolve(safeWorkspacePath, DEFAULT_WORKSPACE_UPLOADS_DIR_NAME);
+    let resolvedUploadsDir: string;
+    try {
+      resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
+        safeWorkspacePath,
+        requestedUploadsDir,
+      );
+    } catch {
+      throw new Error("Uploads directory resolves outside the workspace.");
+    }
 
-  let counter = 1;
-  while (await fileExists(targetPath)) {
-    targetPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
+    await fs.mkdir(resolvedUploadsDir, { recursive: true });
+    try {
+      resolvedUploadsDir = await resolvePathInsideRootForBoundaryCheck(
+        safeWorkspacePath,
+        resolvedUploadsDir,
+      );
+    } catch {
+      throw new Error("Uploads directory resolves outside the workspace.");
+    }
+
+    const ext = path.extname(safeName);
+    const base = safeName.slice(0, safeName.length - ext.length);
+    let targetPath = path.resolve(resolvedUploadsDir, safeName);
     if (!isPathInside(resolvedUploadsDir, targetPath)) {
       throw new Error("Invalid filename (path traversal)");
     }
-    counter += 1;
+
+    let counter = 1;
+    while (await fileExists(targetPath)) {
+      targetPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
+      if (!isPathInside(resolvedUploadsDir, targetPath)) {
+        throw new Error("Invalid filename (path traversal)");
+      }
+      counter += 1;
+    }
+
+    await fs.writeFile(targetPath, await sourceHandle.readFile(), { flag: "wx" });
+    return { filename: path.basename(targetPath), path: targetPath };
+  } finally {
+    await sourceHandle.close();
+  }
+}
+
+async function openAuthorizedUploadSource(
+  sourcePath: string,
+  authorizedSource: AuthorizedUploadSource,
+): Promise<FileHandle> {
+  const sourceStat = await fs.lstat(sourcePath).catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to read source file: ${detail}`);
+  });
+  if (sourceStat.isSymbolicLink()) {
+    throw new Error("Upload source path must not be a symbolic link.");
+  }
+  if (!sourceStat.isFile()) {
+    throw new Error("Source path is not a file");
+  }
+  const currentIdentity = uploadSourceIdentityFromStat(sourceStat);
+  if (!uploadSourceIdentityMatches(authorizedSource, currentIdentity)) {
+    throw new Error("Upload source file changed after authorization. Select the file again.");
   }
 
-  await fs.copyFile(sourcePath, targetPath);
-  return { filename: path.basename(targetPath), path: targetPath };
+  const sourceHandle = await fs.open(
+    sourcePath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+  );
+  const openedStat = await sourceHandle.stat();
+  if (!openedStat.isFile()) {
+    await sourceHandle.close();
+    throw new Error("Source path is not a file");
+  }
+  if (!uploadSourceIdentityMatches(authorizedSource, uploadSourceIdentityFromStat(openedStat))) {
+    await sourceHandle.close();
+    throw new Error("Upload source file changed after authorization. Select the file again.");
+  }
+  return sourceHandle;
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

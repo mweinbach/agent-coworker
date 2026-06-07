@@ -23,6 +23,7 @@ import {
   filterTargetPathsToWorkspace,
   resolveSandboxPolicy,
   type SandboxPolicy,
+  tmpScratchRoots,
 } from "../../src/platform/sandbox/policy";
 import {
   buildSeatbeltCommand,
@@ -170,6 +171,23 @@ describe("resolveSandboxPolicy", () => {
       projectRoots: [path.resolve("/tmp/project/src"), path.resolve("/tmp/project")],
       network: true,
     });
+  });
+
+  test("temp scratch exclusion canonicalizes symlinked project roots", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const realProject = fs.mkdtempSync(path.join("/tmp", "cowork-sandbox-real-project-"));
+    const linkParent = fs.mkdtempSync(path.join(process.cwd(), ".tmp-cowork-sandbox-link-"));
+    const linkedProject = path.join(linkParent, "project-link");
+    try {
+      fs.symlinkSync(realProject, linkedProject, "dir");
+      expect(tmpScratchRoots([linkedProject], ["/tmp"])).toEqual([]);
+    } finally {
+      fs.rmSync(linkParent, { recursive: true, force: true });
+      fs.rmSync(realProject, { recursive: true, force: true });
+    }
   });
 
   test("relative targetPaths resolve against the workspace, not process cwd", () => {

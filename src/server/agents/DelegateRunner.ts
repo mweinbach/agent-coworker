@@ -1,4 +1,7 @@
+import path from "node:path";
+
 import { buildRuntimeTelemetrySettings } from "../../observability/runtime";
+import { resolveSandboxPolicy } from "../../platform/sandbox";
 import { loadAgentPrompt } from "../../prompt";
 import { buildGooglePrepareStep } from "../../providers/googleReplay";
 import { createRuntime } from "../../runtime";
@@ -81,6 +84,7 @@ export class DelegateRunner {
       [],
       opts.harnessContext,
     );
+    const shellPolicy = getAgentRoleShellPolicy(opts.role);
     const delegateContext: ToolContext = {
       config: routed.config,
       log: (line) => opts.log(`[delegate:${opts.role}] ${line}`),
@@ -94,7 +98,16 @@ export class DelegateRunner {
       harnessContext: opts.harnessContext,
       agentRole: opts.role,
       agentTargetPaths: opts.targetPaths,
-      shellPolicy: getAgentRoleShellPolicy(opts.role),
+      shellPolicy,
+      sandboxPolicy: resolveSandboxPolicy({
+        config: routed.config.sandbox,
+        readOnlyRole: roleDefinition.readOnly || shellPolicy === "no_project_write",
+        workingDirectory: routed.config.workingDirectory,
+        projectRoot: path.dirname(routed.config.projectCoworkDir),
+        outputDirectory: routed.config.outputDirectory,
+        uploadsDirectory: routed.config.uploadsDirectory,
+        targetPaths: opts.targetPaths,
+      }),
     };
     const rawTools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);
     const tools = providerOwnsExecutableTools(routed.config)

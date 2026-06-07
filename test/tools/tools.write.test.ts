@@ -122,6 +122,17 @@ describe("write tool", () => {
     await expect(fs.readFile(path.join(dir, "blocked.txt"), "utf-8")).rejects.toThrow();
   });
 
+  test("rejects writes when sandbox policy is no-project-write", async () => {
+    const dir = await tmpDir();
+    const t: any = createWriteTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: false } }),
+    );
+    await expect(t.execute({ filePath: "blocked.txt", content: "nope" })).rejects.toThrow(
+      /sandbox mode is no-project-write/i,
+    );
+    await expect(fs.readFile(path.join(dir, "blocked.txt"), "utf-8")).rejects.toThrow();
+  });
+
   test("enforces child agent targetPaths for writes", async () => {
     const dir = await tmpDir();
     await fs.mkdir(path.join(dir, "src", "foo"), { recursive: true });

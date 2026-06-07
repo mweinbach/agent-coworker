@@ -80,6 +80,20 @@ describe("edit tool", () => {
     await expect(fs.readFile(p, "utf-8")).resolves.toBe("hello world");
   });
 
+  test("rejects edits when sandbox policy is no-project-write", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "file.txt");
+    await fs.writeFile(p, "hello world", "utf-8");
+
+    const t: any = createEditTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: false } }),
+    );
+    await expect(
+      t.execute({ filePath: p, oldString: "world", newString: "earth", replaceAll: false }),
+    ).rejects.toThrow(/sandbox mode is no-project-write/i);
+    await expect(fs.readFile(p, "utf-8")).resolves.toBe("hello world");
+  });
+
   test("throws when multiple occurrences without replaceAll", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "file.txt");

@@ -4,6 +4,72 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.18 - 2026-06-07
+
+### Added
+
+- **OS-backed command sandboxing** — Added a cross-platform sandbox layer for
+  shell tool execution, replacing parse-only filtering with native policy
+  generation for macOS Seatbelt, Linux bubblewrap, and a Windows restricted
+  token/Job Object helper.
+- **Windows sandbox helper** — Added the `cowork-win-sandbox` Rust sidecar,
+  packaging support, documentation, and CI coverage so Windows shell commands
+  run under the same workspace-scoped enforcement model as macOS and Linux.
+- **Sandbox approval UX** — Added inline sandbox-aware approval cards and
+  surfaced approval context in desktop chat so users can review why a command
+  wants to step outside its current scope.
+- **Scoped advanced memory management** — Added scoped memory-management
+  support with a dedicated built-in tool, OpenAI skill guidance, and tests for
+  memory storage behavior.
+
+### Changed
+
+- **Workspace-first sandbox policy** — Tightened command execution around
+  canonical workspace roots, target paths, read-only floors, protected metadata,
+  upload/output directories, and escalation reason codes so child agents and
+  delegated Codex turns inherit the same effective boundaries.
+- **Global plugin and skill reads** — Expanded allowed read coverage for
+  installed global skills and plugins while preserving the sandbox floor for
+  workspace writes.
+- **Desktop attachment handling** — Large local attachments are copied into
+  controlled upload storage before use, oversized audio uploads now provide a
+  clearer hint, and attachment authorization is bound to the sending thread.
+- **App-server replay** — Replayed app-server web search output more reliably
+  through the model stream normalization path.
+- **Workflow pinning** — Updated GitHub workflow setup steps to pin the shared
+  Bun install action and added Windows sandbox helper enforcement in CI.
+
+### Fixed
+
+- **Sandbox escape prevention** — Rejected symlink-escaping target paths,
+  writable roots inside protected metadata, child target paths outside the
+  workspace, and fallback paths that would silently widen command access.
+- **Sandbox backend correctness** — Hardened bubblewrap probing, macOS `/tmp`
+  alias handling, Seatbelt writable-root canonicalization, Windows restricted
+  token handle cleanup, and unenforceable-policy behavior.
+- **Approval routing** — Kept sandbox approvals reachable across thread
+  transitions, dismissed stale off-thread approvals, and handled
+  no-project-write review feedback without widening access.
+- **Runtime archive safety** — Hardened artifact and Codex primary runtime
+  archive extraction, dereferenced safe symlinks during migration, rejected
+  unsafe paths, and preserved the artifact runtime cache inside the sandbox.
+- **Research and upload safety** — Preserved upload authorization through
+  validation, bound desktop uploads to the active thread, and tightened
+  research-file path handling.
+- **H3 control subscribers** — Gated H3 control-event subscribers so pairing
+  and mobile JSON-RPC traffic stay scoped to active listeners.
+- **Workspace control state** — Preserved the Codex workspace control pool
+  during workspace-control updates.
+
+### Security
+
+- **Path and archive hardening** — Added shared safe-zip extraction coverage,
+  session-backup path traversal tests, runtime-download checks, and workspace
+  MCP validation safeguards.
+- **Sandbox regression coverage** — Added broad platform sandbox tests,
+  command-policy tests, desktop approval-card coverage, IPC file tests, and
+  mobile H3 JSON-RPC tests to lock in the new access boundaries.
+
 ## 1.1.17 - 2026-06-04
 
 ### Added

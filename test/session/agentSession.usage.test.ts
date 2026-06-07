@@ -825,6 +825,7 @@ describe("AgentSession", () => {
           reasoningSummary: "detailed",
         },
       };
+      const sandbox = { mode: "read-only" as const, network: false, requireBackend: true };
 
       const session = AgentSession.fromPersisted({
         persisted: {
@@ -841,6 +842,7 @@ describe("AgentSession", () => {
           outputDirectory: undefined,
           uploadsDirectory: undefined,
           providerOptions,
+          sandbox,
           enableMcp: true,
           backupsEnabledOverride: null,
           createdAt: "2026-03-09T00:00:00.000Z",
@@ -868,6 +870,7 @@ describe("AgentSession", () => {
 
       const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
       expect(call.config.providerOptions).toEqual(providerOptions);
+      expect(call.config.sandbox).toEqual(sandbox);
     });
 
     test("migrates unsupported persisted models to provider default and persists the upgraded snapshot", async () => {

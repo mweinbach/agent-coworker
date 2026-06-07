@@ -256,6 +256,7 @@ type PersistedSessionSnapshotV7 = {
   };
   config: PersistedSessionSnapshotV6["config"] & {
     providerOptions?: AgentConfig["providerOptions"];
+    sandbox?: AgentConfig["sandbox"];
   };
   context: PersistedSessionSnapshotV6["context"] & {
     lastMemoryGeneratedIndex?: number;
@@ -291,6 +292,13 @@ export const LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ = 0;
 
 const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
 const providerNameSchema = z.enum(PROVIDER_NAMES);
+const sandboxConfigSchema = z
+  .object({
+    mode: z.enum(["auto", "read-only", "workspace-write", "danger-full-access"]),
+    network: z.boolean().optional(),
+    requireBackend: z.boolean().optional(),
+  })
+  .strict();
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const modelMessageSchema = z.custom<ModelMessage>(
@@ -594,6 +602,7 @@ const persistedSessionSnapshotV7Schema = z
     config: persistedSessionSnapshotV6Schema.shape.config
       .extend({
         providerOptions: z.record(z.string(), z.unknown()).optional(),
+        sandbox: sandboxConfigSchema.optional(),
       })
       .strict(),
     context: persistedSessionSnapshotV6Schema.shape.context
@@ -699,6 +708,9 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
         uploadsDirectory: snapshot.config.uploadsDirectory,
         ...(snapshot.config.providerOptions !== undefined
           ? { providerOptions: snapshot.config.providerOptions as AgentConfig["providerOptions"] }
+          : {}),
+        ...(snapshot.config.sandbox !== undefined
+          ? { sandbox: snapshot.config.sandbox as AgentConfig["sandbox"] }
           : {}),
       },
       context: {

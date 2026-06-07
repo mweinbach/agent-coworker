@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { collectExistingProtectedMetadataDirs } from "./bwrap";
+import { collectExistingProtectedMetadataPaths } from "./bwrap";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
   type SandboxPolicy,
+  tmpScratchRoots,
   withTmpScratch,
 } from "./policy";
 
@@ -129,8 +130,17 @@ export function buildSeatbeltCommand(
   } else if (policy.kind === "workspace-write" || policy.kind === "no-project-write") {
     // Empty explicit roots still get temp scratch via buildWritePolicy. Fully
     // immutable read-only mode skips this branch and leaves all writes denied.
-    const writableRoots = policy.kind === "workspace-write" ? policy.writableRoots : [];
-    const writeSection = buildWritePolicy(writableRoots, params);
+    const writableRoots =
+      policy.kind === "workspace-write"
+        ? policy.writableRoots
+        : tmpScratchRoots(policy.projectRoots ?? [], ["/tmp", "/private/tmp"]);
+    const rootKinds = policy.kind === "workspace-write" ? (policy.writableRootKinds ?? {}) : {};
+    const writeSection = buildWritePolicy(
+      writableRoots,
+      params,
+      rootKinds,
+      policy.kind === "workspace-write",
+    );
     if (writeSection) sections.push(writeSection);
   }
 
@@ -154,7 +164,12 @@ export function buildSeatbeltCommand(
  * out protected metadata (`.git`, `.cowork`) BELOW each writable root so it
  * stays read-only even though its parent root is writable.
  */
-function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
+function buildWritePolicy(
+  writableRoots: string[],
+  params: DirParam[],
+  rootKinds: Record<string, "directory" | "file"> = {},
+  addTmpScratch = true,
+): string {
   // Canonicalize the explicit roots (realpath) first so a symlinked root can't
   // grant writes to an unexpected target via a different logical path — matching
   // the Linux bwrap backend, which binds canonical paths. The /tmp scratch family
@@ -162,7 +177,15 @@ function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   // would over-scope an explicit root under it (macOS /tmp↔/private/tmp aware).
   // Do NOT add cwd here; that would widen a child agent's scope beyond targetPaths.
   const canonicalExplicit = new Set(writableRoots.map(canonicalizeRoot));
-  const roots = withTmpScratch([...canonicalExplicit], ["/tmp", "/private/tmp"]);
+  const metadataScanRoots = addTmpScratch ? canonicalExplicit : new Set<string>();
+  const explicitFileRoots = new Set(
+    Object.entries(rootKinds)
+      .filter(([, kind]) => kind === "file")
+      .map(([root]) => canonicalizeRoot(root)),
+  );
+  const roots = addTmpScratch
+    ? withTmpScratch([...canonicalExplicit], ["/tmp", "/private/tmp"])
+    : [...canonicalExplicit];
 
   // No writable roots → emit NO allow so the base `(deny default)` denies all
   // writes. A bare `(allow file-write*)` with no filters is an UNCONDITIONAL
@@ -183,8 +206,10 @@ function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
   roots.forEach((root, index) => {
     const rootKey = `WRITABLE_ROOT_${index}`;
     params.push({ key: rootKey, value: root });
+    const isFileRoot = explicitFileRoots.has(root) || (fsExists(root) && !fsIsDirectory(root));
     // Allow the exact root path (file-valued scopes use Seatbelt `literal`).
     components.push(`(literal (param "${rootKey}"))`);
+    if (isFileRoot) return;
 
     // Exclude protected metadata BELOW this root. Passing each one as a -D param
     // (subpath/literal) keeps the match relative to the root, so a workspace that
@@ -198,8 +223,8 @@ function buildWritePolicy(writableRoots: string[], params: DirParam[]): string {
     // Only scan EXPLICIT writable roots for existing nested metadata — never the
     // /tmp scratch family (recursively scanning all of /tmp would be slow and
     // pointless), mirroring the bwrap backend.
-    if (canonicalExplicit.has(root)) {
-      for (const dir of collectExistingProtectedMetadataDirs(root, fsExists, fsIsDirectory)) {
+    if (metadataScanRoots.has(root)) {
+      for (const dir of collectExistingProtectedMetadataPaths(root, fsExists, fsIsDirectory)) {
         protectedDirs.add(dir);
       }
     }

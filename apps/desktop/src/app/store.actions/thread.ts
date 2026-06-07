@@ -1231,12 +1231,15 @@ export function createThreadActions(
     },
 
     answerApproval: (threadId, requestId, approved) => {
-      sendThread(get, threadId, (sessionId) => ({
+      const sent = sendThread(get, threadId, (sessionId) => ({
         type: "approval_response",
         sessionId,
         requestId,
         approved,
       }));
+      if (!sent) {
+        return;
+      }
       appendThreadTranscript(threadId, "client", {
         type: "approval_response",
         sessionId: get().threadRuntimeById[threadId]?.sessionId,

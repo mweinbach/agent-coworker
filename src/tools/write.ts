@@ -33,6 +33,9 @@ export function createWriteTool(ctx: ToolContext) {
       ctx.log(
         `tool> write ${JSON.stringify({ filePath, chars: content.length, mode: resolvedMode })}`,
       );
+      if (ctx.sandboxPolicy?.kind === "read-only") {
+        throw new Error("write blocked: sandbox mode is read-only");
+      }
 
       const abs = await assertWritePathAllowed(
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),

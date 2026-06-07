@@ -623,6 +623,34 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("blocks downloads for explicit read-only sandbox policy", async () => {
+    const dir = await tmpDir();
+    const pdfBytes = Buffer.from("%PDF-1.7\nfake\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return createStreamingResponse(pdfBytes, {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(
+        makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: false } }),
+      );
+      await expect(
+        t.execute({
+          url: "https://example.com/reports/q1-summary.pdf",
+          maxLength: 50000,
+        }),
+      ).rejects.toThrow("webFetch downloads are disabled when sandbox mode is read-only");
+      await expect(fs.readdir(path.join(dir, "Downloads"))).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("cleans up partial downloads when a streamed response exceeds the size limit", async () => {
     const dir = await tmpDir();
     webFetchInternal.setMaxDownloadBytes(8);

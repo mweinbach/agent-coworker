@@ -85,6 +85,9 @@ export class SessionSnapshotBuilder {
         ...(this.opts.state.config.providerOptions !== undefined
           ? { providerOptions: structuredClone(this.opts.state.config.providerOptions) }
           : {}),
+        ...(this.opts.state.config.sandbox !== undefined
+          ? { sandbox: structuredClone(this.opts.state.config.sandbox) }
+          : {}),
       },
       context: {
         system: this.opts.state.system,
@@ -131,6 +134,9 @@ export class SessionSnapshotBuilder {
         : {}),
       ...(this.opts.state.config.providerOptions !== undefined
         ? { providerOptions: structuredClone(this.opts.state.config.providerOptions) }
+        : {}),
+      ...(this.opts.state.config.sandbox !== undefined
+        ? { sandbox: structuredClone(this.opts.state.config.sandbox) }
         : {}),
       enableMcp: this.opts.getEnableMcp(),
       backupsEnabledOverride: this.opts.state.backupsEnabledOverride,

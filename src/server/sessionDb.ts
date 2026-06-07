@@ -63,6 +63,7 @@ export type PersistedSessionRecord = {
   outputDirectory?: string;
   uploadsDirectory?: string;
   providerOptions?: AgentConfig["providerOptions"];
+  sandbox?: AgentConfig["sandbox"];
   enableMcp: boolean;
   backupsEnabledOverride: boolean | null;
   createdAt: string;
@@ -112,6 +113,7 @@ export type PersistedSessionMutation = {
     outputDirectory?: string;
     uploadsDirectory?: string;
     providerOptions?: AgentConfig["providerOptions"];
+    sandbox?: AgentConfig["sandbox"];
     enableMcp: boolean;
     backupsEnabledOverride: boolean | null;
     createdAt: string;

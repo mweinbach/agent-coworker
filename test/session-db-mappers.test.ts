@@ -75,6 +75,7 @@ describe("sessionDb mappers", () => {
       provider_state_json:
         '{"provider":"openai","model":"gpt-5","responseId":"resp_1","updatedAt":"2026-02-19T00:00:01.000Z"}',
       provider_options_json: null,
+      sandbox_json: null,
       todos_json: "[]",
       harness_context_json: '{"runId":"r-1"}',
       cost_tracker_json:
@@ -231,6 +232,7 @@ describe("sessionDb mappers", () => {
         messages_json: "not-json",
         provider_state_json: null,
         provider_options_json: null,
+        sandbox_json: null,
         todos_json: "[]",
         harness_context_json: null,
         cost_tracker_json: null,
@@ -266,6 +268,7 @@ describe("sessionDb mappers", () => {
         messages_json: '[{"role":"user","content":"hello"}]',
         provider_state_json: null,
         provider_options_json: null,
+        sandbox_json: null,
         todos_json: "[]",
         harness_context_json: null,
         cost_tracker_json: "{}",

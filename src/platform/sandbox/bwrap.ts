@@ -5,6 +5,7 @@ import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
   type SandboxPolicy,
+  tmpScratchRoots,
   withTmpScratch,
 } from "./policy";
 
@@ -95,8 +96,13 @@ export function buildBwrapCommand(
   // not over-scope an explicit root under it. no-project-write has no explicit
   // roots, so only temp scratch is writable.
   if (policy.kind === "workspace-write" || policy.kind === "no-project-write") {
-    const policyWritableRoots = policy.kind === "workspace-write" ? policy.writableRoots : [];
-    const explicitRoots = new Set(policyWritableRoots.map(canonicalizeRoot));
+    const policyWritableRoots =
+      policy.kind === "workspace-write"
+        ? policy.writableRoots
+        : tmpScratchRoots(policy.projectRoots ?? [], ["/tmp"]);
+    const explicitRoots = new Set(
+      policy.kind === "workspace-write" ? policy.writableRoots.map(canonicalizeRoot) : [],
+    );
     const rootKinds = policy.kind === "workspace-write" ? (policy.writableRootKinds ?? {}) : {};
     const explicitRootKinds = new Map(
       Object.entries(rootKinds).map(([root, kind]) => [canonicalizeRoot(root), kind]),
@@ -105,7 +111,10 @@ export function buildBwrapCommand(
     // an earlier child's protected-metadata masks — e.g. binding /repo after
     // /repo/src would re-expose /repo/src/.git. Use a total order so separated
     // ancestor/descendant pairs are still ordered deterministically.
-    const withScratch = withTmpScratch(policyWritableRoots, ["/tmp"]);
+    const withScratch =
+      policy.kind === "workspace-write"
+        ? withTmpScratch(policyWritableRoots, ["/tmp"])
+        : policyWritableRoots;
     const canonicalByRoot = new Map(withScratch.map((r) => [r, canonicalizeRoot(r)]));
     const writableRoots = withScratch.sort((a, b) => {
       const ca = canonicalByRoot.get(a) as string;
@@ -141,7 +150,7 @@ export function buildBwrapCommand(
         if (exists(direct)) protectedDirs.add(direct);
       }
       if (explicitRoots.has(realRoot)) {
-        for (const dir of collectExistingProtectedMetadataDirs(realRoot, exists, isDirectory)) {
+        for (const dir of collectExistingProtectedMetadataPaths(realRoot, exists, isDirectory)) {
           protectedDirs.add(dir);
         }
       }
@@ -168,12 +177,12 @@ export function buildBwrapCommand(
 }
 
 /**
- * Walk `root` and return every EXISTING `.git`/`.cowork` directory under it
+ * Walk `root` and return every EXISTING `.git`/`.cowork` path under it
  * (submodules, nested worktrees, …) so a backend can re-protect them. Symlinks
  * are not followed (see the loop), so a `vendor` -> `/` link can't make it
  * traverse out of the tree. Shared by the bwrap and Seatbelt backends.
  */
-export function collectExistingProtectedMetadataDirs(
+export function collectExistingProtectedMetadataPaths(
   root: string,
   exists: (p: string) => boolean,
   isDirectory: (p: string) => boolean,
@@ -202,13 +211,16 @@ export function collectExistingProtectedMetadataDirs(
       } catch {
         continue;
       }
-      if (stats.isSymbolicLink() || !stats.isDirectory()) continue;
+      if (stats.isSymbolicLink()) continue;
       if ((PROTECTED_SUBPATH_NAMES as readonly string[]).includes(entry)) {
         found.push(full);
         continue;
       }
+      if (!stats.isDirectory()) continue;
       pending.push(full);
     }
   }
   return found;
 }
+
+export const collectExistingProtectedMetadataDirs = collectExistingProtectedMetadataPaths;

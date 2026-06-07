@@ -142,6 +142,22 @@ export function createJsonRpcWorkspaceModule(
         params.sessionId ??
         mappedThreadId;
 
+      if (message.method === "serverRequest/resolved") {
+        const requestId = typeof params.requestId === "string" ? params.requestId : null;
+        if (!requestId) return;
+        set((s) => {
+          const existing = s.sandboxApprovalsByThread[mappedThreadId];
+          if (!existing) return {};
+          const remaining = existing.filter((approval) => approval.requestId !== requestId);
+          if (remaining.length === existing.length) return {};
+          const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
+          if (remaining.length > 0) nextSandboxApprovals[mappedThreadId] = remaining;
+          else delete nextSandboxApprovals[mappedThreadId];
+          return { sandboxApprovalsByThread: nextSandboxApprovals };
+        });
+        return;
+      }
+
       if (JSONRPC_THREAD_EVENT_METHODS.has(message.method) && typeof params.type === "string") {
         handleThreadEvent(get, set, mappedThreadId, {
           ...(params as Record<string, unknown>),

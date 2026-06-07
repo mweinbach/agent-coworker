@@ -111,6 +111,17 @@ describe("write tool", () => {
     ).rejects.toThrow(/blocked/i);
   });
 
+  test("rejects writes when sandbox policy is explicitly read-only", async () => {
+    const dir = await tmpDir();
+    const t: any = createWriteTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: false } }),
+    );
+    await expect(t.execute({ filePath: "blocked.txt", content: "nope" })).rejects.toThrow(
+      /sandbox mode is read-only/i,
+    );
+    await expect(fs.readFile(path.join(dir, "blocked.txt"), "utf-8")).rejects.toThrow();
+  });
+
   test("enforces child agent targetPaths for writes", async () => {
     const dir = await tmpDir();
     await fs.mkdir(path.join(dir, "src", "foo"), { recursive: true });

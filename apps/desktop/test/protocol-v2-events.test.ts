@@ -1301,6 +1301,66 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
   });
 
+  test("sandbox approval stays visible when the response cannot be sent", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-send-fails";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      RUNTIME.jsonRpcSockets.delete(workspaceId);
+      useAppStore.setState((state) => ({
+        workspaceRuntimeById: {
+          ...state.workspaceRuntimeById,
+          [workspaceId]: {
+            ...state.workspaceRuntimeById[workspaceId],
+            serverUrl: null,
+          },
+        },
+      }));
+    });
+
+    await act(async () => {
+      useAppStore.getState().answerApproval(threadId, requestId, true);
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toEqual([]);
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().promptModal).toBeNull();
+  });
+
+  test("resolved server requests clear replayed inline sandbox approvals", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-replayed";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+
+    socket.notify("serverRequest/resolved", { threadId: sessionId, requestId });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
   test("retired shared JSON-RPC sockets do not route late notifications or server requests after a serverUrl swap", async () => {
     const firstSocket = await reconnectThreadAndGetSocket();
 

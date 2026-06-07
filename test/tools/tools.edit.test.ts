@@ -66,6 +66,20 @@ describe("edit tool", () => {
     ).rejects.toThrow(/oldString not found/);
   });
 
+  test("rejects edits when sandbox policy is explicitly read-only", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "file.txt");
+    await fs.writeFile(p, "hello world", "utf-8");
+
+    const t: any = createEditTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: false } }),
+    );
+    await expect(
+      t.execute({ filePath: p, oldString: "world", newString: "earth", replaceAll: false }),
+    ).rejects.toThrow(/sandbox mode is read-only/i);
+    await expect(fs.readFile(p, "utf-8")).resolves.toBe("hello world");
+  });
+
   test("throws when multiple occurrences without replaceAll", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "file.txt");

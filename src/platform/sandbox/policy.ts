@@ -17,7 +17,7 @@ import {
 export type SandboxPolicy =
   | { kind: "danger-full-access"; network?: boolean }
   | { kind: "read-only"; network: boolean }
-  | { kind: "no-project-write"; network: boolean }
+  | { kind: "no-project-write"; network: boolean; projectRoots?: string[] }
   | {
       kind: "workspace-write";
       /** Absolute roots the sandboxed process may write to (beyond temp dirs). */
@@ -85,17 +85,17 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
   const config = input.config ?? DEFAULT_SANDBOX_CONFIG;
   const network = config.network ?? true;
 
+  // Explicit user-configured read-only stays fully immutable.
+  if (config.mode === "read-only") {
+    return { kind: "read-only", network };
+  }
+
   // Read-only roles (explorer/reviewer/research) are a hard floor: they must not
   // write project files and are never escalated — even when the configured mode
   // is danger-full-access. They still get temp scratch space for verifier tools
   // that need to compile, diff, or stage transient files.
   if (input.readOnlyRole) {
-    return { kind: "no-project-write", network };
-  }
-
-  // Explicit user-configured read-only stays fully immutable.
-  if (config.mode === "read-only") {
-    return { kind: "read-only", network };
+    return { kind: "no-project-write", projectRoots: deriveProjectRoots(input), network };
   }
 
   // A scoped child (targetPaths) is constrained to its assigned paths even when
@@ -292,6 +292,11 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
   return [...new Set([...resolved, ...extra])];
 }
 
+export function tmpScratchRoots(blockedRoots: string[], scratch: string[]): string[] {
+  const blocked = new Set(blockedRoots.map((root) => path.resolve(root)));
+  return withTmpScratch(blockedRoots, scratch).filter((root) => !blocked.has(path.resolve(root)));
+}
+
 /**
  * Resolve a path to its canonical (symlink-free) form, canonicalizing the
  * longest EXISTING prefix and re-appending the missing tail. This matters for a
@@ -315,6 +320,16 @@ function canonicalTmpAlias(p: string): string {
     return `/private${p}`;
   }
   return p;
+}
+
+function deriveProjectRoots(input: ResolveSandboxPolicyInput): string[] {
+  return [
+    ...new Set(
+      [input.workingDirectory, input.projectRoot]
+        .filter((root): root is string => typeof root === "string" && root.trim() !== "")
+        .map((root) => path.resolve(root)),
+    ),
+  ];
 }
 
 /** Whether the policy permits outbound network access. */

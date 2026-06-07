@@ -29,6 +29,9 @@ export function createEditTool(ctx: ToolContext) {
     }) => {
       ctx.log(`tool> edit ${JSON.stringify({ filePath, replaceAll })}`);
       if (oldString === "") throw new Error("oldString cannot be empty");
+      if (ctx.sandboxPolicy?.kind === "read-only") {
+        throw new Error("edit blocked: sandbox mode is read-only");
+      }
 
       const abs = await assertWritePathAllowed(
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),

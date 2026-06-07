@@ -96,7 +96,11 @@ describe("resolveSandboxPolicy", () => {
       workingDirectory: "/work/project",
       toolRuntimeWritableRoots: ["/home/user/.cowork/memories/project-active"],
     });
-    expect(policy).toEqual({ kind: "no-project-write", network: true });
+    expect(policy).toEqual({
+      kind: "no-project-write",
+      projectRoots: [testRoot("/work/project")],
+      network: true,
+    });
   });
 
   test("explicit read-only mode remains fully read-only", () => {
@@ -105,6 +109,15 @@ describe("resolveSandboxPolicy", () => {
       workingDirectory: "/w",
     });
     expect(policy.kind).toBe("read-only");
+    expect(policy).toEqual({ kind: "read-only", network: false });
+  });
+
+  test("explicit read-only mode beats read-only role temp scratch", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "read-only", network: false },
+      readOnlyRole: true,
+      workingDirectory: "/w",
+    });
     expect(policy).toEqual({ kind: "read-only", network: false });
   });
 
@@ -142,6 +155,20 @@ describe("resolveSandboxPolicy", () => {
       workingDirectory: "/work/project",
     });
     expect(policy.kind).toBe("no-project-write");
+  });
+
+  test("no-project-write policy carries project roots for temp scratch exclusion", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "auto" },
+      readOnlyRole: true,
+      workingDirectory: "/tmp/project/src",
+      projectRoot: "/tmp/project",
+    });
+    expect(policy).toEqual({
+      kind: "no-project-write",
+      projectRoots: [path.resolve("/tmp/project/src"), path.resolve("/tmp/project")],
+      network: true,
+    });
   });
 
   test("relative targetPaths resolve against the workspace, not process cwd", () => {
@@ -424,11 +451,27 @@ posixBackendDescribe("seatbelt argv generation", () => {
     const policyText = args[1];
     expect(policyText).toContain("(allow file-read*)");
     expect(policyText).toContain("(allow file-write*");
-    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/tmp"))).toBe(true);
-    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/private/tmp"))).toBe(
-      true,
-    );
+    expect(
+      args.some(
+        (a) =>
+          a.startsWith("-DWRITABLE_ROOT_") && (a.endsWith("=/tmp") || a.endsWith("=/private/tmp")),
+      ),
+    ).toBe(true);
     expect(args.some((a) => a.includes("=/work"))).toBe(false);
+  });
+
+  test("no-project-write: skips temp scratch when the project lives under /tmp", () => {
+    const policy: SandboxPolicy = {
+      kind: "no-project-write",
+      projectRoots: ["/tmp/project"],
+      network: false,
+    };
+    const { args } = buildSeatbeltCommand(INNER, policy);
+    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/tmp"))).toBe(false);
+    expect(args.some((a) => a.startsWith("-DWRITABLE_ROOT_") && a.endsWith("=/private/tmp"))).toBe(
+      false,
+    );
+    expect(args.some((a) => a.includes("=/tmp/project"))).toBe(false);
   });
 
   test("workspace-write: emits write rules with -D params and protects .git/.cowork", () => {
@@ -512,6 +555,20 @@ posixBackendDescribe("seatbelt argv generation", () => {
       fs.rmSync(base, { recursive: true, force: true });
     }
   });
+
+  test("file-scoped writable roots do not allow a writable subpath", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/work/new.ts"],
+      writableRootKinds: { ["/work/new.ts"]: "file" },
+      network: true,
+    };
+    const { args } = buildSeatbeltCommand(INNER, policy);
+    const policyText = args[1];
+    expect(args).toContain("-DWRITABLE_ROOT_0=/work/new.ts");
+    expect(policyText).toContain('(literal (param "WRITABLE_ROOT_0"))');
+    expect(policyText).not.toContain('(subpath (param "WRITABLE_ROOT_0"))');
+  });
 });
 
 posixBackendDescribe("bwrap argv generation", () => {
@@ -537,6 +594,19 @@ posixBackendDescribe("bwrap argv generation", () => {
     expect(args).toContain("--unshare-net");
   });
 
+  test("no-project-write: does not bind /tmp scratch for /tmp projects", () => {
+    const policy: SandboxPolicy = {
+      kind: "no-project-write",
+      projectRoots: ["/tmp/project"],
+      network: false,
+    };
+    const { args } = buildBwrapCommand(INNER, policy, "/tmp/project", allExist);
+    const binds = joinPairs(args, "--bind");
+    const tmpRoot = canonicalizeRoot("/tmp");
+    expect(binds).not.toContain(`${tmpRoot} ${tmpRoot}`);
+    expect(binds).not.toContain("/tmp/project /tmp/project");
+  });
+
   test("workspace-write: binds writable roots, re-freezes .git, keeps network when enabled", () => {
     const policy: SandboxPolicy = {
       kind: "workspace-write",
@@ -551,6 +621,33 @@ posixBackendDescribe("bwrap argv generation", () => {
     // network enabled => no unshare-net
     expect(args).not.toContain("--unshare-net");
     expect(args).toContain("--chdir");
+  });
+
+  test("workspace-write: re-freezes nested .git files as protected metadata", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "bwrap-git-file-"));
+    try {
+      const nested = path.join(base, "module");
+      fs.mkdirSync(nested);
+      const gitFile = path.join(nested, ".git");
+      fs.writeFileSync(gitFile, "gitdir: ../.git/modules/module\n");
+      const policy: SandboxPolicy = {
+        kind: "workspace-write",
+        writableRoots: [base],
+        network: true,
+      };
+      const { args } = buildBwrapCommand(INNER, policy, base, {
+        program: "bwrap",
+        exists: (p) => p === "/tmp" || fs.existsSync(p),
+        isDirectory: (p) => {
+          if (p === "/tmp") return true;
+          return fs.statSync(p).isDirectory();
+        },
+      });
+      const canonicalGitFile = canonicalizeRoot(gitFile);
+      expect(joinPairs(args, "--ro-bind")).toContain(`${canonicalGitFile} ${canonicalGitFile}`);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 
   test("danger-full-access can still disable network", () => {

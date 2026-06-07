@@ -271,6 +271,47 @@ describe("runTurn", () => {
     expect(runtimeParams.system).toContain("`mcp__{serverName}__{toolName}`");
   });
 
+  test("Codex app-server scoped children keep Cowork read-scope tools", async () => {
+    const runtimeRunTurn = mock(async () => ({
+      responseMessages: [{ role: "assistant", content: "ok" }],
+    }));
+    const createRuntimeForCodex = mock(() => ({
+      name: "codex-app-server" as const,
+      runTurn: runtimeRunTurn,
+    }));
+    const createToolsForCodex = mock(() => ({
+      bash: { type: "builtin" },
+      read: { type: "builtin-read" },
+      glob: { type: "builtin-glob" },
+      grep: { type: "builtin-grep" },
+      write: { type: "builtin-write" },
+      edit: { type: "builtin-edit" },
+      spawnAgent: { type: "cowork" },
+    }));
+    const runCodexTurn = createRunTurn({
+      createRuntime: createRuntimeForCodex,
+      createTools: createToolsForCodex,
+    });
+
+    await runCodexTurn(
+      makeParams({
+        config: makeConfig({
+          provider: "codex-cli",
+          runtime: "codex-app-server",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+        }),
+        agentTargetPaths: ["src/auth"],
+      }),
+    );
+
+    const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
+    expect(Object.keys(runtimeParams.tools).sort()).toEqual(["glob", "grep", "read", "spawnAgent"]);
+    expect(runtimeParams.tools).not.toHaveProperty("bash");
+    expect(runtimeParams.tools).not.toHaveProperty("write");
+    expect(runtimeParams.tools).not.toHaveProperty("edit");
+  });
+
   for (const scenario of [
     {
       label: "Gemini Interactions",

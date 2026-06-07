@@ -449,7 +449,9 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const useProviderNativeTools = providerOwnsExecutableTools(config);
     const rawBuiltInTools = deps.createTools(toolCtx);
     const builtInTools = useProviderNativeTools
-      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools)
+      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools, {
+          preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
+        })
       : rawBuiltInTools;
 
     let mcpTools: Record<string, any> = {};

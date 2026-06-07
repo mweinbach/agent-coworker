@@ -128,6 +128,41 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     connection.close();
   });
 
+  test("records workspace-control event access from current trusted device permissions", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("id" in message) {
+          conn.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    expect(connection.data.workspaceControlEventsAllowed).toBe(false);
+
+    const defaultResponse = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "initialize", params: { cwd: "/tmp" } },
+      connection,
+      trustedDevice(),
+    );
+    expect(defaultResponse.status).toBe(200);
+    expect(connection.data.workspaceControlEventsAllowed).toBe(false);
+
+    const allowedResponse = await __internal.dispatchHttpRpcPayload(
+      { id: 2, method: "initialize", params: { cwd: "/tmp" } },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+    expect(allowedResponse.status).toBe(200);
+    expect(connection.data.workspaceControlEventsAllowed).toBe(true);
+
+    connection.close();
+  });
+
   test("requires workspace settings permission for plugin deletion", async () => {
     const runtime = {
       openHttpConnection() {},

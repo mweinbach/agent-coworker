@@ -132,6 +132,14 @@ function parseBearerToken(header: string | null): string | null {
   return match?.[1]?.trim() || null;
 }
 
+function applyTrustedDevicePermissionsToConnection(
+  connection: H3JsonRpcConnection,
+  trustedDevice: H3TrustedDeviceRecord,
+): void {
+  connection.data.workspaceControlEventsAllowed =
+    trustedDevice.permissions.workspaceSettings === true;
+}
+
 function requireAdminToken(req: Request, adminToken: string): Response | null {
   if (parseBearerToken(req.headers.get("authorization")) === adminToken) {
     return null;
@@ -180,6 +188,7 @@ async function dispatchHttpRpcPayload(
   connection: H3JsonRpcConnection,
   trustedDevice: H3TrustedDeviceRecord,
 ): Promise<Response> {
+  applyTrustedDevicePermissionsToConnection(connection, trustedDevice);
   let message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
   try {
     message = parseJsonRpcPayload(raw);
@@ -439,6 +448,7 @@ function createHttpJsonRpcConnection(
       connectionId: crypto.randomUUID(),
       protocolMode: "h3",
       selectedSubprotocol: "cowork.jsonrpc.v1",
+      workspaceControlEventsAllowed: false,
     },
     send(message: string) {
       const payload = tryParseJsonRpcSendPayload(message);
@@ -675,6 +685,7 @@ export async function startH3MobileServer(
 
       if (req.method === "GET" && url.pathname === "/events") {
         const connection = getConnection(trustedDevice.deviceId);
+        applyTrustedDevicePermissionsToConnection(connection, trustedDevice);
         let removeSink: (() => void) | null = null;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {

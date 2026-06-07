@@ -72,6 +72,18 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
+      - name: Windows sandbox helper enforcement
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          if (!$vsPath) { throw "Visual Studio installation not found" }
+          $devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
+          $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+          $helperPath = Join-Path (Get-Location) "crates\cowork-win-sandbox\target\release\cowork-win-sandbox.exe"
+          $command = "`"$devCmd`" -arch=$arch -host_arch=$arch && cargo build --release --manifest-path crates\cowork-win-sandbox\Cargo.toml && set `"COWORK_WIN_SANDBOX_HELPER=$helperPath`" && bun test test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts"
+          cmd /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Windows path and desktop smoke tests
         run: >
           bun test

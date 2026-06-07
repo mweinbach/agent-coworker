@@ -1,5 +1,5 @@
 import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
-import type { TodoItem } from "../../../types";
+import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
 import type { SessionContext } from "../SessionContext";
@@ -31,10 +31,11 @@ export type RunTurnInvocationDeps = {
   getA2uiSurfaceManager?: A2uiSurfaceManagerProvider;
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string) => Promise<boolean>;
+  approveCommand: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
   updateTodos: (todos: TodoItem[]) => void;
   tracker: TurnStreamTracker;
   includeRawChunks: boolean;
+  onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   setAcceptingSteers: (accepting: boolean) => void;
 };
 
@@ -50,6 +51,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     updateTodos,
     tracker,
     includeRawChunks,
+    onAdvancedMemoryChanged,
     setAcceptingSteers,
   } = deps;
 
@@ -173,13 +175,14 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
             },
       log: (line) => log(line),
       askUser: (q, opts) => askUser(q, opts),
-      approveCommand: (cmd) => approveCommand(cmd),
+      approveCommand: (cmd, opts) => approveCommand(cmd, opts),
       updateTodos: (todos) => updateTodos(todos),
       discoveredSkills: context.state.discoveredSkills,
       maxSteps,
       yolo: context.state.yolo,
       enableMcp: context.state.config.enableMcp,
       sessionId: context.id,
+      onAdvancedMemoryChanged,
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,
       agentRole: context.state.sessionInfo.role,

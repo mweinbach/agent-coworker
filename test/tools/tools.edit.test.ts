@@ -66,6 +66,34 @@ describe("edit tool", () => {
     ).rejects.toThrow(/oldString not found/);
   });
 
+  test("rejects edits when sandbox policy is explicitly read-only", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "file.txt");
+    await fs.writeFile(p, "hello world", "utf-8");
+
+    const t: any = createEditTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: false } }),
+    );
+    await expect(
+      t.execute({ filePath: p, oldString: "world", newString: "earth", replaceAll: false }),
+    ).rejects.toThrow(/sandbox mode is read-only/i);
+    await expect(fs.readFile(p, "utf-8")).resolves.toBe("hello world");
+  });
+
+  test("rejects edits when sandbox policy is no-project-write", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "file.txt");
+    await fs.writeFile(p, "hello world", "utf-8");
+
+    const t: any = createEditTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: false } }),
+    );
+    await expect(
+      t.execute({ filePath: p, oldString: "world", newString: "earth", replaceAll: false }),
+    ).rejects.toThrow(/sandbox mode is no-project-write/i);
+    await expect(fs.readFile(p, "utf-8")).resolves.toBe("hello world");
+  });
+
   test("throws when multiple occurrences without replaceAll", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "file.txt");
@@ -228,6 +256,43 @@ describe("edit tool", () => {
     await expect(
       t.execute({ filePath: p, oldString: "aaa", newString: "bbb", replaceAll: false }),
     ).rejects.toThrow(/found 3 times/);
+  });
+
+  test("refuses to edit protected project .cowork metadata", async () => {
+    const dir = await tmpDir();
+    const configPath = path.join(dir, ".cowork", "config.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, '{"provider":"google"}', "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        filePath: configPath,
+        oldString: "google",
+        newString: "evil",
+        replaceAll: false,
+      }),
+    ).rejects.toThrow(/read-only/i);
+    // The protected file must be left untouched.
+    expect(await fs.readFile(configPath, "utf-8")).toBe('{"provider":"google"}');
+  });
+
+  test("refuses to edit an existing .git hook", async () => {
+    const dir = await tmpDir();
+    const hook = path.join(dir, ".git", "hooks", "pre-commit");
+    await fs.mkdir(path.dirname(hook), { recursive: true });
+    await fs.writeFile(hook, "#!/bin/sh\necho ok\n", "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        filePath: hook,
+        oldString: "echo ok",
+        newString: "echo pwned",
+        replaceAll: false,
+      }),
+    ).rejects.toThrow(/read-only/i);
+    expect(await fs.readFile(hook, "utf-8")).toBe("#!/bin/sh\necho ok\n");
   });
 });
 

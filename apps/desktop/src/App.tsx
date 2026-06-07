@@ -388,6 +388,13 @@ export default function App() {
           }
           return;
         }
+        const hasPendingSandboxApproval = Object.values(state.sandboxApprovalsByThread).some(
+          (pending) => pending.length > 0,
+        );
+        if (hasPendingSandboxApproval) {
+          state.dismissPrompt();
+          return;
+        }
         if (state.view === "settings") {
           state.closeSettings();
           return;

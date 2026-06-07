@@ -52,6 +52,13 @@ const todoItemSchema = z
 const harnessContextSchema = z.record(z.string(), z.unknown());
 const costTrackerSchema: z.ZodType<SessionUsageSnapshot> = sessionUsageSnapshotSchema;
 const providerOptionsSchema = z.record(z.string(), z.unknown());
+const sandboxConfigSchema = z
+  .object({
+    mode: z.enum(["auto", "read-only", "workspace-write", "danger-full-access"]),
+    network: z.boolean().optional(),
+    requireBackend: z.boolean().optional(),
+  })
+  .strict();
 
 const summaryRowSchema = z
   .object({
@@ -139,6 +146,7 @@ const recordRowSchema = z
     last_memory_generated_index: nonNegativeIntegerSchema.nullable().optional(),
     provider_state_json: z.union([z.string(), z.null()]),
     provider_options_json: z.union([z.string(), z.null()]),
+    sandbox_json: z.union([z.string(), z.null()]),
     todos_json: z.string(),
     harness_context_json: z.union([z.string(), z.null()]),
     cost_tracker_json: z.union([z.string(), z.null()]),
@@ -287,6 +295,10 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
           providerOptionsSchema,
           "provider_options_json",
         );
+  const sandbox =
+    values.sandbox_json === null
+      ? undefined
+      : parseJsonStringWithSchema(values.sandbox_json, sandboxConfigSchema, "sandbox_json");
   const todos = parseJsonStringWithSchema(values.todos_json, z.array(todoItemSchema), "todos_json");
   const harnessContext =
     values.harness_context_json === null
@@ -363,6 +375,7 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
     lastMemoryGeneratedIndex: values.last_memory_generated_index ?? undefined,
     providerState,
     providerOptions: providerOptions as PersistedSessionRecord["providerOptions"],
+    sandbox: sandbox as PersistedSessionRecord["sandbox"],
     todos,
     harnessContext: harnessContext as HarnessContextState | null,
     costTracker,

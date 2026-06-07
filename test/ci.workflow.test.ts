@@ -15,7 +15,10 @@ describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
     expect(workflow).toContain("uses: ./.github/actions/setup-bun");
     expect(setupBunAction).toContain("- name: Setup Bun");
-    expect(setupBunAction).toContain("uses: oven-sh/setup-bun@v2");
+    // The third-party setup action must stay pinned to an immutable commit SHA
+    // (not a mutable tag) to prevent supply-chain compromise via retagging.
+    expect(setupBunAction).toMatch(/uses: oven-sh\/setup-bun@[0-9a-f]{40}\b/);
+    expect(setupBunAction).not.toMatch(/uses: oven-sh\/setup-bun@v\d/);
     expect(setupBunAction).toContain('bun-version-file: ".bun-version"');
   });
 
@@ -43,6 +46,18 @@ describe("main CI workflow", () => {
   test("runs Windows path and desktop smoke coverage", () => {
     expect(workflow).toContain("windows-smoke:");
     expect(workflow).toContain("runs-on: windows-latest");
+    expect(workflow).toContain("- name: Windows sandbox helper enforcement");
+    expect(workflow).toContain(
+      "cargo build --release --manifest-path crates\\cowork-win-sandbox\\Cargo.toml",
+    );
+    expect(workflow).toContain(
+      '$helperPath = Join-Path (Get-Location) "crates\\cowork-win-sandbox\\target\\release\\cowork-win-sandbox.exe"',
+    );
+    expect(workflow).toContain("COWORK_WIN_SANDBOX_HELPER=$helperPath");
+    expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER=%CD%");
+    expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
+    expect(workflow).toContain("test/platform/sandbox.test.ts");
+    expect(workflow).toContain("test/build-desktop-resources.test.ts");
     expect(workflow).toContain("- name: Windows path and desktop smoke tests");
     expect(workflow).toContain("apps/desktop/test/ipc-security.test.ts");
     expect(workflow).toContain("apps/desktop/test/file-preview-modal.test.tsx");

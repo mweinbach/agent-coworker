@@ -1,9 +1,17 @@
+import path from "node:path";
+import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import {
   ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
   renderArtifactRuntimeInstructions,
 } from "../../artifactRuntime";
 import { renderManagedSofficeRuntimeInstructions } from "../../managedSofficeRuntime";
 import { getSupportedModel } from "../../models/registry";
+import {
+  type SandboxPolicy as CoworkSandboxPolicy,
+  resolveSandboxPolicy,
+  type SandboxConfig,
+} from "../../platform/sandbox";
+import { tmpScratchRoots } from "../../platform/sandbox/policy";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
@@ -245,8 +253,10 @@ export async function resolveEffectiveCodexModel(
 }
 
 export function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode {
-  if (params.shellPolicy === "no_project_write") return "read-only";
-  return params.yolo === true ? "danger-full-access" : "workspace-write";
+  const policy = resolveCodexCoworkSandboxPolicy(params);
+  if (policy.kind === "danger-full-access") return "danger-full-access";
+  if (policy.kind === "no-project-write") return "workspace-write";
+  return policy.kind;
 }
 
 export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApprovalPolicy {
@@ -254,15 +264,71 @@ export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApproval
 }
 
 export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPolicy {
-  const sandbox = codexSandboxMode(params);
-  if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
-  if (sandbox === "read-only") return { type: "readOnly", networkAccess: true };
+  const sandbox = resolveCodexCoworkSandboxPolicy(params);
+  if (sandbox.kind === "danger-full-access") {
+    return sandbox.network === false
+      ? { type: "dangerFullAccess", networkAccess: false }
+      : { type: "dangerFullAccess" };
+  }
+  if (sandbox.kind === "read-only") {
+    return { type: "readOnly", networkAccess: sandbox.network };
+  }
+  const writableRoots =
+    sandbox.kind === "workspace-write"
+      ? sandbox.writableRoots
+      : tmpScratchRoots(sandbox.projectRoots ?? [], ["/tmp", "/private/tmp"]);
   return {
     type: "workspaceWrite",
-    writableRoots: [params.config.workingDirectory],
-    networkAccess: true,
+    writableRoots,
+    networkAccess: sandbox.network,
     excludeTmpdirEnvVar: false,
-    excludeSlashTmp: false,
+    // Don't grant broad /tmp as implicit scratch when a writable root is nested
+    // under it (e.g. a /tmp checkout scoped to a subdir). Mirrors the local
+    // bwrap/Seatbelt backends, which skip a scratch root that contains an
+    // assigned root; otherwise Codex-native tools could write sibling /tmp paths.
+    excludeSlashTmp: writableRoots.some(
+      (root) => root.startsWith("/tmp/") || root.startsWith("/private/tmp/"),
+    ),
+  };
+}
+
+function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSandboxPolicy {
+  return resolveSandboxPolicy({
+    config: codexSandboxConfig(params),
+    readOnlyRole: params.shellPolicy === "no_project_write",
+    workingDirectory: params.config.workingDirectory,
+    projectRoot: path.dirname(params.config.projectCoworkDir),
+    outputDirectory: params.config.outputDirectory,
+    uploadsDirectory: params.config.uploadsDirectory,
+    toolRuntimeWritableRoots: [
+      ...resolveAdvancedMemoryWriteRoots(params.config),
+      ...resolveCodexToolRuntimeWriteRoots(params.toolEnv),
+    ],
+    targetPaths: params.agentTargetPaths,
+  });
+}
+
+function resolveCodexToolRuntimeWriteRoots(
+  env: Record<string, string | undefined> | undefined,
+): string[] {
+  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
+  return managedSofficeRoot ? [managedSofficeRoot] : [];
+}
+
+function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undefined {
+  // A scoped child (agentTargetPaths) must stay within its assigned paths even
+  // under YOLO. An explicitly restrictive `read-only` sandbox is a hard floor and
+  // must not be widened either — YOLO only relaxes the APPROVAL policy, not the
+  // sandbox mode the user explicitly selected. Only an unscoped, non-read-only
+  // session is lifted to full access. YOLO still maps to approvalPolicy "never".
+  const scoped = (params.agentTargetPaths?.length ?? 0) > 0;
+  const explicitlyReadOnly = params.config.sandbox?.mode === "read-only";
+  if (params.yolo !== true || scoped || explicitlyReadOnly) {
+    return params.config.sandbox;
+  }
+  return {
+    ...(params.config.sandbox ?? {}),
+    mode: "danger-full-access",
   };
 }
 

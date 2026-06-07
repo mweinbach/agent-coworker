@@ -111,6 +111,28 @@ describe("write tool", () => {
     ).rejects.toThrow(/blocked/i);
   });
 
+  test("rejects writes when sandbox policy is explicitly read-only", async () => {
+    const dir = await tmpDir();
+    const t: any = createWriteTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: false } }),
+    );
+    await expect(t.execute({ filePath: "blocked.txt", content: "nope" })).rejects.toThrow(
+      /sandbox mode is read-only/i,
+    );
+    await expect(fs.readFile(path.join(dir, "blocked.txt"), "utf-8")).rejects.toThrow();
+  });
+
+  test("rejects writes when sandbox policy is no-project-write", async () => {
+    const dir = await tmpDir();
+    const t: any = createWriteTool(
+      makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: false } }),
+    );
+    await expect(t.execute({ filePath: "blocked.txt", content: "nope" })).rejects.toThrow(
+      /sandbox mode is no-project-write/i,
+    );
+    await expect(fs.readFile(path.join(dir, "blocked.txt"), "utf-8")).rejects.toThrow();
+  });
+
   test("enforces child agent targetPaths for writes", async () => {
     const dir = await tmpDir();
     await fs.mkdir(path.join(dir, "src", "foo"), { recursive: true });
@@ -174,6 +196,29 @@ describe("write tool", () => {
     await expect(
       t.execute({ filePath: path.join(link, "blocked.txt"), content: "nope" }),
     ).rejects.toThrow(/blocked/i);
+  });
+
+  test("refuses to plant a .git hook under the project root", async () => {
+    const dir = await tmpDir();
+    await fs.mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
+    const hook = path.join(dir, ".git", "hooks", "pre-commit");
+
+    const t: any = createWriteTool(makeCtx(dir));
+    await expect(t.execute({ filePath: hook, content: "#!/bin/sh\necho pwned\n" })).rejects.toThrow(
+      /read-only/i,
+    );
+    await expect(fs.readFile(hook, "utf-8")).rejects.toThrow();
+  });
+
+  test("refuses to write project .cowork config metadata", async () => {
+    const dir = await tmpDir();
+    const configPath = path.join(dir, ".cowork", "config.json");
+
+    const t: any = createWriteTool(makeCtx(dir));
+    await expect(
+      t.execute({ filePath: configPath, content: '{"provider":"evil"}' }),
+    ).rejects.toThrow(/read-only/i);
+    await expect(fs.readFile(configPath, "utf-8")).rejects.toThrow();
   });
 });
 

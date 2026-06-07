@@ -116,6 +116,52 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("sandbox-denied escalation carries detail + category to the approval request", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const approved = await params.approveCommand("curl https://example.com", {
+            reason: "sandbox_denied",
+            detail: "The OS sandbox blocked network access for this command.",
+            category: "network",
+          });
+          return { text: approved ? "approved" : "denied", responseMessages: [] };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start sandbox escalation flow" }],
+      });
+
+      const request = await rpc.waitFor(
+        (message) => message.method === "item/commandExecution/requestApproval",
+      );
+      expect(request.params.command).toBe("curl https://example.com");
+      expect(request.params.dangerous).toBe(true);
+      expect(request.params.reason).toBe("sandbox_denied_escalation");
+      expect(request.params.detail).toBe("The OS sandbox blocked network access for this command.");
+      expect(request.params.category).toBe("network");
+      rpc.sendResponse(request.id, { decision: "decline" });
+
+      const agentCompleted = await rpc.waitFor(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      expect(agentCompleted.params.item.text).toBe("denied");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("thread/resume replays a pending user input request after reconnect", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

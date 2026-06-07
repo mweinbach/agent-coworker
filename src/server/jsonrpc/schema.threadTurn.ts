@@ -259,6 +259,10 @@ export const jsonRpcThreadTurnServerRequestSchemas = {
       command: z.string(),
       dangerous: z.boolean(),
       reason: z.string(),
+      // Sandbox-escalation context so clients can render a clear, inline
+      // approval ("re-run with full access?") instead of a generic prompt.
+      detail: z.string().optional(),
+      category: z.enum(["filesystem", "network"]).optional(),
     })
     .strict(),
 } as const;

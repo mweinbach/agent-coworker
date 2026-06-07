@@ -8,6 +8,7 @@ import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../li
 import { seedDockFromFeed } from "../a2uiDockReducer";
 import {
   type AppStoreActions,
+  type AppStoreState,
   appendThreadTranscript,
   beginThreadSelectionRequest,
   buildContextPreamble,
@@ -46,6 +47,7 @@ import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
   createDefaultA2uiDock,
   isOneOffChatWorkspace,
+  type SandboxApprovalPrompt,
   type SessionSnapshot,
   type SessionSnapshotFingerprint,
   type ThreadBusyPolicy,
@@ -58,6 +60,35 @@ type HydrateThreadSelectionOptions = {
   reconnectAfterHydration?: boolean;
   skipWorkspaceSelectOnReconnect?: boolean;
 };
+
+function findLatestSandboxApprovalPrompt(
+  state: AppStoreState,
+): { threadId: string; prompt: SandboxApprovalPrompt } | null {
+  const selectedThreadId = state.selectedThreadId;
+  const selectedPrompt = selectedThreadId
+    ? state.sandboxApprovalsByThread[selectedThreadId]?.at(-1)
+    : undefined;
+  if (selectedThreadId && selectedPrompt) {
+    return { threadId: selectedThreadId, prompt: selectedPrompt };
+  }
+
+  let latest: { threadId: string; prompt: SandboxApprovalPrompt } | null = null;
+  for (const [threadId, prompts] of Object.entries(state.sandboxApprovalsByThread)) {
+    for (const prompt of prompts) {
+      if (!latest) {
+        latest = { threadId, prompt };
+        continue;
+      }
+      const promptSequence = prompt.receivedSequence ?? 0;
+      const latestSequence = latest.prompt.receivedSequence ?? 0;
+      if (promptSequence > latestSequence) {
+        latest = { threadId, prompt };
+      }
+    }
+  }
+
+  return latest;
+}
 
 export async function hydrateThreadSelection(
   get: StoreGet,
@@ -633,11 +664,15 @@ export function createThreadActions(
         const nextThreadRuntimeById = { ...s.threadRuntimeById };
         delete nextThreadRuntimeById[threadId];
 
+        const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
+        delete nextSandboxApprovals[threadId];
+
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
           selectedThreadId,
           promptModal: nextPromptModal,
+          sandboxApprovalsByThread: nextSandboxApprovals,
           threadRuntimeById: nextThreadRuntimeById,
           selectedWorkspaceId:
             s.selectedWorkspaceId === workspaceIdToRemove
@@ -894,6 +929,7 @@ export function createThreadActions(
           set,
           workspaceId,
           opts.attachmentFiles.map(createComposerAttachmentFile),
+          { threadId },
         );
         resolvedAttachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
         firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
@@ -1227,22 +1263,52 @@ export function createThreadActions(
     },
 
     answerApproval: (threadId, requestId, approved) => {
-      sendThread(get, threadId, (sessionId) => ({
+      const sent = sendThread(get, threadId, (sessionId) => ({
         type: "approval_response",
         sessionId,
         requestId,
         approved,
       }));
+      if (!sent) {
+        return;
+      }
       appendThreadTranscript(threadId, "client", {
         type: "approval_response",
         sessionId: get().threadRuntimeById[threadId]?.sessionId,
         requestId,
         approved,
       });
-      set({ promptModal: null });
+      // Clear the modal (ordinary approvals) and drop any matching inline
+      // sandbox-escalation prompt for this thread.
+      set((s) => {
+        const existing = s.sandboxApprovalsByThread[threadId];
+        const promptModal =
+          s.promptModal?.kind === "approval" &&
+          s.promptModal.threadId === threadId &&
+          s.promptModal.prompt.requestId === requestId
+            ? null
+            : s.promptModal;
+        if (!existing) return { promptModal };
+        const remaining = existing.filter((p) => p.requestId !== requestId);
+        const nextSandbox = { ...s.sandboxApprovalsByThread };
+        if (remaining.length > 0) nextSandbox[threadId] = remaining;
+        else delete nextSandbox[threadId];
+        return { promptModal, sandboxApprovalsByThread: nextSandbox };
+      });
     },
 
-    dismissPrompt: () => set({ promptModal: null }),
+    dismissPrompt: () => {
+      const state = get();
+      if (state.promptModal) {
+        set({ promptModal: null });
+        return;
+      }
+
+      const pending = findLatestSandboxApprovalPrompt(state);
+      if (pending) {
+        state.answerApproval(pending.threadId, pending.prompt.requestId, false);
+      }
+    },
 
     loadAllThreadUsage: async () => {
       const threads = get().threads;

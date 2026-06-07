@@ -31,8 +31,28 @@ started by the desktop sidecar. Pairing details are in
 
 `/rpc` and `/events` require both `Authorization: Bearer <sessionToken>` and the paired
 `x-cowork-mobile-device-id` header. The H3 listener keeps one trusted-device record per mobile
-device id, and desktop-side per-device permissions gate mutating JSON-RPC methods such as turns,
-provider auth, MCP auth, backups, workspace settings, and server-request responses.
+device id, and desktop-side per-device permissions gate JSON-RPC methods such as turns, provider
+auth, MCP auth, backups, workspace settings, and server-request responses. Reading thread history
+(`thread/list`, `thread/read`, `thread/hydrate`, and `thread/resume`, which streams a thread's live
+content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
+stays always-allowed. Newly paired devices default to no `conversations` access until it is granted;
+devices paired before this permission existed are grandfathered to preserve their prior read access. The whole
+`cowork/mcp/*` config surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth
+permission) requires the workspace-settings permission: `cowork/mcp/servers/read` can expose
+configured transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP
+command (spawns a local subprocess) while connecting. The `cowork/memory/*` surface (including the
+`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the workspace-settings
+permission, because memory holds long-lived private user/project content. `cowork/plugins/install/preview` and
+`cowork/skills/install/preview` also require the workspace-settings permission, because they
+materialize an attacker-selectable local or GitHub source (only the passive plugin/skill
+catalog/list/detail reads stay always-allowed). The workspace document surface `cowork/workspace/presentation/preview` (which runs a workspace
+slide module on the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content
+from a caller-selected `cwd` that is not confined to the active workspace) require the
+workspace-settings permission. `cowork/session/state/read` (workspace/session config, provider
+options, userName/userProfile) also requires the workspace-settings permission, and
+`cowork/workspace/bootstrap` requires both the workspace-settings and conversations permissions
+because it returns that control state plus thread summaries. None of these are always-allowed
+defaults.
 
 The JSON-RPC handshake (`initialize`, then `initialized`) is still required before calling
 `thread/*`, `turn/*`, or `cowork/*`.
@@ -437,6 +457,7 @@ Requests:
   - params: `{ filename, mimeType, contentBase64 }`
   - result: `{ file }`
   - stages a pending upload under `~/.cowork/research/uploads`; payloads are capped at 20 MiB decoded size
+  - the returned `file.fileId` is a generated UUID; `attachedFileIds`/`fileId` accepted by `research/start`, `research/followup`, and `research/attachFile` must be these exact UUIDs (callers cannot supply arbitrary paths)
 - `research/discardUploads`
   - params: `{ fileIds }`
   - result: `{ status: "discarded" }`
@@ -1376,7 +1397,15 @@ Backups are opt-in. In git workspaces, clients and agents should prefer git-nati
 | "requires_manual_review"
 | "file_read_command_requires_review"
 | "outside_allowed_scope"
+| "sandbox_denied_escalation"
 ```
+
+Command execution is enforced by the OS sandbox (see [Sandbox](./sandbox.md)).
+Dangerous commands are classified before execution and may emit
+`"matches_dangerous_pattern"` or `"requires_manual_review"` approvals. A
+`"sandbox_denied_escalation"` approval means a sandboxed command failed in a way
+that looks like a sandbox denial and the agent is asking whether to retry with
+the specific blocked capability widened.
 
 ### ServerErrorCode
 
@@ -2289,7 +2318,14 @@ Client guidance:
 
 ### approval
 
-Internal session event recorded when the harness needs command approval. On the JSON-RPC wire, the same prompt is sent as the server request `item/commandExecution/requestApproval`.
+Internal session event recorded when an action needs user approval. There are two kinds:
+
+1. **Sandbox-denial escalation** (`dangerous: true`, `reasonCode: "sandbox_denied_escalation"`): the OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this is emitted when a sandboxed command failed like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure), or when a restrictive command would fall back to unsandboxed execution because no backend is available. Approving runs the command with full access; rejecting returns the sandbox failure/refusal to the model.
+2. **Ordinary approval** (`dangerous: false`, `reasonCode: "requires_manual_review"`): a provider/tool approval that is NOT a sandbox escape — e.g. the Codex app-server `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` prompts, routed through `approveCommand` without a sandbox reason. Clients should render these as normal approval prompts, not as "escape the sandbox".
+
+YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always prompts (it is not auto-approved under YOLO). On the JSON-RPC wire, the prompt is sent as the server request `item/commandExecution/requestApproval` (or `item/fileChange/requestApproval`).
+
+For a sandbox-denial escalation the event also carries `detail` (a short, safe-to-display reason the command was blocked) and `category` (`"filesystem"` or `"network"`) so clients can render a clear, inline, sandbox-aware approval ("re-run with full disk + network access?") instead of a generic command-approval prompt. These fields are omitted for ordinary approvals. They are mirrored on the JSON-RPC server request `item/commandExecution/requestApproval` params (`detail`, `category`).
 
 ```json
 {
@@ -2298,7 +2334,9 @@ Internal session event recorded when the harness needs command approval. On the 
   "requestId": "req-def",
   "command": "rm -rf /tmp/build",
   "dangerous": true,
-  "reasonCode": "matches_dangerous_pattern"
+  "reasonCode": "sandbox_denied_escalation",
+  "detail": "The OS sandbox blocked a write outside the workspace for this command.",
+  "category": "filesystem"
 }
 ```
 
@@ -2307,9 +2345,11 @@ Internal session event recorded when the harness needs command approval. On the 
 | `type` | `"approval"` | — |
 | `sessionId` | `string` | Session identifier |
 | `requestId` | `string` | Unique request ID, mirrored in the JSON-RPC server request |
-| `command` | `string` | The shell command requesting approval |
-| `dangerous` | `boolean` | Whether the command matches dangerous patterns |
-| `reasonCode` | `ApprovalRiskCode` | Why approval is needed (see [ApprovalRiskCode](#approvalriskcode)) |
+| `command` | `string` | The shell command (or action) awaiting approval |
+| `dangerous` | `boolean` | `true` for a sandbox escape (running outside the sandbox); `false` for an ordinary approval |
+| `reasonCode` | `ApprovalRiskCode` | `"sandbox_denied_escalation"` for a sandbox escape, else `"requires_manual_review"` (see [ApprovalRiskCode](#approvalriskcode)) |
+| `detail` | `string` (optional) | Human-readable reason the command was blocked; present for sandbox escalations only |
+| `category` | `"filesystem" \| "network"` (optional) | Sandbox-denial classification; present for sandbox escalations only |
 
 ---
 

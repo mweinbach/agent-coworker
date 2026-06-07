@@ -2087,6 +2087,83 @@ describe("AgentSession", () => {
       });
     });
 
+    test("uses a copied-file hint for oversized uploaded audio instead of sending audio content", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const audioPath = path.join(uploadsDir, "voice.mp3");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(audioPath, "");
+      await fs.truncate(audioPath, MAX_ATTACHMENT_INLINE_BYTE_SIZE + 1);
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage(
+        "transcribe this and take notes",
+        "msg-large-audio",
+        undefined,
+        [
+          {
+            filename: "voice.mp3",
+            path: audioPath,
+            mimeType: "audio/mpeg",
+          },
+        ],
+      );
+
+      expect(events.some((e) => e.type === "error")).toBe(false);
+      expect(events.some((e) => e.type === "user_message")).toBe(true);
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      const content = call.messages.at(-1)?.content as Array<Record<string, unknown>>;
+      expect(content).toContainEqual({
+        type: "text",
+        text: "transcribe this and take notes",
+      });
+      expect(content.some((part) => part.type === "audio")).toBe(false);
+
+      const hint = content.find(
+        (part) => part.type === "text" && String(part.text).includes(audioPath),
+      );
+      expect(hint).toBeDefined();
+      expect(String(hint?.text)).toContain("has been copied");
+      expect(String(hint?.text)).toContain("larger than the 25MB model attachment limit");
+      expect(String(hint?.text)).toContain("not attached as audio content");
+      expect(String(hint?.text)).toContain("dedicated transcription workflow");
+      expect(JSON.stringify(content)).not.toContain("already attached to this message");
+    });
+
+    test("uses the oversized audio hint even when the provider does not attach audio natively", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const audioPath = path.join(uploadsDir, "voice.mp3");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(audioPath, "");
+      await fs.truncate(audioPath, MAX_ATTACHMENT_INLINE_BYTE_SIZE + 1);
+      const { session } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          provider: "openai",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+        },
+      });
+
+      await session.sendUserMessage("transcribe this", "msg-large-audio-openai", undefined, [
+        {
+          filename: "voice.mp3",
+          path: audioPath,
+          mimeType: "audio/mpeg",
+        },
+      ]);
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      const content = call.messages.at(-1)?.content as Array<Record<string, unknown>>;
+      expect(content.some((part) => part.type === "audio")).toBe(false);
+      expect(JSON.stringify(content)).toContain("larger than the 25MB model attachment limit");
+      expect(JSON.stringify(content)).toContain("dedicated transcription workflow");
+    });
+
     test("preserves inline base64 audio attachments for Google multimodal input", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const uploadsDir = path.join(dir, "uploads");

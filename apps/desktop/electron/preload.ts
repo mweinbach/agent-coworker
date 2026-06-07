@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { z } from "zod";
 import {
   type DesktopFeatureFlagOverrides,
@@ -14,6 +14,7 @@ import type { PersistedState } from "../src/app/types";
 import {
   type CaptureProductEventInput,
   type ConfirmActionInput,
+  type CopyFileToWorkspaceUploadsInput,
   type CopyPathInput,
   type CreateDirectoryInput,
   type CreateOneOffChatWorkspaceInput,
@@ -62,6 +63,7 @@ import {
 import {
   captureProductEventInputSchema,
   confirmActionInputSchema,
+  copyFileToWorkspaceUploadsInputSchema,
   copyPathInputSchema,
   copyTextInputSchema,
   createDirectoryInputSchema,
@@ -207,6 +209,14 @@ function assertCopyPathInput(opts: CopyPathInput): void {
 
 function assertCopyTextInput(text: unknown): void {
   parseWithSchema(copyTextInputSchema, text, "copyText text");
+}
+
+function assertCopyFileToWorkspaceUploadsInput(opts: CopyFileToWorkspaceUploadsInput): void {
+  parseWithSchema(
+    copyFileToWorkspaceUploadsInputSchema,
+    opts,
+    "copyFileToWorkspaceUploads options",
+  );
 }
 
 function assertCreateDirectoryInput(opts: CreateDirectoryInput): void {
@@ -601,6 +611,35 @@ const desktopApi = Object.freeze<DesktopApi>({
   copyText: (text: string) => {
     assertCopyTextInput(text);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyText, text);
+  },
+
+  getPathForFile: async (file: unknown) => {
+    // `webUtils.getPathForFile` only returns a real path for genuine OS-backed
+    // File objects (drag-drop / file input); synthetic files yield "". That is
+    // the capability that authorizes an upload source. We register the resolved
+    // path with the main process so copyFileToWorkspaceUploads can refuse any
+    // renderer-supplied path that was not selected through this picker flow.
+    let sourcePath: string | null;
+    try {
+      sourcePath = webUtils.getPathForFile(file as File) || null;
+    } catch {
+      return null;
+    }
+    if (!sourcePath) {
+      return null;
+    }
+    try {
+      await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.authorizeUploadSource, { sourcePath });
+    } catch {
+      // Best-effort: if authorization fails the copy will be rejected and the
+      // caller falls back to the server-side upload path.
+    }
+    return sourcePath;
+  },
+
+  copyFileToWorkspaceUploads: (opts: CopyFileToWorkspaceUploadsInput) => {
+    assertCopyFileToWorkspaceUploadsInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads, opts);
   },
 
   createDirectory: (opts: CreateDirectoryInput) => {

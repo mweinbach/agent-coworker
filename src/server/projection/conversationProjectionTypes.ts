@@ -53,6 +53,8 @@ export type ProjectionServerRequest =
         command: string;
         dangerous: boolean;
         reason: string;
+        detail?: string;
+        category?: "filesystem" | "network";
       };
     };
 

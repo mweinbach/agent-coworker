@@ -1046,6 +1046,7 @@ describe("desktop JSON-RPC event mapping", () => {
         provider: "openai",
         model: "gpt-5.4-mini",
         workingDirectory: "/tmp/workspace",
+        uploadsDirectory: "/tmp/workspace/Custom Uploads",
       },
     });
     socket.notify("cowork/session/settings", {
@@ -1081,6 +1082,7 @@ describe("desktop JSON-RPC event mapping", () => {
       "Renamed over JSON-RPC",
     );
     expect(runtime?.config?.model).toBe("gpt-5.4-mini");
+    expect(runtime?.config?.uploadsDirectory).toBe("/tmp/workspace/Custom Uploads");
     expect(runtime?.enableMcp).toBe(false);
     expect(runtime?.sessionConfig?.preferredChildModel).toBe("gpt-5.4-mini");
   });
@@ -1254,6 +1256,402 @@ describe("desktop JSON-RPC event mapping", () => {
       expectedResponse: { decision: "accept" },
       answer: () => useAppStore.getState().answerApproval(threadId, "approval-1", true),
     });
+  });
+
+  test("sandbox-denied escalation renders inline in the feed, not the modal", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-1";
+    const responseCountBefore = socket.responses.length;
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    // A sandbox escape is an inline, sandbox-aware card — never the centered modal.
+    expect(useAppStore.getState().promptModal).toBeNull();
+    const pending = useAppStore.getState().sandboxApprovalsByThread[threadId] ?? [];
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      requestId,
+      command: "curl https://example.com",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    // The card actually renders inline in the live ChatView tree (not just store state).
+    const bodyText = harness?.dom.window.document.body.textContent ?? "";
+    expect(bodyText).toContain("Blocked by the OS sandbox");
+    expect(bodyText).toContain("curl https://example.com");
+
+    await act(async () => {
+      useAppStore.getState().answerApproval(threadId, requestId, true);
+      await Promise.resolve();
+    });
+
+    // Answering resolves on the shared socket and clears the inline prompt.
+    expect(socket.responses.slice(responseCountBefore)).toEqual([
+      { id: requestId, result: { decision: "accept" } },
+    ]);
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("sandbox-denied escalation stays visible and answerable after switching threads", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-off-thread";
+    const otherThreadId = `thread-${crypto.randomUUID()}`;
+    const otherSessionId = `session-${crypto.randomUUID()}`;
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com/off-thread",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        selectedThreadId: otherThreadId,
+        threads: [
+          ...state.threads,
+          {
+            id: otherThreadId,
+            workspaceId,
+            title: "Other thread",
+            titleSource: "manual",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "disconnected",
+            sessionId: otherSessionId,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            legacyTranscriptId: null,
+          },
+        ],
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [otherThreadId]: {
+            ...defaultThreadRuntime(),
+            wsUrl: "ws://mock",
+            sessionId: otherSessionId,
+          },
+        },
+      }));
+    });
+    await flushAsyncWork();
+
+    const body = harness?.dom.window.document.body;
+    expect(body?.textContent ?? "").toContain("curl https://example.com/off-thread");
+    const keepBlockedButton = Array.from(body?.querySelectorAll("button") ?? []).find((button) =>
+      button.textContent?.includes("Keep blocked"),
+    );
+    expect(keepBlockedButton).toBeDefined();
+    if (!harness) {
+      throw new Error("missing jsdom harness");
+    }
+
+    await act(async () => {
+      keepBlockedButton?.dispatchEvent(
+        new harness.dom.window.MouseEvent("click", { bubbles: true }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("sandbox-denied escalation clears a stale approval modal for the same thread", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    useAppStore.setState({
+      promptModal: {
+        kind: "approval",
+        threadId,
+        prompt: {
+          requestId: "ordinary-approval",
+          command: "rm -rf build",
+          dangerous: true,
+          reasonCode: "requires_manual_review",
+        },
+      },
+    });
+
+    socket.requestFromServer("sandbox-clears-modal", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().promptModal).toBeNull();
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+  });
+
+  test("answering an inline sandbox approval leaves unrelated modals open", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-unrelated-modal";
+    useAppStore.setState({
+      promptModal: {
+        kind: "approval",
+        threadId,
+        prompt: {
+          requestId: "ordinary-approval",
+          command: "rm -rf build",
+          dangerous: true,
+          reasonCode: "requires_manual_review",
+        },
+      },
+    });
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+    useAppStore.setState({
+      promptModal: {
+        kind: "approval",
+        threadId,
+        prompt: {
+          requestId: "ordinary-approval",
+          command: "rm -rf build",
+          dangerous: true,
+          reasonCode: "requires_manual_review",
+        },
+      },
+    });
+
+    await act(async () => {
+      useAppStore.getState().answerApproval(threadId, requestId, false);
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().promptModal?.prompt.requestId).toBe("ordinary-approval");
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("dismissPrompt declines the latest inline sandbox approval", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-escape-denies";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("dismissPrompt declines an off-thread inline sandbox approval", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-escape-off-thread-denies";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState({ selectedThreadId: `thread-${crypto.randomUUID()}` });
+    });
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("dismissPrompt declines the latest off-thread inline sandbox approval", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const firstRequestId = "sandbox-escape-first-off-thread";
+    const latestRequestId = "sandbox-escape-latest-off-thread";
+    const selectedIdleThreadId = `thread-${crypto.randomUUID()}`;
+    const selectedIdleSessionId = `session-${crypto.randomUUID()}`;
+    const latestThreadId = `thread-${crypto.randomUUID()}`;
+    const latestSessionId = `session-${crypto.randomUUID()}`;
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        selectedThreadId: selectedIdleThreadId,
+        threads: [
+          ...state.threads,
+          {
+            id: selectedIdleThreadId,
+            workspaceId,
+            title: "Selected idle thread",
+            titleSource: "manual",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "disconnected",
+            sessionId: selectedIdleSessionId,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            legacyTranscriptId: null,
+          },
+          {
+            id: latestThreadId,
+            workspaceId,
+            title: "Latest prompt thread",
+            titleSource: "manual",
+            createdAt: "2024-01-01T00:00:04.000Z",
+            lastMessageAt: "2024-01-01T00:00:04.000Z",
+            status: "disconnected",
+            sessionId: latestSessionId,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            legacyTranscriptId: null,
+          },
+        ],
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [selectedIdleThreadId]: {
+            ...defaultThreadRuntime(),
+            wsUrl: "ws://mock",
+            sessionId: selectedIdleSessionId,
+          },
+          [latestThreadId]: {
+            ...defaultThreadRuntime(),
+            wsUrl: "ws://mock",
+            sessionId: latestSessionId,
+          },
+        },
+      }));
+    });
+
+    socket.requestFromServer(firstRequestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox-first",
+      command: "curl https://example.com/first",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    socket.requestFromServer(latestRequestId, "item/commandExecution/requestApproval", {
+      threadId: latestSessionId,
+      turnId: "turn-2",
+      itemId: "item-sandbox-latest",
+      command: "curl https://example.com/latest",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({
+      id: latestRequestId,
+      result: { decision: "decline" },
+    });
+    expect(socket.responses).not.toContainEqual({
+      id: firstRequestId,
+      result: { decision: "decline" },
+    });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().sandboxApprovalsByThread[latestThreadId] ?? []).toHaveLength(0);
+  });
+
+  test("sandbox approval stays visible when the response cannot be sent", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-send-fails";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      RUNTIME.jsonRpcSockets.delete(workspaceId);
+      useAppStore.setState((state) => ({
+        workspaceRuntimeById: {
+          ...state.workspaceRuntimeById,
+          [workspaceId]: {
+            ...state.workspaceRuntimeById[workspaceId],
+            serverUrl: null,
+          },
+        },
+      }));
+    });
+
+    await act(async () => {
+      useAppStore.getState().answerApproval(threadId, requestId, true);
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toEqual([]);
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().promptModal).toBeNull();
+  });
+
+  test("resolved server requests clear replayed inline sandbox approvals", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-replayed";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+
+    socket.notify("serverRequest/resolved", { threadId: sessionId, requestId });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
   });
 
   test("retired shared JSON-RPC sockets do not route late notifications or server requests after a serverUrl swap", async () => {

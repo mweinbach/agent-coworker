@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
 import type { AgentConfig } from "../src/types";
 import {
   assertReadPathAllowed,
@@ -120,9 +121,9 @@ describe("isWritePathAllowed", () => {
   // ---- Writes inside projectCoworkDir parent (project root) ------------------
 
   describe("allows writes via projectCoworkDir parent (project root)", () => {
-    test("file in .agent directory", () => {
+    test("project .cowork metadata is protected even under the project root", () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, ".cowork", "config.json"), cfg)).toBe(true);
+      expect(isWritePathAllowed(path.join(PROJECT, ".cowork", "config.json"), cfg)).toBe(false);
     });
 
     test("projectCoworkDir parent matches workingDirectory", () => {
@@ -261,9 +262,9 @@ describe("isWritePathAllowed", () => {
       expect(isWritePathAllowed(cfg.outputDirectory, cfg)).toBe(true);
     });
 
-    test("projectCoworkDir itself is inside its parent and allowed", () => {
+    test("projectCoworkDir itself is protected metadata and blocked", () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(cfg.projectCoworkDir, cfg)).toBe(true);
+      expect(isWritePathAllowed(cfg.projectCoworkDir, cfg)).toBe(false);
     });
   });
 
@@ -313,6 +314,90 @@ describe("assertWritePathAllowed", () => {
     const cfg = makeConfig(dir);
     const target = path.join(dir, "src", "file.txt");
     await expect(assertWritePathAllowed(target, cfg, "write")).resolves.toBe(path.resolve(target));
+  });
+
+  test("allows advanced-memory writes only inside the active folder", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-write-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const cfg = makeConfig(dir);
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFolder = resolveMemoryFolderName(cfg);
+    const activeFile = path.join(memoriesDir, activeFolder, "memory.md");
+    const chatsFile = path.join(memoriesDir, CHATS_FOLDER, "memory.md");
+    const siblingFile = path.join(memoriesDir, "other-project", "memory.md");
+
+    expect(isWritePathAllowed(activeFile, cfg)).toBe(true);
+    expect(isWritePathAllowed(chatsFile, cfg)).toBe(false);
+    expect(isWritePathAllowed(siblingFile, cfg)).toBe(false);
+    await expect(assertWritePathAllowed(activeFile, cfg, "write")).resolves.toBe(
+      path.resolve(activeFile),
+    );
+    await expect(assertWritePathAllowed(chatsFile, cfg, "write")).rejects.toThrow(/blocked/i);
+    await expect(assertWritePathAllowed(siblingFile, cfg, "write")).rejects.toThrow(/blocked/i);
+  });
+
+  describe("protected project metadata carve-out (.git/.cowork)", () => {
+    test("blocks writing a .git hook even though it is under the project root", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-git-"));
+      const cfg = makeConfig(dir);
+      await fs.mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
+      const hook = path.join(dir, ".git", "hooks", "pre-commit");
+
+      expect(isWritePathAllowed(hook, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(hook, cfg, "write")).rejects.toThrow(/read-only/i);
+    });
+
+    test("blocks editing project .cowork config metadata", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-cowork-"));
+      const cfg = makeConfig(dir);
+      const configPath = path.join(dir, ".cowork", "config.json");
+
+      expect(isWritePathAllowed(configPath, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(configPath, cfg, "edit")).rejects.toThrow(/read-only/i);
+    });
+
+    test("blocks a symlink whose canonical target lands in .git", async () => {
+      if (process.platform === "win32") return;
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-symlink-"));
+      const cfg = makeConfig(dir);
+      await fs.mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
+      // An innocuously named in-project dir that actually points at .git.
+      await fs.symlink(path.join(dir, ".git"), path.join(dir, "tools-link"));
+      const sneaky = path.join(dir, "tools-link", "hooks", "post-checkout");
+
+      expect(isWritePathAllowed(sneaky, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(sneaky, cfg, "write")).rejects.toThrow(
+        /blocked|read-only/i,
+      );
+    });
+
+    test("still allows ordinary files next to protected metadata", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-allow-"));
+      const cfg = makeConfig(dir);
+      const ordinary = path.join(dir, "src", "index.ts");
+
+      expect(isWritePathAllowed(ordinary, cfg)).toBe(true);
+      await expect(assertWritePathAllowed(ordinary, cfg, "write")).resolves.toBe(
+        path.resolve(ordinary),
+      );
+    });
+  });
+
+  test("targetPath-scoped children cannot write the active memory folder", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-scoped-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-scoped-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const cfg = makeConfig(dir);
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFile = path.join(memoriesDir, resolveMemoryFolderName(cfg), "memory.md");
+    const targetPaths = [path.join(dir, "src")];
+
+    await expect(assertWritePathAllowed(activeFile, cfg, "write", targetPaths)).rejects.toThrow(
+      /targetPaths/,
+    );
   });
 
   test("rejects symlink segment escapes", async () => {
@@ -388,6 +473,19 @@ describe("isReadPathAllowed", () => {
     ).toBe(true);
   });
 
+  test("advanced-memory reads include active and chats folders", () => {
+    const cfg = makeConfig(PROJECT);
+    const memoriesDir =
+      process.platform === "win32" ? "C:\\cowork-memory-home" : "/cowork-memory-home";
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFolder = resolveMemoryFolderName(cfg);
+
+    expect(isReadPathAllowed(path.join(memoriesDir, activeFolder, "memory.md"), cfg)).toBe(true);
+    expect(isReadPathAllowed(path.join(memoriesDir, CHATS_FOLDER, "memory.md"), cfg)).toBe(true);
+    expect(isReadPathAllowed(path.join(memoriesDir, "other", "memory.md"), cfg)).toBe(false);
+  });
+
   test("denies reads outside allowed roots", () => {
     const cfg = makeConfig(PROJECT);
     expect(isReadPathAllowed("/etc/passwd", cfg)).toBe(false);
@@ -415,6 +513,27 @@ describe("assertReadPathAllowed", () => {
     await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
   });
 
+  test("allows advanced-memory reads from active and chats folders only", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-read-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-read-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const cfg = makeConfig(dir);
+    cfg.advancedMemory = true;
+    cfg.memoriesDir = memoriesDir;
+    const activeFolder = resolveMemoryFolderName(cfg);
+    const activeFile = path.join(memoriesDir, activeFolder, "memory.md");
+    const chatsFile = path.join(memoriesDir, CHATS_FOLDER, "memory.md");
+    const siblingFile = path.join(memoriesDir, "other-project", "memory.md");
+
+    await expect(assertReadPathAllowed(activeFile, cfg, "read")).resolves.toBe(
+      path.resolve(activeFile),
+    );
+    await expect(assertReadPathAllowed(chatsFile, cfg, "read")).resolves.toBe(
+      path.resolve(chatsFile),
+    );
+    await expect(assertReadPathAllowed(siblingFile, cfg, "read")).rejects.toThrow(/blocked/i);
+  });
+
   test("rejects symlink segment escapes", async () => {
     if (process.platform === "win32") return;
 
@@ -438,6 +557,60 @@ describe("assertReadPathAllowed", () => {
     const target = path.join(skillsDir, "slides", "references", "example.md");
 
     await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
+  });
+
+  test("a scoped child can still read global skills outside its targetPaths", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-skills-"));
+    // Global skills live under ~/.cowork/skills — a separate home, OUTSIDE the
+    // project write roots (not nested under the workspace).
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-home-"));
+    const cfg = makeConfig(dir);
+    const globalSkillsDir = path.join(home, ".cowork", "skills");
+    cfg.skillsDirs = [path.join(dir, ".cowork", "skills"), globalSkillsDir];
+    const skillFile = path.join(globalSkillsDir, "pdf", "SKILL.md");
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.writeFile(skillFile, "skill-body", "utf-8");
+    // The child is scoped to a single subdir of the project.
+    const targetPaths = [path.join(dir, "src", "auth")];
+
+    // Reads outside the project write roots (e.g. global skills) are not
+    // constrained by targetPaths, so a scoped child can still load them.
+    await expect(assertReadPathAllowed(skillFile, cfg, "read", targetPaths)).resolves.toBe(
+      path.resolve(skillFile),
+    );
+
+    // But a project file outside the child's targetPaths stays blocked.
+    await expect(
+      assertReadPathAllowed(path.join(dir, "src", "other", "secret.ts"), cfg, "read", targetPaths),
+    ).rejects.toThrow(/targetPaths/);
+  });
+
+  test("allows reads inside the user plugins dir (~/.cowork/plugins)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-user-plugins-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-user-plugins-home-"));
+    const cfg = makeConfig(dir);
+    // ~/.cowork/plugins is an explicit read root (config.userPluginsDir).
+    cfg.userPluginsDir = path.join(home, ".cowork", "plugins");
+    const target = path.join(cfg.userPluginsDir, "figma-toolkit", "README.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "plugin readme", "utf-8");
+
+    await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
+  });
+
+  test("a scoped child can still read the user plugins dir outside its targetPaths", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-plugins-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-scoped-plugins-home-"));
+    const cfg = makeConfig(dir);
+    cfg.userPluginsDir = path.join(home, ".cowork", "plugins");
+    const target = path.join(cfg.userPluginsDir, "figma-toolkit", "README.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "plugin readme", "utf-8");
+    const targetPaths = [path.join(dir, "src", "auth")];
+
+    await expect(assertReadPathAllowed(target, cfg, "read", targetPaths)).resolves.toBe(
+      path.resolve(target),
+    );
   });
 
   test("allows reads from bundled plugin skill directories", async () => {

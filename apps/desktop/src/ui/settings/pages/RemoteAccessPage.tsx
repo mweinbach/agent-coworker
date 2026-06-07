@@ -44,6 +44,7 @@ const TRUSTED_DEVICE_PERMISSION_CONTROLS: Array<{
   key: MobileRelayTrustedDevicePermissionKey;
   label: string;
 }> = [
+  { key: "conversations", label: "Conversations" },
   { key: "turns", label: "Turns" },
   { key: "serverRequests", label: "Approvals" },
   { key: "providerAuth", label: "Provider auth" },

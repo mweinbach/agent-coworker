@@ -6,6 +6,7 @@ import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
 import { __internal as agentInternal, createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import { canonicalizeRoot } from "../src/platform/sandbox/policy";
 import { SessionCostTracker } from "../src/session/costTracker";
 import { buildTurnSystemPrompt } from "../src/turnSystemPrompt";
 import type { AgentConfig } from "../src/types";
@@ -271,6 +272,47 @@ describe("runTurn", () => {
     expect(runtimeParams.system).toContain("`mcp__{serverName}__{toolName}`");
   });
 
+  test("Codex app-server scoped children keep Cowork read-scope tools", async () => {
+    const runtimeRunTurn = mock(async () => ({
+      responseMessages: [{ role: "assistant", content: "ok" }],
+    }));
+    const createRuntimeForCodex = mock(() => ({
+      name: "codex-app-server" as const,
+      runTurn: runtimeRunTurn,
+    }));
+    const createToolsForCodex = mock(() => ({
+      bash: { type: "builtin" },
+      read: { type: "builtin-read" },
+      glob: { type: "builtin-glob" },
+      grep: { type: "builtin-grep" },
+      write: { type: "builtin-write" },
+      edit: { type: "builtin-edit" },
+      spawnAgent: { type: "cowork" },
+    }));
+    const runCodexTurn = createRunTurn({
+      createRuntime: createRuntimeForCodex,
+      createTools: createToolsForCodex,
+    });
+
+    await runCodexTurn(
+      makeParams({
+        config: makeConfig({
+          provider: "codex-cli",
+          runtime: "codex-app-server",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+        }),
+        agentTargetPaths: ["src/auth"],
+      }),
+    );
+
+    const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
+    expect(Object.keys(runtimeParams.tools).sort()).toEqual(["glob", "grep", "read", "spawnAgent"]);
+    expect(runtimeParams.tools).not.toHaveProperty("bash");
+    expect(runtimeParams.tools).not.toHaveProperty("write");
+    expect(runtimeParams.tools).not.toHaveProperty("edit");
+  });
+
   for (const scenario of [
     {
       label: "Gemini Interactions",
@@ -349,10 +391,12 @@ describe("runTurn", () => {
 
       const shimDir = path.join(homeDir, ".cache", "cowork", "libreoffice", "bin");
       const shimPath = expectedManagedSofficeShimPath(shimDir);
+      const managedRoot = path.join(homeDir, ".cache", "cowork", "libreoffice");
       const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
       expect(toolCtx.toolEnv.COWORK_SOFFICE).toBe(shimPath);
       expect(toolCtx.toolEnv.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
       expect(toolCtx.toolEnv.PATH.split(path.delimiter)[0]).toBe(shimDir);
+      expect(toolCtx.sandboxPolicy.writableRoots).toContain(canonicalizeRoot(managedRoot));
 
       const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
       expect(runtimeParams.toolEnv.COWORK_SOFFICE).toBe(shimPath);
@@ -1021,6 +1065,14 @@ describe("runTurn", () => {
     const toolCtx = mockCreateTools.mock.calls[0]?.[0] as any;
     expect(toolCtx.costTracker).toBe(costTracker);
     expect(toolCtx.onSessionUsageBudgetUpdated).toBe(onSessionUsageBudgetUpdated);
+  });
+
+  test("explicit no_project_write shell policy yields a no-project-write sandbox without an agentRole", async () => {
+    await runTurn(makeParams({ shellPolicy: "no_project_write" }));
+    const toolCtx = mockCreateTools.mock.calls[0]?.[0] as any;
+    // The precomputed sandbox policy (preferred by the bash tool) must honor the
+    // no-project-write shell policy even when no agentRole is set.
+    expect(toolCtx.sandboxPolicy.kind).toBe("no-project-write");
   });
 
   // -------------------------------------------------------------------------

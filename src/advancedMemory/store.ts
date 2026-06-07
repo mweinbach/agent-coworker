@@ -59,6 +59,10 @@ function slugify(raw: string): string {
   );
 }
 
+export function slugifyMemoryName(raw: string): string {
+  return slugify(raw);
+}
+
 export function normalizeMemoryFolderName(raw: string): string {
   const folder = raw.trim();
   if (!folder || folder === "." || folder === ".." || INVALID_FOLDER_CHARS.test(folder)) {
@@ -90,6 +94,41 @@ export function resolveMemoryFolderName(config: AgentConfig): string {
 
 export function resolveMemoriesDir(config: AgentConfig): string {
   return config.memoriesDir ?? getAiCoworkerPaths().memoriesDir;
+}
+
+export type AdvancedMemoryAccessRoots = {
+  memoriesDir: string;
+  activeFolder: string;
+  readableFolders: string[];
+  writableFolder: string;
+  readRoots: string[];
+  writeRoots: string[];
+};
+
+export function resolveAdvancedMemoryAccessRoots(config: AgentConfig): AdvancedMemoryAccessRoots {
+  const memoriesDir = resolveMemoriesDir(config);
+  const store = new AdvancedMemoryStore(memoriesDir);
+  const activeFolder = resolveMemoryFolderName(config);
+  const readableFolders =
+    activeFolder === CHATS_FOLDER ? [CHATS_FOLDER] : [activeFolder, CHATS_FOLDER];
+  return {
+    memoriesDir,
+    activeFolder,
+    readableFolders,
+    writableFolder: activeFolder,
+    readRoots: readableFolders.map((folder) => store.folderPath(folder)),
+    writeRoots: [store.folderPath(activeFolder)],
+  };
+}
+
+export function resolveAdvancedMemoryReadRoots(config: AgentConfig): string[] {
+  if (!config.advancedMemory) return [];
+  return resolveAdvancedMemoryAccessRoots(config).readRoots;
+}
+
+export function resolveAdvancedMemoryWriteRoots(config: AgentConfig): string[] {
+  if (!config.advancedMemory) return [];
+  return resolveAdvancedMemoryAccessRoots(config).writeRoots;
 }
 
 function escapeYamlValue(value: string): string {
@@ -325,6 +364,7 @@ export class AdvancedMemoryStore {
       "",
       "Your long-term memory is maintained automatically as indexed entries below.",
       "Use `recallMemory` to read the full content of any listed memory by name.",
+      "Use `manageMemory` for explicit user requests to list, create, edit, or refresh memories.",
       "Use `readPastConversation` to revisit a prior session transcript by its sessionId.",
       "Treat memories as helpful context; resolve conflicts in favor of the latest explicit user instruction.",
       "",

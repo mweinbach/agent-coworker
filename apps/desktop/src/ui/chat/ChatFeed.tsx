@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import type { RefObject } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
+import type { SandboxApprovalPrompt } from "../../app/types";
 import {
   Conversation,
   ConversationContent,
@@ -16,6 +17,12 @@ import { Card, CardContent } from "../../components/ui/card";
 import { ActivityGroupCard } from "./ActivityGroupCard";
 import type { ChatRenderItem } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
+import { SandboxApprovalCard } from "./SandboxApprovalCard";
+
+export type VisibleSandboxApproval = {
+  threadId: string;
+  prompt: SandboxApprovalPrompt;
+};
 
 export function ChatFeed(props: {
   feedRef: RefObject<HTMLDivElement | null>;
@@ -34,6 +41,8 @@ export function ChatFeed(props: {
   latestUiSurfaceItemId: string | null;
   a2uiEnabled: boolean;
   composerOverlayHeight: number;
+  sandboxApprovals: VisibleSandboxApproval[];
+  onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => void;
 }) {
   const {
     feedRef,
@@ -52,6 +61,8 @@ export function ChatFeed(props: {
     latestUiSurfaceItemId,
     a2uiEnabled,
     composerOverlayHeight,
+    sandboxApprovals,
+    onAnswerApproval,
   } = props;
 
   return (
@@ -123,6 +134,16 @@ export function ChatFeed(props: {
             ),
           )
         )}
+        {sandboxApprovals.length > 0
+          ? sandboxApprovals.map(({ threadId, prompt }) => (
+              <SandboxApprovalCard
+                key={`${threadId}:${prompt.requestId}`}
+                threadId={threadId}
+                prompt={prompt}
+                onAnswer={onAnswerApproval}
+              />
+            ))
+          : null}
         <div
           aria-hidden="true"
           className="shrink-0"

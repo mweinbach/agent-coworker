@@ -1,5 +1,7 @@
+import path from "node:path";
 import { z } from "zod";
 
+import { isUsableTargetPath } from "../platform/sandbox/policy";
 import {
   AGENT_ROLE_VALUES,
   agentContextModeSchema,
@@ -9,7 +11,6 @@ import {
   normalizeAgentTargetPaths,
   resolveAgentSpawnContextOptions,
 } from "../shared/agents";
-
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -114,6 +115,36 @@ export function createSpawnAgentTool(ctx: ToolContext) {
         throw new Error("spawnAgent nickname must not be empty");
       }
       const normalizedTargetPaths = normalizeAgentTargetPaths(targetPaths);
+      if (normalizedTargetPaths !== undefined) {
+        // An explicitly provided scope must be non-empty and fully valid; an
+        // empty list would otherwise be treated as "no scope" and widen the child
+        // to the whole workspace. Omit targetPaths entirely for whole-workspace.
+        if (normalizedTargetPaths.length === 0) {
+          throw new Error(
+            "spawnAgent targetPaths must not be empty; omit it for whole-workspace scope.",
+          );
+        }
+        // Reject the spawn if ANY entry is not a usable scope (outside the
+        // workspace, an escaping symlink, or inside protected metadata like
+        // `.git`/`.cowork`). The stored targetPaths feed both the OS sandbox and
+        // the built-in file tools, so silently dropping invalid entries would let
+        // a mixed scope (e.g. [".git/hooks", "src/ok"]) still write protected
+        // metadata via write/edit. Children inherit the parent workspace.
+        const invalid = normalizedTargetPaths.filter(
+          (p) =>
+            !isUsableTargetPath(
+              ctx.config.workingDirectory,
+              p,
+              path.dirname(ctx.config.projectCoworkDir),
+            ),
+        );
+        if (invalid.length > 0) {
+          throw new Error(
+            "spawnAgent targetPaths must be inside the workspace and outside .git/.cowork; " +
+              `invalid: ${invalid.join(", ")}`,
+          );
+        }
+      }
       const resolvedContext = resolveAgentSpawnContextOptions({
         contextMode,
         briefing,

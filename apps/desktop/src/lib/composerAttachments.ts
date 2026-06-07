@@ -73,11 +73,21 @@ export type ResolvedComposerAttachments = {
   skippedNotes: string[];
 };
 
+type DesktopUploadAttempt =
+  | { attempted: false }
+  | { attempted: true; uploaded: { filename: string; path: string } }
+  | { attempted: true; error: string };
+
+type ResolveComposerAttachmentOptions = {
+  threadId?: string | null;
+};
+
 export async function resolveComposerAttachmentsForWorkspace(
   get: StoreGet,
   set: StoreSet,
   workspaceId: string,
   attachments: readonly ComposerAttachmentFile[],
+  options: ResolveComposerAttachmentOptions = {},
 ): Promise<ResolvedComposerAttachments> {
   let inlineByteLength = 0;
   const resolvedAttachments: FileAttachmentInput[] = [];
@@ -90,12 +100,12 @@ export async function resolveComposerAttachmentsForWorkspace(
       continue;
     }
 
-    const buffer = await attachment.file.arrayBuffer();
-    const base64 = encodeArrayBufferToBase64(buffer);
     const canInline =
       attachment.size <= MAX_ATTACHMENT_INLINE_BYTE_SIZE &&
       inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
     if (canInline) {
+      const buffer = await attachment.file.arrayBuffer();
+      const base64 = encodeArrayBufferToBase64(buffer);
       inlineByteLength += attachment.size;
       resolvedAttachments.push({
         filename: attachment.filename,
@@ -105,6 +115,28 @@ export async function resolveComposerAttachmentsForWorkspace(
       continue;
     }
 
+    const desktopUpload = await tryCopyDesktopAttachmentToWorkspaceUploads(
+      get,
+      workspaceId,
+      attachment,
+      options.threadId ?? null,
+    );
+    let desktopUploadError: string | null = null;
+    if (desktopUpload.attempted) {
+      if ("uploaded" in desktopUpload) {
+        resolvedAttachments.push({
+          filename: desktopUpload.uploaded.filename,
+          path: desktopUpload.uploaded.path,
+          mimeType: attachment.mimeType,
+        });
+        continue;
+      } else {
+        desktopUploadError = desktopUpload.error;
+      }
+    }
+
+    const buffer = await attachment.file.arrayBuffer();
+    const base64 = encodeArrayBufferToBase64(buffer);
     const uploaded = await uploadJsonRpcWorkspaceFile(
       get,
       set,
@@ -113,9 +145,10 @@ export async function resolveComposerAttachmentsForWorkspace(
       base64,
     );
     if (!uploaded.path) {
-      skippedNotes.push(
-        buildAttachmentSkippedNote(attachment.filename, "upload to the project folder failed"),
-      );
+      const reason = desktopUploadError
+        ? `${desktopUploadError}; upload to the project folder failed`
+        : "upload to the project folder failed";
+      skippedNotes.push(buildAttachmentSkippedNote(attachment.filename, reason));
       continue;
     }
     resolvedAttachments.push({
@@ -126,4 +159,73 @@ export async function resolveComposerAttachmentsForWorkspace(
   }
 
   return { attachments: resolvedAttachments, skippedNotes };
+}
+
+async function tryCopyDesktopAttachmentToWorkspaceUploads(
+  get: StoreGet,
+  workspaceId: string,
+  attachment: ComposerAttachmentFile,
+  threadId: string | null,
+): Promise<DesktopUploadAttempt> {
+  const desktopApi = typeof window === "undefined" ? undefined : window.cowork;
+  if (!desktopApi?.getPathForFile || !desktopApi.copyFileToWorkspaceUploads) {
+    return { attempted: false };
+  }
+
+  const workspace = get().workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace?.path) {
+    return { attempted: false };
+  }
+
+  const sourcePath = await desktopApi.getPathForFile(attachment.file);
+  if (!sourcePath) {
+    return { attempted: false };
+  }
+
+  try {
+    const uploadsDirectory = resolveWorkspaceUploadsDirectory(get, workspaceId, threadId);
+    const uploaded = await desktopApi.copyFileToWorkspaceUploads({
+      workspacePath: workspace.path,
+      sourcePath,
+      filename: attachment.filename,
+      ...(uploadsDirectory ? { uploadsDirectory } : {}),
+    });
+    return { attempted: true, uploaded };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      attempted: true,
+      error: detail ? `copy to the project upload folder failed: ${detail}` : "copy failed",
+    };
+  }
+}
+
+function resolveWorkspaceUploadsDirectory(
+  get: StoreGet,
+  workspaceId: string,
+  threadId: string | null,
+): string | null {
+  const state = get();
+  const runtime = state.workspaceRuntimeById[workspaceId];
+  const targetThreadId =
+    threadId && state.threads.find((thread) => thread.id === threadId)?.workspaceId === workspaceId
+      ? threadId
+      : null;
+  const threadRuntime = targetThreadId ? state.threadRuntimeById[targetThreadId] : null;
+  const candidates: unknown[] = [
+    threadRuntime?.sessionConfig,
+    threadRuntime?.config,
+    runtime?.controlSessionConfig,
+    runtime?.controlConfig,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const value = (candidate as { uploadsDirectory?: unknown }).uploadsDirectory;
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
 }

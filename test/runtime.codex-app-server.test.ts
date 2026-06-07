@@ -4,8 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
+import { canonicalizeRoot } from "../src/platform/sandbox/policy";
 import { __internal as codexAppServerClientInternal } from "../src/providers/codexAppServerClient";
 import { createRuntime } from "../src/runtime";
+import { handleServerRequest } from "../src/runtime/codexAppServer/serverRequests";
 import { VERSION } from "../src/version";
 import { createMockClient, writeMockAppServer } from "./fixtures/codexAppServerMock";
 import {
@@ -98,6 +101,12 @@ describe("codex app-server runtime", () => {
     const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
     expect(startParams?.baseInstructions).toContain("Managed LibreOffice Runtime");
     expect(startParams?.baseInstructions).toContain(shimPath);
+    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
+      | { sandboxPolicy?: { writableRoots?: string[] } }
+      | undefined;
+    expect(turnStart?.sandboxPolicy?.writableRoots ?? []).toContain(
+      canonicalizeRoot(path.join(home, ".cache", "cowork", "libreoffice")),
+    );
     if (process.platform === "win32") {
       expect(startParams?.baseInstructions).toContain(`$env:PATH = '${shimDir};' + $env:PATH`);
     } else {
@@ -750,7 +759,7 @@ rl.on("line", (line) => {
 
       const runtime = createRuntime(makeConfig(dir));
       await runtime.runTurn({
-        config: makeConfig(dir),
+        config: { ...makeConfig(dir), sandbox: { mode: "workspace-write", network: false } },
         system: "You are Codex.",
         messages: [{ role: "user", content: "Say hi" }],
         tools: {},
@@ -761,6 +770,9 @@ rl.on("line", (line) => {
       });
 
       const requests = await readCapturedRequests(capturePath);
+      // The test workspace lives under the OS temp dir; on Linux that is /tmp, so
+      // the broad /tmp scratch is excluded (the workspace itself stays writable).
+      const underTmp = dir.startsWith("/tmp/") || dir.startsWith("/private/tmp/");
       expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
@@ -769,14 +781,88 @@ rl.on("line", (line) => {
         approvalPolicy: "on-request",
         sandboxPolicy: {
           type: "workspaceWrite",
-          writableRoots: [dir],
-          networkAccess: true,
+          writableRoots: expect.arrayContaining([
+            canonicalizeRoot(dir),
+            canonicalizeRoot(path.join(dir, "output")),
+            canonicalizeRoot(path.join(dir, "uploads")),
+          ]),
+          networkAccess: false,
           excludeTmpdirEnvVar: false,
-          excludeSlashTmp: false,
+          excludeSlashTmp: underTmp,
         },
       });
     },
   );
+
+  test.serial("adds only the active advanced-memory folder to Codex writable roots", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-memory-"));
+    const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-memory-home-"));
+    const memoriesDir = path.join(memoryHome, "memories");
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+    const config = {
+      ...makeConfig(dir),
+      advancedMemory: true,
+      memoriesDir,
+      sandbox: { mode: "workspace-write" as const, network: false },
+    };
+    const activeMemoryRoot = path.join(memoriesDir, resolveMemoryFolderName(config));
+    const chatsMemoryRoot = path.join(memoriesDir, CHATS_FOLDER);
+
+    const runtime = createRuntime(config);
+    await runtime.runTurn({
+      config,
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: false,
+      shellPolicy: "full",
+      approveCommand: async () => true,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
+      | { sandboxPolicy?: { writableRoots?: string[] } }
+      | undefined;
+    const writableRoots = turnStart?.sandboxPolicy?.writableRoots ?? [];
+    expect(writableRoots).toContain(canonicalizeRoot(activeMemoryRoot));
+    expect(writableRoots).not.toContain(canonicalizeRoot(chatsMemoryRoot));
+  });
+
+  test.serial("passes configured read-only sandbox to Codex app-server turns", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-config-ro-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: { ...makeConfig(dir), sandbox: { mode: "read-only", network: false } },
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Inspect only" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: false,
+      shellPolicy: "full",
+      approveCommand: async () => true,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+    });
+    expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "readOnly", networkAccess: false },
+    });
+  });
 
   test.serial("passes danger-full-access sandbox when the session is in yolo mode", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-"));
@@ -808,8 +894,33 @@ rl.on("line", (line) => {
     });
   });
 
-  test.serial("passes read-only sandbox for read-only subagent shell policy", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-readonly-"));
+  test.serial("preserves no-network danger-full-access for Codex turns", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-net-full-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: { ...makeConfig(dir), sandbox: { mode: "danger-full-access", network: false } },
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: false,
+      shellPolicy: "full",
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      sandboxPolicy: { type: "dangerFullAccess", networkAccess: false },
+    });
+  });
+
+  test.serial("keeps a scoped child within targetPaths even under yolo", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-scoped-"));
     const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
@@ -819,22 +930,142 @@ rl.on("line", (line) => {
     const runtime = createRuntime(makeConfig(dir));
     await runtime.runTurn({
       config: makeConfig(dir),
-      system: "You are a read-only child agent.",
-      messages: [{ role: "user", content: "Inspect only" }],
+      system: "You are a scoped child.",
+      messages: [{ role: "user", content: "Edit auth" }],
       tools: {},
       maxSteps: 1,
       yolo: true,
-      shellPolicy: "no_project_write",
+      shellPolicy: "full",
+      agentTargetPaths: [path.join(dir, "src", "auth")],
     });
 
     const requests = await readCapturedRequests(capturePath);
-    expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
-      approvalPolicy: "never",
-      sandbox: "read-only",
+    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as {
+      approvalPolicy: string;
+      sandboxPolicy: { type: string; writableRoots?: string[] };
+    };
+    // YOLO still maps to approvalPolicy "never", but the sandbox must stay scoped
+    // to the child's targetPaths instead of widening to danger-full-access.
+    expect(turnStart.approvalPolicy).toBe("never");
+    expect(turnStart.sandboxPolicy.type).toBe("workspaceWrite");
+    expect(turnStart.sandboxPolicy.writableRoots).toContain(
+      canonicalizeRoot(path.join(dir, "src", "auth")),
+    );
+  });
+
+  test.serial("does not widen an explicit read-only sandbox under yolo", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-ro-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: { ...makeConfig(dir), sandbox: { mode: "read-only", network: false } },
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Inspect" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: true,
+      shellPolicy: "full",
     });
+
+    const requests = await readCapturedRequests(capturePath);
+    // YOLO relaxes the approval policy to "never", but an explicitly read-only
+    // sandbox is a hard floor and must not be widened to full access.
     expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
       approvalPolicy: "never",
-      sandboxPolicy: { type: "readOnly", networkAccess: true },
+      sandboxPolicy: { type: "readOnly" },
     });
+  });
+
+  test.serial(
+    "passes scratch-only Codex workspace-write sandbox for no-project-write subagent shell policy",
+    async () => {
+      const dir = await fs.mkdtemp(
+        path.join(process.cwd(), ".tmp-cowork-codex-app-server-scratch-"),
+      );
+      const script = await writeMockAppServer(dir);
+      const capturePath = path.join(dir, "requests.jsonl");
+      process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        await runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are a no-project-write child agent.",
+          messages: [{ role: "user", content: "Inspect only" }],
+          tools: {},
+          maxSteps: 1,
+          yolo: true,
+          shellPolicy: "no_project_write",
+        });
+
+        const requests = await readCapturedRequests(capturePath);
+        expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+          approvalPolicy: "never",
+          sandbox: "workspace-write",
+        });
+        expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "workspaceWrite",
+            networkAccess: true,
+          },
+        });
+        const sandboxPolicy = requests.find((entry) => entry.method === "turn/start")?.params
+          ?.sandboxPolicy;
+        expect(sandboxPolicy?.writableRoots).toContain("/tmp");
+        expect(sandboxPolicy?.writableRoots).toContain("/private/tmp");
+        expect(sandboxPolicy?.writableRoots).not.toContain(dir);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("declines read-only Codex file approvals even under yolo", async () => {
+    let approvals = 0;
+    const response = await handleServerRequest(
+      {
+        id: "file-approval-1",
+        jsonrpc: "2.0",
+        method: "item/fileChange/requestApproval",
+        params: { path: "src/new.ts" },
+      },
+      {
+        shellPolicy: "no_project_write",
+        yolo: true,
+        approveCommand: async () => {
+          approvals += 1;
+          return true;
+        },
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(approvals).toBe(0);
+  });
+
+  test("still accepts ordinary Codex command approvals under yolo", async () => {
+    const response = await handleServerRequest(
+      {
+        id: "command-approval-1",
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        params: { command: "echo ok" },
+      },
+      {
+        shellPolicy: "no_project_write",
+        yolo: true,
+        approveCommand: async () => false,
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "accept" });
   });
 });

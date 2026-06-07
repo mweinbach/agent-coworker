@@ -20,6 +20,7 @@ Long-running Deep Research jobs are intentionally outside the harness/session lo
 
 See also:
 
+- `docs/sandbox.md` for the OS-level command sandbox (macOS/Linux/Windows) and escalate-on-failure.
 - `docs/websocket-protocol.md` for the wire-level protocol contract.
 - `docs/session-storage-architecture.md` for shared SQLite + research-row persistence.
 - `packages/harness/src/run_raw_agent_loops.ts` for the harness runner implementation.

@@ -29,6 +29,8 @@ export type JsonRpcMessageParams = Record<string, unknown> & {
   command?: string;
   dangerous?: boolean;
   reason?: string;
+  detail?: string;
+  category?: string;
   type?: string;
   turn?: { id?: string; status?: string };
   item?: unknown;

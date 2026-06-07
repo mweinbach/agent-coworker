@@ -1,10 +1,15 @@
+import path from "node:path";
+
 import { z } from "zod";
 
+import { resolveAdvancedMemoryWriteRoots } from "./advancedMemory/store";
 import {
   ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
   prepareArtifactRuntimeToolEnv,
   renderArtifactRuntimeInstructions,
 } from "./artifactRuntime";
+import { ARTIFACT_RUNTIME_ENV_DIR } from "./artifactRuntime/constants";
+import { artifactRuntimeCacheRoot } from "./artifactRuntime/runtimeDiscovery";
 import { getModel as realGetModel } from "./config";
 import {
   prepareManagedSofficeToolEnv,
@@ -12,6 +17,7 @@ import {
 } from "./managedSofficeRuntime";
 import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
+import { resolveSandboxPolicy } from "./platform/sandbox";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
 import type {
@@ -32,6 +38,7 @@ import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
 import type {
   AgentConfig,
+  ApproveCommandOptions,
   HarnessContextState,
   ModelMessage,
   ReferencedPluginContext,
@@ -95,7 +102,7 @@ export interface RunTurnParams {
 
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string) => Promise<boolean>;
+  approveCommand: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
 
   /** Lightweight skill metadata for dynamic tool descriptions. */
@@ -113,6 +120,7 @@ export interface RunTurnParams {
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  onAdvancedMemoryChanged?: (folder: string) => void | Promise<void>;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
@@ -271,6 +279,30 @@ function providerOwnsExecutableTools(config: AgentConfig): boolean {
   return config.provider === "codex-cli";
 }
 
+function collectToolRuntimeWritableRoots(
+  config: AgentConfig,
+  env: Record<string, string | undefined> | undefined,
+): string[] | undefined {
+  const writableRoots: string[] = [];
+  const artifactRuntimeDir = env?.[ARTIFACT_RUNTIME_ENV_DIR]?.trim();
+  if (artifactRuntimeDir) {
+    const cacheRoot = artifactRuntimeCacheRoot(resolveAuthHomeDir(config));
+    const relativeToCache = path.relative(
+      path.resolve(cacheRoot),
+      path.resolve(artifactRuntimeDir),
+    );
+    const runtimeIsInCache =
+      relativeToCache === "" ||
+      (!relativeToCache.startsWith("..") && !path.isAbsolute(relativeToCache));
+    if (runtimeIsInCache) writableRoots.push(cacheRoot);
+  }
+
+  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
+  if (managedSofficeRoot) writableRoots.push(managedSofficeRoot);
+
+  return writableRoots.length > 0 ? writableRoots : undefined;
+}
+
 async function prepareTurnToolEnv(
   params: Pick<RunTurnParams, "config" | "toolEnv" | "log">,
 ): Promise<Record<string, string | undefined> | undefined> {
@@ -395,17 +427,40 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentRole: params.agentRole,
       agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
+      sessionId: params.sessionId,
       shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
+      sandboxPolicy: resolveSandboxPolicy({
+        config: config.sandbox,
+        // Honor an explicit `no_project_write` shell policy even without an
+        // agentRole; otherwise this precomputed policy (preferred by the bash
+        // tool over deriving from shellPolicy) would run mutating commands with
+        // project write access despite the no-project-write shell policy.
+        readOnlyRole:
+          (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
+          (params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole)) === "no_project_write",
+        workingDirectory: config.workingDirectory,
+        projectRoot: path.dirname(config.projectCoworkDir),
+        outputDirectory: config.outputDirectory,
+        uploadsDirectory: config.uploadsDirectory,
+        toolRuntimeWritableRoots: [
+          ...(collectToolRuntimeWritableRoots(config, turnToolEnv) ?? []),
+          ...resolveAdvancedMemoryWriteRoots(config),
+        ],
+        targetPaths: params.agentTargetPaths,
+      }),
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
+      onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);
     const rawBuiltInTools = deps.createTools(toolCtx);
     const builtInTools = useProviderNativeTools
-      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools)
+      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools, {
+          preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
+        })
       : rawBuiltInTools;
 
     let mcpTools: Record<string, any> = {};
@@ -420,7 +475,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         });
         mcpTools = loaded.tools;
       } else {
-        const servers = await deps.loadMCPServers(config);
+        const servers = await deps.loadMCPServers(config, { log });
         if (servers.length > 0) {
           const loaded = await deps.loadMCPTools(servers, { log });
           mcpTools = loaded.tools;
@@ -615,6 +670,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           ...(params.registerSteerHandler
             ? { registerSteerHandler: params.registerSteerHandler }
             : {}),
+          agentTargetPaths: params.agentTargetPaths,
           askUser,
           approveCommand,
           updateTodos,

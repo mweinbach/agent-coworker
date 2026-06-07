@@ -108,6 +108,10 @@ export function createJsonRpcWorkspaceModule(
           return;
         }
         if (message.method === "item/commandExecution/requestApproval") {
+          const category =
+            requestParams.category === "filesystem" || requestParams.category === "network"
+              ? requestParams.category
+              : undefined;
           handleThreadEvent(get, set, threadId, {
             type: "approval",
             sessionId,
@@ -115,6 +119,8 @@ export function createJsonRpcWorkspaceModule(
             command: String(requestParams.command ?? ""),
             dangerous: requestParams.dangerous === true,
             reasonCode: requestParams.reason ?? "requires_manual_review",
+            ...(typeof requestParams.detail === "string" ? { detail: requestParams.detail } : {}),
+            ...(category ? { category } : {}),
           } as SessionEvent);
         }
         return;
@@ -135,6 +141,22 @@ export function createJsonRpcWorkspaceModule(
         params.thread?.id ??
         params.sessionId ??
         mappedThreadId;
+
+      if (message.method === "serverRequest/resolved") {
+        const requestId = typeof params.requestId === "string" ? params.requestId : null;
+        if (!requestId) return;
+        set((s) => {
+          const existing = s.sandboxApprovalsByThread[mappedThreadId];
+          if (!existing) return {};
+          const remaining = existing.filter((approval) => approval.requestId !== requestId);
+          if (remaining.length === existing.length) return {};
+          const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
+          if (remaining.length > 0) nextSandboxApprovals[mappedThreadId] = remaining;
+          else delete nextSandboxApprovals[mappedThreadId];
+          return { sandboxApprovalsByThread: nextSandboxApprovals };
+        });
+        return;
+      }
 
       if (JSONRPC_THREAD_EVENT_METHODS.has(message.method) && typeof params.type === "string") {
         handleThreadEvent(get, set, mappedThreadId, {
@@ -377,6 +399,20 @@ export function createJsonRpcWorkspaceModule(
       }
       delete nextLatestTodosByThreadId[fromThreadId];
 
+      const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
+      if (fromThreadId in nextSandboxApprovals) {
+        const migrated = nextSandboxApprovals[fromThreadId];
+        delete nextSandboxApprovals[fromThreadId];
+        if (migrated) {
+          const existing = nextSandboxApprovals[toThreadId] ?? [];
+          const seenRequestIds = new Set(existing.map((approval) => approval.requestId));
+          nextSandboxApprovals[toThreadId] = [
+            ...existing,
+            ...migrated.filter((approval) => !seenRequestIds.has(approval.requestId)),
+          ];
+        }
+      }
+
       return {
         threads: nextThreads,
         selectedThreadId: s.selectedThreadId === fromThreadId ? toThreadId : s.selectedThreadId,
@@ -384,6 +420,7 @@ export function createJsonRpcWorkspaceModule(
           s.promptModal && s.promptModal.threadId === fromThreadId
             ? { ...s.promptModal, threadId: toThreadId }
             : s.promptModal,
+        sandboxApprovalsByThread: nextSandboxApprovals,
         threadRuntimeById: nextThreadRuntimeById,
         latestTodosByThreadId: nextLatestTodosByThreadId,
       };

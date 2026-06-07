@@ -1,3 +1,4 @@
+import type { SandboxPolicy } from "../platform/sandbox/policy";
 import type { AgentShellPolicy } from "../server/agents/commandPolicy";
 import type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
@@ -9,7 +10,7 @@ import type {
   AgentSpawnContextOptions,
   PersistentAgentSummary,
 } from "../shared/agents";
-import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
+import type { AgentConfig, ApproveCommandOptions, HarnessContextState, TodoItem } from "../types";
 
 export interface AgentControl {
   spawn: (
@@ -41,7 +42,7 @@ export interface ToolContext {
   log: (line: string) => void;
 
   askUser: (question: string, options?: string[]) => Promise<string>;
-  approveCommand: (command: string) => Promise<boolean>;
+  approveCommand: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
 
   updateTodos?: (todos: TodoItem[]) => void;
 
@@ -67,6 +68,9 @@ export interface ToolContext {
   /** Structured run intent for the active session/turn. */
   harnessContext?: HarnessContextState | null;
 
+  /** Active session id, used for memory provenance and session-scoped tool state. */
+  sessionId?: string;
+
   /** Optional role for child-agent tool filtering. */
   agentRole?: AgentRole;
 
@@ -79,6 +83,13 @@ export interface ToolContext {
   /** Effective shell mutation policy. Defaults to "full" when omitted. */
   shellPolicy?: AgentShellPolicy;
 
+  /**
+   * Effective OS sandbox policy for shell command execution. When omitted, the
+   * bash tool runs with full access (no sandbox). Enforced at the OS level via
+   * `src/platform/sandbox`.
+   */
+  sandboxPolicy?: SandboxPolicy;
+
   /** Environment variables inherited by child processes launched from tools. */
   toolEnv?: Record<string, string | undefined>;
 
@@ -90,6 +101,9 @@ export interface ToolContext {
 
   /** Notify the session when tool-driven budget changes should be persisted/emitted immediately. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
+
+  /** Notify the session when an advanced-memory tool mutates a memory folder. */
+  onAdvancedMemoryChanged?: (folder: string) => void | Promise<void>;
 
   /**
    * Apply an A2UI v0.9 envelope to the session's surface state. Returns a

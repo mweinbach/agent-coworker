@@ -21,6 +21,11 @@ import {
   describeModelProviderMismatch,
   getSupportedModel,
 } from "./models/registry";
+import {
+  DEFAULT_SANDBOX_CONFIG,
+  type SandboxConfig,
+  type SandboxMode,
+} from "./platform/sandbox/policy";
 import { getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
@@ -106,6 +111,37 @@ const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
+}
+
+const SANDBOX_MODE_VALUES: readonly SandboxMode[] = [
+  "auto",
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+];
+
+/**
+ * Resolve the effective sandbox configuration from the `AGENT_SANDBOX` env
+ * override (mode) and the deep-merged config layers. Always returns a concrete
+ * config; defaults to workspace-write with network enabled and fail-closed
+ * backend enforcement.
+ */
+function resolveSandboxConfig(envMode: string | undefined, raw: unknown): SandboxConfig {
+  const obj = isPlainObject(raw) ? raw : {};
+  const trimmedEnv = envMode?.trim();
+  const mode: SandboxMode = SANDBOX_MODE_VALUES.includes(trimmedEnv as SandboxMode)
+    ? (trimmedEnv as SandboxMode)
+    : SANDBOX_MODE_VALUES.includes(obj.mode as SandboxMode)
+      ? (obj.mode as SandboxMode)
+      : "workspace-write";
+  return {
+    mode,
+    network: typeof obj.network === "boolean" ? obj.network : DEFAULT_SANDBOX_CONFIG.network,
+    requireBackend:
+      typeof obj.requireBackend === "boolean"
+        ? obj.requireBackend
+        : DEFAULT_SANDBOX_CONFIG.requireBackend,
+  };
 }
 
 function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
@@ -437,6 +473,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
+  const sandbox = resolveSandboxConfig(
+    env.AGENT_SANDBOX,
+    (inheritedMerged as Record<string, unknown>).sandbox,
+  );
+
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
     ? (deepMerge(
         {},
@@ -583,6 +624,17 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.enableMcp) ??
     true;
 
+  // Trust to AUTO-START a workspace's own stdio MCP servers must never be
+  // grantable by the workspace itself, so this deliberately omits the
+  // attacker-controlled `projectConfig` layer (.cowork/config.json). Resolve it
+  // only from env + user (~/.cowork) + built-in defaults, defaulting to false so
+  // a freshly opened/malicious workspace never launches local commands on its own.
+  const trustWorkspaceMcp =
+    asBoolean(env.AGENT_TRUST_WORKSPACE_MCP) ??
+    asBoolean(userConfig.trustWorkspaceMcp) ??
+    asBoolean(builtInDefaults.trustWorkspaceMcp) ??
+    false;
+
   const enableMemory =
     asBoolean(env.AGENT_ENABLE_MEMORY) ??
     asBoolean(projectConfig.enableMemory) ??
@@ -710,6 +762,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   return {
     provider,
     runtime,
+    sandbox,
     model: supportedModel.id,
     preferredChildModel: normalizedChildRouting.preferredChildModel,
     childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
@@ -752,6 +805,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     configDirs: [projectCoworkDir, userConfigDir, builtInConfigDir],
 
     enableMcp,
+    trustWorkspaceMcp,
     enableMemory,
     memoryRequireApproval,
     advancedMemory,

@@ -40,6 +40,9 @@ export class WorkspaceControl {
   ) {}
 
   registerSubscriber(ws: StartServerSocket, cwd: string): void {
+    if (ws.data.workspaceControlEventsAllowed === false) {
+      return;
+    }
     const connectionId = ws.data.connectionId;
     if (!connectionId) {
       return;
@@ -178,6 +181,9 @@ export class WorkspaceControl {
           ...(controlConfig.outputDirectory
             ? { outputDirectory: controlConfig.outputDirectory }
             : {}),
+          ...(controlConfig.uploadsDirectory
+            ? { uploadsDirectory: controlConfig.uploadsDirectory }
+            : {}),
         },
       },
       {
@@ -238,6 +244,9 @@ export class WorkspaceControl {
       return;
     }
     for (const ws of subscribers.values()) {
+      if (ws.data.workspaceControlEventsAllowed === false) {
+        continue;
+      }
       if (!this.options.socketSendQueue.shouldSendNotification(ws, "cowork/control/event")) {
         continue;
       }

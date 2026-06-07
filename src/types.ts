@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import type { SandboxConfig } from "./platform/sandbox/policy";
+
 export const PROVIDER_NAMES = [
   "google",
   "openai",
@@ -170,6 +172,12 @@ export type WorkspaceFeatureFlags = {
 export interface AgentConfig {
   provider: ProviderName;
   runtime?: RuntimeName;
+  /**
+   * OS-level sandbox configuration for shell command execution. When omitted,
+   * defaults to workspace-write with network enabled. See
+   * `src/platform/sandbox`.
+   */
+  sandbox?: SandboxConfig;
   model: string;
   preferredChildModel: string;
   childModelRoutingMode?: ChildModelRoutingMode;
@@ -229,6 +237,15 @@ export interface AgentConfig {
    * Defaults to true when not specified.
    */
   enableMcp?: boolean;
+
+  /**
+   * Whether the current workspace is trusted to auto-start local stdio MCP
+   * servers declared in its own `.cowork/mcp-servers.json`. Defaults to false:
+   * a malicious repository must not be able to launch arbitrary local commands
+   * on turn setup. This MUST be resolved from non-workspace layers only (env /
+   * user config), never from the attacker-controlled project config layer.
+   */
+  trustWorkspaceMcp?: boolean;
 
   /**
    * Whether memory tool + prompt memory injection are enabled.
@@ -669,9 +686,28 @@ export const APPROVAL_RISK_CODES = [
   "requires_manual_review",
   "file_read_command_requires_review",
   "outside_allowed_scope",
+  "sandbox_denied_escalation",
 ] as const;
 
 export type ApprovalRiskCode = (typeof APPROVAL_RISK_CODES)[number];
+
+/**
+ * Coarse classification of why an OS-sandboxed command was denied. Used to tailor
+ * the escalation copy/iconography surfaced to the user.
+ */
+export type SandboxDenialCategory = "filesystem" | "network";
+
+/**
+ * Options for {@link ToolContext.approveCommand}. `reason: "sandbox_denied"` marks
+ * the escalation path (escape the OS sandbox); `detail`/`category` carry sandbox
+ * context so clients can render a clear, sandbox-aware approval instead of a
+ * generic prompt.
+ */
+export interface ApproveCommandOptions {
+  reason?: string;
+  detail?: string;
+  category?: SandboxDenialCategory;
+}
 
 export const SERVER_ERROR_SOURCES = [
   "protocol",

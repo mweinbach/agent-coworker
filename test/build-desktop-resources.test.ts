@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { FOUNDATION_MODELS_KOFFI_TRIPLET } from "../apps/desktop/electron/services/sidecar";
 import { __internal } from "../scripts/build_desktop_resources";
+import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 
 describe("desktop resource build helpers", () => {
   test("refreshes cached Foundation Models SDK bundles missing Koffi runtime files", async () => {
@@ -95,6 +96,64 @@ describe("desktop resource build helpers", () => {
       });
 
       await expect(fs.stat(dest)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("builds and copies the Windows sandbox helper for Windows targets", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const dest = path.join(
+      root,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const crateDir = path.join(root, "crates", "cowork-win-sandbox");
+    const builtHelper = path.join(
+      crateDir,
+      "target",
+      "aarch64-pc-windows-msvc",
+      "release",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const commands: string[][] = [];
+
+    try {
+      await fs.mkdir(path.join(crateDir, "src"), { recursive: true });
+      await fs.writeFile(path.join(crateDir, "Cargo.toml"), '[package]\nname = "test"\n');
+      await fs.writeFile(path.join(crateDir, "Cargo.lock"), "");
+      await fs.writeFile(path.join(crateDir, "src", "main.rs"), "fn main() {}\n");
+
+      await __internal.syncWindowsSandboxHelper({
+        root,
+        dest,
+        previousFingerprint: "old",
+        nextFingerprint: "new",
+        platform: "win32",
+        arch: "arm64",
+        commandRunner: async (command) => {
+          commands.push(command);
+          await fs.mkdir(path.dirname(builtHelper), { recursive: true });
+          await fs.writeFile(builtHelper, "helper-binary");
+        },
+      });
+
+      expect(commands).toEqual([
+        ["rustup", "target", "add", "aarch64-pc-windows-msvc"],
+        [
+          "cargo",
+          "build",
+          "--release",
+          "--manifest-path",
+          path.join(crateDir, "Cargo.toml"),
+          "--target",
+          "aarch64-pc-windows-msvc",
+        ],
+      ]);
+      await expect(fs.readFile(dest, "utf8")).resolves.toBe("helper-binary");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

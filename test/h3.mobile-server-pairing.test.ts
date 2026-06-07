@@ -307,6 +307,11 @@ describe("H3 mobile server pairing", () => {
       await expect(mismatchedDeviceHeaderRpc.json()).resolves.toEqual({ error: "Unauthorized." });
       expect(handled).toEqual([]);
 
+      // thread/list now requires the conversations permission (newly paired
+      // devices default to false); grant it so the valid-token path reaches the
+      // runtime. The permission denial is covered by the deniedTurn case below.
+      await server.updateTrustedDevicePermissions("phone-1", { conversations: true });
+
       const authenticatedRpc = await fetchH3(`${server.url}/rpc`, {
         method: "POST",
         headers: {
@@ -380,6 +385,132 @@ describe("H3 mobile server pairing", () => {
           params: { threadId: "thread-1", input: "hello" },
         },
       ]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("closes active event streams when conversations permission is revoked", async () => {
+    const storeRoot = await createTempRoot();
+    let closedConnections = 0;
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {
+        closedConnections += 1;
+      },
+    } satisfies Partial<AgentServerRuntime>;
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      const pairResponse = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+          displayName: "Work Phone",
+        }),
+      });
+      expect(pairResponse.status).toBe(200);
+      const pairPayload = (await pairResponse.json()) as { sessionToken: string };
+
+      await server.updateTrustedDevicePermissions("phone-1", { conversations: true });
+
+      const eventsResponse = await fetchH3(`${server.url}/events`, {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "x-cowork-mobile-device-id": "phone-1",
+        },
+      });
+      expect(eventsResponse.status).toBe(200);
+      expect(eventsResponse.body).not.toBeNull();
+      const reader = eventsResponse.body?.getReader();
+      expect(reader).toBeDefined();
+      await reader?.read();
+
+      await server.updateTrustedDevicePermissions("phone-1", { conversations: false });
+
+      const closedRead = await Promise.race([
+        reader?.read(),
+        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) =>
+          setTimeout(() => reject(new Error("Timed out waiting for event stream close.")), 2_000),
+        ),
+      ]);
+      expect(closedRead?.done).toBe(true);
+      expect(closedConnections).toBe(1);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("closes active event streams when workspace settings permission is revoked", async () => {
+    const storeRoot = await createTempRoot();
+    let closedConnections = 0;
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {
+        closedConnections += 1;
+      },
+    } satisfies Partial<AgentServerRuntime>;
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      const pairResponse = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+          displayName: "Work Phone",
+        }),
+      });
+      expect(pairResponse.status).toBe(200);
+      const pairPayload = (await pairResponse.json()) as { sessionToken: string };
+
+      await server.updateTrustedDevicePermissions("phone-1", { workspaceSettings: true });
+
+      const eventsResponse = await fetchH3(`${server.url}/events`, {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${pairPayload.sessionToken}`,
+          "x-cowork-mobile-device-id": "phone-1",
+        },
+      });
+      expect(eventsResponse.status).toBe(200);
+      expect(eventsResponse.body).not.toBeNull();
+      const reader = eventsResponse.body?.getReader();
+      expect(reader).toBeDefined();
+      await reader?.read();
+
+      await server.updateTrustedDevicePermissions("phone-1", { workspaceSettings: false });
+
+      const closedRead = await Promise.race([
+        reader?.read(),
+        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) =>
+          setTimeout(() => reject(new Error("Timed out waiting for event stream close.")), 2_000),
+        ),
+      ]);
+      expect(closedRead?.done).toBe(true);
+      expect(closedConnections).toBe(1);
     } finally {
       await server.stop();
     }

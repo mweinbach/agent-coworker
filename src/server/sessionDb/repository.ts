@@ -260,6 +260,7 @@ export class SessionDbRepository {
           "           st.last_memory_generated_index,",
           "           st.provider_state_json,",
           "           st.provider_options_json,",
+          "           st.sandbox_json,",
           "           st.todos_json,",
           "           st.harness_context_json,",
           "           st.cost_tracker_json",
@@ -317,6 +318,7 @@ export class SessionDbRepository {
         snapshot.providerState === null ? null : toJsonString(snapshot.providerState);
       const providerOptionsJson =
         snapshot.providerOptions === undefined ? null : toJsonString(snapshot.providerOptions);
+      const sandboxJson = snapshot.sandbox === undefined ? null : toJsonString(snapshot.sandbox);
       const costTrackerJson =
         snapshot.costTracker === null ? null : toJsonString(snapshot.costTracker);
       const lastMemoryGeneratedIndex =
@@ -475,16 +477,18 @@ export class SessionDbRepository {
             "             last_memory_generated_index,",
             "             provider_state_json,",
             "             provider_options_json,",
+            "             sandbox_json,",
             "             todos_json,",
             "             harness_context_json,",
             "             cost_tracker_json",
-            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "           ON CONFLICT(session_id) DO UPDATE SET",
             "             system_prompt = excluded.system_prompt,",
             "             messages_json = excluded.messages_json,",
             "             last_memory_generated_index = excluded.last_memory_generated_index,",
             "             provider_state_json = excluded.provider_state_json,",
             "             provider_options_json = excluded.provider_options_json,",
+            "             sandbox_json = excluded.sandbox_json,",
             "             todos_json = excluded.todos_json,",
             "             harness_context_json = excluded.harness_context_json,",
             "             cost_tracker_json = excluded.cost_tracker_json",
@@ -497,6 +501,7 @@ export class SessionDbRepository {
           lastMemoryGeneratedIndex,
           providerStateJson,
           providerOptionsJson,
+          sandboxJson,
           toJsonString(snapshot.todos),
           toJsonString(snapshot.harnessContext),
           costTrackerJson,
@@ -984,6 +989,7 @@ export class SessionDbRepository {
         "             last_memory_generated_index INTEGER NULL,",
         "             provider_state_json TEXT NULL,",
         "             provider_options_json TEXT NULL,",
+        "             sandbox_json TEXT NULL,",
         "             todos_json TEXT NOT NULL,",
         "             harness_context_json TEXT NULL,",
         "             cost_tracker_json TEXT NULL",
@@ -1135,6 +1141,11 @@ export class SessionDbRepository {
   addProviderOptionsColumn(): void {
     if (this.hasSessionStateColumn("provider_options_json")) return;
     this.db.exec("ALTER TABLE session_state ADD COLUMN provider_options_json TEXT NULL");
+  }
+
+  addSandboxColumn(): void {
+    if (this.hasSessionStateColumn("sandbox_json")) return;
+    this.db.exec("ALTER TABLE session_state ADD COLUMN sandbox_json TEXT NULL");
   }
 
   addLastMemoryGeneratedIndexColumn(): void {
@@ -1401,6 +1412,7 @@ export class SessionDbRepository {
           ? legacy.config.backupsEnabledOverride
           : null;
       const providerOptions = legacy.version === 7 ? legacy.config.providerOptions : undefined;
+      const sandbox = legacy.version === 7 ? legacy.config.sandbox : undefined;
       const hasSubagentMetadata =
         legacy.version === 3 ||
         legacy.version === 4 ||
@@ -1561,16 +1573,18 @@ export class SessionDbRepository {
             "             last_memory_generated_index,",
             "             provider_state_json,",
             "             provider_options_json,",
+            "             sandbox_json,",
             "             todos_json,",
             "             harness_context_json,",
             "             cost_tracker_json",
-            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "           ON CONFLICT(session_id) DO UPDATE SET",
             "             system_prompt = excluded.system_prompt,",
             "             messages_json = excluded.messages_json,",
             "             last_memory_generated_index = excluded.last_memory_generated_index,",
             "             provider_state_json = excluded.provider_state_json,",
             "             provider_options_json = excluded.provider_options_json,",
+            "             sandbox_json = excluded.sandbox_json,",
             "             todos_json = excluded.todos_json,",
             "             harness_context_json = excluded.harness_context_json,",
             "             cost_tracker_json = excluded.cost_tracker_json",
@@ -1583,6 +1597,7 @@ export class SessionDbRepository {
           lastMemoryGeneratedIndex,
           providerState === null ? null : toJsonString(providerState),
           providerOptions === undefined ? null : toJsonString(providerOptions),
+          sandbox === undefined ? null : toJsonString(sandbox),
           toJsonString(legacy.context.todos),
           toJsonString(legacy.context.harnessContext),
           costTracker === null ? null : toJsonString(costTracker),

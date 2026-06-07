@@ -86,6 +86,7 @@ export function createAgentSessionFromPersisted(
     ...(persisted.providerOptions !== undefined
       ? { providerOptions: structuredClone(persisted.providerOptions) }
       : {}),
+    ...(persisted.sandbox !== undefined ? { sandbox: structuredClone(persisted.sandbox) } : {}),
   };
 
   const sessionInfo: SessionInfoState = {

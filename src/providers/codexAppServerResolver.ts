@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +63,11 @@ export type CodexAppServerResolverOverrides = {
   pathEnv?: string;
   platform?: NodeJS.Platform;
   arch?: string;
+  /**
+   * Test-only override of the expected per-asset SHA-256 checksums. Production
+   * always verifies against the repo-pinned {@link CODEX_APP_SERVER_MANAGED_CHECKSUMS}.
+   */
+  expectedChecksums?: Record<string, string>;
 };
 
 const DEFAULT_CODEX_COMMAND = "codex";
@@ -73,6 +79,70 @@ const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 export const CODEX_APP_SERVER_MANAGED_VERSION = "0.136.0";
 const MANAGED_CODEX_APP_SERVER_ARGS = ["--session-source", "app-server"] as const;
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
+
+/**
+ * Repo-pinned SHA-256 checksums for the managed Codex app-server release assets.
+ * The repository is the trust anchor: downloaded release bytes are verified
+ * against these BEFORE extraction, promotion, or execution, so a compromised,
+ * swapped, or corrupted upstream release asset fails closed instead of being
+ * spawned as the Cowork user.
+ *
+ * Keyed by release version, then by exact platform asset name. When bumping
+ * {@link CODEX_APP_SERVER_MANAGED_VERSION}, add the new version's asset checksums
+ * here. They are the GitHub release asset `digest` values, obtainable with:
+ *   gh api repos/openai/codex/releases/tags/rust-v<version> \
+ *     --jq '.assets[] | "\(.name) \(.digest)"'
+ */
+const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>> = {
+  "0.136.0": {
+    "codex-app-server-aarch64-apple-darwin.tar.gz":
+      "408ebc00ce914f4130a831a1c3f3f06f6be635992dc37432ed25fd294446d8d1",
+    "codex-app-server-x86_64-apple-darwin.tar.gz":
+      "00841273e0d6a01f8380e9c33ffd80a2ccbd889b123ee87e49f7ccf5d855570e",
+    "codex-app-server-aarch64-unknown-linux-musl.tar.gz":
+      "3fea169ff5b150862d298bd862da927a8fb864cf0e9e521fb9d409c27ae5b443",
+    "codex-app-server-x86_64-unknown-linux-musl.tar.gz":
+      "bf80cb4437f87cc8f724e62f48c0b7e7279e1d44ec8e85cf60fa95450be9970b",
+    "codex-app-server-aarch64-pc-windows-msvc.exe":
+      "5973564695689f7b5251e87460c31695ba12c855ad5280e8eeeb9e4b3166e58d",
+    "codex-app-server-x86_64-pc-windows-msvc.exe":
+      "cdb0df36287c24c8f0a037087ec5fc0bb85cebb8d1433951969ce7cd56e8a972",
+  },
+};
+
+function expectedCodexAssetChecksum(
+  version: string,
+  assetName: string,
+  overrides: CodexAppServerResolverOverrides,
+): string | undefined {
+  return (
+    overrides.expectedChecksums?.[assetName] ??
+    CODEX_APP_SERVER_MANAGED_CHECKSUMS[version]?.[assetName]
+  );
+}
+
+async function verifyDownloadedAssetChecksum(opts: {
+  assetPath: string;
+  assetName: string;
+  version: string;
+  overrides: CodexAppServerResolverOverrides;
+}): Promise<void> {
+  const expected = expectedCodexAssetChecksum(opts.version, opts.assetName, opts.overrides);
+  if (!expected) {
+    throw new Error(
+      `Refusing to install Codex app-server ${opts.version}: no pinned SHA-256 checksum for asset ${opts.assetName}.`,
+    );
+  }
+  const actual = createHash("sha256")
+    .update(await fs.readFile(opts.assetPath))
+    .digest("hex");
+  if (actual.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error(
+      `Codex app-server asset ${opts.assetName} failed checksum verification ` +
+        `(expected ${expected}, got ${actual}).`,
+    );
+  }
+}
 
 function normalizeBuildArch(arch: string): string {
   if (arch === "x64" || arch === "arm64") return arch;
@@ -576,6 +646,16 @@ async function installCodexAppServer(
     try {
       const assetPath = path.join(tempRoot, assetName);
       await downloadFile(downloadUrl, assetPath, overrides);
+      // Verify the downloaded bytes against the repo-pinned checksum BEFORE the
+      // asset is extracted, copied to the managed path, made executable, or
+      // promoted for spawn. A mismatch (or a version with no pinned checksum)
+      // fails closed so a compromised release asset is never executed.
+      await verifyDownloadedAssetChecksum({
+        assetPath,
+        assetName,
+        version: release.version,
+        overrides,
+      });
       if (assetName.endsWith(".tar.gz")) {
         const extractDir = path.join(tempRoot, "extract");
         await fs.mkdir(extractDir, { recursive: true });

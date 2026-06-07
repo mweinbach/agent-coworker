@@ -1,6 +1,11 @@
-import path from "node:path";
 import { captureProductEvent } from "../../telemetry/productAnalytics";
-import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
+import type {
+  AgentConfig,
+  ApprovalRiskCode,
+  ApproveCommandOptions,
+  ServerErrorCode,
+  ServerErrorSource,
+} from "../../types";
 import { classifyCommandDetailed } from "../../utils/approval";
 import { ASK_SKIP_TOKEN, type SessionEvent } from "../protocol";
 
@@ -140,38 +145,51 @@ export class InteractionManager {
     });
   }
 
-  async approveCommand(command: string) {
-    if (this.opts.isYolo()) return true;
+  /**
+   * Request user approval for an action. The primary case is a sandbox-denial
+   * retry (`reason: "sandbox_denied"`): lifting the OS sandbox to run a command
+   * unsandboxed. Provider runtimes (e.g. the Codex app-server) also route their
+   * own command/file approvals here without a reason — those are ordinary
+   * approvals, not sandbox escapes.
+   *
+   * YOLO auto-approves ordinary command execution. Sandbox-denial retries still
+   * require an explicit response because they lift the OS sandbox entirely.
+   */
+  async approveCommand(command: string, opts?: ApproveCommandOptions) {
+    const isSandboxEscalation = opts?.reason === "sandbox_denied";
+    if (this.opts.isYolo() && !isSandboxEscalation) return true;
 
-    const config = this.opts.getConfig();
-    const classification = classifyCommandDetailed(command, {
-      allowedRoots: [
-        path.dirname(config.projectCoworkDir),
-        config.workingDirectory,
-        ...(config.outputDirectory ? [config.outputDirectory] : []),
-      ],
-      workingDirectory: config.workingDirectory,
-    });
-    if (classification.kind === "auto") return true;
+    const classification = isSandboxEscalation ? null : classifyCommandDetailed(command);
+    if (classification?.autoApprove) return true;
 
     const requestId = makeId();
     const pending = Promise.withResolvers<boolean>();
     this.pendingApproval.set(requestId, pending);
 
+    // Only a sandbox-denial retry is the "escape the OS sandbox" action; other
+    // callers (e.g. Codex app-server command/file approvals) are ordinary
+    // approvals and must not be mislabeled as a sandbox escalation.
+    const reasonCode: ApprovalRiskCode = isSandboxEscalation
+      ? "sandbox_denied_escalation"
+      : (classification?.reasonCode ?? "requires_manual_review");
     const evt: Extract<SessionEvent, { type: "approval" }> = {
       type: "approval",
       sessionId: this.opts.sessionId,
       requestId,
       command,
-      dangerous: classification.dangerous,
-      reasonCode: classification.riskCode,
+      dangerous: isSandboxEscalation || classification?.dangerous === true,
+      reasonCode,
+      // Sandbox context lets clients render a clear, inline approval ("re-run
+      // with full access?") instead of a generic command-approval modal.
+      ...(isSandboxEscalation && opts?.detail ? { detail: opts.detail } : {}),
+      ...(isSandboxEscalation && opts?.category ? { category: opts.category } : {}),
     };
     this.pendingApprovalEvents.set(requestId, evt);
     this.opts.emit(evt);
     captureProductEvent("tool_approval_requested", {
       eventSource: "server",
-      status: classification.dangerous ? "dangerous" : "review",
-      errorCategory: classification.riskCode,
+      status: "dangerous",
+      errorCategory: reasonCode,
     });
     this.opts.queuePersistSessionSnapshot("session.approval_pending");
 

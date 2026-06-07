@@ -28,6 +28,7 @@ type ServerTransportData = {
   protocolMode?: "jsonrpc" | "h3";
   selectedSubprotocol?: string | null;
   connectionId?: string;
+  workspaceControlEventsAllowed?: boolean;
   rpc?: JsonRpcConnectionState;
 };
 

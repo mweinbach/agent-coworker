@@ -738,6 +738,14 @@ export function createWebFetchTool(ctx: ToolContext) {
       );
 
       if (contentKind.kind === "download") {
+        if (
+          ctx.sandboxPolicy?.kind === "read-only" ||
+          ctx.sandboxPolicy?.kind === "no-project-write"
+        ) {
+          throw new Error(
+            `webFetch downloads are disabled when sandbox mode is ${ctx.sandboxPolicy.kind}`,
+          );
+        }
         if (ctx.shellPolicy === "no_project_write") {
           throw new Error("webFetch downloads are disabled for read-only roles");
         }

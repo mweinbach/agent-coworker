@@ -339,7 +339,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        const approved = await params.approveCommand("npm install");
+        const approved = await params.approveCommand("npm publish");
         return {
           text: approved ? "approved" : "denied",
           reasoningText: undefined,
@@ -352,7 +352,8 @@ describe("AgentSession", () => {
 
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
-      expect(approvalEvt.command).toBe("npm install");
+      expect(approvalEvt.command).toBe("npm publish");
+      // A no-reason approval is an ordinary review, not a sandbox escalation.
       expect(approvalEvt.reasonCode).toBe("requires_manual_review");
 
       session.handleApprovalResponse(approvalEvt.requestId, true);
@@ -366,7 +367,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        const approved = await params.approveCommand("npm install");
+        const approved = await params.approveCommand("npm publish");
         return {
           text: approved ? "approved" : "denied",
           reasoningText: undefined,
@@ -389,7 +390,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        await params.approveCommand("npm install");
+        await params.approveCommand("npm publish");
         return { text: "done", reasoningText: undefined, responseMessages: [] };
       });
 
@@ -436,7 +437,7 @@ describe("AgentSession", () => {
       });
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        await params.approveCommand("npm install").catch(() => {});
+        await params.approveCommand("npm publish").catch(() => {});
         return { text: "", reasoningText: undefined, responseMessages: [] };
       });
 
@@ -452,7 +453,7 @@ describe("AgentSession", () => {
       const sessionAny = session as any;
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        const approved = await params.approveCommand("npm install");
+        const approved = await params.approveCommand("npm publish");
         return {
           text: approved ? "approved" : "denied",
           reasoningText: undefined,
@@ -473,11 +474,12 @@ describe("AgentSession", () => {
       expect(sessionAny.sessionSnapshotProjector.getSnapshot().hasPendingApproval).toBe(false);
     });
 
-    test("marks dangerous commands in the approval event", async () => {
+    test("marks sandbox-escalation approval events as dangerous", async () => {
       const { session, events } = makeSession();
 
       mockRunTurn.mockImplementation(async (params: any) => {
-        await params.approveCommand("rm -rf /");
+        // Escalation requests carry a sandbox-denied reason from the bash tool.
+        await params.approveCommand("rm -rf build", { reason: "sandbox_denied" });
         return { text: "done", reasoningText: undefined, responseMessages: [] };
       });
 
@@ -486,52 +488,12 @@ describe("AgentSession", () => {
 
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
+      // Running outside the OS sandbox is always treated as the dangerous action.
       expect(approvalEvt.dangerous).toBe(true);
-      expect(approvalEvt.reasonCode).toBe("matches_dangerous_pattern");
+      expect(approvalEvt.reasonCode).toBe("sandbox_denied_escalation");
 
       session.handleApprovalResponse(approvalEvt.requestId, true);
       await sendPromise;
-    });
-
-    test("marks outside-scope absolute paths with outside_allowed_scope", async () => {
-      const { session, events } = makeSession();
-
-      mockRunTurn.mockImplementation(async (params: any) => {
-        await params.approveCommand("ls /etc");
-        return { text: "done", reasoningText: undefined, responseMessages: [] };
-      });
-
-      const sendPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
-
-      const approvalEvt = events.find((e) => e.type === "approval") as any;
-      expect(approvalEvt).toBeDefined();
-      expect(approvalEvt.dangerous).toBe(false);
-      expect(approvalEvt.reasonCode).toBe("outside_allowed_scope");
-
-      session.handleApprovalResponse(approvalEvt.requestId, true);
-      await sendPromise;
-    });
-
-    test("auto-approved commands skip the approval flow entirely", async () => {
-      const { session, events } = makeSession();
-
-      mockRunTurn.mockImplementation(async (params: any) => {
-        const approved = await params.approveCommand("ls -la");
-        return {
-          text: approved ? "auto-approved" : "denied",
-          reasoningText: undefined,
-          responseMessages: [],
-        };
-      });
-
-      await session.sendUserMessage("list files");
-
-      const approvalEvt = events.find((e) => e.type === "approval");
-      expect(approvalEvt).toBeUndefined();
-
-      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
-      expect(assistantEvt.text).toBe("auto-approved");
     });
 
     test("yolo mode skips approval flow even for dangerous commands", async () => {
@@ -589,7 +551,7 @@ describe("AgentSession", () => {
 
       let approvalPromise!: Promise<boolean>;
       mockRunTurn.mockImplementation(async (params: any) => {
-        approvalPromise = params.approveCommand("npm install");
+        approvalPromise = params.approveCommand("npm publish");
         try {
           await approvalPromise;
         } catch {
@@ -692,7 +654,7 @@ describe("AgentSession", () => {
 
       mockRunTurn.mockImplementation(async (params: any) => {
         askPromise = params.askUser("ask?");
-        approvalPromise = params.approveCommand("npm install");
+        approvalPromise = params.approveCommand("npm publish");
         try {
           await Promise.all([askPromise, approvalPromise]);
         } catch {

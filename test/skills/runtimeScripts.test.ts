@@ -28,6 +28,7 @@ describe("bundled runtime skill scripts", () => {
 
   test("includes codex-primary-runtime skill entrypoints", async () => {
     await expectFile("skills/documents/SKILL.md");
+    await expectFile("skills/memories/SKILL.md");
     await expectFile("skills/presentations/SKILL.md");
     await expectFile("skills/spreadsheets/SKILL.md");
   });

@@ -24,6 +24,24 @@ export const normalizeAskQuestion = normalizeAskQuestionShared;
 export const normalizeAskOptions = normalizeAskOptionsShared;
 export const shouldRenderAskOptions = shouldRenderAskOptionsShared;
 
+const APPROVAL_RISK_LABELS: Record<string, string> = {
+  requires_manual_review: "Needs your review",
+  sandbox_denied_escalation: "Run outside the OS sandbox",
+  outside_allowed_scope: "Outside the allowed scope",
+  matches_dangerous_pattern: "Potentially dangerous command",
+  contains_shell_control_operator: "Contains shell control operators",
+  file_read_command_requires_review: "File read needs review",
+  safe_auto_approved: "Auto-approved",
+};
+
+/** Human-readable label for an approval risk code (falls back to a humanized form). */
+export function approvalRiskLabel(reasonCode: string): string {
+  return (
+    APPROVAL_RISK_LABELS[reasonCode] ??
+    reasonCode.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+  );
+}
+
 type AskModalState = Extract<NonNullable<PromptModalState>, { kind: "ask" }>;
 
 function AskPromptContent(props: {
@@ -207,7 +225,7 @@ export function PromptModal() {
                     {modal.prompt.command}
                   </code>
                   <div className="text-xs text-muted-foreground">
-                    Risk: {modal.prompt.reasonCode}
+                    {approvalRiskLabel(modal.prompt.reasonCode)}
                   </div>
                 </div>
               </div>

@@ -62,9 +62,13 @@ describe("server JSON-RPC control methods", () => {
     try {
       const rpc = await connectJsonRpc(url);
 
-      const catalogResponse = await rpc.request("cowork/plugins/catalog/read", {
-        cwd: tmpDir,
-      });
+      const catalogResponse = await rpc.request(
+        "cowork/plugins/catalog/read",
+        {
+          cwd: tmpDir,
+        },
+        15_000,
+      );
       expect(catalogResponse.result.event.type).toBe("plugins_catalog");
       expect(catalogResponse.result.event.catalog.plugins).toEqual([
         expect.objectContaining({
@@ -80,10 +84,14 @@ describe("server JSON-RPC control methods", () => {
       const pluginId = catalogResponse.result.event.catalog.plugins[0]?.id;
       expect(typeof pluginId).toBe("string");
 
-      const detailResponse = await rpc.request("cowork/plugins/read", {
-        cwd: tmpDir,
-        pluginId,
-      });
+      const detailResponse = await rpc.request(
+        "cowork/plugins/read",
+        {
+          cwd: tmpDir,
+          pluginId,
+        },
+        15_000,
+      );
       expect(detailResponse.result.event).toEqual(
         expect.objectContaining({
           type: "plugin_detail",
@@ -176,28 +184,40 @@ describe("server JSON-RPC control methods", () => {
     try {
       const rpc = await connectJsonRpc(url);
 
-      const ambiguousResponse = await rpc.request("cowork/plugins/read", {
-        cwd: tmpDir,
-        pluginId: "figma-toolkit",
-      });
+      const ambiguousResponse = await rpc.request(
+        "cowork/plugins/read",
+        {
+          cwd: tmpDir,
+          pluginId: "figma-toolkit",
+        },
+        15_000,
+      );
       expect(ambiguousResponse.error?.message).toContain("exists in multiple scopes");
       expect(ambiguousResponse.result).toBeUndefined();
 
-      const missingResponse = await rpc.request("cowork/plugins/read", {
-        cwd: tmpDir,
-        pluginId: "missing-plugin",
-        scope: "workspace",
-      });
+      const missingResponse = await rpc.request(
+        "cowork/plugins/read",
+        {
+          cwd: tmpDir,
+          pluginId: "missing-plugin",
+          scope: "workspace",
+        },
+        15_000,
+      );
       expect(missingResponse.error?.message).toContain(
         'Plugin "missing-plugin" was not found in the workspace scope.',
       );
       expect(missingResponse.result).toBeUndefined();
 
-      const scopedResponse = await rpc.request("cowork/plugins/read", {
-        cwd: tmpDir,
-        pluginId: "figma-toolkit",
-        scope: "workspace",
-      });
+      const scopedResponse = await rpc.request(
+        "cowork/plugins/read",
+        {
+          cwd: tmpDir,
+          pluginId: "figma-toolkit",
+          scope: "workspace",
+        },
+        15_000,
+      );
       expect(scopedResponse.result.event).toEqual(
         expect.objectContaining({
           type: "plugin_detail",
@@ -213,7 +233,7 @@ describe("server JSON-RPC control methods", () => {
     } finally {
       await stopTestServer(server);
     }
-  });
+  }, 15_000);
 
   test("plugin install preview and install mutate the workspace plugin catalog", async () => {
     const tmpDir = await makeTmpProject();
@@ -251,11 +271,15 @@ describe("server JSON-RPC control methods", () => {
     try {
       const rpc = await connectJsonRpc(url);
 
-      const previewResponse = await rpc.request("cowork/plugins/install/preview", {
-        cwd: tmpDir,
-        sourceInput: sourceRoot,
-        targetScope: "workspace",
-      });
+      const previewResponse = await rpc.request(
+        "cowork/plugins/install/preview",
+        {
+          cwd: tmpDir,
+          sourceInput: sourceRoot,
+          targetScope: "workspace",
+        },
+        15_000,
+      );
       expect(previewResponse.result.event).toEqual(
         expect.objectContaining({
           type: "plugin_install_preview",
@@ -272,11 +296,15 @@ describe("server JSON-RPC control methods", () => {
         }),
       );
 
-      const installResponse = await rpc.request("cowork/plugins/install", {
-        cwd: tmpDir,
-        sourceInput: sourceRoot,
-        targetScope: "workspace",
-      });
+      const installResponse = await rpc.request(
+        "cowork/plugins/install",
+        {
+          cwd: tmpDir,
+          sourceInput: sourceRoot,
+          targetScope: "workspace",
+        },
+        15_000,
+      );
       expect(Array.isArray(installResponse.result.events)).toBe(true);
       expect(installResponse.result.events).toEqual(
         expect.arrayContaining([
@@ -377,7 +405,7 @@ describe("server JSON-RPC control methods", () => {
     } finally {
       await stopTestServer(server);
     }
-  });
+  }, 15_000);
 
   test("plugin installs allow enough time for slower mutation event streams", async () => {
     const tmpDir = await makeTmpProject();

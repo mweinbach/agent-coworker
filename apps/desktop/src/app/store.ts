@@ -40,6 +40,7 @@ const initialState: AppStoreDataState = {
   workspaceExplorerRefreshById: {},
 
   promptModal: null,
+  sandboxApprovalsByThread: {},
   filePreview: null,
   canvasActiveTab: "preview",
   canvasShowFormattingBar: true,

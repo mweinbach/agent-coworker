@@ -176,6 +176,38 @@ describe("bash tool", () => {
     expect(res.exitCode).toBe(0);
   });
 
+  test("sandboxed run uses a minimal env when no toolEnv is set", async () => {
+    const dir = await tmpDir();
+    let observedEnv: Record<string, string | undefined> | undefined;
+    process.env.COWORK_TEST_INHERIT = "yes";
+    process.env.PATH = process.env.PATH || "/usr/bin";
+    try {
+      await bashInternal.runShellCommandWithExec({
+        command: "echo hi",
+        cwd: dir,
+        platform: "linux",
+        policy: { kind: "workspace-write", writableRoots: [dir], network: true },
+        capabilities: { seatbelt: false, bwrapPath: "/usr/bin/bwrap", windowsHelperPath: null },
+        // no `env` (toolEnv) — mirrors a raw delegate context.
+        execRunner: async (
+          _file: string,
+          _args: string[],
+          execOpts?: { env?: Record<string, string | undefined> },
+        ) => {
+          observedEnv = execOpts?.env;
+          return { stdout: "hi\n", stderr: "", exitCode: 0 };
+        },
+      });
+    } finally {
+      delete process.env.COWORK_TEST_INHERIT;
+    }
+    // The sandboxed branch keeps compatibility basics but does not inherit
+    // arbitrary server secrets/env vars.
+    expect(observedEnv?.PATH).toBeDefined();
+    expect(observedEnv?.COWORK_TEST_INHERIT).toBeUndefined();
+    expect(observedEnv?.COWORK_SANDBOX).toBeDefined();
+  });
+
   test("passes tool environment into shell execution", async () => {
     const dir = await tmpDir();
     let observedEnv: Record<string, string | undefined> | undefined;
@@ -190,12 +222,295 @@ describe("bash tool", () => {
 
   test("returns exit code on failure", async () => {
     const dir = await tmpDir();
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 42,
+    }));
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({ command: "exit 42" });
     expect(res.exitCode).not.toBe(0);
   });
 
-  test("calls approveCommand before execution", async () => {
+  test("fails closed when a restrictive sandbox backend is required but unavailable", async () => {
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "workspace-write", writableRoots: ["/tmp"], network: true },
+      requireBackend: true,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls).toEqual([]);
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+    expect(result.stderr).toContain("Refusing to run unsandboxed");
+  });
+
+  test("fails closed when requireBackend sees only a non-enforcing backend", async () => {
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: false },
+      requireBackend: true,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls).toEqual([]);
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+    expect(result.stderr).toContain("requires filesystem/network enforcement");
+    expect(result.sandboxWarning).toContain("filesystem and network scoping are not yet enforced");
+  });
+
+  test("refuses unscoped Windows workspace-write under the non-enforcing helper when approval is declined", async () => {
+    // The Windows helper applies restricted-token + Job Object process
+    // containment but does NOT enforce writable roots or the network policy, so
+    // ordinary workspace-write must NOT run under it silently. With
+    // requireBackend=false it requires explicit unsandboxed approval and is
+    // refused (helper never executed) when the user declines.
+    const calls: string[] = [];
+    const approve = mock(async () => false);
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo pwned > C:/Windows/System32/evil.txt",
+      cwd: "C:/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: false },
+      requireBackend: false,
+      requireEnforcingBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).toHaveBeenCalled();
+    expect(calls).toEqual([]); // declined → never executed under the non-enforcing helper
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+    expect(result.sandboxWarning).toContain("filesystem and network scoping are not yet enforced");
+  });
+
+  test("runs unscoped Windows workspace-write under the helper only after unsandboxed approval", async () => {
+    const calls: string[] = [];
+    const approve = mock(async () => true);
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: true },
+      requireBackend: false,
+      requireEnforcingBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).toHaveBeenCalled();
+    // Approved → still wrapped by the helper for process containment.
+    expect(calls).toEqual(["C:/h/helper.exe"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.sandbox).toBe("windows-restricted");
+  });
+
+  test("requires approval before the unsandboxed fallback (requireBackend=false)", async () => {
+    const calls: string[] = [];
+    const approve = mock(async () => false); // user declines
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "rm -rf /",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "workspace-write", writableRoots: ["/tmp"], network: true },
+      requireBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).toHaveBeenCalled();
+    expect(calls).toEqual([]); // declined → never executed
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+  });
+
+  test("labels an unsandboxed fallback approval as a sandbox escape", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => false);
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: true, requireBackend: false },
+      }),
+    });
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      await opts.approveUnsandboxed?.();
+      return {
+        stdout: "",
+        stderr: "declined",
+        exitCode: 1,
+        errorCode: "SANDBOX_REQUIRED",
+        sandbox: "none",
+      };
+    });
+
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "touch outside" });
+    expect(approveFn).toHaveBeenCalledWith(
+      "touch outside",
+      expect.objectContaining({ reason: "sandbox_denied", detail: expect.any(String) }),
+    );
+  });
+
+  test("runs the unsandboxed fallback once approved", async () => {
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "workspace-write", writableRoots: ["/tmp"], network: true },
+      requireBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      approveUnsandboxed: async () => true,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls.length).toBeGreaterThan(0); // executed after approval
+    expect(result.exitCode).toBe(0);
+    expect(result.sandbox).toBe("none");
+  });
+
+  test("refuses danger-full-access with disabled network when no backend can enforce it", async () => {
+    const calls: string[] = [];
+    const approve = mock(async () => false);
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "danger-full-access", network: false },
+      requireBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+    expect(result.stderr).toContain("declined");
+  });
+
+  test("runs danger-full-access with disabled network after unsandboxed fallback approval", async () => {
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "/tmp",
+      platform: "linux",
+      policy: { kind: "danger-full-access", network: false },
+      requireBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+      approveUnsandboxed: async () => true,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(result.exitCode).toBe(0);
+    expect(result.sandbox).toBe("none");
+    expect(result.sandboxWarning).toContain("bubblewrap");
+  });
+
+  test("marks a scoped child as requiring an enforcing backend (hard floor)", async () => {
+    const dir = await tmpDir();
+    let observed: { requireBackend?: boolean; requireEnforcingBackend?: boolean } = {};
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = {
+        requireBackend: opts.requireBackend,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: true, requireBackend: false },
+      }),
+      agentTargetPaths: [path.join(dir, "src")],
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    // A scoped child must be enforced by the backend (no process-only/unsandboxed).
+    expect(observed.requireEnforcingBackend).toBe(true);
+  });
+
+  test("does not require an enforcing backend for an unscoped workspace-write session", async () => {
+    const dir = await tmpDir();
+    let observed: { requireBackend?: boolean; requireEnforcingBackend?: boolean } = {};
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = {
+        requireBackend: opts.requireBackend,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: true, requireBackend: false },
+      }),
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    expect(observed.requireEnforcingBackend).toBe(false);
+    expect(observed.requireBackend).toBe(false);
+  });
+
+  test("hard-floor scoped child fails closed under a non-enforcing (Windows-like) backend", async () => {
+    // A backend that runs the command but does not enforce scope (enforcesScope
+    // falsy) must not satisfy a hard floor — the run is refused, not executed.
+    const calls: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "rm -rf /",
+      cwd: "/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["/work/src"], network: true },
+      requireEnforcingBackend: true,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(calls).toEqual([]); // never executed
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+  });
+
+  test("does not prompt for approval when a sandboxed command succeeds", async () => {
     const dir = await tmpDir();
     const approveFn = mock(async () => true);
     const ctx = makeCtx(dir);
@@ -204,22 +519,52 @@ describe("bash tool", () => {
       stdout: "test\n",
       stderr: "",
       exitCode: 0,
+      sandbox: "linux-bwrap",
     }));
 
     const t: any = createBashTool(ctx);
-    await t.execute({ command: "echo test" });
-    expect(approveFn).toHaveBeenCalledWith("echo test");
+    const res = await t.execute({ command: "echo test" });
+    expect(res.exitCode).toBe(0);
+    // Under escalate-on-failure the sandbox is the boundary; no pre-run prompt.
+    expect(approveFn).not.toHaveBeenCalled();
   });
 
-  test("returns rejection when command not approved", async () => {
+  test("requires approval before executing a dangerous command", async () => {
     const dir = await tmpDir();
+    const approveFn = mock(async () => false);
     const ctx = makeCtx(dir);
-    ctx.approveCommand = async () => false;
+    ctx.approveCommand = approveFn;
+    const calls: string[] = [];
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      calls.push(opts.command);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
 
     const t: any = createBashTool(ctx);
-    const res = await t.execute({ command: "echo secret" });
+    const res = await t.execute({ command: "rm -rf ." });
+    expect(approveFn).toHaveBeenCalledWith("rm -rf .");
+    expect(calls).toEqual([]);
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain("rejected");
+    expect(res.stderr).toContain("not approved");
+  });
+
+  test("escalation rejected returns the sandbox failure unchanged", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => false);
+    const ctx = makeCtx(dir);
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot touch 'x': Operation not permitted",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    const res = await t.execute({ command: "touch x" });
+    expect(approveFn).toHaveBeenCalled();
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("Operation not permitted");
   });
 
   test("handles stderr output", async () => {
@@ -285,26 +630,155 @@ describe("bash tool", () => {
     expect(res.stderr.trim()).toBe("err");
   });
 
-  test("rejected command does not execute the command", async () => {
+  test("approved filesystem escalation preserves a disabled network policy", async () => {
     const dir = await tmpDir();
-    const p = path.join(dir, "should-not-exist.txt");
-    const ctx = makeCtx(dir);
-    ctx.approveCommand = async () => false;
+    const approveFn = mock(async () => true);
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: false, requireBackend: false },
+      }),
+    });
+    ctx.approveCommand = approveFn;
+    const policies: Array<{ kind: string; network?: boolean }> = [];
+    let call = 0;
+    bashInternal.setRunShellCommandForTests(async (opts: any) => {
+      policies.push(opts.policy);
+      call += 1;
+      if (call === 1) {
+        return {
+          stdout: "",
+          stderr: "bash: cannot create file: Read-only file system",
+          exitCode: 1,
+          sandbox: "linux-bwrap",
+        };
+      }
+      return { stdout: "ran with approved filesystem access\n", stderr: "", exitCode: 0 };
+    });
 
     const t: any = createBashTool(ctx);
-    await t.execute({ command: `touch "${p}"` });
-    // File should not have been created since command was rejected
-    await expect(fs.access(p)).rejects.toThrow();
+    const res = await t.execute({ command: "touch x" });
+    expect(approveFn).toHaveBeenCalled();
+    expect(call).toBe(2);
+    expect(policies[1]?.kind).toBe("danger-full-access");
+    expect(policies[1]?.network).toBe(false);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("approved filesystem access");
   });
 
-  test("returns empty stdout on rejected command", async () => {
+  test("approved network escalation only enables network within the workspace sandbox", async () => {
     const dir = await tmpDir();
-    const ctx = makeCtx(dir);
-    ctx.approveCommand = async () => false;
+    const approveFn = mock(async () => true);
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: false, requireBackend: false },
+      }),
+    });
+    ctx.approveCommand = approveFn;
+    const policies: Array<{ kind: string; network?: boolean }> = [];
+    let call = 0;
+    bashInternal.setRunShellCommandForTests(async (opts: any) => {
+      policies.push(opts.policy);
+      call += 1;
+      if (call === 1) {
+        return {
+          stdout: "",
+          stderr: "curl: (6) Could not resolve host: example.com",
+          exitCode: 6,
+          sandbox: "linux-bwrap",
+        };
+      }
+      return { stdout: "network retry\n", stderr: "", exitCode: 0, sandbox: "linux-bwrap" };
+    });
 
     const t: any = createBashTool(ctx);
-    const res = await t.execute({ command: "echo should not see" });
-    expect(res.stdout).toBe("");
+    const res = await t.execute({ command: "curl https://example.com" });
+    expect(call).toBe(2);
+    expect(policies[1]?.kind).toBe("workspace-write");
+    expect(policies[1]?.network).toBe(true);
+    expect(res.stdout).toContain("network retry");
+  });
+
+  test("escalation carries a sandbox category + detail for the inline approval UI", async () => {
+    const dir = await tmpDir();
+    const calls: Array<{ reason?: string; detail?: string; category?: string }> = [];
+    const approveFn = mock(async (_command: string, opts?: Record<string, unknown>) => {
+      calls.push((opts ?? {}) as (typeof calls)[number]);
+      return false;
+    });
+    const ctx = makeCtx(dir);
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot touch 'x': Operation not permitted",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "touch x" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.reason).toBe("sandbox_denied");
+    // EPERM is a filesystem denial; detail is safe-to-display copy.
+    expect(calls[0]?.category).toBe("filesystem");
+    expect(typeof calls[0]?.detail).toBe("string");
+    expect((calls[0]?.detail ?? "").length).toBeGreaterThan(0);
+  });
+
+  test("does not escalate when a sandboxed failure is not a sandbox denial", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => true);
+    const ctx = makeCtx(dir);
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "some normal command error",
+      exitCode: 2,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    const res = await t.execute({ command: "false" });
+    expect(approveFn).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(2);
+  });
+
+  test("never escalates a read-only policy to full access", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => true);
+    const ctx = makeCtx(dir);
+    ctx.approveCommand = approveFn;
+    ctx.sandboxPolicy = { kind: "read-only", network: false };
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot create 'x': Read-only file system",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    const res = await t.execute({ command: "touch x" });
+    // Read-only roles must not be lifted to danger-full-access on denial.
+    expect(approveFn).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(1);
+  });
+
+  test("does not escalate a scoped child's targetPath denial (even in yolo)", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => true); // simulates yolo auto-approve
+    const ctx = makeCtx(dir, { agentTargetPaths: [path.join(dir, "src")] });
+    ctx.approveCommand = approveFn;
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "touch: cannot touch '../outside': Read-only file system",
+      exitCode: 1,
+      sandbox: "linux-bwrap",
+    }));
+
+    const t: any = createBashTool(ctx);
+    const res = await t.execute({ command: "touch ../outside" });
+    // Escalating a scoped child to full access would bypass its targetPaths.
+    expect(approveFn).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(1);
   });
 
   test("returns aborted exit code when turn signal is aborted", async () => {

@@ -1,5 +1,5 @@
 import type { ProviderContinuationState } from "../shared/providerContinuation";
-import type { AgentConfig, ModelMessage, TodoItem } from "../types";
+import type { AgentConfig, ApproveCommandOptions, ModelMessage, TodoItem } from "../types";
 
 export type RuntimeModelRawEvent = {
   format: "openai-responses-v1" | "google-interactions-v1" | "codex-app-server-v2";
@@ -62,6 +62,8 @@ export interface RuntimeRunTurnParams {
   maxSteps: number;
   yolo?: boolean;
   shellPolicy?: "full" | "no_project_write";
+  /** Child-agent filesystem scope; becomes the OS sandbox writable roots. */
+  agentTargetPaths?: readonly string[] | null;
   providerOptions?: Record<string, any>;
   providerState?: ProviderContinuationState | null;
   toolEnv?: Record<string, string | undefined>;
@@ -72,7 +74,7 @@ export interface RuntimeRunTurnParams {
   prepareStep?: RuntimePrepareStep;
   registerSteerHandler?: RuntimeRegisterSteerHandler;
   askUser?: (question: string, options?: string[]) => Promise<string>;
-  approveCommand?: (command: string) => Promise<boolean>;
+  approveCommand?: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;

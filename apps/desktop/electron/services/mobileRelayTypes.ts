@@ -23,6 +23,7 @@ const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
   "mcpAuth",
   "workspaceSettings",
   "backups",
+  "conversations",
 ] as const;
 
 export type MobileRelayTrustedDevicePermissionKey =

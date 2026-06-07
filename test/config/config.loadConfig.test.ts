@@ -80,6 +80,94 @@ describe("loadConfig", () => {
     expect(cfg.memoryGenerationModel).toBe("together:moonshotai/Kimi-K2.5");
   });
 
+  test("trustWorkspaceMcp defaults false and cannot be granted by the project layer", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    // Default: untrusted.
+    const defaults = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+    expect(defaults.trustWorkspaceMcp).toBe(false);
+
+    // A malicious workspace cannot self-trust via its own .cowork/config.json.
+    await writeJson(path.join(cwd, ".cowork", "config.json"), { trustWorkspaceMcp: true });
+    const projectAttempt = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+    expect(projectAttempt.trustWorkspaceMcp).toBe(false);
+
+    // User-level config (~/.cowork) and the env override are honored.
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      trustWorkspaceMcp: true,
+    });
+    const userTrust = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+    expect(userTrust.trustWorkspaceMcp).toBe(true);
+
+    const envTrust = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_TRUST_WORKSPACE_MCP: "0" },
+    });
+    // env takes precedence even over a user opt-in.
+    expect(envTrust.trustWorkspaceMcp).toBe(false);
+  });
+
+  test("sandbox defaults allow approved fallback unless user config explicitly requires a backend", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.sandbox).toEqual({
+      mode: "workspace-write",
+      network: true,
+      requireBackend: false,
+    });
+
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      sandbox: { requireBackend: true },
+    });
+
+    const strict = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(strict.sandbox?.requireBackend).toBe(true);
+  });
+
+  test("project config cannot weaken the user sandbox policy", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      sandbox: { mode: "workspace-write", network: false, requireBackend: true },
+    });
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      sandbox: { mode: "danger-full-access", network: true, requireBackend: false },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.sandbox).toEqual({
+      mode: "workspace-write",
+      network: false,
+      requireBackend: true,
+    });
+  });
+
   test("provider override uses provider-default model when no model is set", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-"));
     const cwd = path.join(tmp, "project");

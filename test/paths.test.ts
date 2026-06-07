@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import { isPathInside, resolveMaybeRelative, truncateLine, truncateText } from "../src/utils/paths";
+import {
+  isPathInside,
+  pathCrossesProtectedMetadata,
+  resolveMaybeRelative,
+  truncateLine,
+  truncateText,
+} from "../src/utils/paths";
 
 // ---------------------------------------------------------------------------
 // resolveMaybeRelative
@@ -217,6 +223,20 @@ describe("isPathInside", () => {
     test("non-root is not parent of root", () => {
       expect(isPathInside("/project", "/")).toBe(false);
     });
+  });
+});
+
+describe("pathCrossesProtectedMetadata", () => {
+  test("detects protected metadata below child directories starting with two dots", () => {
+    expect(
+      pathCrossesProtectedMetadata("/project", "/project/..cache/.git/hooks/post-checkout"),
+    ).toBe(true);
+  });
+
+  test("does not treat sibling paths starting with two dots as inside", () => {
+    expect(pathCrossesProtectedMetadata("/project", "/..project/.git/hooks/post-checkout")).toBe(
+      false,
+    );
   });
 });
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -215,6 +216,47 @@ async function downloadFile(url, destination) {
   await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination));
 }
 
+// Repo-pinned SHA-256 checksums for the DEFAULT_LIBREOFFICE_VERSION default
+// download assets, from The Document Foundation's published `<url>.sha256` files.
+// The repository is the trust anchor: downloaded bytes are verified against these
+// BEFORE extraction, promotion, or execution, so a compromised, swapped, or
+// corrupted upstream artifact fails closed instead of being executed as the user.
+// When bumping DEFAULT_LIBREOFFICE_VERSION (managedSofficeRuntime/constants.ts),
+// refresh every entry from the matching `<download-url>.sha256`.
+const MANAGED_SOFFICE_DEFAULT_CHECKSUMS = {
+  "darwin-arm64": "8ea6bdf67dbffc9c47104f73a3c98ed145ff26c00dde44c43633f5b3d741479f",
+  "darwin-x64": "534cefb965b2d1c566c1e675f4ae2e9b0dcfdcd42861044fb0360c2b7a9eace3",
+  "linux-x64": "18838cb9d028b664a9d0e966cd4c8ca47ca3ea363c393b41d1b5124740b121a5",
+  "linux-arm64": "0e5252725da663dbc237367444c9f41caae6ec4b7b58d3e714fcef907becaf9f",
+  "win32-x64": "468d1fb3880af3bcddac002e9054155912c70b45d105bfa1c82036f33456133d",
+  "win32-arm64": "9f2bd820b928a96fc7d2dd8dc02995ddbde329d8377933a94ddeb5a5a1cb3cb9",
+};
+
+function normalizeSha256(value) {
+  const trimmed = String(value || "")
+    .trim()
+    .toLowerCase();
+  return /^[0-9a-f]{64}$/.test(trimmed) ? trimmed : "";
+}
+
+// Expected SHA-256 for the runtime archive, or "" when none can be established.
+// An operator-provided COWORK_LIBREOFFICE_DOWNLOAD_SHA256 always wins; a custom
+// COWORK_LIBREOFFICE_DOWNLOAD_URL has no repo-pinned checksum and therefore must
+// supply one explicitly (else we fail closed); the default URL uses the pinned map.
+function expectedSofficeChecksum(version) {
+  const fromEnv = normalizeSha256(process.env.COWORK_LIBREOFFICE_DOWNLOAD_SHA256);
+  if (fromEnv) return fromEnv;
+  if (process.env.COWORK_LIBREOFFICE_DOWNLOAD_URL) return "";
+  if (version !== DEFAULT_LIBREOFFICE_VERSION) return "";
+  return normalizeSha256(MANAGED_SOFFICE_DEFAULT_CHECKSUMS[platformArchKey()]);
+}
+
+async function sha256File(filePath) {
+  const hash = createHash("sha256");
+  await pipeline(fs.createReadStream(filePath), hash);
+  return hash.digest("hex");
+}
+
 function findFirstFile(root, predicate) {
   const entries = fs.readdirSync(root, { withFileTypes: true });
   for (const entry of entries) {
@@ -333,6 +375,17 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
     );
   }
 
+  // Fail closed before downloading if we have no checksum to verify against.
+  const expectedChecksum = expectedSofficeChecksum(version);
+  if (!expectedChecksum) {
+    throw new Error(
+      process.env.COWORK_LIBREOFFICE_DOWNLOAD_URL
+        ? "Refusing to install LibreOffice from COWORK_LIBREOFFICE_DOWNLOAD_URL without a pinned checksum. " +
+            "Set COWORK_LIBREOFFICE_DOWNLOAD_SHA256 to the expected SHA-256."
+        : `Refusing to install LibreOffice ${version} for ${platformArchKey()}: no pinned SHA-256 checksum is available.`,
+    );
+  }
+
   const root = installRoot(version);
   const stagedRoot = `${root}.staged-${process.pid}-${Date.now()}`;
   await fsp.mkdir(rootDir, { recursive: true });
@@ -345,6 +398,16 @@ async function installManagedRuntime(version = DEFAULT_LIBREOFFICE_VERSION) {
   await fsp.mkdir(stagedRoot, { recursive: true });
   try {
     await downloadFile(url, archivePath);
+    // Verify the downloaded bytes against the expected checksum BEFORE mounting,
+    // extracting, installing, or promoting the runtime, so unverified bytes are
+    // never executed (not even the soffice --version health check).
+    const actualChecksum = await sha256File(archivePath);
+    if (actualChecksum !== expectedChecksum) {
+      throw new Error(
+        `Downloaded LibreOffice archive failed checksum verification ` +
+          `(expected ${expectedChecksum}, got ${actualChecksum}).`,
+      );
+    }
     if (process.platform === "darwin") {
       await installMacRuntime(archivePath, stagedRoot);
     } else if (process.platform === "linux") {

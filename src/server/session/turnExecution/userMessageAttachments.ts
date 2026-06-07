@@ -7,6 +7,7 @@ import {
   decodeBase64Strict,
   getAttachmentCountValidationMessage,
   getAttachmentValidationMessage,
+  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
 } from "../../../shared/attachments";
 import {
   SERVER_ERROR_CODES,
@@ -122,6 +123,26 @@ function isUploadedFileAttachment(
   attachment: FileAttachment,
 ): attachment is Extract<FileAttachment, { path: string }> {
   return "path" in attachment;
+}
+
+function isOversizedUploadedAudioAttachment(
+  mimeType: string,
+  stat: UploadedAttachmentStat | null,
+): boolean {
+  return (
+    mimeType.toLowerCase().startsWith("audio/") &&
+    stat !== null &&
+    Number(stat.size) > MAX_ATTACHMENT_INLINE_BYTE_SIZE
+  );
+}
+
+function buildOversizedUploadedAudioHint(diskPath: string): string {
+  return [
+    `[System: The user uploaded an audio file which has been copied to ${diskPath}.`,
+    "It is larger than the 25MB model attachment limit, so it is not attached as audio content.",
+    "Do not call read on this uploaded audio path because read will not return audio bytes.",
+    "Use a dedicated transcription workflow or local audio tooling if transcription is needed, and write any large requested output file in the workspace.]",
+  ].join(" ");
 }
 
 export function createTurnErrorClassifier(context: SessionContext) {
@@ -304,6 +325,7 @@ export function createUserMessageAttachmentHelpers(
       let diskPath: string;
       let contentReadPath: string;
       let multimodalData: string | null = null;
+      let uploadedAttachmentStat: UploadedAttachmentStat | null = null;
 
       if (inlineAttachment) {
         let finalName = safeName;
@@ -366,23 +388,37 @@ export function createUserMessageAttachmentHelpers(
         const uploadedFile = await resolveUploadedAttachmentPath(uploadedAttachment.path);
         diskPath = path.resolve(uploadedAttachment.path);
         contentReadPath = uploadedFile.canonicalPath;
+        uploadedAttachmentStat = uploadedFile.stat;
       }
 
       const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
         modelSupportsImages,
         isGoogleProvider,
       });
+      const oversizedUploadedAudio = isOversizedUploadedAudioAttachment(
+        attachment.mimeType,
+        uploadedAttachmentStat,
+      );
       const hasTargetedLargeOutputGuidance =
         shouldAddLargeOutputGuidance &&
         typeof contentPartType === "string" &&
         largeMultimodalOutputPartTypes.has(contentPartType);
+      if (hasTargetedLargeOutputGuidance && !oversizedUploadedAudio) {
+        appendLargeOutputGuidance();
+      }
 
       contentParts.push({
         type: "text",
-        text: hasTargetedLargeOutputGuidance
-          ? `[System: The user uploaded a file which has been saved to ${diskPath}. The file is already attached as ${contentPartType} content below; do not call read on this uploaded media path just to inspect, transcribe, or summarize it. Use the attached media content and write the requested output file directly.]`
-          : `[System: The user uploaded a file which has been saved to ${diskPath}]`,
+        text: oversizedUploadedAudio
+          ? buildOversizedUploadedAudioHint(diskPath)
+          : hasTargetedLargeOutputGuidance
+            ? `[System: The user uploaded a file which has been saved to ${diskPath}. The file is already attached as ${contentPartType} content below; do not call read on this uploaded media path just to inspect, transcribe, or summarize it. Use the attached media content and write the requested output file directly.]`
+            : `[System: The user uploaded a file which has been saved to ${diskPath}]`,
       });
+
+      if (oversizedUploadedAudio) {
+        return;
+      }
 
       if (!multimodalData && contentPartType) {
         multimodalData = (await fs.readFile(contentReadPath)).toString("base64");
@@ -415,21 +451,17 @@ export function createUserMessageAttachmentHelpers(
           });
           continue;
         }
-        appendLargeOutputGuidance();
         await appendAttachment(part);
       }
       if (lastTextPartIndex < 0 && text) {
         contentParts.unshift({ type: "text", text });
       }
-      appendLargeOutputGuidance();
       return contentParts;
     }
 
     if (text) {
       contentParts.push({ type: "text", text });
     }
-
-    appendLargeOutputGuidance();
 
     for (const attachment of attachments) {
       await appendAttachment(attachment);
@@ -462,6 +494,9 @@ export function createUserMessageAttachmentHelpers(
         isGoogleProvider,
       });
       if (contentPartType) {
+        if (isOversizedUploadedAudioAttachment(attachment.mimeType, uploadedFile.stat)) {
+          continue;
+        }
         multimodalUploadedByteLengths.push(Number(uploadedFile.stat.size));
       }
     }

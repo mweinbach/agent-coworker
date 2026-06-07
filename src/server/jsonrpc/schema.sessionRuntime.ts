@@ -147,6 +147,7 @@ export const configUpdatedEventSchema = z
         model: z.string(),
         workingDirectory: z.string(),
         outputDirectory: z.string().optional(),
+        uploadsDirectory: z.string().optional(),
       })
       .passthrough(),
   })

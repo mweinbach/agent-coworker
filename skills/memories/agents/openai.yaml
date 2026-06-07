@@ -1,0 +1,5 @@
+interface:
+  display_name: "Memories"
+  short_description: "View and update long-term memory"
+  brand_color: "#0F766E"
+  default_prompt: "Use $memories to list, read, create, or edit long-term memory for this chat or workspace."

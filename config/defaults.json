@@ -1,5 +1,10 @@
 {
   "provider": "google",
+  "sandbox": {
+    "mode": "workspace-write",
+    "network": true,
+    "requireBackend": false
+  },
   "userName": "",
   "knowledgeCutoff": "End of May 2025",
   "toolOutputOverflowChars": 25000,

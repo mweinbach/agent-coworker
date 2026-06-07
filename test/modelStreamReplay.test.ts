@@ -241,6 +241,78 @@ describe("modelStreamReplay", () => {
     ).toBe(false);
   });
 
+  test("replays Codex app-server native web search raw response items", () => {
+    const runtime = createModelStreamReplayRuntime();
+    const turnId = "turn-codex-app-server-native-web";
+
+    const updates = replayModelStreamRawEvent(runtime, {
+      type: "model_stream_raw",
+      sessionId: "session-codex",
+      turnId,
+      index: 105,
+      provider: "codex-cli",
+      model: "gpt-5.5",
+      format: "codex-app-server-v2",
+      normalizerVersion: 1,
+      event: {
+        direction: "server_notification",
+        message: {
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "thread-codex",
+            turnId: "turn-codex-runtime",
+            item: {
+              type: "web_search_call",
+              status: "completed",
+              action: {
+                type: "search",
+                query: "Apple WWDC 2026 dates announcement June 2026 official Apple Newsroom",
+                queries: [
+                  "Apple WWDC 2026 dates announcement June 2026 official Apple Newsroom",
+                  "site:developer.apple.com wwdc26 Apple WWDC 2026",
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(updates).toEqual([
+      {
+        kind: "tool_result",
+        turnId,
+        key: `native-web-search:${turnId}:105`,
+        name: "nativeWebSearch",
+        result: {
+          status: "completed",
+          action: {
+            type: "search",
+            query: "Apple WWDC 2026 dates announcement June 2026 official Apple Newsroom",
+            queries: [
+              "Apple WWDC 2026 dates announcement June 2026 official Apple Newsroom",
+              "site:developer.apple.com wwdc26 Apple WWDC 2026",
+            ],
+          },
+          sources: undefined,
+          raw: {
+            type: "web_search_call",
+            status: "completed",
+            action: {
+              type: "search",
+              query: "Apple WWDC 2026 dates announcement June 2026 official Apple Newsroom",
+              queries: [
+                "Apple WWDC 2026 dates announcement June 2026 official Apple Newsroom",
+                "site:developer.apple.com wwdc26 Apple WWDC 2026",
+              ],
+            },
+          },
+        },
+      },
+    ]);
+    expect(runtime.rawBackedTurns.has(turnId)).toBe(false);
+  });
+
   test("replays google interactions raw reasoning and tool activity from persisted chunks", () => {
     const runtime = createModelStreamReplayRuntime();
     const turnId = "turn-google-raw";

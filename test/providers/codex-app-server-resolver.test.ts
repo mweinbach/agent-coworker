@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,18 @@ import {
   resolveCodexAppServerCommand,
   updateManagedCodexAppServer,
 } from "../../src/providers/codexAppServerResolver";
+
+// fakeReleaseFetch serves the literal bytes "managed app-server" for downloads.
+// The resolver now verifies downloaded assets against a pinned SHA-256, so the
+// install plumbing tests inject the matching checksum via the expectedChecksums
+// override (production verifies against the repo-pinned map instead).
+const FAKE_ASSET_SHA256 = createHash("sha256").update("managed app-server").digest("hex");
+const FAKE_ASSET_CHECKSUMS: Record<string, string> = {
+  "codex-app-server-x86_64-pc-windows-msvc.exe": FAKE_ASSET_SHA256,
+  "codex-app-server-aarch64-pc-windows-msvc.exe": FAKE_ASSET_SHA256,
+  "codex-app-server-x86_64-apple-darwin.tar.gz": FAKE_ASSET_SHA256,
+  "codex-app-server-aarch64-apple-darwin.tar.gz": FAKE_ASSET_SHA256,
+};
 
 const previousCommand = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
 const previousArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS;
@@ -100,6 +113,7 @@ describe("codex app-server resolver", () => {
       platform: "win32",
       arch: "x64",
       fetchImpl: fakeReleaseFetch("9.999.0", requestedVersions),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
       spawnForResult: async () => {
         throw new Error("system codex should not be probed for production app-server resolution");
       },
@@ -121,6 +135,7 @@ describe("codex app-server resolver", () => {
       platform: "win32",
       arch: "x64",
       fetchImpl: fakeReleaseFetch("9.999.0", requestedVersions),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
       spawnForResult: async () => {
         throw new Error("system codex should not be probed for the app-pinned install");
       },
@@ -142,6 +157,7 @@ describe("codex app-server resolver", () => {
           platform: "win32",
           arch: "x64",
           fetchImpl: fakeReleaseFetch(version),
+          expectedChecksums: FAKE_ASSET_CHECKSUMS,
         },
       );
     }
@@ -151,6 +167,7 @@ describe("codex app-server resolver", () => {
       platform: "win32",
       arch: "x64",
       fetchImpl: fakeReleaseFetch("9.999.0"),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
       spawnForResult: async () => {
         throw new Error("system codex should not be probed for the app-pinned install");
       },
@@ -223,6 +240,7 @@ describe("codex app-server resolver", () => {
           platform: "win32",
           arch: "x64",
           fetchImpl: fakeReleaseFetch("9.999.0"),
+          expectedChecksums: FAKE_ASSET_CHECKSUMS,
         },
       );
 
@@ -262,6 +280,7 @@ describe("codex app-server resolver", () => {
         platform: "win32",
         arch: "x64",
         fetchImpl: fakeReleaseFetch("9.999.0", requestedVersions),
+        expectedChecksums: FAKE_ASSET_CHECKSUMS,
       },
     );
 
@@ -347,6 +366,7 @@ describe("codex app-server resolver", () => {
         platform: "win32",
         arch: "x64",
         fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+        expectedChecksums: FAKE_ASSET_CHECKSUMS,
         promoteManagedInstall: async () => {
           attemptedPromotion = true;
           const error = new Error("current executable is locked") as NodeJS.ErrnoException;
@@ -477,5 +497,58 @@ describe("codex app-server resolver", () => {
       args: ["--config", "/path/with spaces/config.json"],
       source: "override",
     });
+  });
+
+  test.serial(
+    "rejects a managed install whose downloaded bytes fail checksum verification",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-bad-checksum-"));
+      const target = { platform: "win32" as const, arch: "x64" };
+
+      // No expectedChecksums override -> verified against the real repo-pinned
+      // checksum for the managed version, which the fake "managed app-server" bytes
+      // do not match, so the install must fail closed.
+      await expect(
+        __internal.installCodexAppServer(
+          { version: CODEX_APP_SERVER_MANAGED_VERSION },
+          {
+            homeDir,
+            platform: "win32",
+            arch: "x64",
+            fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+          },
+        ),
+      ).rejects.toThrow(/checksum verification/i);
+
+      // The unverified binary must never be promoted to the managed executable path.
+      const executablePath = __internal.managedExecutablePath(
+        homeDir,
+        CODEX_APP_SERVER_MANAGED_VERSION,
+        target,
+      );
+      await expect(fs.access(executablePath)).rejects.toThrow();
+    },
+  );
+
+  test.serial("refuses to install a managed version with no pinned checksum", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-unpinned-version-"));
+
+    await expect(
+      __internal.installCodexAppServer(
+        { version: "0.135.0" },
+        {
+          homeDir,
+          platform: "win32",
+          arch: "x64",
+          fetchImpl: fakeReleaseFetch("0.135.0"),
+        },
+      ),
+    ).rejects.toThrow(/no pinned SHA-256 checksum/i);
+
+    const executablePath = __internal.managedExecutablePath(homeDir, "0.135.0", {
+      platform: "win32",
+      arch: "x64",
+    });
+    await expect(fs.access(executablePath)).rejects.toThrow();
   });
 });

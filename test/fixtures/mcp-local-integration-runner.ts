@@ -78,6 +78,9 @@ function makeConfig(baseDir: string, configDir: string): AgentConfig {
     memoryDirs: [],
     configDirs: [configDir],
     enableMcp: true,
+    // This scenario deliberately exercises auto-starting a workspace-defined
+    // stdio MCP server, so the test workspace opts into the trust gate.
+    trustWorkspaceMcp: true,
   };
 }
 

@@ -24,9 +24,11 @@ import {
   type PersistedState,
 } from "../app/types";
 import type {
+  AuthorizeUploadSourceInput,
   CaptureProductEventInput,
   ConfirmActionInput,
   ContextMenuItem,
+  CopyFileToWorkspaceUploadsInput,
   CopyPathInput,
   CreateDirectoryInput,
   CreateOneOffChatWorkspaceInput,
@@ -118,6 +120,7 @@ const mobileRelayTrustedDevicePermissionKeys = [
   "mcpAuth",
   "workspaceSettings",
   "backups",
+  "conversations",
 ] as const;
 
 const contextMenuItemSchema: z.ZodType<ContextMenuItem> = z.object({
@@ -435,6 +438,19 @@ export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> =
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;
 export const copyTextInputSchema = z.string();
+export const copyFileToWorkspaceUploadsInputSchema: z.ZodType<CopyFileToWorkspaceUploadsInput> = z
+  .object({
+    workspacePath: nonEmptyStringSchema,
+    sourcePath: nonEmptyStringSchema,
+    filename: validatedSegmentSchema,
+    uploadsDirectory: nonEmptyStringSchema.optional(),
+  })
+  .strict();
+export const authorizeUploadSourceInputSchema: z.ZodType<AuthorizeUploadSourceInput> = z
+  .object({
+    sourcePath: nonEmptyStringSchema,
+  })
+  .strict();
 export const trashPathInputSchema: z.ZodType<TrashPathInput> = sharedPathSchema;
 
 export const createDirectoryInputSchema: z.ZodType<CreateDirectoryInput> = z.object({
@@ -770,6 +786,7 @@ const mobileRelayTrustedDevicePermissionsSchema = z.preprocess(
     mcpAuth: z.boolean().optional().default(false),
     workspaceSettings: z.boolean().optional().default(false),
     backups: z.boolean().optional().default(false),
+    conversations: z.boolean().optional().default(false),
   }),
 );
 

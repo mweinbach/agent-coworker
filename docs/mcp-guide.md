@@ -14,6 +14,15 @@ Legacy `.agent/mcp-servers.json` files are not runtime fallback layers. Run `cow
 
 *Note: If the same server key is defined in multiple layers, the configuration from the higher-precedence layer will override the lower ones.*
 
+### Workspace stdio trust gate
+
+Because `.cowork/mcp-servers.json` is part of a repository, an untrusted (e.g. freshly cloned) workspace must not be able to launch local commands just by opening it or starting a turn. A **`stdio`** server defined in the **workspace** layer therefore does **not** auto-start unless the workspace is explicitly trusted. Trust is resolved only from non-workspace sources — it cannot be granted by the workspace's own config:
+
+- set `"trustWorkspaceMcp": true` in `~/.cowork/config/config.json` (user-level), or
+- set the `AGENT_TRUST_WORKSPACE_MCP=1` environment variable.
+
+Until then, workspace `stdio` servers are skipped (with a `[MCP] Not auto-starting …` log line) while user/built-in/plugin servers and non-`stdio` workspace transports continue to load. Explicitly validating a server (`mcp_server_validate`) is treated as per-command approval and may launch the workspace's own `stdio` server for that one test.
+
 ## Server Configuration Schema
 Each MCP server entry in the configuration file must specify how the agent should connect to it. The basic schema includes defining the `transport` mechanism and the command or URL required to initialize the connection.
 

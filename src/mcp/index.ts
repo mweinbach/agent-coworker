@@ -525,12 +525,60 @@ export async function readMCPServersSnapshot(config: AgentConfig): Promise<MCPSe
   };
 }
 
-export async function loadMCPServers(config: AgentConfig): Promise<MCPServerConfig[]> {
+/**
+ * A workspace's own `.cowork/mcp-servers.json` is attacker-controlled in a
+ * malicious repository. Launching a stdio server from it runs a local command
+ * with the agent's privileges BEFORE the bash/tool command-approval path, so it
+ * must not auto-start unless the workspace is explicitly trusted (resolved only
+ * from env/user config — never from the workspace itself). Non-stdio workspace
+ * transports do not launch a local process and other sources (user/system/plugin)
+ * are installed deliberately. Workspace-scoped plugin stdio servers are also
+ * gated because the plugin bundle comes from the repository.
+ */
+function isUntrustedWorkspaceStdioServer(
+  server: MCPRegistryServer,
+  config: AgentConfig,
+  allowUntrusted: boolean,
+): boolean {
+  if (config.trustWorkspaceMcp === true || allowUntrusted) return false;
+  const isWorkspaceOwned =
+    server.source === "workspace" ||
+    (server.source === "plugin" && server.pluginScope === "workspace");
+  return isWorkspaceOwned && server.transport.type === "stdio";
+}
+
+export async function loadMCPServers(
+  config: AgentConfig,
+  opts: {
+    log?: (line: string) => void;
+    /**
+     * Allow this call to include the workspace's own (otherwise untrusted) stdio
+     * MCP servers. Reserved for explicit, user-initiated actions (e.g. MCP server
+     * validation), which serve as per-command approval. The automatic turn-setup
+     * path leaves this false so a malicious workspace cannot auto-launch commands.
+     */
+    includeUntrustedWorkspaceStdio?: boolean;
+  } = {},
+): Promise<MCPServerConfig[]> {
   const registry = await loadMCPConfigRegistry(config);
+  const allowed: MCPRegistryServer[] = [];
+  for (const server of registry.servers) {
+    if (server.enabled === false) continue;
+    if (
+      isUntrustedWorkspaceStdioServer(server, config, opts.includeUntrustedWorkspaceStdio === true)
+    ) {
+      opts.log?.(
+        `[MCP] Not auto-starting workspace stdio server "${server.name}" from ` +
+          `.cowork/${MCP_SERVERS_FILE_NAME}: this workspace is not trusted to launch local ` +
+          `commands. Set "trustWorkspaceMcp": true in ~/.cowork/config/config.json or ` +
+          `AGENT_TRUST_WORKSPACE_MCP=1 to allow it.`,
+      );
+      continue;
+    }
+    allowed.push(server);
+  }
   const hydrated = await Promise.all(
-    registry.servers
-      .filter((server) => server.enabled !== false)
-      .map(async (server) => await hydrateServerForRuntime(config, server)),
+    allowed.map(async (server) => await hydrateServerForRuntime(config, server)),
   );
   if (!hydrated.some((server) => server.name === CODEX_APPS_MCP_SERVER_NAME)) {
     const codexApps = await buildCodexAppsMcpServer(config);
@@ -723,7 +771,7 @@ export async function getOrLoadMCPToolsCached(
   const loadMCPToolsFn = opts.loadMCPTools ?? loadMCPTools;
 
   const workspaceKey = path.resolve(config.projectCoworkDir);
-  const servers = await loadMCPServersFn(config);
+  const servers = await loadMCPServersFn(config, { log: opts.log });
   const serversConfigJson = serializeServerConfigs(servers);
 
   const cached = workspaceMcpCache.get(workspaceKey);

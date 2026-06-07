@@ -94,6 +94,55 @@ describe("managed soffice runtime", () => {
       expect(helper).toContain('oor:name="LoadPrinter"');
       expect(helper).toContain('"--nodefault"');
       expect(helper).toContain('"--nolockcheck"');
+      // Supply-chain integrity: the helper pins SHA-256 checksums and verifies
+      // downloaded runtime bytes before extraction, promotion, or execution.
+      expect(helper).toContain("MANAGED_SOFFICE_DEFAULT_CHECKSUMS");
+      expect(helper).toContain("8ea6bdf67dbffc9c47104f73a3c98ed145ff26c00dde44c43633f5b3d741479f");
+      expect(helper).toContain("failed checksum verification");
+      expect(helper).toContain("COWORK_LIBREOFFICE_DOWNLOAD_SHA256");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("shim refuses a custom download URL without a pinned checksum", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-checksum-"));
+
+    try {
+      const setup = await ensureManagedSofficeRuntimeReady({
+        homedir: home,
+        env: { PATH: "" },
+        nodePath: process.execPath,
+      });
+      expect(setup?.shimPath).toBeTruthy();
+
+      // Download enabled + custom URL, but no pinned checksum -> the runtime must
+      // fail closed BEFORE any download/extraction/execution. (Bun.spawnSync does
+      // not capture child stdout/stderr under `bun test`, so we assert on exit code
+      // and filesystem side effects; the exact error string is covered by the
+      // helper-source content assertions above.)
+      const proc = Bun.spawnSync({
+        cmd: [setup?.shimPath ?? "", "--version"],
+        env: {
+          ...process.env,
+          PATH: setup?.shimDir ?? "",
+          COWORK_IGNORE_SYSTEM_SOFFICE: "1",
+          COWORK_MANAGED_SOFFICE_ROOT: setup?.rootDir ?? "",
+          COWORK_MANAGED_SOFFICE_SHIM_DIR: setup?.shimDir ?? "",
+          COWORK_DISABLE_MANAGED_SOFFICE_DOWNLOAD: "",
+          COWORK_LIBREOFFICE_DOWNLOAD_URL: "https://example.invalid/LibreOffice.dmg",
+          COWORK_LIBREOFFICE_DOWNLOAD_SHA256: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(proc.exitCode).toBe(127);
+      // No runtime was promoted...
+      await expect(fs.stat(path.join(setup?.rootDir ?? "", "runtime"))).rejects.toThrow();
+      // ...and the gate fired before download: no `tmp-*` staging dir was created.
+      const rootEntries = await fs.readdir(setup?.rootDir ?? "").catch(() => []);
+      expect(rootEntries.some((entry) => entry.startsWith("tmp-"))).toBe(false);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

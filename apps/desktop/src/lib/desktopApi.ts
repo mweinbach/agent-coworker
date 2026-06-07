@@ -50,6 +50,7 @@ const MOBILE_RELAY_TRUSTED_DEVICE_PERMISSION_KEYS = [
   "mcpAuth",
   "workspaceSettings",
   "backups",
+  "conversations",
 ] as const;
 
 export type MobileRelayTrustedDevicePermissionKey =
@@ -207,6 +208,22 @@ export type ReadFileForPreviewOutput = {
 
 export type CopyPathInput = {
   path: string;
+};
+
+export type CopyFileToWorkspaceUploadsInput = {
+  workspacePath: string;
+  sourcePath: string;
+  filename: string;
+  uploadsDirectory?: string;
+};
+
+export type CopyFileToWorkspaceUploadsOutput = {
+  filename: string;
+  path: string;
+};
+
+export type AuthorizeUploadSourceInput = {
+  sourcePath: string;
 };
 
 export type CreateDirectoryInput = {
@@ -503,6 +520,10 @@ export interface DesktopApi {
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
   copyText(text: string): Promise<void>;
+  getPathForFile?(file: unknown): string | null | Promise<string | null>;
+  copyFileToWorkspaceUploads?(
+    opts: CopyFileToWorkspaceUploadsInput,
+  ): Promise<CopyFileToWorkspaceUploadsOutput>;
   createDirectory(opts: CreateDirectoryInput): Promise<void>;
   renamePath(opts: RenamePathInput): Promise<void>;
   trashPath(opts: TrashPathInput): Promise<void>;
@@ -573,6 +594,8 @@ export const DESKTOP_IPC_CHANNELS = {
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",
   copyText: "desktop:copyText",
+  copyFileToWorkspaceUploads: "desktop:copyFileToWorkspaceUploads",
+  authorizeUploadSource: "desktop:authorizeUploadSource",
   createDirectory: "desktop:createDirectory",
   renamePath: "desktop:renamePath",
   trashPath: "desktop:trashPath",

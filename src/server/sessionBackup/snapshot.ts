@@ -1,8 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { copyDirectory, copyDirectoryContents, directoryByteSize } from "./fileSystem";
+import {
+  copyDirectory,
+  copyDirectoryContents,
+  directoryByteSize,
+  isPathWithin,
+} from "./fileSystem";
 import type { SessionBackupMetadataSnapshot } from "./metadata";
 import { createTarGz, extractTarGz } from "./tar";
+
+/**
+ * Resolve a snapshot's stored relative path against its backup session directory,
+ * refusing any path that escapes the session directory. Backup metadata is
+ * attacker-tamperable in our threat model, so the snapshot path is treated as
+ * untrusted and re-validated immediately before any stat/copy/extract/remove —
+ * even though {@link readMetadata} already rejects non-contained paths at load.
+ */
+export function resolveSnapshotPath(sessionDir: string, snapshotPath: string): string {
+  const sessionRoot = path.resolve(sessionDir);
+  const absolutePath = path.resolve(sessionRoot, snapshotPath);
+  if (!isPathWithin(sessionRoot, absolutePath)) {
+    throw new Error(
+      `Refusing to use backup snapshot path outside the session directory: ${snapshotPath}`,
+    );
+  }
+  return absolutePath;
+}
 
 export async function createSnapshotWithTarFallback(opts: {
   sourceDir: string;
@@ -39,7 +62,7 @@ export async function snapshotByteSize(
   sessionDir: string,
   snapshot: SessionBackupMetadataSnapshot,
 ): Promise<number> {
-  const absolutePath = path.join(sessionDir, snapshot.path);
+  const absolutePath = resolveSnapshotPath(sessionDir, snapshot.path);
   if (snapshot.kind === "tar_gz") {
     const stat = await fs.stat(absolutePath);
     return stat.size;
@@ -52,7 +75,7 @@ export async function restoreSnapshot(opts: {
   targetDir: string;
   snapshot: SessionBackupMetadataSnapshot;
 }): Promise<void> {
-  const absolutePath = path.join(opts.sessionDir, opts.snapshot.path);
+  const absolutePath = resolveSnapshotPath(opts.sessionDir, opts.snapshot.path);
   if (opts.snapshot.kind === "tar_gz") {
     await extractTarGz(absolutePath, opts.targetDir);
     return;

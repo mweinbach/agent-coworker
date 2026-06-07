@@ -19,6 +19,11 @@ import type { ChatRenderItem } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
+export type VisibleSandboxApproval = {
+  threadId: string;
+  prompt: SandboxApprovalPrompt;
+};
+
 export function ChatFeed(props: {
   feedRef: RefObject<HTMLDivElement | null>;
   onScroll: () => void;
@@ -36,8 +41,7 @@ export function ChatFeed(props: {
   latestUiSurfaceItemId: string | null;
   a2uiEnabled: boolean;
   composerOverlayHeight: number;
-  threadId: string | null;
-  sandboxApprovals: SandboxApprovalPrompt[];
+  sandboxApprovals: VisibleSandboxApproval[];
   onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => void;
 }) {
   const {
@@ -57,7 +61,6 @@ export function ChatFeed(props: {
     latestUiSurfaceItemId,
     a2uiEnabled,
     composerOverlayHeight,
-    threadId,
     sandboxApprovals,
     onAnswerApproval,
   } = props;
@@ -131,10 +134,10 @@ export function ChatFeed(props: {
             ),
           )
         )}
-        {threadId && sandboxApprovals.length > 0
-          ? sandboxApprovals.map((prompt) => (
+        {sandboxApprovals.length > 0
+          ? sandboxApprovals.map(({ threadId, prompt }) => (
               <SandboxApprovalCard
-                key={prompt.requestId}
+                key={`${threadId}:${prompt.requestId}`}
                 threadId={threadId}
                 prompt={prompt}
                 onAnswer={onAnswerApproval}

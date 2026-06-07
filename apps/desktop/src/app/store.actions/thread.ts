@@ -8,6 +8,7 @@ import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../li
 import { seedDockFromFeed } from "../a2uiDockReducer";
 import {
   type AppStoreActions,
+  type AppStoreState,
   appendThreadTranscript,
   beginThreadSelectionRequest,
   buildContextPreamble,
@@ -46,6 +47,7 @@ import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
   createDefaultA2uiDock,
   isOneOffChatWorkspace,
+  type SandboxApprovalPrompt,
   type SessionSnapshot,
   type SessionSnapshotFingerprint,
   type ThreadBusyPolicy,
@@ -58,6 +60,31 @@ type HydrateThreadSelectionOptions = {
   reconnectAfterHydration?: boolean;
   skipWorkspaceSelectOnReconnect?: boolean;
 };
+
+function findLatestSandboxApprovalPrompt(
+  state: AppStoreState,
+): { threadId: string; prompt: SandboxApprovalPrompt } | null {
+  const selectedThreadId = state.selectedThreadId;
+  const selectedPrompt = selectedThreadId
+    ? state.sandboxApprovalsByThread[selectedThreadId]?.at(-1)
+    : undefined;
+  if (selectedThreadId && selectedPrompt) {
+    return { threadId: selectedThreadId, prompt: selectedPrompt };
+  }
+
+  const entries = Object.entries(state.sandboxApprovalsByThread);
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+    const [threadId, prompts] = entry;
+    const prompt = prompts.at(-1);
+    if (prompt) {
+      return { threadId, prompt };
+    }
+  }
+
+  return null;
+}
 
 export async function hydrateThreadSelection(
   get: StoreGet,
@@ -1273,11 +1300,9 @@ export function createThreadActions(
         return;
       }
 
-      const threadId = state.selectedThreadId;
-      const pending = threadId ? state.sandboxApprovalsByThread[threadId] : undefined;
-      const prompt = pending?.at(-1);
-      if (threadId && prompt) {
-        state.answerApproval(threadId, prompt.requestId, false);
+      const pending = findLatestSandboxApprovalPrompt(state);
+      if (pending) {
+        state.answerApproval(pending.threadId, pending.prompt.requestId, false);
       }
     },
 

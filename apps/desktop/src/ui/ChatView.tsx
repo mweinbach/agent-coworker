@@ -13,7 +13,6 @@ import {
 } from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
-import type { SandboxApprovalPrompt } from "../app/types";
 import { ConversationScrollButton } from "../components/ai-elements/conversation";
 import {
   buildComposerAttachmentSignature,
@@ -28,7 +27,7 @@ import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
 import { buildChatRenderItems } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
-import { ChatFeed } from "./chat/ChatFeed";
+import { ChatFeed, type VisibleSandboxApproval } from "./chat/ChatFeed";
 import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
 import {
@@ -55,7 +54,7 @@ const FEED_BOTTOM_STICKY_THRESHOLD_PX = 220;
 const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
 // Stable empty reference so the sandbox-approvals selector doesn't allocate a new
 // array each render (which would defeat zustand's reference equality check).
-const EMPTY_SANDBOX_APPROVALS: SandboxApprovalPrompt[] = [];
+const EMPTY_SANDBOX_APPROVALS: VisibleSandboxApproval[] = [];
 
 export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
@@ -98,11 +97,27 @@ export function ChatView() {
     [workspaceSkills, workspacePluginsCatalog],
   );
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
-  const sandboxApprovals = useAppStore((s) =>
-    s.selectedThreadId
-      ? (s.sandboxApprovalsByThread[s.selectedThreadId] ?? EMPTY_SANDBOX_APPROVALS)
-      : EMPTY_SANDBOX_APPROVALS,
-  );
+  const sandboxApprovalsByThread = useAppStore((s) => s.sandboxApprovalsByThread);
+  const sandboxApprovals = useMemo(() => {
+    const entries = Object.entries(sandboxApprovalsByThread);
+    if (entries.length === 0) return EMPTY_SANDBOX_APPROVALS;
+
+    const visible: VisibleSandboxApproval[] = [];
+    if (selectedThreadId) {
+      const selectedPrompts = sandboxApprovalsByThread[selectedThreadId] ?? [];
+      for (const prompt of selectedPrompts) {
+        visible.push({ threadId: selectedThreadId, prompt });
+      }
+    }
+    for (const [threadId, prompts] of entries) {
+      if (threadId === selectedThreadId) continue;
+      for (const prompt of prompts) {
+        visible.push({ threadId, prompt });
+      }
+    }
+
+    return visible.length > 0 ? visible : EMPTY_SANDBOX_APPROVALS;
+  }, [sandboxApprovalsByThread, selectedThreadId]);
   const answerApproval = useAppStore((s) => s.answerApproval);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
@@ -714,7 +729,6 @@ export function ChatView() {
           latestUiSurfaceItemId={latestUiSurfaceItemId}
           a2uiEnabled={a2uiEnabled}
           composerOverlayHeight={composerOverlayHeight}
-          threadId={selectedThreadId}
           sandboxApprovals={sandboxApprovals}
           onAnswerApproval={answerApproval}
         />

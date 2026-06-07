@@ -1303,6 +1303,77 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
   });
 
+  test("sandbox-denied escalation stays visible and answerable after switching threads", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-approval-off-thread";
+    const otherThreadId = `thread-${crypto.randomUUID()}`;
+    const otherSessionId = `session-${crypto.randomUUID()}`;
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com/off-thread",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+      detail: "The OS sandbox blocked network access for this command.",
+      category: "network",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        selectedThreadId: otherThreadId,
+        threads: [
+          ...state.threads,
+          {
+            id: otherThreadId,
+            workspaceId,
+            title: "Other thread",
+            titleSource: "manual",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "disconnected",
+            sessionId: otherSessionId,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            legacyTranscriptId: null,
+          },
+        ],
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [otherThreadId]: {
+            ...defaultThreadRuntime(),
+            wsUrl: "ws://mock",
+            sessionId: otherSessionId,
+          },
+        },
+      }));
+    });
+    await flushAsyncWork();
+
+    const body = harness?.dom.window.document.body;
+    expect(body?.textContent ?? "").toContain("curl https://example.com/off-thread");
+    const keepBlockedButton = Array.from(body?.querySelectorAll("button") ?? []).find((button) =>
+      button.textContent?.includes("Keep blocked"),
+    );
+    expect(keepBlockedButton).toBeDefined();
+    if (!harness) {
+      throw new Error("missing jsdom harness");
+    }
+
+    await act(async () => {
+      keepBlockedButton?.dispatchEvent(
+        new harness.dom.window.MouseEvent("click", { bubbles: true }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
   test("sandbox-denied escalation clears a stale approval modal for the same thread", async () => {
     const socket = await reconnectThreadAndGetSocket();
     useAppStore.setState({
@@ -1393,8 +1464,37 @@ describe("desktop JSON-RPC event mapping", () => {
     });
     await flushAsyncWork();
 
-    useAppStore.getState().dismissPrompt();
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("dismissPrompt declines an off-thread inline sandbox approval", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-escape-off-thread-denies";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
     await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState({ selectedThreadId: `thread-${crypto.randomUUID()}` });
+    });
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
 
     expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
     expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);

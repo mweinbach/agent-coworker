@@ -388,13 +388,12 @@ export default function App() {
           }
           return;
         }
-        if (state.selectedThreadId) {
-          const pendingSandboxApprovals =
-            state.sandboxApprovalsByThread[state.selectedThreadId] ?? [];
-          if (pendingSandboxApprovals.length > 0) {
-            state.dismissPrompt();
-            return;
-          }
+        const hasPendingSandboxApproval = Object.values(state.sandboxApprovalsByThread).some(
+          (pending) => pending.length > 0,
+        );
+        if (hasPendingSandboxApproval) {
+          state.dismissPrompt();
+          return;
         }
         if (state.view === "settings") {
           state.closeSettings();

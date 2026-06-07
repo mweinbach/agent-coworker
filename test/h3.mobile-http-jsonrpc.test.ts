@@ -163,6 +163,712 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     connection.close();
   });
 
+  test("blocks MCP server config reads for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("mcp servers read must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/mcp/servers/read", params: { workspaceId: "ws-1" } },
+      connection,
+      trustedDevice(),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    // The read is never an always-allowed default; it requires workspaceSettings.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/mcp/servers/read",
+        params: {},
+      }),
+    ).toBe("workspaceSettings");
+    connection.close();
+  });
+
+  test("allows MCP server config reads for devices granted workspaceSettings", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { event: { type: "mcp_servers", servers: [] } },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/mcp/servers/read", params: { workspaceId: "ws-1" } },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 1,
+      result: { event: { type: "mcp_servers" } },
+    });
+    expect(dispatchedMethods).toContain("cowork/mcp/servers/read");
+    connection.close();
+  });
+
+  test("blocks MCP server validation (stdio spawn) for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("mcp validate must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/mcp/server/validate", params: { workspaceId: "ws-1", name: "fs" } },
+      connection,
+      trustedDevice(),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    // Validation starts the configured stdio MCP command, so it must never be an
+    // always-allowed default; it requires workspaceSettings.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/mcp/server/validate",
+        params: { name: "fs" },
+      }),
+    ).toBe("workspaceSettings");
+    connection.close();
+  });
+
+  test("allows MCP server validation for devices granted workspaceSettings", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { event: { type: "mcp_server_validation", name: "fs", ok: true } },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/mcp/server/validate", params: { workspaceId: "ws-1", name: "fs" } },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 1,
+      result: { event: { type: "mcp_server_validation", name: "fs" } },
+    });
+    expect(dispatchedMethods).toContain("cowork/mcp/server/validate");
+    connection.close();
+  });
+
+  test("blocks memory reads for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("memory list must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/memory/list", params: { workspaceId: "ws-1", scope: "user" } },
+      connection,
+      trustedDevice(),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    // Memory holds long-lived private content, so it is never an always-allowed
+    // default read; it requires workspaceSettings.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/memory/list",
+        params: { scope: "user" },
+      }),
+    ).toBe("workspaceSettings");
+    // Advanced memory reads cross the same boundary.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 3,
+        method: "cowork/memory/advanced/list",
+        params: {},
+      }),
+    ).toBe("workspaceSettings");
+    connection.close();
+  });
+
+  test("allows memory reads for devices granted workspaceSettings", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { event: { type: "memory_list", entries: [] } },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/memory/list", params: { workspaceId: "ws-1" } },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 1,
+      result: { event: { type: "memory_list" } },
+    });
+    expect(dispatchedMethods).toContain("cowork/memory/list");
+    connection.close();
+  });
+
+  test("blocks plugin install preview for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("plugin install preview must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/plugins/install/preview",
+        params: { workspaceId: "ws-1", sourceInput: "/etc", targetScope: "workspace" },
+      },
+      connection,
+      trustedDevice(),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    // Preview materializes an attacker-selectable source, so it requires
+    // workspaceSettings and is never an always-allowed default.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/plugins/install/preview",
+        params: { sourceInput: "/etc" },
+      }),
+    ).toBe("workspaceSettings");
+    // Passive plugin catalog/detail reads remain always-allowed (null permission).
+    expect(
+      __internal.getRequiredH3Permission({ id: 3, method: "cowork/plugins/read", params: {} }),
+    ).toBeNull();
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 4,
+        method: "cowork/plugins/catalog/read",
+        params: {},
+      }),
+    ).toBeNull();
+    connection.close();
+  });
+
+  test("allows plugin install preview for devices granted workspaceSettings", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { event: { type: "plugin_install_preview", candidates: [] } },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/plugins/install/preview",
+        params: { workspaceId: "ws-1", sourceInput: "owner/repo", targetScope: "workspace" },
+      },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 1,
+      result: { event: { type: "plugin_install_preview" } },
+    });
+    expect(dispatchedMethods).toContain("cowork/plugins/install/preview");
+    connection.close();
+  });
+
+  test("blocks presentation preview (slide-module execution) for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("presentation preview must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/workspace/presentation/preview",
+        params: { workspaceId: "ws-1", path: "slide-1.mjs" },
+      },
+      connection,
+      trustedDevice(),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    // Preview executes a workspace slide module on the host, so it requires
+    // workspaceSettings and is never an always-allowed default.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/workspace/presentation/preview",
+        params: { path: "slide-1.mjs" },
+      }),
+    ).toBe("workspaceSettings");
+    // Listing workspaces stays always-allowed (the gate is targeted, not the
+    // whole workspace surface).
+    expect(
+      __internal.getRequiredH3Permission({ id: 3, method: "workspace/list", params: {} }),
+    ).toBeNull();
+    connection.close();
+  });
+
+  test("allows presentation preview for devices granted workspaceSettings", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { slides: [] } }));
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/workspace/presentation/preview",
+        params: { workspaceId: "ws-1", path: "slide-1.mjs" },
+      },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: 1, result: { slides: [] } });
+    expect(dispatchedMethods).toContain("cowork/workspace/presentation/preview");
+    connection.close();
+  });
+
+  test("blocks skill install preview for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("skill install preview must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/skills/install/preview",
+        params: { workspaceId: "ws-1", sourceInput: "/etc", targetScope: "project" },
+      },
+      connection,
+      trustedDevice(),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    // Preview materializes an attacker-selectable source, so it requires
+    // workspaceSettings and is never an always-allowed default.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/skills/install/preview",
+        params: { sourceInput: "/etc" },
+      }),
+    ).toBe("workspaceSettings");
+    // Passive skill catalog/list/detail/installation reads remain always-allowed.
+    for (const passive of [
+      "cowork/skills/catalog/read",
+      "cowork/skills/list",
+      "cowork/skills/read",
+      "cowork/skills/installation/read",
+    ]) {
+      expect(__internal.getRequiredH3Permission({ id: 3, method: passive, params: {} })).toBeNull();
+    }
+    connection.close();
+  });
+
+  test("allows skill install preview for devices granted workspaceSettings", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { event: { type: "skill_install_preview", candidates: [] } },
+            }),
+          );
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/skills/install/preview",
+        params: { workspaceId: "ws-1", sourceInput: "owner/repo", targetScope: "project" },
+      },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 1,
+      result: { event: { type: "skill_install_preview" } },
+    });
+    expect(dispatchedMethods).toContain("cowork/skills/install/preview");
+    connection.close();
+  });
+
+  test("blocks spreadsheet reads (caller-selected cwd) for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("spreadsheet read must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    for (const method of [
+      "cowork/workspace/spreadsheet/workbook",
+      "cowork/workspace/spreadsheet/version",
+    ]) {
+      const response = await __internal.dispatchHttpRpcPayload(
+        { id: 1, method, params: { cwd: "/", path: "secret.csv" } },
+        connection,
+        trustedDevice(),
+      );
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: "Mobile device permission required: workspaceSettings.",
+        permission: "workspaceSettings",
+      });
+      expect(__internal.getRequiredH3Permission({ id: 2, method, params: { cwd: "/" } })).toBe(
+        "workspaceSettings",
+      );
+    }
+
+    // Listing workspaces stays always-allowed (the gate is targeted, not the
+    // whole workspace surface).
+    expect(
+      __internal.getRequiredH3Permission({ id: 3, method: "workspace/list", params: {} }),
+    ).toBeNull();
+    connection.close();
+  });
+
+  test("allows spreadsheet reads for devices granted workspaceSettings", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { sheets: [] } }));
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 1,
+        method: "cowork/workspace/spreadsheet/workbook",
+        params: { workspaceId: "ws-1", path: "data.xlsx" },
+      },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: 1, result: { sheets: [] } });
+    expect(dispatchedMethods).toContain("cowork/workspace/spreadsheet/workbook");
+    connection.close();
+  });
+
+  test("blocks thread history reads for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("thread reads must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    for (const method of ["thread/list", "thread/read", "thread/hydrate", "thread/resume"]) {
+      const response = await __internal.dispatchHttpRpcPayload(
+        { id: 1, method, params: { threadId: "t-1" } },
+        connection,
+        trustedDevice(),
+      );
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: "Mobile device permission required: conversations.",
+        permission: "conversations",
+      });
+      expect(__internal.getRequiredH3Permission({ id: 2, method, params: {} })).toBe(
+        "conversations",
+      );
+    }
+
+    // Subscription teardown returns no content and stays always-allowed.
+    expect(
+      __internal.getRequiredH3Permission({ id: 3, method: "thread/unsubscribe", params: {} }),
+    ).toBeNull();
+    connection.close();
+  });
+
+  test("allows thread history reads for devices granted conversations", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(
+            JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { threads: [], total: 0 } }),
+          );
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "thread/list", params: {} },
+      connection,
+      trustedDevice({ conversations: true }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: 1, result: { total: 0 } });
+    expect(dispatchedMethods).toContain("thread/list");
+    connection.close();
+  });
+
+  test("blocks workspace state/config reads for default-permission devices before dispatch", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {
+        throw new Error("workspace state read must be blocked before reaching the runtime");
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const response = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/session/state/read", params: { cwd: "/tmp" } },
+      connection,
+      trustedDevice(),
+    );
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Mobile device permission required: workspaceSettings.",
+      permission: "workspaceSettings",
+    });
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 2,
+        method: "cowork/session/state/read",
+        params: {},
+      }),
+    ).toBe("workspaceSettings");
+    connection.close();
+  });
+
+  test("workspace bootstrap requires both workspaceSettings and conversations", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("id" in message) {
+          conn.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { threads: [] } }));
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    // bootstrap returns workspace config AND thread summaries, so it requires both.
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 1,
+        method: "cowork/workspace/bootstrap",
+        params: {},
+      }),
+    ).toEqual(["workspaceSettings", "conversations"]);
+
+    // Missing workspaceSettings -> 403 on the first missing permission.
+    const noSettings = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/workspace/bootstrap", params: { cwd: "/tmp" } },
+      connection,
+      trustedDevice({ conversations: true }),
+    );
+    expect(noSettings.status).toBe(403);
+    await expect(noSettings.json()).resolves.toMatchObject({ permission: "workspaceSettings" });
+
+    // Has workspaceSettings but missing conversations -> 403 on conversations.
+    const noConversations = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/workspace/bootstrap", params: { cwd: "/tmp" } },
+      connection,
+      trustedDevice({ workspaceSettings: true }),
+    );
+    expect(noConversations.status).toBe(403);
+    await expect(noConversations.json()).resolves.toMatchObject({ permission: "conversations" });
+
+    // Both granted -> reaches the runtime.
+    const allowed = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "cowork/workspace/bootstrap", params: { cwd: "/tmp" } },
+      connection,
+      trustedDevice({ workspaceSettings: true, conversations: true }),
+    );
+    expect(allowed.status).toBe(200);
+    await expect(allowed.json()).resolves.toMatchObject({ id: 1, result: { threads: [] } });
+    connection.close();
+  });
+
   test("emits periodic SSE keepalive comments while event sinks are open", async () => {
     const runtime = {
       openHttpConnection() {},
@@ -224,7 +930,9 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     const pending = __internal.dispatchHttpRpcPayload(
       { id: 1, method: "thread/list" },
       connection,
-      trustedDevice(),
+      // thread/list now requires the conversations permission; grant it so the
+      // request reaches dispatch and we can exercise the connection-close path.
+      trustedDevice({ conversations: true }),
     );
 
     connection.close();

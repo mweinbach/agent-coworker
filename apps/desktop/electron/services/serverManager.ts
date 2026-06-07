@@ -138,6 +138,7 @@ const trustedDevicePermissionSchema = z.preprocess(
     mcpAuth: z.boolean().optional().default(false),
     workspaceSettings: z.boolean().optional().default(false),
     backups: z.boolean().optional().default(false),
+    conversations: z.boolean().optional().default(false),
   }),
 );
 
@@ -193,6 +194,7 @@ const serverListeningSchema = z
                   mcpAuth: false,
                   workspaceSettings: false,
                   backups: false,
+                  conversations: false,
                 },
               })),
           ])

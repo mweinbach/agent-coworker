@@ -31,8 +31,28 @@ started by the desktop sidecar. Pairing details are in
 
 `/rpc` and `/events` require both `Authorization: Bearer <sessionToken>` and the paired
 `x-cowork-mobile-device-id` header. The H3 listener keeps one trusted-device record per mobile
-device id, and desktop-side per-device permissions gate mutating JSON-RPC methods such as turns,
-provider auth, MCP auth, backups, workspace settings, and server-request responses.
+device id, and desktop-side per-device permissions gate JSON-RPC methods such as turns, provider
+auth, MCP auth, backups, workspace settings, and server-request responses. Reading thread history
+(`thread/list`, `thread/read`, `thread/hydrate`, and `thread/resume`, which streams a thread's live
+content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
+stays always-allowed. Newly paired devices default to no `conversations` access until it is granted;
+devices paired before this permission existed are grandfathered to preserve their prior read access. The whole
+`cowork/mcp/*` config surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth
+permission) requires the workspace-settings permission: `cowork/mcp/servers/read` can expose
+configured transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP
+command (spawns a local subprocess) while connecting. The `cowork/memory/*` surface (including the
+`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the workspace-settings
+permission, because memory holds long-lived private user/project content. `cowork/plugins/install/preview` and
+`cowork/skills/install/preview` also require the workspace-settings permission, because they
+materialize an attacker-selectable local or GitHub source (only the passive plugin/skill
+catalog/list/detail reads stay always-allowed). The workspace document surface `cowork/workspace/presentation/preview` (which runs a workspace
+slide module on the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content
+from a caller-selected `cwd` that is not confined to the active workspace) require the
+workspace-settings permission. `cowork/session/state/read` (workspace/session config, provider
+options, userName/userProfile) also requires the workspace-settings permission, and
+`cowork/workspace/bootstrap` requires both the workspace-settings and conversations permissions
+because it returns that control state plus thread summaries. None of these are always-allowed
+defaults.
 
 The JSON-RPC handshake (`initialize`, then `initialized`) is still required before calling
 `thread/*`, `turn/*`, or `cowork/*`.

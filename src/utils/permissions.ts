@@ -9,7 +9,7 @@ import {
 import { discoverPlugins } from "../plugins/discovery";
 import { readPluginManifest } from "../plugins/manifest";
 import type { AgentConfig } from "../types";
-import { isPathInside } from "./paths";
+import { isPathInside, PROTECTED_METADATA_DIR_NAMES, pathCrossesProtectedMetadata } from "./paths";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const WRITE_ROOT_LABEL =
@@ -120,8 +120,36 @@ async function assertInsideAgentTargetPaths(
   }
 }
 
+/**
+ * Whether a write target lands inside protected project metadata (`.git` or
+ * `.cowork`). Mirrors the shell sandbox policy's carve-out so the built-in
+ * write/edit tools cannot plant git hooks or mutate project config/skills/memory
+ * metadata even though the project root is a writable root. The check is made
+ * relative to the project root and re-checked after symlink resolution.
+ */
+function writeTargetCrossesProtectedMetadata(config: AgentConfig, resolvedTarget: string): boolean {
+  const projectRoot = path.dirname(config.projectCoworkDir);
+  if (pathCrossesProtectedMetadata(projectRoot, resolvedTarget)) {
+    return true;
+  }
+  try {
+    return pathCrossesProtectedMetadata(
+      canonicalizeRootSync(projectRoot),
+      canonicalizeExistingPrefixSync(resolvedTarget),
+    );
+  } catch {
+    // Containment/symlink checks already passed before this runs; if canonical
+    // resolution fails here, defer to the logical result above.
+    return false;
+  }
+}
+
 export function isWritePathAllowed(filePath: string, config: AgentConfig): boolean {
-  return isCanonicalPathInsideRoots(filePath, writeRoots(config));
+  const resolved = path.resolve(filePath);
+  if (!isCanonicalPathInsideRoots(resolved, writeRoots(config))) {
+    return false;
+  }
+  return !writeTargetCrossesProtectedMetadata(config, resolved);
 }
 
 export function isReadPathAllowed(filePath: string, config: AgentConfig): boolean {
@@ -217,6 +245,15 @@ export async function assertWritePathAllowed(
   if (!allowedRoots.some((root) => isPathInside(root, canonicalTarget))) {
     throw new Error(
       `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`,
+    );
+  }
+
+  // Protected project metadata (.git/.cowork) is carved out of the writable set,
+  // matching the shell sandbox policy, so a prompt-influenced write/edit cannot
+  // plant a git hook or mutate project config/skills/memory metadata.
+  if (writeTargetCrossesProtectedMetadata(config, resolved)) {
+    throw new Error(
+      `${action} blocked: ${PROTECTED_METADATA_DIR_NAMES.join("/")} project metadata is read-only: ${resolved}`,
     );
   }
 

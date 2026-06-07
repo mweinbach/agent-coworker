@@ -1,6 +1,11 @@
 import path from "node:path";
 
-import { canonicalizePathForBoundaryCheckSync, isPathInside } from "../../utils/paths";
+import {
+  canonicalizePathForBoundaryCheckSync,
+  isPathInside,
+  PROTECTED_METADATA_DIR_NAMES,
+  pathCrossesProtectedMetadata,
+} from "../../utils/paths";
 
 /**
  * High-level sandbox policy, modeled on OpenAI Codex's `SandboxPolicy`
@@ -50,9 +55,10 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
  * Metadata directory names that must remain read-only even when they live under
  * a writable root. Writing into `.git/hooks` or `.cowork` is a privilege
  * escalation vector, so these are carved back out of the writable set. Mirrors
- * Codex's `PROTECTED_METADATA_PATH_NAMES`.
+ * Codex's `PROTECTED_METADATA_PATH_NAMES`. Shared with the built-in file tools
+ * via `src/utils/paths.ts` so the sandbox and write/edit enforce the same set.
  */
-export const PROTECTED_SUBPATH_NAMES = [".git", ".cowork"] as const;
+export const PROTECTED_SUBPATH_NAMES = PROTECTED_METADATA_DIR_NAMES;
 
 export interface ResolveSandboxPolicyInput {
   config?: SandboxConfig;
@@ -262,12 +268,7 @@ function targetPathWritableRootKind(p: string): WritableRootKind | undefined {
  * workspace under `~/.cowork/chats/<id>`) is not wrongly dropped.
  */
 function rootCrossesProtectedMetadata(base: string, root: string): boolean {
-  const relative = path.relative(path.resolve(base), path.resolve(root));
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return false;
-  }
-  const segments = relative.split(/[/\\]+/).filter(Boolean);
-  return segments.some((seg) => (PROTECTED_SUBPATH_NAMES as readonly string[]).includes(seg));
+  return pathCrossesProtectedMetadata(base, root);
 }
 
 /**

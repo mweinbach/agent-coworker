@@ -500,7 +500,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Publish release assets
-        uses: softprops/action-gh-release@v2
+        # Pinned to an immutable commit SHA: this release-publishing job runs with
+        # contents: write, so the third-party action must not be a mutable tag.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: ${{ steps.collect-release-assets.outputs.files }}
           generate_release_notes: true

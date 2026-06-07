@@ -121,9 +121,9 @@ describe("isWritePathAllowed", () => {
   // ---- Writes inside projectCoworkDir parent (project root) ------------------
 
   describe("allows writes via projectCoworkDir parent (project root)", () => {
-    test("file in .agent directory", () => {
+    test("project .cowork metadata is protected even under the project root", () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, ".cowork", "config.json"), cfg)).toBe(true);
+      expect(isWritePathAllowed(path.join(PROJECT, ".cowork", "config.json"), cfg)).toBe(false);
     });
 
     test("projectCoworkDir parent matches workingDirectory", () => {
@@ -262,9 +262,9 @@ describe("isWritePathAllowed", () => {
       expect(isWritePathAllowed(cfg.outputDirectory, cfg)).toBe(true);
     });
 
-    test("projectCoworkDir itself is inside its parent and allowed", () => {
+    test("projectCoworkDir itself is protected metadata and blocked", () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(cfg.projectCoworkDir, cfg)).toBe(true);
+      expect(isWritePathAllowed(cfg.projectCoworkDir, cfg)).toBe(false);
     });
   });
 
@@ -336,6 +336,53 @@ describe("assertWritePathAllowed", () => {
     );
     await expect(assertWritePathAllowed(chatsFile, cfg, "write")).rejects.toThrow(/blocked/i);
     await expect(assertWritePathAllowed(siblingFile, cfg, "write")).rejects.toThrow(/blocked/i);
+  });
+
+  describe("protected project metadata carve-out (.git/.cowork)", () => {
+    test("blocks writing a .git hook even though it is under the project root", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-git-"));
+      const cfg = makeConfig(dir);
+      await fs.mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
+      const hook = path.join(dir, ".git", "hooks", "pre-commit");
+
+      expect(isWritePathAllowed(hook, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(hook, cfg, "write")).rejects.toThrow(/read-only/i);
+    });
+
+    test("blocks editing project .cowork config metadata", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-cowork-"));
+      const cfg = makeConfig(dir);
+      const configPath = path.join(dir, ".cowork", "config.json");
+
+      expect(isWritePathAllowed(configPath, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(configPath, cfg, "edit")).rejects.toThrow(/read-only/i);
+    });
+
+    test("blocks a symlink whose canonical target lands in .git", async () => {
+      if (process.platform === "win32") return;
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-symlink-"));
+      const cfg = makeConfig(dir);
+      await fs.mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
+      // An innocuously named in-project dir that actually points at .git.
+      await fs.symlink(path.join(dir, ".git"), path.join(dir, "tools-link"));
+      const sneaky = path.join(dir, "tools-link", "hooks", "post-checkout");
+
+      expect(isWritePathAllowed(sneaky, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(sneaky, cfg, "write")).rejects.toThrow(
+        /blocked|read-only/i,
+      );
+    });
+
+    test("still allows ordinary files next to protected metadata", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-carveout-allow-"));
+      const cfg = makeConfig(dir);
+      const ordinary = path.join(dir, "src", "index.ts");
+
+      expect(isWritePathAllowed(ordinary, cfg)).toBe(true);
+      await expect(assertWritePathAllowed(ordinary, cfg, "write")).resolves.toBe(
+        path.resolve(ordinary),
+      );
+    });
   });
 
   test("targetPath-scoped children cannot write the active memory folder", async () => {

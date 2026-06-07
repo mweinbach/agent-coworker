@@ -613,12 +613,28 @@ const desktopApi = Object.freeze<DesktopApi>({
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyText, text);
   },
 
-  getPathForFile: (file: unknown) => {
+  getPathForFile: async (file: unknown) => {
+    // `webUtils.getPathForFile` only returns a real path for genuine OS-backed
+    // File objects (drag-drop / file input); synthetic files yield "". That is
+    // the capability that authorizes an upload source. We register the resolved
+    // path with the main process so copyFileToWorkspaceUploads can refuse any
+    // renderer-supplied path that was not selected through this picker flow.
+    let sourcePath: string | null;
     try {
-      return webUtils.getPathForFile(file as File) || null;
+      sourcePath = webUtils.getPathForFile(file as File) || null;
     } catch {
       return null;
     }
+    if (!sourcePath) {
+      return null;
+    }
+    try {
+      await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.authorizeUploadSource, { sourcePath });
+    } catch {
+      // Best-effort: if authorization fails the copy will be rejected and the
+      // caller falls back to the server-side upload path.
+    }
+    return sourcePath;
   },
 
   copyFileToWorkspaceUploads: (opts: CopyFileToWorkspaceUploadsInput) => {

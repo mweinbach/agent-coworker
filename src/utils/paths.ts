@@ -18,6 +18,33 @@ export function isPathInside(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== "..");
 }
 
+/**
+ * Metadata directory names that must stay read-only even inside a writable root.
+ * Writing into `.git` (e.g. hooks) or `.cowork` (project config/skills/memory)
+ * is a privilege-escalation vector, so both the shell sandbox policy and the
+ * built-in write/edit file tools carve these back out of their writable roots.
+ */
+export const PROTECTED_METADATA_DIR_NAMES = [".git", ".cowork"] as const;
+
+/**
+ * Whether `target`, expressed relative to `base`, passes through a protected
+ * metadata directory (`.git`/`.cowork`). The check is relative to `base` (the
+ * outermost writable boundary, i.e. the project root) so a workspace that merely
+ * lives UNDER a `.cowork` ancestor (e.g. a one-off chat under
+ * `~/.cowork/chats/<id>`) is not wrongly flagged. Resolve symlinks before
+ * calling so an aliased directory cannot smuggle metadata back in.
+ */
+export function pathCrossesProtectedMetadata(base: string, target: string): boolean {
+  const relative = path.relative(path.resolve(base), path.resolve(target));
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  return relative
+    .split(/[/\\]+/)
+    .filter(Boolean)
+    .some((segment) => (PROTECTED_METADATA_DIR_NAMES as readonly string[]).includes(segment));
+}
+
 function canonicalizePathFromExistingAncestorSync(targetPath: string): string {
   const pendingSegments: string[] = [];
   let currentPath = path.resolve(targetPath);

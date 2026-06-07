@@ -24,6 +24,7 @@ import {
   type PersistedState,
 } from "../app/types";
 import type {
+  AuthorizeUploadSourceInput,
   CaptureProductEventInput,
   ConfirmActionInput,
   ContextMenuItem,
@@ -119,6 +120,7 @@ const mobileRelayTrustedDevicePermissionKeys = [
   "mcpAuth",
   "workspaceSettings",
   "backups",
+  "conversations",
 ] as const;
 
 const contextMenuItemSchema: z.ZodType<ContextMenuItem> = z.object({
@@ -442,6 +444,11 @@ export const copyFileToWorkspaceUploadsInputSchema: z.ZodType<CopyFileToWorkspac
     sourcePath: nonEmptyStringSchema,
     filename: validatedSegmentSchema,
     uploadsDirectory: nonEmptyStringSchema.optional(),
+  })
+  .strict();
+export const authorizeUploadSourceInputSchema: z.ZodType<AuthorizeUploadSourceInput> = z
+  .object({
+    sourcePath: nonEmptyStringSchema,
   })
   .strict();
 export const trashPathInputSchema: z.ZodType<TrashPathInput> = sharedPathSchema;
@@ -779,6 +786,7 @@ const mobileRelayTrustedDevicePermissionsSchema = z.preprocess(
     mcpAuth: z.boolean().optional().default(false),
     workspaceSettings: z.boolean().optional().default(false),
     backups: z.boolean().optional().default(false),
+    conversations: z.boolean().optional().default(false),
   }),
 );
 

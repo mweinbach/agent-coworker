@@ -10,6 +10,7 @@ import type * as Electron from "electron";
 import { MAX_ATTACHMENT_UPLOAD_BYTE_SIZE } from "../../../../src/shared/attachments";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../../src/utils/paths";
 import {
+  type AuthorizeUploadSourceInput,
   type CopyFileToWorkspaceUploadsInput,
   type CopyFileToWorkspaceUploadsOutput,
   type CopyPathInput,
@@ -29,6 +30,7 @@ import {
   type WriteFileInput,
 } from "../../src/lib/desktopApi";
 import {
+  authorizeUploadSourceInputSchema,
   copyFileToWorkspaceUploadsInputSchema,
   copyPathInputSchema,
   copyTextInputSchema,
@@ -63,9 +65,26 @@ const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as 
 
 export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
+const MAX_AUTHORIZED_UPLOAD_SOURCES = 512;
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
+
+  // Source paths a trusted-renderer file picker (webUtils.getPathForFile) has
+  // resolved from a real user-selected File. copyFileToWorkspaceUploads only
+  // copies paths recorded here, so a renderer cannot turn the main process into
+  // a confused deputy that reads arbitrary local files it was never given.
+  const authorizedUploadSources = new Set<string>();
+  const rememberAuthorizedUploadSource = (sourcePath: string): void => {
+    const resolved = path.resolve(sourcePath);
+    authorizedUploadSources.delete(resolved);
+    authorizedUploadSources.add(resolved);
+    while (authorizedUploadSources.size > MAX_AUTHORIZED_UPLOAD_SOURCES) {
+      const oldest = authorizedUploadSources.values().next().value;
+      if (oldest === undefined) break;
+      authorizedUploadSources.delete(oldest);
+    }
+  };
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.listDirectory,
@@ -280,6 +299,18 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.authorizeUploadSource,
+    async (_event, args: AuthorizeUploadSourceInput) => {
+      const input = parseWithSchema(
+        authorizeUploadSourceInputSchema,
+        args,
+        "authorizeUploadSource options",
+      );
+      rememberAuthorizedUploadSource(input.sourcePath);
+    },
+  );
+
+  handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads,
     async (_event, args: CopyFileToWorkspaceUploadsInput) => {
       const input = parseWithSchema(
@@ -288,7 +319,11 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         "copyFileToWorkspaceUploads options",
       );
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      return await copyFileToWorkspaceUploads(workspaceRoots.getApprovedWorkspaceRoots(), input);
+      return await copyFileToWorkspaceUploads(
+        workspaceRoots.getApprovedWorkspaceRoots(),
+        input,
+        authorizedUploadSources,
+      );
     },
   );
 
@@ -331,9 +366,18 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
 async function copyFileToWorkspaceUploads(
   workspaceRoots: string[],
   input: CopyFileToWorkspaceUploadsInput,
+  authorizedUploadSources: ReadonlySet<string>,
 ): Promise<CopyFileToWorkspaceUploadsOutput> {
   const safeWorkspacePath = resolveAllowedDirectoryPath(workspaceRoots, input.workspacePath);
   const sourcePath = path.resolve(input.sourcePath);
+  // Fail closed before touching the source: only paths the renderer picker
+  // authorized via getPathForFile may be copied. Otherwise an arbitrary path
+  // could be read into the workspace and exfiltrated as an attachment.
+  if (!authorizedUploadSources.has(sourcePath)) {
+    throw new Error(
+      "Upload source path is not authorized. Select the file through the desktop file picker.",
+    );
+  }
   const sourceStat = await fs.stat(sourcePath).catch((error: unknown) => {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Unable to read source file: ${detail}`);

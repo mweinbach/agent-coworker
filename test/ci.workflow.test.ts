@@ -15,7 +15,10 @@ describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
     expect(workflow).toContain("uses: ./.github/actions/setup-bun");
     expect(setupBunAction).toContain("- name: Setup Bun");
-    expect(setupBunAction).toContain("uses: oven-sh/setup-bun@v2");
+    // The third-party setup action must stay pinned to an immutable commit SHA
+    // (not a mutable tag) to prevent supply-chain compromise via retagging.
+    expect(setupBunAction).toMatch(/uses: oven-sh\/setup-bun@[0-9a-f]{40}\b/);
+    expect(setupBunAction).not.toMatch(/uses: oven-sh\/setup-bun@v\d/);
     expect(setupBunAction).toContain('bun-version-file: ".bun-version"');
   });
 

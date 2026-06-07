@@ -388,6 +388,11 @@ describe("files IPC", () => {
       },
     });
 
+    // The renderer file picker (getPathForFile) authorizes the source before copy.
+    const authorizeHandler = handlers.get(DESKTOP_IPC_CHANNELS.authorizeUploadSource);
+    expect(authorizeHandler).toBeDefined();
+    await authorizeHandler?.({ sender: {} }, { sourcePath });
+
     const handler = handlers.get(DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads);
     expect(handler).toBeDefined();
 
@@ -407,6 +412,68 @@ describe("files IPC", () => {
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
     await fs.rm(sourceDir, { recursive: true, force: true });
+  });
+
+  test("copyFileToWorkspaceUploads rejects source paths not authorized by the picker", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-upload-reject-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const secretDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-upload-reject-secret-"));
+    const secretPath = path.join(secretDir, "id_rsa");
+    await fs.writeFile(secretPath, "PRIVATE KEY", "utf-8");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads);
+    expect(handler).toBeDefined();
+
+    // A renderer that never went through the picker supplies an arbitrary path.
+    await expect(
+      handler?.(
+        { sender: {} },
+        {
+          workspacePath: tempWorkspace,
+          sourcePath: secretPath,
+          filename: "id_rsa",
+        },
+      ),
+    ).rejects.toThrow(/not authorized/i);
+
+    // The unauthorized secret must not have been copied into the workspace.
+    await expect(fs.stat(path.join(tempWorkspace, "User Uploads", "id_rsa"))).rejects.toThrow();
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(secretDir, { recursive: true, force: true });
   });
 
   test("readFile returns full UTF-8 content from approved roots", async () => {

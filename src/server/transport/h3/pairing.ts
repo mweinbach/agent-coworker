@@ -17,6 +17,7 @@ export const H3_TRUSTED_DEVICE_PERMISSION_KEYS = [
   "mcpAuth",
   "workspaceSettings",
   "backups",
+  "conversations",
 ] as const;
 
 export type H3TrustedDevicePermissionKey = (typeof H3_TRUSTED_DEVICE_PERMISSION_KEYS)[number];
@@ -30,6 +31,10 @@ export const DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS: H3TrustedDevicePermissions =
   mcpAuth: false,
   workspaceSettings: false,
   backups: false,
+  // `conversations` gates reading thread/conversation history (thread/list,
+  // thread/read, thread/hydrate, thread/resume). New pairings default to false;
+  // see normalizePermissions for the grandfathering of pre-existing devices.
+  conversations: false,
 };
 
 export type H3TrustedDeviceRecord = {
@@ -111,6 +116,13 @@ function normalizePermissions(raw: unknown): H3TrustedDevicePermissions {
   const record = raw as Record<string, unknown>;
   for (const key of H3_TRUSTED_DEVICE_PERMISSION_KEYS) {
     permissions[key] = record[key] === true;
+  }
+  // Grandfather devices paired before the `conversations` (thread-read) permission
+  // existed: their stored record has no `conversations` key, and thread reads were
+  // always-allowed at the time, so preserve their read access. Newly paired devices
+  // persist the key explicitly (default false), so they are not affected.
+  if (!Object.hasOwn(record, "conversations")) {
+    permissions.conversations = true;
   }
   return permissions;
 }

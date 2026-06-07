@@ -27,7 +27,10 @@ jobs:
           persist-credentials: false
 
       - name: Run opencode
-        uses: anomalyco/opencode/github@latest
+        # Pinned to an immutable commit SHA to prevent a compromised/retagged
+        # third-party action from receiving OPENCODE_API_KEY or the id-token.
+        # Resolved from the rolling `latest` tag on 2026-06-07; bump deliberately.
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:

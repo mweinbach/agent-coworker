@@ -19,6 +19,7 @@ import {
 } from "./sessionBackup/metadata";
 import {
   createSnapshotWithTarFallback,
+  resolveSnapshotPath,
   restoreSnapshot,
   snapshotByteSize,
 } from "./sessionBackup/snapshot";
@@ -484,7 +485,7 @@ export class SessionBackupManager implements SessionBackupHandle {
       (this.metadata.originalSnapshot.kind === checkpoint.snapshot.kind &&
         this.metadata.originalSnapshot.path === checkpoint.snapshot.path);
     if (!snapshotStillReferenced) {
-      await fs.rm(path.join(this.sessionDir, checkpoint.snapshot.path), {
+      await fs.rm(resolveSnapshotPath(this.sessionDir, checkpoint.snapshot.path), {
         recursive: true,
         force: true,
       });

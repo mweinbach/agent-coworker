@@ -1,47 +1,23 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractZipArchive } from "../utils/safeZip";
 import { pathExists } from "./state";
 import type { ExtractArchive, FetchLike } from "./types";
 
-async function runCommand(command: string, args: string[], cwd: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = execFile(command, args, { cwd, windowsHide: true }, (error, _stdout, stderr) => {
-      if (error) {
-        reject(
-          new Error(`${command} ${args.join(" ")} failed: ${String(stderr || error.message)}`),
-        );
-        return;
-      }
-      resolve();
-    });
-    child.on("error", reject);
-  });
-}
-
+/**
+ * Extract a downloaded artifact runtime archive into `destinationDir`.
+ *
+ * Extraction is done fully in-process with per-member containment checks (see
+ * {@link extractZipArchive}) instead of shelling out to `unzip`/`Expand-Archive`.
+ * Blind platform extraction honored archive-controlled symlinks and traversal
+ * paths, which could escape the extraction tree and then be promoted into the
+ * trusted artifact runtime cache.
+ */
 export async function defaultExtractArchive(
   archivePath: string,
   destinationDir: string,
 ): Promise<void> {
-  await fs.mkdir(destinationDir, { recursive: true });
-  if (process.platform === "win32") {
-    const escapedArchivePath = archivePath.replaceAll("'", "''");
-    const escapedDestinationDir = destinationDir.replaceAll("'", "''");
-    await runCommand(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        `Expand-Archive -LiteralPath '${escapedArchivePath}' -DestinationPath '${escapedDestinationDir}' -Force`,
-      ],
-      destinationDir,
-    );
-    return;
-  }
-  await runCommand("unzip", ["-oq", archivePath, "-d", destinationDir], destinationDir);
+  await extractZipArchive(archivePath, destinationDir);
 }
 
 async function fetchBytes(fetchImpl: FetchLike, url: string): Promise<Uint8Array> {

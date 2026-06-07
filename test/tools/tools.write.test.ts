@@ -175,6 +175,29 @@ describe("write tool", () => {
       t.execute({ filePath: path.join(link, "blocked.txt"), content: "nope" }),
     ).rejects.toThrow(/blocked/i);
   });
+
+  test("refuses to plant a .git hook under the project root", async () => {
+    const dir = await tmpDir();
+    await fs.mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
+    const hook = path.join(dir, ".git", "hooks", "pre-commit");
+
+    const t: any = createWriteTool(makeCtx(dir));
+    await expect(t.execute({ filePath: hook, content: "#!/bin/sh\necho pwned\n" })).rejects.toThrow(
+      /read-only/i,
+    );
+    await expect(fs.readFile(hook, "utf-8")).rejects.toThrow();
+  });
+
+  test("refuses to write project .cowork config metadata", async () => {
+    const dir = await tmpDir();
+    const configPath = path.join(dir, ".cowork", "config.json");
+
+    const t: any = createWriteTool(makeCtx(dir));
+    await expect(
+      t.execute({ filePath: configPath, content: '{"provider":"evil"}' }),
+    ).rejects.toThrow(/read-only/i);
+    await expect(fs.readFile(configPath, "utf-8")).rejects.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------

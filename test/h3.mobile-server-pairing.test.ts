@@ -307,6 +307,11 @@ describe("H3 mobile server pairing", () => {
       await expect(mismatchedDeviceHeaderRpc.json()).resolves.toEqual({ error: "Unauthorized." });
       expect(handled).toEqual([]);
 
+      // thread/list now requires the conversations permission (newly paired
+      // devices default to false); grant it so the valid-token path reaches the
+      // runtime. The permission denial is covered by the deniedTurn case below.
+      await server.updateTrustedDevicePermissions("phone-1", { conversations: true });
+
       const authenticatedRpc = await fetchH3(`${server.url}/rpc`, {
         method: "POST",
         headers: {

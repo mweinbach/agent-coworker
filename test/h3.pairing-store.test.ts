@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -7,6 +7,7 @@ import {
   forgetH3TrustedDevice,
   loadH3PairingStoreState,
   rememberH3TrustedDevice,
+  resolveH3PairingStoreDir,
   updateH3TrustedDevicePermissions,
   verifyH3SessionToken,
 } from "../src/server/transport/h3/pairing";
@@ -110,5 +111,53 @@ describe("H3 pairing store", () => {
         mcpAuth: true,
       },
     });
+  });
+
+  test("newly paired devices default to no conversations (thread-read) access", async () => {
+    const storeRoot = await createTempRoot();
+    const device = await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "fresh-phone",
+      identityPub: "fresh-identity",
+      displayName: "Fresh Phone",
+      sessionToken: "fresh-token",
+    });
+    expect(device.permissions.conversations).toBe(false);
+    const loaded = await loadH3PairingStoreState(storeRoot);
+    expect(
+      loaded.trustedDevices.find((entry) => entry.deviceId === "fresh-phone")?.permissions
+        .conversations,
+    ).toBe(false);
+  });
+
+  test("grandfathers thread-read access for devices paired before the conversations permission", async () => {
+    const storeRoot = await createTempRoot();
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "legacy-phone",
+      identityPub: "legacy-identity",
+      displayName: "Legacy Phone",
+      sessionToken: "legacy-token",
+    });
+
+    // Emulate a record persisted before the `conversations` permission existed:
+    // thread reads were always-allowed, so the stored record has no such key.
+    const devicesFile = path.join(resolveH3PairingStoreDir(storeRoot), "devices.json");
+    const state = JSON.parse(await readFile(devicesFile, "utf8")) as {
+      version: number;
+      trustedDevices: Array<{ deviceId: string; permissions: Record<string, boolean> }>;
+    };
+    const stored = state.trustedDevices.find((entry) => entry.deviceId === "legacy-phone");
+    if (!stored) throw new Error("expected stored legacy device");
+    delete stored.permissions.conversations;
+    await writeFile(devicesFile, JSON.stringify(state, null, 2), "utf8");
+
+    const loaded = await loadH3PairingStoreState(storeRoot);
+    expect(
+      loaded.trustedDevices.find((entry) => entry.deviceId === "legacy-phone")?.permissions
+        .conversations,
+    ).toBe(true);
+    // The grandfathered permission flows through session verification (used by the gate).
+    await expect(
+      verifyH3SessionToken(storeRoot, "legacy-token", "legacy-phone"),
+    ).resolves.toMatchObject({ permissions: { conversations: true } });
   });
 });

@@ -229,6 +229,43 @@ describe("edit tool", () => {
       t.execute({ filePath: p, oldString: "aaa", newString: "bbb", replaceAll: false }),
     ).rejects.toThrow(/found 3 times/);
   });
+
+  test("refuses to edit protected project .cowork metadata", async () => {
+    const dir = await tmpDir();
+    const configPath = path.join(dir, ".cowork", "config.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, '{"provider":"google"}', "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        filePath: configPath,
+        oldString: "google",
+        newString: "evil",
+        replaceAll: false,
+      }),
+    ).rejects.toThrow(/read-only/i);
+    // The protected file must be left untouched.
+    expect(await fs.readFile(configPath, "utf-8")).toBe('{"provider":"google"}');
+  });
+
+  test("refuses to edit an existing .git hook", async () => {
+    const dir = await tmpDir();
+    const hook = path.join(dir, ".git", "hooks", "pre-commit");
+    await fs.mkdir(path.dirname(hook), { recursive: true });
+    await fs.writeFile(hook, "#!/bin/sh\necho ok\n", "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        filePath: hook,
+        oldString: "echo ok",
+        newString: "echo pwned",
+        replaceAll: false,
+      }),
+    ).rejects.toThrow(/read-only/i);
+    expect(await fs.readFile(hook, "utf-8")).toBe("#!/bin/sh\necho ok\n");
+  });
 });
 
 // ---------------------------------------------------------------------------

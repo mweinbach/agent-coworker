@@ -170,7 +170,7 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
     return { attempted: true, error: "project folder was unavailable" };
   }
 
-  const sourcePath = desktopApi.getPathForFile(attachment.file);
+  const sourcePath = await desktopApi.getPathForFile(attachment.file);
   if (!sourcePath) {
     return { attempted: true, error: "desktop file path was unavailable" };
   }

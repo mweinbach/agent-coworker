@@ -31,6 +31,7 @@ const DEFAULT_TRUSTED_DEVICE_PERMISSIONS: MobileRelayTrustedDevicePermissions = 
   mcpAuth: false,
   workspaceSettings: false,
   backups: false,
+  conversations: false,
 };
 
 function buildIdleState(): MobileRelayBridgeState {

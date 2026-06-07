@@ -15,6 +15,8 @@ import {
 import { sortAgentSummaries } from "../../threadEventReducerContext";
 import type { HandlerDispatch, HandlerModuleContext } from "./shared";
 
+let sandboxApprovalSequence = 0;
+
 export function handleLifecycleThreadEvent(
   module: HandlerModuleContext,
   dispatch: HandlerDispatch,
@@ -434,6 +436,7 @@ export function handleLifecycleThreadEvent(
       const prompt: SandboxApprovalPrompt = {
         requestId: evt.requestId,
         command: evt.command,
+        receivedSequence: ++sandboxApprovalSequence,
         ...(evt.detail ? { detail: evt.detail } : {}),
         ...(evt.category ? { category: evt.category } : {}),
       };

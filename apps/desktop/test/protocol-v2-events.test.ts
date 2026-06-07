@@ -1500,6 +1500,100 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
   });
 
+  test("dismissPrompt declines the latest off-thread inline sandbox approval", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const firstRequestId = "sandbox-escape-first-off-thread";
+    const latestRequestId = "sandbox-escape-latest-off-thread";
+    const selectedIdleThreadId = `thread-${crypto.randomUUID()}`;
+    const selectedIdleSessionId = `session-${crypto.randomUUID()}`;
+    const latestThreadId = `thread-${crypto.randomUUID()}`;
+    const latestSessionId = `session-${crypto.randomUUID()}`;
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        selectedThreadId: selectedIdleThreadId,
+        threads: [
+          ...state.threads,
+          {
+            id: selectedIdleThreadId,
+            workspaceId,
+            title: "Selected idle thread",
+            titleSource: "manual",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "disconnected",
+            sessionId: selectedIdleSessionId,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            legacyTranscriptId: null,
+          },
+          {
+            id: latestThreadId,
+            workspaceId,
+            title: "Latest prompt thread",
+            titleSource: "manual",
+            createdAt: "2024-01-01T00:00:04.000Z",
+            lastMessageAt: "2024-01-01T00:00:04.000Z",
+            status: "disconnected",
+            sessionId: latestSessionId,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            legacyTranscriptId: null,
+          },
+        ],
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [selectedIdleThreadId]: {
+            ...defaultThreadRuntime(),
+            wsUrl: "ws://mock",
+            sessionId: selectedIdleSessionId,
+          },
+          [latestThreadId]: {
+            ...defaultThreadRuntime(),
+            wsUrl: "ws://mock",
+            sessionId: latestSessionId,
+          },
+        },
+      }));
+    });
+
+    socket.requestFromServer(firstRequestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox-first",
+      command: "curl https://example.com/first",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    socket.requestFromServer(latestRequestId, "item/commandExecution/requestApproval", {
+      threadId: latestSessionId,
+      turnId: "turn-2",
+      itemId: "item-sandbox-latest",
+      command: "curl https://example.com/latest",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({
+      id: latestRequestId,
+      result: { decision: "decline" },
+    });
+    expect(socket.responses).not.toContainEqual({
+      id: firstRequestId,
+      result: { decision: "decline" },
+    });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().sandboxApprovalsByThread[latestThreadId] ?? []).toHaveLength(0);
+  });
+
   test("sandbox approval stays visible when the response cannot be sent", async () => {
     const socket = await reconnectThreadAndGetSocket();
     const requestId = "sandbox-approval-send-fails";

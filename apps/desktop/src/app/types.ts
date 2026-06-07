@@ -629,6 +629,7 @@ export type ApprovalPrompt = {
 export type SandboxApprovalPrompt = {
   requestId: string;
   command: string;
+  receivedSequence?: number;
   detail?: string;
   category?: "filesystem" | "network";
 };

@@ -72,18 +72,22 @@ function findLatestSandboxApprovalPrompt(
     return { threadId: selectedThreadId, prompt: selectedPrompt };
   }
 
-  const entries = Object.entries(state.sandboxApprovalsByThread);
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (!entry) continue;
-    const [threadId, prompts] = entry;
-    const prompt = prompts.at(-1);
-    if (prompt) {
-      return { threadId, prompt };
+  let latest: { threadId: string; prompt: SandboxApprovalPrompt } | null = null;
+  for (const [threadId, prompts] of Object.entries(state.sandboxApprovalsByThread)) {
+    for (const prompt of prompts) {
+      if (!latest) {
+        latest = { threadId, prompt };
+        continue;
+      }
+      const promptSequence = prompt.receivedSequence ?? 0;
+      const latestSequence = latest.prompt.receivedSequence ?? 0;
+      if (promptSequence > latestSequence) {
+        latest = { threadId, prompt };
+      }
     }
   }
 
-  return null;
+  return latest;
 }
 
 export async function hydrateThreadSelection(

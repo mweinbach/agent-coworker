@@ -12,6 +12,7 @@ import {
 import { findBwrapProbeCommand } from "../../src/platform/sandbox/detect";
 import {
   DEFAULT_SANDBOX_CONFIG,
+  detectCapabilities,
   SANDBOX_ENV_VAR,
   SANDBOX_NETWORK_DISABLED_ENV_VAR,
   type SandboxCapabilities,
@@ -198,6 +199,20 @@ describe("resolveSandboxPolicy", () => {
     });
   });
 
+  test("preserves file intent for file-like targetPaths before bwrap setup", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "auto" },
+      workingDirectory: "/work/project",
+      targetPaths: ["src/new.ts"],
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: [testRoot("/work/project/src/new.ts")],
+      writableRootKinds: { [testRoot("/work/project/src/new.ts")]: "file" },
+      network: true,
+    });
+  });
+
   test("drops writable roots inside protected metadata (.git/.cowork)", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },
@@ -248,6 +263,7 @@ describe("resolveSandboxPolicy", () => {
     expect(policy).toEqual({
       kind: "workspace-write",
       writableRoots: [testRoot("/work/project/..foo")],
+      writableRootKinds: { [testRoot("/work/project/..foo")]: "file" },
       network: true,
     });
   });
@@ -568,6 +584,32 @@ posixBackendDescribe("seatbelt argv generation", () => {
     expect(args).toContain("-DWRITABLE_ROOT_0=/work/new.ts");
     expect(policyText).toContain('(literal (param "WRITABLE_ROOT_0"))');
     expect(policyText).not.toContain('(subpath (param "WRITABLE_ROOT_0"))');
+  });
+});
+
+describe("sandbox capability detection", () => {
+  test("searches Electron resources/binaries for the Windows helper", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "win-helper-resources-"));
+    const binaries = path.join(base, "binaries");
+    const helperPath = path.join(binaries, "cowork-win-sandbox.exe");
+    const descriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    try {
+      fs.mkdirSync(binaries, { recursive: true });
+      fs.writeFileSync(helperPath, "");
+      Object.defineProperty(process, "resourcesPath", {
+        configurable: true,
+        value: base,
+      });
+
+      expect(detectCapabilities("win32").windowsHelperPath).toBe(helperPath);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(process, "resourcesPath", descriptor);
+      } else {
+        Reflect.deleteProperty(process, "resourcesPath");
+      }
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

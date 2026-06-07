@@ -258,7 +258,9 @@ function resolveUsableTargetPath(
 }
 
 function targetPathWritableRootKind(p: string): WritableRootKind | undefined {
-  return /[/\\]$/.test(p.trim()) ? "directory" : undefined;
+  const trimmed = p.trim();
+  if (/[/\\]$/.test(trimmed)) return "directory";
+  return path.basename(trimmed).includes(".") ? "file" : undefined;
 }
 
 /**

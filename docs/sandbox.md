@@ -127,8 +127,9 @@ filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
   network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is
   resolved only from trusted system dirs (`/usr/bin`, `/bin`, …) or an absolute
   `COWORK_BWRAP_PATH` — never `$PATH` — so a workspace-planted binary can't hijack
-  it. If absent the command fails closed by default, or runs unsandboxed with a
-  surfaced warning when `sandbox.requireBackend` is explicitly `false`.
+  it. If absent the default `sandbox.requireBackend: false` surfaces an
+  unsandboxed fallback approval for unscoped workspace-write commands; set
+  `sandbox.requireBackend: true` to fail closed instead.
   (The in-process seccomp layer Codex adds is not ported — bwrap alone provides
   filesystem + network + namespace isolation.)
   **Limitation:** the `.git`/`.cowork` re-protection is bind-based. It re-freezes

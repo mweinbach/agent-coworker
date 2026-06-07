@@ -63,7 +63,7 @@ export interface SandboxTransformResult extends SandboxCommand {
 
 /**
  * Default directories to search for the bundled Windows sandbox helper: next to
- * the running binary and the Electron `resources` dir. The
+ * the running binary, the Electron `resources` dir, and bundled binaries. The
  * `COWORK_WIN_SANDBOX_HELPER` env override (handled in `findWindowsHelper`)
  * takes precedence over these.
  */
@@ -75,7 +75,7 @@ function defaultWindowsHelperDirs(): string[] {
     // process.execPath may be unavailable in some embeddings
   }
   const resourcesPath = (process as { resourcesPath?: string }).resourcesPath;
-  if (resourcesPath) dirs.push(resourcesPath);
+  if (resourcesPath) dirs.push(resourcesPath, path.join(resourcesPath, "binaries"));
   return dirs;
 }
 

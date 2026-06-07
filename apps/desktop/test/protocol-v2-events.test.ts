@@ -1046,6 +1046,7 @@ describe("desktop JSON-RPC event mapping", () => {
         provider: "openai",
         model: "gpt-5.4-mini",
         workingDirectory: "/tmp/workspace",
+        uploadsDirectory: "/tmp/workspace/Custom Uploads",
       },
     });
     socket.notify("cowork/session/settings", {
@@ -1081,6 +1082,7 @@ describe("desktop JSON-RPC event mapping", () => {
       "Renamed over JSON-RPC",
     );
     expect(runtime?.config?.model).toBe("gpt-5.4-mini");
+    expect(runtime?.config?.uploadsDirectory).toBe("/tmp/workspace/Custom Uploads");
     expect(runtime?.enableMcp).toBe(false);
     expect(runtime?.sessionConfig?.preferredChildModel).toBe("gpt-5.4-mini");
   });
@@ -1298,6 +1300,103 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(socket.responses.slice(responseCountBefore)).toEqual([
       { id: requestId, result: { decision: "accept" } },
     ]);
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("sandbox-denied escalation clears a stale approval modal for the same thread", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    useAppStore.setState({
+      promptModal: {
+        kind: "approval",
+        threadId,
+        prompt: {
+          requestId: "ordinary-approval",
+          command: "rm -rf build",
+          dangerous: true,
+          reasonCode: "requires_manual_review",
+        },
+      },
+    });
+
+    socket.requestFromServer("sandbox-clears-modal", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().promptModal).toBeNull();
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+  });
+
+  test("answering an inline sandbox approval leaves unrelated modals open", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-unrelated-modal";
+    useAppStore.setState({
+      promptModal: {
+        kind: "approval",
+        threadId,
+        prompt: {
+          requestId: "ordinary-approval",
+          command: "rm -rf build",
+          dangerous: true,
+          reasonCode: "requires_manual_review",
+        },
+      },
+    });
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+    useAppStore.setState({
+      promptModal: {
+        kind: "approval",
+        threadId,
+        prompt: {
+          requestId: "ordinary-approval",
+          command: "rm -rf build",
+          dangerous: true,
+          reasonCode: "requires_manual_review",
+        },
+      },
+    });
+
+    await act(async () => {
+      useAppStore.getState().answerApproval(threadId, requestId, false);
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().promptModal?.prompt.requestId).toBe("ordinary-approval");
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("dismissPrompt declines the latest inline sandbox approval", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-escape-denies";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    useAppStore.getState().dismissPrompt();
+    await flushAsyncWork();
+
+    expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
     expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
   });
 

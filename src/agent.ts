@@ -283,15 +283,24 @@ function collectToolRuntimeWritableRoots(
   config: AgentConfig,
   env: Record<string, string | undefined> | undefined,
 ): string[] | undefined {
+  const writableRoots: string[] = [];
   const artifactRuntimeDir = env?.[ARTIFACT_RUNTIME_ENV_DIR]?.trim();
-  if (!artifactRuntimeDir) return undefined;
+  if (artifactRuntimeDir) {
+    const cacheRoot = artifactRuntimeCacheRoot(resolveAuthHomeDir(config));
+    const relativeToCache = path.relative(
+      path.resolve(cacheRoot),
+      path.resolve(artifactRuntimeDir),
+    );
+    const runtimeIsInCache =
+      relativeToCache === "" ||
+      (!relativeToCache.startsWith("..") && !path.isAbsolute(relativeToCache));
+    if (runtimeIsInCache) writableRoots.push(cacheRoot);
+  }
 
-  const cacheRoot = artifactRuntimeCacheRoot(resolveAuthHomeDir(config));
-  const relativeToCache = path.relative(path.resolve(cacheRoot), path.resolve(artifactRuntimeDir));
-  const runtimeIsInCache =
-    relativeToCache === "" ||
-    (!relativeToCache.startsWith("..") && !path.isAbsolute(relativeToCache));
-  return runtimeIsInCache ? [cacheRoot] : undefined;
+  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
+  if (managedSofficeRoot) writableRoots.push(managedSofficeRoot);
+
+  return writableRoots.length > 0 ? writableRoots : undefined;
 }
 
 async function prepareTurnToolEnv(

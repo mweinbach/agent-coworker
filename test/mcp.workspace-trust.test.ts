@@ -73,10 +73,29 @@ async function seedServers(dirs: { workspace: string; home: string }) {
   });
 }
 
+async function seedWorkspacePluginStdioServer(dirs: { workspace: string }) {
+  const pluginRoot = path.join(dirs.workspace, ".agents", "plugins", "stdio-plugin");
+  await writeJson(path.join(pluginRoot, ".codex-plugin", "plugin.json"), {
+    name: "stdio-plugin",
+    description: "Workspace plugin with stdio MCP",
+    interface: { displayName: "Stdio Plugin" },
+  });
+  await writeJson(path.join(pluginRoot, ".mcp.json"), {
+    mcpServers: {
+      pluginStdio: {
+        type: "stdio",
+        command: "/bin/echo",
+        args: ["plugin"],
+      },
+    },
+  });
+}
+
 describe("workspace MCP stdio trust gate", () => {
   test("untrusted workspace does not auto-start its own stdio servers", async () => {
     await withDirs(async (dirs) => {
       await seedServers(dirs);
+      await seedWorkspacePluginStdioServer(dirs);
       const config = makeConfig({
         workspaceRoot: dirs.workspace,
         userHome: dirs.home,
@@ -89,6 +108,7 @@ describe("workspace MCP stdio trust gate", () => {
 
       // Workspace stdio is blocked...
       expect(names).not.toContain("ws-stdio");
+      expect(names).not.toContain("pluginStdio");
       // ...but the workspace http transport (no local process) and trusted
       // user-layer stdio servers still load.
       expect(names).toContain("ws-http");
@@ -96,12 +116,18 @@ describe("workspace MCP stdio trust gate", () => {
       expect(
         logs.some((line) => line.includes('Not auto-starting workspace stdio server "ws-stdio"')),
       ).toBe(true);
+      expect(
+        logs.some((line) =>
+          line.includes('Not auto-starting workspace stdio server "pluginStdio"'),
+        ),
+      ).toBe(true);
     });
   });
 
   test("trusted workspace (user/env opt-in) auto-starts its stdio servers", async () => {
     await withDirs(async (dirs) => {
       await seedServers(dirs);
+      await seedWorkspacePluginStdioServer(dirs);
       const config = makeConfig({
         workspaceRoot: dirs.workspace,
         userHome: dirs.home,
@@ -111,12 +137,14 @@ describe("workspace MCP stdio trust gate", () => {
 
       const servers = await loadMCPServers(config);
       expect(servers.map((server) => server.name)).toContain("ws-stdio");
+      expect(servers.map((server) => server.name)).toContain("pluginStdio");
     });
   });
 
   test("explicit validation may include the otherwise-untrusted workspace stdio server", async () => {
     await withDirs(async (dirs) => {
       await seedServers(dirs);
+      await seedWorkspacePluginStdioServer(dirs);
       const config = makeConfig({
         workspaceRoot: dirs.workspace,
         userHome: dirs.home,
@@ -125,9 +153,11 @@ describe("workspace MCP stdio trust gate", () => {
 
       const auto = await loadMCPServers(config);
       expect(auto.map((server) => server.name)).not.toContain("ws-stdio");
+      expect(auto.map((server) => server.name)).not.toContain("pluginStdio");
 
       const validation = await loadMCPServers(config, { includeUntrustedWorkspaceStdio: true });
       expect(validation.map((server) => server.name)).toContain("ws-stdio");
+      expect(validation.map((server) => server.name)).toContain("pluginStdio");
     });
   });
 });

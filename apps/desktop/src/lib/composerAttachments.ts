@@ -167,12 +167,12 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
 
   const workspace = get().workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace?.path) {
-    return { attempted: true, error: "project folder was unavailable" };
+    return { attempted: false };
   }
 
   const sourcePath = await desktopApi.getPathForFile(attachment.file);
   if (!sourcePath) {
-    return { attempted: true, error: "desktop file path was unavailable" };
+    return { attempted: false };
   }
 
   try {

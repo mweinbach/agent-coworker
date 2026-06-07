@@ -344,6 +344,7 @@ export type SessionEvent =
       sessionId: string;
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & {
         outputDirectory?: string;
+        uploadsDirectory?: string;
       };
     }
   | { type: "tools"; sessionId: string; tools: Array<{ name: string; description: string }> }

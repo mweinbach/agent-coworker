@@ -1250,16 +1250,35 @@ export function createThreadActions(
       // sandbox-escalation prompt for this thread.
       set((s) => {
         const existing = s.sandboxApprovalsByThread[threadId];
-        if (!existing) return { promptModal: null };
+        const promptModal =
+          s.promptModal?.kind === "approval" &&
+          s.promptModal.threadId === threadId &&
+          s.promptModal.prompt.requestId === requestId
+            ? null
+            : s.promptModal;
+        if (!existing) return { promptModal };
         const remaining = existing.filter((p) => p.requestId !== requestId);
         const nextSandbox = { ...s.sandboxApprovalsByThread };
         if (remaining.length > 0) nextSandbox[threadId] = remaining;
         else delete nextSandbox[threadId];
-        return { promptModal: null, sandboxApprovalsByThread: nextSandbox };
+        return { promptModal, sandboxApprovalsByThread: nextSandbox };
       });
     },
 
-    dismissPrompt: () => set({ promptModal: null }),
+    dismissPrompt: () => {
+      const state = get();
+      if (state.promptModal) {
+        set({ promptModal: null });
+        return;
+      }
+
+      const threadId = state.selectedThreadId;
+      const pending = threadId ? state.sandboxApprovalsByThread[threadId] : undefined;
+      const prompt = pending?.at(-1);
+      if (threadId && prompt) {
+        state.answerApproval(threadId, prompt.requestId, false);
+      }
+    },
 
     loadAllThreadUsage: async () => {
       const threads = get().threads;

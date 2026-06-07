@@ -475,7 +475,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const sandbox = resolveSandboxConfig(
     env.AGENT_SANDBOX,
-    (merged as Record<string, unknown>).sandbox,
+    (inheritedMerged as Record<string, unknown>).sandbox,
   );
 
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)

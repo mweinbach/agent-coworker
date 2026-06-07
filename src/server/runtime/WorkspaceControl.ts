@@ -178,6 +178,9 @@ export class WorkspaceControl {
           ...(controlConfig.outputDirectory
             ? { outputDirectory: controlConfig.outputDirectory }
             : {}),
+          ...(controlConfig.uploadsDirectory
+            ? { uploadsDirectory: controlConfig.uploadsDirectory }
+            : {}),
         },
       },
       {

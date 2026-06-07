@@ -28,11 +28,15 @@ describe("InteractionManager.approveCommand", () => {
     expect(events).toEqual([]);
   });
 
-  test("YOLO auto-approves a sandbox-denied escalation without prompting", async () => {
+  test("YOLO still prompts for sandbox-denied escalations", async () => {
     const { manager, events } = makeManager({ yolo: true, promptResult: false });
     const approved = await manager.approveCommand("cat /etc/shadow", { reason: "sandbox_denied" });
-    expect(approved).toBe(true);
-    expect(events).toEqual([]);
+    expect(approved).toBe(false);
+    expect(events.find((e) => e.type === "approval")).toMatchObject({
+      type: "approval",
+      reasonCode: "sandbox_denied_escalation",
+      dangerous: true,
+    });
   });
 
   test("non-YOLO escalation honors the prompt response", async () => {

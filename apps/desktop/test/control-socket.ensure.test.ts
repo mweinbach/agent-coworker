@@ -344,6 +344,7 @@ describe("control socket helpers over JSON-RPC", () => {
             provider: "openai",
             model: "gpt-5.2",
             workingDirectory: "/tmp/workspace",
+            uploadsDirectory: "/tmp/workspace/Custom Uploads",
           },
         },
         {
@@ -384,6 +385,7 @@ describe("control socket helpers over JSON-RPC", () => {
       provider: "openai",
       model: "gpt-5.2",
       workingDirectory: "/tmp/workspace",
+      uploadsDirectory: "/tmp/workspace/Custom Uploads",
     });
     expect(state.workspaceRuntimeById[workspaceId].controlEnableMcp).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].controlSessionConfig?.preferredChildModel).toBe(

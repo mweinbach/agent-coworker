@@ -6,6 +6,7 @@ import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
 import { __internal as agentInternal, createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import { canonicalizeRoot } from "../src/platform/sandbox/policy";
 import { SessionCostTracker } from "../src/session/costTracker";
 import { buildTurnSystemPrompt } from "../src/turnSystemPrompt";
 import type { AgentConfig } from "../src/types";
@@ -390,10 +391,12 @@ describe("runTurn", () => {
 
       const shimDir = path.join(homeDir, ".cache", "cowork", "libreoffice", "bin");
       const shimPath = expectedManagedSofficeShimPath(shimDir);
+      const managedRoot = path.join(homeDir, ".cache", "cowork", "libreoffice");
       const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
       expect(toolCtx.toolEnv.COWORK_SOFFICE).toBe(shimPath);
       expect(toolCtx.toolEnv.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
       expect(toolCtx.toolEnv.PATH.split(path.delimiter)[0]).toBe(shimDir);
+      expect(toolCtx.sandboxPolicy.writableRoots).toContain(canonicalizeRoot(managedRoot));
 
       const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
       expect(runtimeParams.toolEnv.COWORK_SOFFICE).toBe(shimPath);

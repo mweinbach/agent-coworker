@@ -438,6 +438,10 @@ export function handleLifecycleThreadEvent(
         ...(evt.category ? { category: evt.category } : {}),
       };
       set((s) => ({
+        promptModal:
+          s.promptModal?.kind === "approval" && s.promptModal.threadId === threadId
+            ? null
+            : s.promptModal,
         sandboxApprovalsByThread: {
           ...s.sandboxApprovalsByThread,
           [threadId]: [

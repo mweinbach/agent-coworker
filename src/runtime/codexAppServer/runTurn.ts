@@ -7,7 +7,13 @@ import {
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { isCodexAppServerContinuationState } from "../../shared/providerContinuation";
 import { asRecord, asString } from "../../shared/recordParsing";
-import type { LlmRuntime, PartialTurnError, RuntimeRunTurnResult, RuntimeUsage } from "../types";
+import type {
+  LlmRuntime,
+  PartialTurnError,
+  RuntimeRunTurnParams,
+  RuntimeRunTurnResult,
+  RuntimeUsage,
+} from "../types";
 import { startCodexAppServer } from "./clientLifecycle";
 import {
   codexApprovalPolicy,
@@ -78,6 +84,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         waitForRawEvents,
         dispose,
       } = await startCodexAppServer(params, activeTarget);
+      const preparedParams: RuntimeRunTurnParams = { ...params, toolEnv: appServerEnv };
       let usage: RuntimeUsage | undefined;
       let unregisterSteerHandler: (() => void) | undefined;
       let notificationRouter: ReturnType<typeof createCodexTurnNotificationRouter> | undefined;
@@ -94,10 +101,10 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const currentState = isCodexAppServerContinuationState(params.providerState)
           ? params.providerState
           : null;
-        const approvalPolicy = codexApprovalPolicy(params);
-        const sandboxMode = codexSandboxMode(params);
-        const sandboxPolicy = codexSandboxPolicy(params);
-        const threadConfig = codexThreadConfig(params);
+        const approvalPolicy = codexApprovalPolicy(preparedParams);
+        const sandboxMode = codexSandboxMode(preparedParams);
+        const sandboxPolicy = codexSandboxPolicy(preparedParams);
+        const threadConfig = codexThreadConfig(preparedParams);
         const dynamicTools = codexDynamicToolSpecs(params.tools);
         const resumeState = currentState?.model === effectiveModel ? currentState : null;
         let resumedThread = resumeState !== null;

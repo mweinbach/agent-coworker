@@ -264,7 +264,11 @@ export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApproval
 
 export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPolicy {
   const sandbox = resolveCodexCoworkSandboxPolicy(params);
-  if (sandbox.kind === "danger-full-access") return { type: "dangerFullAccess" };
+  if (sandbox.kind === "danger-full-access") {
+    return sandbox.network === false
+      ? { type: "dangerFullAccess", networkAccess: false }
+      : { type: "dangerFullAccess" };
+  }
   if (sandbox.kind === "read-only" || sandbox.kind === "no-project-write") {
     return { type: "readOnly", networkAccess: sandbox.network };
   }
@@ -292,9 +296,19 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     projectRoot: path.dirname(params.config.projectCoworkDir),
     outputDirectory: params.config.outputDirectory,
     uploadsDirectory: params.config.uploadsDirectory,
-    toolRuntimeWritableRoots: resolveAdvancedMemoryWriteRoots(params.config),
+    toolRuntimeWritableRoots: [
+      ...resolveAdvancedMemoryWriteRoots(params.config),
+      ...resolveCodexToolRuntimeWriteRoots(params.toolEnv),
+    ],
     targetPaths: params.agentTargetPaths,
   });
+}
+
+function resolveCodexToolRuntimeWriteRoots(
+  env: Record<string, string | undefined> | undefined,
+): string[] {
+  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
+  return managedSofficeRoot ? [managedSofficeRoot] : [];
 }
 
 function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undefined {

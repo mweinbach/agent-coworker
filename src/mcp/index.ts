@@ -532,7 +532,8 @@ export async function readMCPServersSnapshot(config: AgentConfig): Promise<MCPSe
  * must not auto-start unless the workspace is explicitly trusted (resolved only
  * from env/user config — never from the workspace itself). Non-stdio workspace
  * transports do not launch a local process and other sources (user/system/plugin)
- * are installed deliberately, so neither is gated here.
+ * are installed deliberately. Workspace-scoped plugin stdio servers are also
+ * gated because the plugin bundle comes from the repository.
  */
 function isUntrustedWorkspaceStdioServer(
   server: MCPRegistryServer,
@@ -540,7 +541,10 @@ function isUntrustedWorkspaceStdioServer(
   allowUntrusted: boolean,
 ): boolean {
   if (config.trustWorkspaceMcp === true || allowUntrusted) return false;
-  return server.source === "workspace" && server.transport.type === "stdio";
+  const isWorkspaceOwned =
+    server.source === "workspace" ||
+    (server.source === "plugin" && server.pluginScope === "workspace");
+  return isWorkspaceOwned && server.transport.type === "stdio";
 }
 
 export async function loadMCPServers(

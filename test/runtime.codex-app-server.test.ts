@@ -8,6 +8,7 @@ import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/sto
 import { canonicalizeRoot } from "../src/platform/sandbox/policy";
 import { __internal as codexAppServerClientInternal } from "../src/providers/codexAppServerClient";
 import { createRuntime } from "../src/runtime";
+import { handleServerRequest } from "../src/runtime/codexAppServer/serverRequests";
 import { VERSION } from "../src/version";
 import { createMockClient, writeMockAppServer } from "./fixtures/codexAppServerMock";
 import {
@@ -100,6 +101,12 @@ describe("codex app-server runtime", () => {
     const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
     expect(startParams?.baseInstructions).toContain("Managed LibreOffice Runtime");
     expect(startParams?.baseInstructions).toContain(shimPath);
+    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
+      | { sandboxPolicy?: { writableRoots?: string[] } }
+      | undefined;
+    expect(turnStart?.sandboxPolicy?.writableRoots ?? []).toContain(
+      canonicalizeRoot(path.join(home, ".cache", "cowork", "libreoffice")),
+    );
     if (process.platform === "win32") {
       expect(startParams?.baseInstructions).toContain(`$env:PATH = '${shimDir};' + $env:PATH`);
     } else {
@@ -774,11 +781,11 @@ rl.on("line", (line) => {
         approvalPolicy: "on-request",
         sandboxPolicy: {
           type: "workspaceWrite",
-          writableRoots: [
+          writableRoots: expect.arrayContaining([
             canonicalizeRoot(dir),
             canonicalizeRoot(path.join(dir, "output")),
             canonicalizeRoot(path.join(dir, "uploads")),
-          ],
+          ]),
           networkAccess: false,
           excludeTmpdirEnvVar: false,
           excludeSlashTmp: underTmp,
@@ -887,6 +894,31 @@ rl.on("line", (line) => {
     });
   });
 
+  test.serial("preserves no-network danger-full-access for Codex turns", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-net-full-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const runtime = createRuntime(makeConfig(dir));
+    await runtime.runTurn({
+      config: { ...makeConfig(dir), sandbox: { mode: "danger-full-access", network: false } },
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+      yolo: false,
+      shellPolicy: "full",
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      sandboxPolicy: { type: "dangerFullAccess", networkAccess: false },
+    });
+  });
+
   test.serial("keeps a scoped child within targetPaths even under yolo", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-scoped-"));
     const script = await writeMockAppServer(dir);
@@ -984,4 +1016,45 @@ rl.on("line", (line) => {
       });
     },
   );
+
+  test("declines read-only Codex file approvals even under yolo", async () => {
+    let approvals = 0;
+    const response = await handleServerRequest(
+      {
+        id: "file-approval-1",
+        jsonrpc: "2.0",
+        method: "item/fileChange/requestApproval",
+        params: { path: "src/new.ts" },
+      },
+      {
+        shellPolicy: "no_project_write",
+        yolo: true,
+        approveCommand: async () => {
+          approvals += 1;
+          return true;
+        },
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(approvals).toBe(0);
+  });
+
+  test("still accepts ordinary Codex command approvals under yolo", async () => {
+    const response = await handleServerRequest(
+      {
+        id: "command-approval-1",
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        params: { command: "echo ok" },
+      },
+      {
+        shellPolicy: "no_project_write",
+        yolo: true,
+        approveCommand: async () => false,
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "accept" });
+  });
 });

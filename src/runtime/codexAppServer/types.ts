@@ -27,7 +27,7 @@ export type ActiveCodexTurnTarget = {
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexApprovalPolicy = "on-request" | "never";
 export type CodexSandboxPolicy =
-  | { type: "dangerFullAccess" }
+  | { type: "dangerFullAccess"; networkAccess?: boolean }
   | { type: "readOnly"; networkAccess: boolean }
   | {
       type: "workspaceWrite";

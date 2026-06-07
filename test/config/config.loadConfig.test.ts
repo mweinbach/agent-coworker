@@ -114,7 +114,7 @@ describe("loadConfig", () => {
     expect(envTrust.trustWorkspaceMcp).toBe(false);
   });
 
-  test("sandbox defaults allow approved fallback unless a backend is explicitly required", async () => {
+  test("sandbox defaults allow approved fallback unless user config explicitly requires a backend", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -130,18 +130,42 @@ describe("loadConfig", () => {
       requireBackend: false,
     });
 
-    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
       sandbox: { requireBackend: true },
     });
 
-    const relaxed = await loadConfig({
+    const strict = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: {},
     });
 
-    expect(relaxed.sandbox?.requireBackend).toBe(true);
+    expect(strict.sandbox?.requireBackend).toBe(true);
+  });
+
+  test("project config cannot weaken the user sandbox policy", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      sandbox: { mode: "workspace-write", network: false, requireBackend: true },
+    });
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      sandbox: { mode: "danger-full-access", network: true, requireBackend: false },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.sandbox).toEqual({
+      mode: "workspace-write",
+      network: false,
+      requireBackend: true,
+    });
   });
 
   test("provider override uses provider-default model when no model is set", async () => {

@@ -388,6 +388,14 @@ export default function App() {
           }
           return;
         }
+        if (state.selectedThreadId) {
+          const pendingSandboxApprovals =
+            state.sandboxApprovalsByThread[state.selectedThreadId] ?? [];
+          if (pendingSandboxApprovals.length > 0) {
+            state.dismissPrompt();
+            return;
+          }
+        }
         if (state.view === "settings") {
           state.closeSettings();
           return;

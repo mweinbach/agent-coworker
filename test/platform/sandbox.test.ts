@@ -593,7 +593,9 @@ describe("sandbox capability detection", () => {
     const binaries = path.join(base, "binaries");
     const helperPath = path.join(binaries, "cowork-win-sandbox.exe");
     const descriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    const previousHelperOverride = process.env.COWORK_WIN_SANDBOX_HELPER;
     try {
+      delete process.env.COWORK_WIN_SANDBOX_HELPER;
       fs.mkdirSync(binaries, { recursive: true });
       fs.writeFileSync(helperPath, "");
       Object.defineProperty(process, "resourcesPath", {
@@ -607,6 +609,11 @@ describe("sandbox capability detection", () => {
         Object.defineProperty(process, "resourcesPath", descriptor);
       } else {
         Reflect.deleteProperty(process, "resourcesPath");
+      }
+      if (previousHelperOverride === undefined) {
+        delete process.env.COWORK_WIN_SANDBOX_HELPER;
+      } else {
+        process.env.COWORK_WIN_SANDBOX_HELPER = previousHelperOverride;
       }
       fs.rmSync(base, { recursive: true, force: true });
     }

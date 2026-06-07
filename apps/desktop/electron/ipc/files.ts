@@ -65,24 +65,62 @@ const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as 
 
 export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
-const MAX_AUTHORIZED_UPLOAD_SOURCES = 512;
+const MAX_AUTHORIZED_UPLOAD_SOURCES_PER_SENDER = 64;
+
+type UploadAuthorizationOwnerKey = string;
+type AuthorizedUploadSources = Map<UploadAuthorizationOwnerKey, Set<string>>;
+
+function uploadAuthorizationOwnerKey(
+  event: Electron.IpcMainInvokeEvent,
+): UploadAuthorizationOwnerKey {
+  const webContentsId = typeof event.sender?.id === "number" ? event.sender.id : "unknown";
+  const processId = typeof event.processId === "number" ? event.processId : "unknown";
+  const frameId = typeof event.frameId === "number" ? event.frameId : "unknown";
+  return `${webContentsId}:${processId}:${frameId}`;
+}
+
+function consumeAuthorizedUploadSource(
+  authorizedUploadSources: AuthorizedUploadSources,
+  ownerKey: UploadAuthorizationOwnerKey,
+  sourcePath: string,
+): boolean {
+  const ownerSources = authorizedUploadSources.get(ownerKey);
+  if (!ownerSources?.has(sourcePath)) {
+    return false;
+  }
+
+  ownerSources.delete(sourcePath);
+  if (ownerSources.size === 0) {
+    authorizedUploadSources.delete(ownerKey);
+  }
+
+  return true;
+}
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
   // Source paths a trusted-renderer file picker (webUtils.getPathForFile) has
-  // resolved from a real user-selected File. copyFileToWorkspaceUploads only
-  // copies paths recorded here, so a renderer cannot turn the main process into
-  // a confused deputy that reads arbitrary local files it was never given.
-  const authorizedUploadSources = new Set<string>();
-  const rememberAuthorizedUploadSource = (sourcePath: string): void => {
+  // resolved from a real user-selected File. Authorizations are scoped to the
+  // sender frame and consumed on copy so another renderer cannot reuse them.
+  const authorizedUploadSources: AuthorizedUploadSources = new Map();
+  const rememberAuthorizedUploadSource = (
+    ownerKey: UploadAuthorizationOwnerKey,
+    sourcePath: string,
+  ): void => {
     const resolved = path.resolve(sourcePath);
-    authorizedUploadSources.delete(resolved);
-    authorizedUploadSources.add(resolved);
-    while (authorizedUploadSources.size > MAX_AUTHORIZED_UPLOAD_SOURCES) {
-      const oldest = authorizedUploadSources.values().next().value;
+    let ownerSources = authorizedUploadSources.get(ownerKey);
+    if (!ownerSources) {
+      ownerSources = new Set();
+      authorizedUploadSources.set(ownerKey, ownerSources);
+    }
+
+    ownerSources.delete(resolved);
+    ownerSources.add(resolved);
+    while (ownerSources.size > MAX_AUTHORIZED_UPLOAD_SOURCES_PER_SENDER) {
+      const oldest = ownerSources.values().next().value;
       if (oldest === undefined) break;
-      authorizedUploadSources.delete(oldest);
+      ownerSources.delete(oldest);
     }
   };
 
@@ -300,19 +338,19 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.authorizeUploadSource,
-    async (_event, args: AuthorizeUploadSourceInput) => {
+    async (event, args: AuthorizeUploadSourceInput) => {
       const input = parseWithSchema(
         authorizeUploadSourceInputSchema,
         args,
         "authorizeUploadSource options",
       );
-      rememberAuthorizedUploadSource(input.sourcePath);
+      rememberAuthorizedUploadSource(uploadAuthorizationOwnerKey(event), input.sourcePath);
     },
   );
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads,
-    async (_event, args: CopyFileToWorkspaceUploadsInput) => {
+    async (event, args: CopyFileToWorkspaceUploadsInput) => {
       const input = parseWithSchema(
         copyFileToWorkspaceUploadsInputSchema,
         args,
@@ -323,6 +361,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         workspaceRoots.getApprovedWorkspaceRoots(),
         input,
         authorizedUploadSources,
+        uploadAuthorizationOwnerKey(event),
       );
     },
   );
@@ -366,14 +405,17 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
 async function copyFileToWorkspaceUploads(
   workspaceRoots: string[],
   input: CopyFileToWorkspaceUploadsInput,
-  authorizedUploadSources: ReadonlySet<string>,
+  authorizedUploadSources: AuthorizedUploadSources,
+  uploadAuthorizationOwnerKey: UploadAuthorizationOwnerKey,
 ): Promise<CopyFileToWorkspaceUploadsOutput> {
   const safeWorkspacePath = resolveAllowedDirectoryPath(workspaceRoots, input.workspacePath);
   const sourcePath = path.resolve(input.sourcePath);
   // Fail closed before touching the source: only paths the renderer picker
   // authorized via getPathForFile may be copied. Otherwise an arbitrary path
   // could be read into the workspace and exfiltrated as an attachment.
-  if (!authorizedUploadSources.has(sourcePath)) {
+  if (
+    !consumeAuthorizedUploadSource(authorizedUploadSources, uploadAuthorizationOwnerKey, sourcePath)
+  ) {
     throw new Error(
       "Upload source path is not authorized. Select the file through the desktop file picker.",
     );
@@ -395,7 +437,7 @@ async function copyFileToWorkspaceUploads(
   }
 
   const requestedUploadsDir = input.uploadsDirectory
-    ? path.resolve(input.uploadsDirectory)
+    ? path.resolve(safeWorkspacePath, input.uploadsDirectory)
     : path.resolve(safeWorkspacePath, DEFAULT_WORKSPACE_UPLOADS_DIR_NAME);
   let resolvedUploadsDir: string;
   try {

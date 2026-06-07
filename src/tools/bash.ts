@@ -328,6 +328,38 @@ async function runShellCommandWithExec(
     };
   }
 
+  // A restrictive policy whose backend does NOT enforce filesystem/network scope
+  // is effectively unsandboxed for FS/network. This is either no backend at all
+  // (`sandbox === "none"`) or a process-containment-only helper (the Windows
+  // restricted-token helper, which discards writable roots and the network
+  // policy). Running it grants full filesystem/network access despite
+  // workspace-write / no-network expectations, so require explicit unsandboxed
+  // approval BEFORE executing — mirroring the escalate-on-failure prompt —
+  // rather than silently running under it and only warning afterwards. The
+  // requireEnforcingBackend / requireBackend gates above already fail closed for
+  // stricter contexts; danger-full-access with network allowed is not restrictive
+  // and never reaches here.
+  if (
+    policy &&
+    requiresSandboxEnforcement &&
+    backendDoesNotEnforceScope &&
+    opts.approveUnsandboxed &&
+    !(await opts.approveUnsandboxed())
+  ) {
+    return {
+      stdout: "",
+      stderr: `Refusing to run: ${transformed?.warning ?? "OS sandbox backend does not enforce filesystem/network scope"} (declined).`,
+      exitCode: 1,
+      errorCode: "SANDBOX_REQUIRED",
+      sandbox: "none",
+      sandboxWarning: transformed?.warning,
+    };
+  }
+
+  // A backend is present and either enforcing (Seatbelt/bwrap) or the unsandboxed
+  // fallback was approved above. Run the (possibly wrapped) command. For the
+  // non-enforcing Windows helper this still adds restricted-token + Job Object
+  // process containment on top of the now-approved full FS/network access.
   if (policy && transformed && transformed.sandbox !== "none") {
     const result = await opts.execRunner(transformed.file, transformed.args, {
       cwd: opts.cwd,
@@ -340,29 +372,6 @@ async function runShellCommandWithExec(
       env: { ...(opts.env ?? minimalSandboxEnv()), ...transformed.env },
     });
     return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
-  }
-
-  // Restrictive policy but no backend available (requireBackend=false): falling
-  // back to an unsandboxed run grants full filesystem access, so require approval
-  // first — mirroring the escalate-on-failure prompt — rather than running and
-  // only warning afterwards. danger-full-access is intentional full access and is
-  // not gated here; under YOLO the approval auto-returns true.
-  if (
-    policy &&
-    requiresSandboxEnforcement &&
-    transformed &&
-    transformed.sandbox === "none" &&
-    opts.approveUnsandboxed &&
-    !(await opts.approveUnsandboxed())
-  ) {
-    return {
-      stdout: "",
-      stderr: `Refusing to run unsandboxed: ${transformed.warning ?? "OS sandbox backend unavailable"} (declined).`,
-      exitCode: 1,
-      errorCode: "SANDBOX_REQUIRED",
-      sandbox: "none",
-      sandboxWarning: transformed.warning,
-    };
   }
 
   // Unsandboxed: try shell candidates until one is not missing (ENOENT).
@@ -508,7 +517,7 @@ export function createBashTool(ctx: ToolContext) {
           ctx.approveCommand(command, {
             reason: "sandbox_denied",
             detail:
-              "No OS sandbox backend is available on this machine, so this command can only run with full access.",
+              "No enforcing OS sandbox is available on this machine, so this command can only run with full filesystem and network access.",
           }),
       };
 

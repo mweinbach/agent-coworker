@@ -464,7 +464,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         });
         mcpTools = loaded.tools;
       } else {
-        const servers = await deps.loadMCPServers(config);
+        const servers = await deps.loadMCPServers(config, { log });
         if (servers.length > 0) {
           const loaded = await deps.loadMCPTools(servers, { log });
           mcpTools = loaded.tools;

@@ -88,14 +88,17 @@ creates a directory bind source rather than an empty file.
 `config.sandbox` (built-in default in `config/defaults.json`):
 
 ```json
-{ "sandbox": { "mode": "workspace-write", "network": true, "requireBackend": true } }
+{ "sandbox": { "mode": "workspace-write", "network": true, "requireBackend": false } }
 ```
 
 - `mode`: `auto` | `read-only` | `workspace-write` | `danger-full-access`
 - `network`: allow outbound network inside the sandbox (default `true`)
 - `requireBackend`: fail closed when the selected OS sandbox backend is unavailable
-  or cannot enforce filesystem/network scope (default `true`; set `false` to
-  allow an explicitly degraded fallback, which still surfaces a warning)
+  or cannot enforce filesystem/network scope (default `false`; set `true` to fail
+  closed instead of allowing an explicitly degraded fallback). With the default
+  `false`, hard-floor contexts still fail closed and a non-enforcing fallback
+  (no backend, or the Windows process-containment-only helper) requires explicit
+  unsandboxed approval before running and surfaces a `[sandbox] …` warning.
 - env override: `AGENT_SANDBOX=<mode>`
 
 ## Escalate-on-failure
@@ -138,11 +141,16 @@ filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
   Object, providing **process containment only**. Per-root ACL filesystem scoping
   and WFP network isolation are tracked TODOs, so workspace-write / read-only
   path scoping is **not** enforced yet. `no-project-write` maps through the
-  helper's existing read-only flag until filesystem scoping exists. With the
-  default `requireBackend: true`,
-  bash fails closed instead of treating that helper as an enforcing backend; set
-  `requireBackend: false` to opt into the degraded helper path, where every
-  Windows command gets a `[sandbox] …` warning. CI builds the helper and runs the
+  helper's existing read-only flag until filesystem scoping exists. With
+  `requireBackend: true`, bash fails closed instead of treating that helper as an
+  enforcing backend. With the default `requireBackend: false`, hard-floor
+  contexts (read-only / no-project-write roles and scoped `targetPaths` children)
+  still fail closed, while an unscoped `workspace-write` (or no-network) command
+  requires explicit unsandboxed approval — the same protected `sandbox_denied`
+  path used when no backend exists — before it runs, because the helper would
+  otherwise grant full filesystem/network access despite the policy. Approved
+  commands still run under the helper for process containment and surface a
+  `[sandbox] …` warning. CI builds the helper and runs the
   Windows sandbox smoke tests so the current fail-closed/degraded behavior stays
   covered until full filesystem enforcement lands. Desktop Windows resource
   builds compile and copy `cowork-win-sandbox.exe` into the packaged

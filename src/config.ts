@@ -624,6 +624,17 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.enableMcp) ??
     true;
 
+  // Trust to AUTO-START a workspace's own stdio MCP servers must never be
+  // grantable by the workspace itself, so this deliberately omits the
+  // attacker-controlled `projectConfig` layer (.cowork/config.json). Resolve it
+  // only from env + user (~/.cowork) + built-in defaults, defaulting to false so
+  // a freshly opened/malicious workspace never launches local commands on its own.
+  const trustWorkspaceMcp =
+    asBoolean(env.AGENT_TRUST_WORKSPACE_MCP) ??
+    asBoolean(userConfig.trustWorkspaceMcp) ??
+    asBoolean(builtInDefaults.trustWorkspaceMcp) ??
+    false;
+
   const enableMemory =
     asBoolean(env.AGENT_ENABLE_MEMORY) ??
     asBoolean(projectConfig.enableMemory) ??
@@ -794,6 +805,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     configDirs: [projectCoworkDir, userConfigDir, builtInConfigDir],
 
     enableMcp,
+    trustWorkspaceMcp,
     enableMemory,
     memoryRequireApproval,
     advancedMemory,

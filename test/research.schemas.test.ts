@@ -9,12 +9,13 @@ import { MAX_RESEARCH_UPLOAD_BASE64_LENGTH } from "../src/server/jsonrpc/schema.
 
 describe("research JSON-RPC schemas", () => {
   test("parses research request, result, and notification envelopes", () => {
+    const attachedFileId = "11111111-1111-4111-8111-111111111111";
     const request = jsonRpcRequestSchemas["research/start"].parse({
       input: "Summarize the current vendor landscape.",
       settings: {
         planApproval: false,
       },
-      attachedFileIds: ["file-1"],
+      attachedFileIds: [attachedFileId],
     });
 
     const result = jsonRpcResultSchemas["research/export"].parse({
@@ -50,10 +51,33 @@ describe("research JSON-RPC schemas", () => {
       },
     });
 
-    expect(request.attachedFileIds).toEqual(["file-1"]);
+    expect(request.attachedFileIds).toEqual([attachedFileId]);
     expect(discard.fileIds).toEqual(["file-1", "file-2"]);
     expect(result.path).toBe("/tmp/report.pdf");
     expect(notification.research.status).toBe("completed");
+  });
+
+  test("rejects attachment ids that are not generated upload UUIDs", () => {
+    const traversalId = "../../../../etc/passwd";
+    expect(() =>
+      jsonRpcRequestSchemas["research/start"].parse({
+        input: "Summarize this",
+        attachedFileIds: [traversalId],
+      }),
+    ).toThrow();
+    expect(() =>
+      jsonRpcRequestSchemas["research/followup"].parse({
+        parentResearchId: "research-1",
+        input: "Continue this",
+        attachedFileIds: ["not-a-uuid"],
+      }),
+    ).toThrow();
+    expect(() =>
+      jsonRpcRequestSchemas["research/attachFile"].parse({
+        researchId: "research-1",
+        fileId: traversalId,
+      }),
+    ).toThrow();
   });
 
   test("rejects inline research file descriptors and oversized upload payloads", () => {

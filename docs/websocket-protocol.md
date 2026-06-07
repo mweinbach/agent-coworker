@@ -437,6 +437,7 @@ Requests:
   - params: `{ filename, mimeType, contentBase64 }`
   - result: `{ file }`
   - stages a pending upload under `~/.cowork/research/uploads`; payloads are capped at 20 MiB decoded size
+  - the returned `file.fileId` is a generated UUID; `attachedFileIds`/`fileId` accepted by `research/start`, `research/followup`, and `research/attachFile` must be these exact UUIDs (callers cannot supply arbitrary paths)
 - `research/discardUploads`
   - params: `{ fileIds }`
   - result: `{ status: "discarded" }`

@@ -239,6 +239,15 @@ export interface AgentConfig {
   enableMcp?: boolean;
 
   /**
+   * Whether the current workspace is trusted to auto-start local stdio MCP
+   * servers declared in its own `.cowork/mcp-servers.json`. Defaults to false:
+   * a malicious repository must not be able to launch arbitrary local commands
+   * on turn setup. This MUST be resolved from non-workspace layers only (env /
+   * user config), never from the attacker-controlled project config layer.
+   */
+  trustWorkspaceMcp?: boolean;
+
+  /**
    * Whether memory tool + prompt memory injection are enabled.
    * Defaults to true when not specified.
    */

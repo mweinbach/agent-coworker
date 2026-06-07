@@ -7,7 +7,12 @@ import {
   deleteResearchFileSearchStore,
   uploadFileToResearchFileSearchStore,
 } from "./researchRuntime";
-import { MAX_RESEARCH_UPLOAD_BYTES, type ResearchInputFile } from "./types";
+import {
+  MAX_RESEARCH_UPLOAD_BYTES,
+  RESEARCH_UPLOAD_ID_PATTERN,
+  type ResearchInputFile,
+  researchInputFileSchema,
+} from "./types";
 
 type ResearchFileStoreOptions = {
   rootDir: string;
@@ -27,6 +32,15 @@ function sanitizeFilename(filename: string): string {
 function estimateBase64DecodedBytes(contentBase64: string): number {
   const padding = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
   return Math.floor((contentBase64.length * 3) / 4) - padding;
+}
+
+function isPathInside(parentDir: string, candidate: string): boolean {
+  const resolvedParent = path.resolve(parentDir);
+  const resolvedCandidate = path.resolve(candidate);
+  return (
+    resolvedCandidate === resolvedParent ||
+    resolvedCandidate.startsWith(`${resolvedParent}${path.sep}`)
+  );
 }
 
 export class ResearchFileStore {
@@ -89,13 +103,36 @@ export class ResearchFileStore {
   }
 
   async readPendingUpload(fileId: string): Promise<ResearchInputFile | null> {
+    // Only accept the generated UUID form so a caller-controlled id can never
+    // traverse out of the uploads directory when joined into the metadata path.
+    if (!RESEARCH_UPLOAD_ID_PATTERN.test(fileId)) {
+      return null;
+    }
+    const uploadsDir = this.uploadsDir();
+    const metadataPath = path.join(uploadsDir, `${fileId}.json`);
+    // Defense in depth: the metadata file must canonicalize inside the uploads dir.
+    if (!isPathInside(uploadsDir, metadataPath)) {
+      return null;
+    }
     try {
-      const raw = await fs.readFile(path.join(this.uploadsDir(), `${fileId}.json`), "utf-8");
-      const parsed = JSON.parse(raw) as { version?: number; file?: ResearchInputFile };
-      if (parsed.version !== metadataVersion || !parsed.file) {
+      const raw = await fs.readFile(metadataPath, "utf-8");
+      const parsed = JSON.parse(raw) as { version?: number; file?: unknown };
+      if (parsed.version !== metadataVersion) {
         return null;
       }
-      return parsed.file;
+      // Validate the parsed metadata shape before trusting any of its fields.
+      const result = researchInputFileSchema.safeParse(parsed.file);
+      if (!result.success) {
+        return null;
+      }
+      const file = result.data;
+      // The recorded id must match the request, and the recorded local path must
+      // itself live inside the uploads directory, so spoofed metadata cannot
+      // redirect the later copy/upload to an arbitrary readable local file.
+      if (file.fileId !== fileId || !isPathInside(uploadsDir, file.path)) {
+        return null;
+      }
+      return file;
     } catch {
       return null;
     }

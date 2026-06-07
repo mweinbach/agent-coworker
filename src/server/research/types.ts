@@ -54,6 +54,18 @@ export const researchInputFileSchema = z
   })
   .strict();
 
+// Pending-upload IDs are always generated via crypto.randomUUID() in
+// ResearchFileStore.savePendingUpload. Constraining caller-supplied attachment
+// IDs to this exact form prevents path traversal when the ID is joined into the
+// pending-upload metadata path (CWE-22) and the subsequent local-file upload.
+export const RESEARCH_UPLOAD_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const researchFileIdSchema = z
+  .string()
+  .trim()
+  .regex(RESEARCH_UPLOAD_ID_PATTERN, "Invalid research file id");
+
 export const researchInputsSchema = z
   .object({
     fileSearchStoreName: z.string().trim().min(1).optional(),

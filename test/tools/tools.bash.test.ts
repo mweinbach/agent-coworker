@@ -275,6 +275,61 @@ describe("bash tool", () => {
     expect(result.sandboxWarning).toContain("filesystem and network scoping are not yet enforced");
   });
 
+  test("refuses unscoped Windows workspace-write under the non-enforcing helper when approval is declined", async () => {
+    // The Windows helper applies restricted-token + Job Object process
+    // containment but does NOT enforce writable roots or the network policy, so
+    // ordinary workspace-write must NOT run under it silently. With
+    // requireBackend=false it requires explicit unsandboxed approval and is
+    // refused (helper never executed) when the user declines.
+    const calls: string[] = [];
+    const approve = mock(async () => false);
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo pwned > C:/Windows/System32/evil.txt",
+      cwd: "C:/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: false },
+      requireBackend: false,
+      requireEnforcingBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).toHaveBeenCalled();
+    expect(calls).toEqual([]); // declined → never executed under the non-enforcing helper
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("SANDBOX_REQUIRED");
+    expect(result.sandboxWarning).toContain("filesystem and network scoping are not yet enforced");
+  });
+
+  test("runs unscoped Windows workspace-write under the helper only after unsandboxed approval", async () => {
+    const calls: string[] = [];
+    const approve = mock(async () => true);
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: true },
+      requireBackend: false,
+      requireEnforcingBackend: false,
+      capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).toHaveBeenCalled();
+    // Approved → still wrapped by the helper for process containment.
+    expect(calls).toEqual(["C:/h/helper.exe"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.sandbox).toBe("windows-restricted");
+  });
+
   test("requires approval before the unsandboxed fallback (requireBackend=false)", async () => {
     const calls: string[] = [];
     const approve = mock(async () => false); // user declines

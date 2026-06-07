@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   MAX_RESEARCH_UPLOAD_BYTES,
   researchExportFormatSchema,
+  researchFileIdSchema,
   researchInputFileSchema,
   researchRecordSchema,
   researchSettingsSchema,
@@ -20,7 +21,7 @@ export const jsonRpcResearchRequestSchemas = {
       input: z.string().trim().min(1),
       title: z.string().optional(),
       settings: researchSettingsSchema.optional(),
-      attachedFileIds: z.array(nonEmptyTrimmedStringSchema).optional(),
+      attachedFileIds: z.array(researchFileIdSchema).optional(),
     })
     .strict(),
   "research/list": z.object({}).strict(),
@@ -46,7 +47,7 @@ export const jsonRpcResearchRequestSchemas = {
       input: z.string().trim().min(1),
       title: z.string().optional(),
       settings: researchSettingsSchema.optional(),
-      attachedFileIds: z.array(nonEmptyTrimmedStringSchema).optional(),
+      attachedFileIds: z.array(researchFileIdSchema).optional(),
     })
     .strict(),
   "research/uploadFile": z
@@ -64,7 +65,7 @@ export const jsonRpcResearchRequestSchemas = {
   "research/attachFile": z
     .object({
       researchId: nonEmptyTrimmedStringSchema,
-      fileId: nonEmptyTrimmedStringSchema,
+      fileId: researchFileIdSchema,
     })
     .strict(),
   "research/subscribe": z

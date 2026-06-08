@@ -14,6 +14,7 @@ import {
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 export type MCPServerConfigSource = "workspace" | "user" | "plugin" | "system";
+export type EditableMCPServerConfigSource = Extract<MCPServerConfigSource, "workspace" | "user">;
 
 function sortServersByName(servers: MCPServerConfig[]): MCPServerConfig[] {
   return [...servers].sort((a, b) => a.name.localeCompare(b.name));
@@ -95,6 +96,15 @@ async function readEditableWorkspaceServers(config: AgentConfig): Promise<MCPSer
   return parseMCPServersDocument(rawJson).servers;
 }
 
+async function readEditableServers(
+  config: AgentConfig,
+  source: EditableMCPServerConfigSource,
+): Promise<MCPServerConfig[]> {
+  if (source === "workspace") return await readEditableWorkspaceServers(config);
+  const paths = resolveMcpConfigPaths(config);
+  return await readMCPServersDocumentFile(paths.userConfigFile);
+}
+
 async function writeWorkspaceServers(
   config: AgentConfig,
   servers: MCPServerConfig[],
@@ -105,38 +115,60 @@ async function writeWorkspaceServers(
   await atomicWriteFile(paths.workspaceConfigFile, payload, 0o600);
 }
 
+async function writeEditableServers(
+  config: AgentConfig,
+  source: EditableMCPServerConfigSource,
+  servers: MCPServerConfig[],
+): Promise<void> {
+  if (source === "workspace") {
+    await writeWorkspaceServers(config, servers);
+    return;
+  }
+  const paths = resolveMcpConfigPaths(config);
+  await writeMCPServersDocumentFile(paths.userConfigFile, servers);
+}
+
 export async function upsertWorkspaceMCPServer(
   config: AgentConfig,
   server: MCPServerConfig,
   previousName?: string,
 ): Promise<void> {
+  await upsertMCPServer(config, "workspace", server, previousName);
+}
+
+export async function upsertMCPServer(
+  config: AgentConfig,
+  source: EditableMCPServerConfigSource,
+  server: MCPServerConfig,
+  previousName?: string,
+): Promise<void> {
   const validated = parseMCPServerConfig(server);
-  const workspaceServers = await readEditableWorkspaceServers(config);
+  const servers = await readEditableServers(config, source);
 
   const trimmedPrevious = previousName?.trim();
   const isRename =
     trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name;
 
-  if (isRename && workspaceServers.some((entry) => entry.name === validated.name)) {
+  if (isRename && servers.some((entry) => entry.name === validated.name)) {
     throw new Error(
       `mcp-servers.json: cannot rename "${trimmedPrevious}" to "${validated.name}" because "${validated.name}" already exists`,
     );
   }
 
-  const nextServers = workspaceServers.filter((entry) => {
+  const nextServers = servers.filter((entry) => {
     if (trimmedPrevious && trimmedPrevious.length > 0) {
       return entry.name !== trimmedPrevious;
     }
     return entry.name !== validated.name;
   });
   nextServers.push(validated);
-  await writeWorkspaceServers(config, nextServers);
+  await writeEditableServers(config, source, nextServers);
 
   if (trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name) {
     const { renameMCPServerCredentials } = await import("../authStore");
     await renameMCPServerCredentials({
       config,
-      source: "workspace",
+      source,
       previousName: trimmedPrevious,
       nextName: validated.name,
     });
@@ -147,14 +179,22 @@ export async function deleteWorkspaceMCPServer(
   config: AgentConfig,
   nameRaw: string,
 ): Promise<void> {
+  await deleteMCPServer(config, "workspace", nameRaw);
+}
+
+export async function deleteMCPServer(
+  config: AgentConfig,
+  source: EditableMCPServerConfigSource,
+  nameRaw: string,
+): Promise<void> {
   const name = nameRaw.trim();
   if (!name) {
     throw new Error("mcp-servers.json: server name is required");
   }
 
-  const workspaceServers = await readEditableWorkspaceServers(config);
-  const nextServers = workspaceServers.filter((entry) => entry.name !== name);
-  await writeWorkspaceServers(config, nextServers);
+  const servers = await readEditableServers(config, source);
+  const nextServers = servers.filter((entry) => entry.name !== name);
+  await writeEditableServers(config, source, nextServers);
 }
 
 export async function setMCPServerEnabled(opts: {

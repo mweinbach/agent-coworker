@@ -1,8 +1,11 @@
 export { MCP_SERVERS_FILE_NAME } from "./configPaths";
 export {
+  deleteMCPServer,
   deleteWorkspaceMCPServer,
+  type EditableMCPServerConfigSource,
   readWorkspaceMCPServersDocument,
   setMCPServerEnabled,
+  upsertMCPServer,
   upsertWorkspaceMCPServer,
   writeWorkspaceMCPServersDocument,
 } from "./configRegistry/editor";

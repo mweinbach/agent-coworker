@@ -8,6 +8,10 @@ import {
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
+function resolveEditableMcpSource(value: unknown): "workspace" | "user" {
+  return value === "user" ? "user" : "workspace";
+}
+
 export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/mcp/servers/read": async (ws, message) => {
@@ -33,10 +37,11 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const server = params.server as any;
       const previousName =
         typeof params.previousName === "string" ? params.previousName : undefined;
+      const source = resolveEditableMcpSource(params.source);
       const mutationError = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.upsert(server, previousName),
+        async (runtime) => await runtime.mcp.upsert(server, previousName, source),
       );
       if (mutationError) {
         sendSessionMutationError(context, ws, message.id, mutationError);
@@ -60,10 +65,11 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
+      const source = resolveEditableMcpSource(params.source);
       const mutationError = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.delete(name),
+        async (runtime) => await runtime.mcp.delete(name, source),
       );
       if (mutationError) {
         sendSessionMutationError(context, ws, message.id, mutationError);

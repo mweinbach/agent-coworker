@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadMCPConfigRegistry, upsertWorkspaceMCPServer } from "../src/mcp/configRegistry";
+import {
+  deleteMCPServer,
+  loadMCPConfigRegistry,
+  upsertMCPServer,
+  upsertWorkspaceMCPServer,
+} from "../src/mcp/configRegistry";
 import type { AgentConfig } from "../src/types";
 
 function makeConfig(
@@ -507,6 +512,54 @@ describe("mcp config registry", () => {
       };
       expect(authDoc.servers.old).toBeUndefined();
       expect(authDoc.servers.new?.apiKey?.value).toBe("secret-key");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("upsertMCPServer can manage global user MCP configs without touching workspace config", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-upsert-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-upsert-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-user-upsert-builtin-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writeJson(path.join(workspace, ".cowork", "mcp-servers.json"), {
+        servers: [{ name: "workspace-only", transport: { type: "stdio", command: "workspace" } }],
+      });
+
+      await upsertMCPServer(config, "user", {
+        name: "global-mail",
+        transport: { type: "http", url: "https://mail.example.com/mcp" },
+        auth: { type: "oauth", oauthMode: "auto" },
+      });
+
+      let snapshot = await loadMCPConfigRegistry(config);
+      expect(snapshot.servers.find((entry) => entry.name === "global-mail")).toMatchObject({
+        source: "user",
+        inherited: true,
+      });
+      expect(snapshot.servers.find((entry) => entry.name === "workspace-only")?.source).toBe(
+        "workspace",
+      );
+
+      const workspaceRaw = await fs.readFile(
+        path.join(workspace, ".cowork", "mcp-servers.json"),
+        "utf-8",
+      );
+      expect(workspaceRaw).toContain("workspace-only");
+      expect(workspaceRaw).not.toContain("global-mail");
+
+      await deleteMCPServer(config, "user", "global-mail");
+      snapshot = await loadMCPConfigRegistry(config);
+      expect(snapshot.servers.find((entry) => entry.name === "global-mail")).toBeUndefined();
+      expect(snapshot.servers.find((entry) => entry.name === "workspace-only")?.source).toBe(
+        "workspace",
+      );
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

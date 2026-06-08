@@ -423,8 +423,13 @@ export type AppStoreState = {
       auth?: MCPServerConfig["auth"];
     },
     previousName?: string,
+    source?: "workspace" | "user",
   ) => Promise<void>;
-  deleteWorkspaceMcpServer: (workspaceId: string, name: string) => Promise<void>;
+  deleteWorkspaceMcpServer: (
+    workspaceId: string,
+    name: string,
+    source?: "workspace" | "user",
+  ) => Promise<void>;
   setWorkspaceMcpServerEnabled: (
     workspaceId: string,
     server: {

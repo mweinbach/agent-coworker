@@ -1,3 +1,4 @@
+import type { EditableMCPServerConfigSource } from "../../mcp/configRegistry";
 import type { MCPServerConfig, PluginScope } from "../../types";
 import { McpAuthFlow } from "./mcp/McpAuthFlow";
 import { McpRegistryFlow } from "./mcp/McpRegistryFlow";
@@ -43,13 +44,17 @@ export class McpManager {
     await this.registryFlow.emitMcpServers();
   }
 
-  async upsert(server: MCPServerConfig, previousName?: string) {
-    const validateName = await this.registryFlow.upsert(server, previousName);
+  async upsert(
+    server: MCPServerConfig,
+    previousName?: string,
+    source?: EditableMCPServerConfigSource,
+  ) {
+    const validateName = await this.registryFlow.upsert(server, previousName, source);
     if (validateName) void this.validate(validateName);
   }
 
-  async delete(nameRaw: string) {
-    await this.registryFlow.delete(nameRaw);
+  async delete(nameRaw: string, source?: EditableMCPServerConfigSource) {
+    await this.registryFlow.delete(nameRaw, source);
   }
 
   async setEnabled(opts: {

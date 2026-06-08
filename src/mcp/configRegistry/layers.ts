@@ -275,7 +275,7 @@ export async function loadMCPConfigRegistry(
         editable: true,
         legacy: false,
       }),
-      readLayer({ source: "user", filePath: paths.userConfigFile, editable: false, legacy: false }),
+      readLayer({ source: "user", filePath: paths.userConfigFile, editable: true, legacy: false }),
       readLayer({
         source: "system",
         filePath: paths.systemConfigFile,

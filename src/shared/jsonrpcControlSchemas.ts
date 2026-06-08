@@ -1282,9 +1282,12 @@ const mcpServersReadRequestSchema = z
   })
   .strict();
 
+const editableMcpServerSourceSchema = z.enum(["workspace", "user"]);
+
 const mcpServerUpsertRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
+    source: editableMcpServerSourceSchema.optional(),
     server: mcpServerConfigSchema,
     previousName: z.string().optional(),
   })
@@ -1293,6 +1296,7 @@ const mcpServerUpsertRequestSchema = z
 const mcpServerDeleteRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
+    source: editableMcpServerSourceSchema.optional(),
     name: nonEmptyTrimmedStringSchema,
   })
   .strict();

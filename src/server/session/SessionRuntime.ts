@@ -1,3 +1,4 @@
+import type { EditableMCPServerConfigSource } from "../../mcp/configRegistry";
 import type { MemoryScope } from "../../memoryStore";
 import type { AgentProfileCopyInput, AgentProfileUpsertInput } from "../../shared/agentProfiles";
 import type {
@@ -300,12 +301,16 @@ export class SessionMcpService {
     await this.session.emitMcpServers();
   }
 
-  async upsert(server: MCPServerConfig, previousName?: string): Promise<void> {
-    await this.session.upsertMcpServer(server, previousName);
+  async upsert(
+    server: MCPServerConfig,
+    previousName?: string,
+    source?: EditableMCPServerConfigSource,
+  ): Promise<void> {
+    await this.session.upsertMcpServer(server, previousName, source);
   }
 
-  async delete(name: string): Promise<void> {
-    await this.session.deleteMcpServer(name);
+  async delete(name: string, source?: EditableMCPServerConfigSource): Promise<void> {
+    await this.session.deleteMcpServer(name, source);
   }
 
   async setEnabled(opts: Parameters<AgentSession["setMcpServerEnabled"]>[0]): Promise<void> {

@@ -105,7 +105,7 @@ export function McpServersPage() {
 
   useEffect(() => clearAutoValidateTimer, [clearAutoValidateTimer]);
 
-  const servers = runtime?.mcpServers ?? [];
+  const servers = (runtime?.mcpServers ?? []).filter((server) => server.source === "user");
   const files = runtime?.mcpFiles ?? [];
   const warnings = runtime?.mcpWarnings ?? [];
   const validationByName = runtime?.mcpValidationByName ?? {};
@@ -333,7 +333,7 @@ export function McpServersPage() {
                     if (!next) return;
                     const workspaceId = workspace.id;
                     const previousName = getPreviousNameForUpsert(editorState);
-                    void upsertWorkspaceMcpServer(workspaceId, next, previousName);
+                    void upsertWorkspaceMcpServer(workspaceId, next, previousName, "user");
                     autoValidateSchedulerRef.current.schedule(workspaceId, next.name);
                     resetDraft({ clearAutoValidate: false });
                   }}
@@ -361,7 +361,7 @@ export function McpServersPage() {
         {servers.map((server) => {
           const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;
           const validation = validationByName[server.name];
-          const canEdit = server.source === "workspace";
+          const canEdit = server.source === "user";
           const apiKeyDraft = apiKeyByName[draftKey] ?? "";
           const oauthCode = oauthCodeByName[draftKey] ?? "";
           const isExpanded = expandedServers[server.name] ?? false;
@@ -538,7 +538,8 @@ export function McpServersPage() {
                         size="sm"
                         className="h-7 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive shadow-none border-transparent"
                         onClick={() =>
-                          workspace && void deleteWorkspaceMcpServer(workspace.id, server.name)
+                          workspace &&
+                          void deleteWorkspaceMcpServer(workspace.id, server.name, "user")
                         }
                       >
                         Delete Server

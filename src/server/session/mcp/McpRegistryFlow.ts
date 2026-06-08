@@ -1,7 +1,10 @@
 import { readMCPServersSnapshot } from "../../../mcp";
 import {
+  deleteMCPServer,
   deleteWorkspaceMCPServer,
+  type EditableMCPServerConfigSource,
   setMCPServerEnabled,
+  upsertMCPServer,
   upsertWorkspaceMCPServer,
 } from "../../../mcp/configRegistry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
@@ -97,11 +100,19 @@ export class McpRegistryFlow {
     }
   }
 
-  async upsert(server: MCPServerConfig, previousName?: string): Promise<string | null> {
+  async upsert(
+    server: MCPServerConfig,
+    previousName?: string,
+    source: EditableMCPServerConfigSource = "workspace",
+  ): Promise<string | null> {
     if (!this.context.guardBusy()) return null;
 
     try {
-      await upsertWorkspaceMCPServer(this.context.state.config, server, previousName);
+      if (source === "workspace") {
+        await upsertWorkspaceMCPServer(this.context.state.config, server, previousName);
+      } else {
+        await upsertMCPServer(this.context.state.config, source, server, previousName);
+      }
     } catch (err) {
       const message = String(err);
       if (message.toLowerCase().includes("mcp-servers.json")) {
@@ -124,10 +135,14 @@ export class McpRegistryFlow {
     return server.name;
   }
 
-  async delete(nameRaw: string) {
+  async delete(nameRaw: string, source: EditableMCPServerConfigSource = "workspace") {
     if (!this.context.guardBusy()) return;
     try {
-      await deleteWorkspaceMCPServer(this.context.state.config, nameRaw);
+      if (source === "workspace") {
+        await deleteWorkspaceMCPServer(this.context.state.config, nameRaw);
+      } else {
+        await deleteMCPServer(this.context.state.config, source, nameRaw);
+      }
     } catch (err) {
       const message = String(err);
       if (

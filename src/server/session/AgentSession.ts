@@ -11,7 +11,7 @@ import {
 import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
 import { closeMcpServersForSession } from "../../mcp";
-import type { MCPRegistryServer } from "../../mcp/configRegistry";
+import type { EditableMCPServerConfigSource, MCPRegistryServer } from "../../mcp/configRegistry";
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
@@ -1272,12 +1272,16 @@ export class AgentSession {
     await this.getMcpManager().emitMcpServers();
   }
 
-  async upsertMcpServer(server: MCPServerConfig, previousName?: string) {
-    await this.getMcpManager().upsert(server, previousName);
+  async upsertMcpServer(
+    server: MCPServerConfig,
+    previousName?: string,
+    source?: EditableMCPServerConfigSource,
+  ) {
+    await this.getMcpManager().upsert(server, previousName, source);
   }
 
-  async deleteMcpServer(nameRaw: string) {
-    await this.getMcpManager().delete(nameRaw);
+  async deleteMcpServer(nameRaw: string, source?: EditableMCPServerConfigSource) {
+    await this.getMcpManager().delete(nameRaw, source);
   }
 
   async setMcpServerEnabled(opts: Parameters<McpManager["setEnabled"]>[0]) {

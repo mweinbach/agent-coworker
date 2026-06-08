@@ -51,7 +51,7 @@ export function createWorkspaceMcpActions(
       }
     },
 
-    upsertWorkspaceMcpServer: async (workspaceId, server, previousName) => {
+    upsertWorkspaceMcpServer: async (workspaceId, server, previousName, source = "workspace") => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
@@ -62,6 +62,7 @@ export function createWorkspaceMcpActions(
         "cowork/mcp/server/upsert",
         {
           cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          source,
           server,
           previousName,
         },
@@ -79,7 +80,7 @@ export function createWorkspaceMcpActions(
       }));
     },
 
-    deleteWorkspaceMcpServer: async (workspaceId, name) => {
+    deleteWorkspaceMcpServer: async (workspaceId, name, source = "workspace") => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       const ok = await requestJsonRpcControlEvent(
@@ -89,6 +90,7 @@ export function createWorkspaceMcpActions(
         "cowork/mcp/server/delete",
         {
           cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          source,
           name,
         },
       );

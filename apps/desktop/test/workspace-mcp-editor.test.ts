@@ -299,7 +299,7 @@ describe("workspace MCP editor flow", () => {
     expect(runtime?.mcpWarnings[0]).toContain("invalid JSON");
   });
 
-  test("upsertWorkspaceMcpServer sends cowork/mcp/server/upsert and applies the returned snapshot", async () => {
+  test("upsertWorkspaceMcpServer can target global user MCP config", async () => {
     jsonRpcHandlers.set("cowork/mcp/server/upsert", async (params) => ({
       event: {
         type: "mcp_servers",
@@ -308,10 +308,10 @@ describe("workspace MCP editor flow", () => {
           {
             name: "local",
             transport: { type: "stdio", command: "echo", args: ["ok"] },
-            source: "workspace",
-            inherited: false,
+            source: "user",
+            inherited: true,
             authMode: "none",
-            authScope: "workspace",
+            authScope: "user",
             authMessage: null,
           },
         ],
@@ -334,15 +334,21 @@ describe("workspace MCP editor flow", () => {
       },
     }));
 
-    await useAppStore.getState().upsertWorkspaceMcpServer(workspaceId, {
-      name: "local",
-      transport: { type: "stdio", command: "echo", args: ["ok"] },
-      auth: { type: "none" },
-    });
+    await useAppStore.getState().upsertWorkspaceMcpServer(
+      workspaceId,
+      {
+        name: "local",
+        transport: { type: "stdio", command: "echo", args: ["ok"] },
+        auth: { type: "none" },
+      },
+      undefined,
+      "user",
+    );
 
     const request = jsonRpcRequests.find((entry) => entry.method === "cowork/mcp/server/upsert");
     expect(request?.params).toMatchObject({
       cwd: "/tmp/workspace",
+      source: "user",
       server: {
         name: "local",
       },

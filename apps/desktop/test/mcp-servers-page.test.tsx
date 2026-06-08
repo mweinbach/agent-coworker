@@ -31,10 +31,11 @@ describe("MCP servers settings page", () => {
   test("renders per-server switches and toggles without expanding the row", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const setEnabled = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -64,11 +65,11 @@ describe("MCP servers settings page", () => {
                 {
                   name: "grep",
                   transport: { type: "http", url: "https://mcp.grep.app" },
-                  enabled: true,
-                  source: "workspace",
-                  inherited: false,
+                  enabled: false,
+                  source: "user",
+                  inherited: true,
                   authMode: "none",
-                  authScope: "workspace",
+                  authScope: "user",
                   authMessage: "",
                 },
                 {
@@ -107,18 +108,18 @@ describe("MCP servers settings page", () => {
 
       expect(setEnabled).toHaveBeenCalledWith("ws-1", {
         name: "grep",
-        source: "workspace",
-        enabled: false,
+        source: "user",
+        enabled: true,
       });
       expect(container.textContent).not.toContain("Command");
 
-      const builtinSwitch = container.querySelector('[aria-label="Enable builtin"]');
-      expect(builtinSwitch?.hasAttribute("disabled")).toBe(true);
-
-      await act(async () => {
-        root.unmount();
-      });
+      expect(container.textContent).not.toContain("builtin");
     } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       harness.restore();
     }
   });
@@ -131,10 +132,11 @@ describe("MCP servers settings page", () => {
         (dom.window.HTMLElement.prototype as { detachEvent?: () => void }).detachEvent = () => {};
       },
     });
+    let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -165,10 +167,10 @@ describe("MCP servers settings page", () => {
                   name: "grep",
                   transport: { type: "http", url: "https://mcp.grep.app" },
                   enabled: true,
-                  source: "workspace",
-                  inherited: false,
+                  source: "user",
+                  inherited: true,
                   authMode: "none",
-                  authScope: "workspace",
+                  authScope: "user",
                   authMessage: "",
                 },
               ],
@@ -190,11 +192,12 @@ describe("MCP servers settings page", () => {
 
       expect(container.textContent).not.toContain("Command");
       expect(editButton).not.toBeNull();
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       harness.restore();
     }
   });

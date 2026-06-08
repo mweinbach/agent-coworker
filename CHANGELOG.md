@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.1.19 - 2026-06-08
+
+### Changed
+
+- Bumped the desktop build version for the next tagged release.
+
 ## 1.1.18 - 2026-06-07
 
 ### Added

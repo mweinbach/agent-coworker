@@ -213,6 +213,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - When the user explicitly accepts a change ("delete the workflow"), execute that — don't keep refining the prior approach.
 - Confirm the active branch is rebased on current `origin/main` before stacking multi-commit work; if `main` moved mid-feature, rebase before more branch work.
 - When the user says a surface is "retired" or "archived", do the full deletion in one pass: code, tests, docs, entrypoints, now-unused deps. No dormant compatibility shells.
+- When the user asks to push a new build for this repo, treat it as a version bump plus release tag unless they explicitly ask for a no-op CI trigger.
 
 ### Verification Before Done
 

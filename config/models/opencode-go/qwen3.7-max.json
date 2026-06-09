@@ -1,0 +1,10 @@
+{
+  "id": "qwen3.7-max",
+  "provider": "opencode-go",
+  "displayName": "Qwen3.7 Max",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

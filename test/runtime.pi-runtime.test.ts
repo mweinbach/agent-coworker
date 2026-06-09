@@ -967,12 +967,12 @@ describe("pi runtime regressions", () => {
       baseUrl: "https://opencode.ai/zen/v1",
       reasoning: true,
       contextWindow: 204800,
-      maxTokens: 65536,
+      maxTokens: 131072,
       cost: {
         input: 0.3,
         output: 1.2,
         cacheRead: 0.06,
-        cacheWrite: 0.375,
+        cacheWrite: 0,
       },
     });
     expect(resolved.model.input).toEqual(["text"]);

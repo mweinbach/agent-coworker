@@ -40,15 +40,70 @@ import openaiGpt54Nano from "../../config/models/openai/gpt-5.4-nano.json";
 import openaiGpt54Pro from "../../config/models/openai/gpt-5.4-pro.json";
 import openaiGpt55 from "../../config/models/openai/gpt-5.5.json";
 import openaiGpt5Mini from "../../config/models/openai/gpt-5-mini.json";
-import opencodeGoGlm5 from "../../config/models/opencode-go/glm-5.json";
+import opencodeGoMinimaxM3 from "../../config/models/opencode-go/minimax-m3.json";
+import opencodeGoMinimaxM27 from "../../config/models/opencode-go/minimax-m2.7.json";
+import opencodeGoMinimaxM25 from "../../config/models/opencode-go/minimax-m2.5.json";
+import opencodeGoKimiK26 from "../../config/models/opencode-go/kimi-k2.6.json";
 import opencodeGoKimiK25 from "../../config/models/opencode-go/kimi-k2.5.json";
-import opencodeZenBigPickle from "../../config/models/opencode-zen/big-pickle.json";
+import opencodeGoGlm51 from "../../config/models/opencode-go/glm-5.1.json";
+import opencodeGoGlm5 from "../../config/models/opencode-go/glm-5.json";
+import opencodeGoDeepseekV4Pro from "../../config/models/opencode-go/deepseek-v4-pro.json";
+import opencodeGoDeepseekV4Flash from "../../config/models/opencode-go/deepseek-v4-flash.json";
+import opencodeGoQwen37Max from "../../config/models/opencode-go/qwen3.7-max.json";
+import opencodeGoQwen37Plus from "../../config/models/opencode-go/qwen3.7-plus.json";
+import opencodeGoQwen36Plus from "../../config/models/opencode-go/qwen3.6-plus.json";
+import opencodeGoQwen35Plus from "../../config/models/opencode-go/qwen3.5-plus.json";
+import opencodeGoMimoV2Pro from "../../config/models/opencode-go/mimo-v2-pro.json";
+import opencodeGoMimoV2Omni from "../../config/models/opencode-go/mimo-v2-omni.json";
+import opencodeGoMimoV25Pro from "../../config/models/opencode-go/mimo-v2.5-pro.json";
+import opencodeGoMimoV25 from "../../config/models/opencode-go/mimo-v2.5.json";
+import opencodeGoHy3Preview from "../../config/models/opencode-go/hy3-preview.json";
+import opencodeZenClaudeOpus48 from "../../config/models/opencode-zen/claude-opus-4-8.json";
+import opencodeZenClaudeOpus47 from "../../config/models/opencode-zen/claude-opus-4-7.json";
+import opencodeZenClaudeOpus46 from "../../config/models/opencode-zen/claude-opus-4-6.json";
+import opencodeZenClaudeOpus45 from "../../config/models/opencode-zen/claude-opus-4-5.json";
+import opencodeZenClaudeOpus41 from "../../config/models/opencode-zen/claude-opus-4-1.json";
+import opencodeZenClaudeSonnet46 from "../../config/models/opencode-zen/claude-sonnet-4-6.json";
+import opencodeZenClaudeSonnet45 from "../../config/models/opencode-zen/claude-sonnet-4-5.json";
+import opencodeZenClaudeSonnet4 from "../../config/models/opencode-zen/claude-sonnet-4.json";
+import opencodeZenClaudeHaiku45 from "../../config/models/opencode-zen/claude-haiku-4-5.json";
+import opencodeZenGemini35Flash from "../../config/models/opencode-zen/gemini-3.5-flash.json";
+import opencodeZenGemini31Pro from "../../config/models/opencode-zen/gemini-3.1-pro.json";
+import opencodeZenGemini3Flash from "../../config/models/opencode-zen/gemini-3-flash.json";
+import opencodeZenGpt55 from "../../config/models/opencode-zen/gpt-5.5.json";
+import opencodeZenGpt55Pro from "../../config/models/opencode-zen/gpt-5.5-pro.json";
+import opencodeZenGpt54 from "../../config/models/opencode-zen/gpt-5.4.json";
+import opencodeZenGpt54Pro from "../../config/models/opencode-zen/gpt-5.4-pro.json";
+import opencodeZenGpt54Mini from "../../config/models/opencode-zen/gpt-5.4-mini.json";
+import opencodeZenGpt54Nano from "../../config/models/opencode-zen/gpt-5.4-nano.json";
+import opencodeZenGpt53CodexSpark from "../../config/models/opencode-zen/gpt-5.3-codex-spark.json";
+import opencodeZenGpt53Codex from "../../config/models/opencode-zen/gpt-5.3-codex.json";
+import opencodeZenGpt52 from "../../config/models/opencode-zen/gpt-5.2.json";
+import opencodeZenGpt52Codex from "../../config/models/opencode-zen/gpt-5.2-codex.json";
+import opencodeZenGpt51 from "../../config/models/opencode-zen/gpt-5.1.json";
+import opencodeZenGpt51CodexMax from "../../config/models/opencode-zen/gpt-5.1-codex-max.json";
+import opencodeZenGpt51Codex from "../../config/models/opencode-zen/gpt-5.1-codex.json";
+import opencodeZenGpt51CodexMini from "../../config/models/opencode-zen/gpt-5.1-codex-mini.json";
+import opencodeZenGpt5 from "../../config/models/opencode-zen/gpt-5.json";
+import opencodeZenGpt5Codex from "../../config/models/opencode-zen/gpt-5-codex.json";
+import opencodeZenGpt5Nano from "../../config/models/opencode-zen/gpt-5-nano.json";
+import opencodeZenGrokBuild01 from "../../config/models/opencode-zen/grok-build-0.1.json";
+import opencodeZenDeepseekV4Flash from "../../config/models/opencode-zen/deepseek-v4-flash.json";
+import opencodeZenGlm51 from "../../config/models/opencode-zen/glm-5.1.json";
 import opencodeZenGlm5 from "../../config/models/opencode-zen/glm-5.json";
+import opencodeZenMinimaxM27 from "../../config/models/opencode-zen/minimax-m2.7.json";
+import opencodeZenMinimaxM25 from "../../config/models/opencode-zen/minimax-m2.5.json";
+import opencodeZenKimiK26 from "../../config/models/opencode-zen/kimi-k2.6.json";
 import opencodeZenKimiK25 from "../../config/models/opencode-zen/kimi-k2.5.json";
-import opencodeZenMimoV2FlashFree from "../../config/models/opencode-zen/mimo-v2-flash-free.json";
-import opencodeZenMiniMaxM25 from "../../config/models/opencode-zen/minimax-m2.5.json";
-import opencodeZenMiniMaxM25Free from "../../config/models/opencode-zen/minimax-m2.5-free.json";
-import opencodeZenNemotron3SuperFree from "../../config/models/opencode-zen/nemotron-3-super-free.json";
+import opencodeZenQwen36Plus from "../../config/models/opencode-zen/qwen3.6-plus.json";
+import opencodeZenQwen35Plus from "../../config/models/opencode-zen/qwen3.5-plus.json";
+import opencodeZenBigPickle from "../../config/models/opencode-zen/big-pickle.json";
+import opencodeZenDeepseekV4FlashFree from "../../config/models/opencode-zen/deepseek-v4-flash-free.json";
+import opencodeZenMimoV25Free from "../../config/models/opencode-zen/mimo-v2.5-free.json";
+import opencodeZenQwen36PlusFree from "../../config/models/opencode-zen/qwen3.6-plus-free.json";
+import opencodeZenMinimaxM3Free from "../../config/models/opencode-zen/minimax-m3-free.json";
+import opencodeZenNemotron3UltraFree from "../../config/models/opencode-zen/nemotron-3-ultra-free.json";
+import opencodeZenNorthMiniCodeFree from "../../config/models/opencode-zen/north-mini-code-free.json";
 import togetherMoonshotAiKimiK25 from "../../config/models/together/moonshotai-kimi-k2.5.json";
 import togetherQwenQwen35397bA17b from "../../config/models/together/qwen-qwen3.5-397b-a17b.json";
 import togetherZaiOrgGlm5 from "../../config/models/together/zai-org-glm-5.json";
@@ -132,15 +187,70 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   openaiGpt54Pro,
   nvidiaNemotron3Super120bA12b,
   minimaxM3,
-  opencodeGoGlm5,
+  opencodeGoMinimaxM3,
+  opencodeGoMinimaxM27,
+  opencodeGoMinimaxM25,
+  opencodeGoKimiK26,
   opencodeGoKimiK25,
-  opencodeZenBigPickle,
+  opencodeGoGlm51,
+  opencodeGoGlm5,
+  opencodeGoDeepseekV4Pro,
+  opencodeGoDeepseekV4Flash,
+  opencodeGoQwen37Max,
+  opencodeGoQwen37Plus,
+  opencodeGoQwen36Plus,
+  opencodeGoQwen35Plus,
+  opencodeGoMimoV2Pro,
+  opencodeGoMimoV2Omni,
+  opencodeGoMimoV25Pro,
+  opencodeGoMimoV25,
+  opencodeGoHy3Preview,
+  opencodeZenClaudeOpus48,
+  opencodeZenClaudeOpus47,
+  opencodeZenClaudeOpus46,
+  opencodeZenClaudeOpus45,
+  opencodeZenClaudeOpus41,
+  opencodeZenClaudeSonnet46,
+  opencodeZenClaudeSonnet45,
+  opencodeZenClaudeSonnet4,
+  opencodeZenClaudeHaiku45,
+  opencodeZenGemini35Flash,
+  opencodeZenGemini31Pro,
+  opencodeZenGemini3Flash,
+  opencodeZenGpt55,
+  opencodeZenGpt55Pro,
+  opencodeZenGpt54,
+  opencodeZenGpt54Pro,
+  opencodeZenGpt54Mini,
+  opencodeZenGpt54Nano,
+  opencodeZenGpt53CodexSpark,
+  opencodeZenGpt53Codex,
+  opencodeZenGpt52,
+  opencodeZenGpt52Codex,
+  opencodeZenGpt51,
+  opencodeZenGpt51CodexMax,
+  opencodeZenGpt51Codex,
+  opencodeZenGpt51CodexMini,
+  opencodeZenGpt5,
+  opencodeZenGpt5Codex,
+  opencodeZenGpt5Nano,
+  opencodeZenGrokBuild01,
+  opencodeZenDeepseekV4Flash,
+  opencodeZenGlm51,
   opencodeZenGlm5,
+  opencodeZenMinimaxM27,
+  opencodeZenMinimaxM25,
+  opencodeZenKimiK26,
   opencodeZenKimiK25,
-  opencodeZenMimoV2FlashFree,
-  opencodeZenMiniMaxM25Free,
-  opencodeZenMiniMaxM25,
-  opencodeZenNemotron3SuperFree,
+  opencodeZenQwen36Plus,
+  opencodeZenQwen35Plus,
+  opencodeZenBigPickle,
+  opencodeZenDeepseekV4FlashFree,
+  opencodeZenMimoV25Free,
+  opencodeZenQwen36PlusFree,
+  opencodeZenMinimaxM3Free,
+  opencodeZenNemotron3UltraFree,
+  opencodeZenNorthMiniCodeFree,
   togetherMoonshotAiKimiK25,
   togetherQwenQwen35397bA17b,
   togetherZaiOrgGlm5,

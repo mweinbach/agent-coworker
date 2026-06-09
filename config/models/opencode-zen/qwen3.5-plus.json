@@ -1,0 +1,10 @@
+{
+  "id": "qwen3.5-plus",
+  "provider": "opencode-zen",
+  "displayName": "Qwen3.5 Plus",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

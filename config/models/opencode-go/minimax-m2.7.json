@@ -1,0 +1,10 @@
+{
+  "id": "minimax-m2.7",
+  "provider": "opencode-go",
+  "displayName": "MiniMax M2.7",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

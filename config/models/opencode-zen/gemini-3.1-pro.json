@@ -1,0 +1,10 @@
+{
+  "id": "gemini-3.1-pro",
+  "provider": "opencode-zen",
+  "displayName": "Gemini 3.1 Pro Preview",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

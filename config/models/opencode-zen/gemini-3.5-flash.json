@@ -1,0 +1,10 @@
+{
+  "id": "gemini-3.5-flash",
+  "provider": "opencode-zen",
+  "displayName": "Gemini 3.5 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -1,0 +1,10 @@
+{
+  "id": "gpt-5.5",
+  "provider": "opencode-zen",
+  "displayName": "GPT-5.5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

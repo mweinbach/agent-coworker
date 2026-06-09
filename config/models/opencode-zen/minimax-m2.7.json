@@ -1,7 +1,7 @@
 {
-  "id": "minimax-m2.5-free",
+  "id": "minimax-m2.7",
   "provider": "opencode-zen",
-  "displayName": "MiniMax M2.5 Free",
+  "displayName": "MiniMax M2.7",
   "knowledgeCutoff": "Unknown",
   "supportsImageInput": false,
   "promptTemplate": "system.md",

@@ -1,0 +1,10 @@
+{
+  "id": "grok-build-0.1",
+  "provider": "opencode-zen",
+  "displayName": "Grok Build 0.1",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -181,4 +181,79 @@ describe("parseChildAgentReport", () => {
       parsedReport: null,
     });
   });
+
+  test("empty <agent_report> tag is found but not valid", () => {
+    const text = ["Summary", "<agent_report>", "</agent_report>"].join("\n");
+
+    expect(parseChildAgentReport(text)).toBeNull();
+    expect(inspectChildAgentReport(text)).toMatchObject({
+      reportFound: true,
+      reportValid: false,
+      reportBlockCount: 1,
+      parsedReport: null,
+      reportDiagnostic: "Empty <agent_report> footer.",
+    });
+  });
+
+  test("empty <agent_report> tag with only whitespace is found but not valid", () => {
+    const text = "<agent_report>   \n   </agent_report>";
+
+    expect(parseChildAgentReport(text)).toBeNull();
+    expect(inspectChildAgentReport(text)).toMatchObject({
+      reportFound: true,
+      reportValid: false,
+      reportBlockCount: 1,
+      parsedReport: null,
+      reportDiagnostic: "Empty <agent_report> footer.",
+    });
+  });
+
+  test("multiple <agent_report> blocks: reportBlockCount reflects total count", () => {
+    const validReport = JSON.stringify({
+      status: "completed",
+      summary: "Third block wins",
+      filesChanged: ["src/foo.ts"],
+    });
+    const text = [
+      '<agent_report>{"status":"completed","summary":"First block"}</agent_report>',
+      '<agent_report>{"status":"blocked","summary":"Second block","filesChanged":[]}</agent_report>',
+      `<agent_report>${validReport}</agent_report>`,
+    ].join("\n");
+
+    const inspection = inspectChildAgentReport(text);
+    expect(inspection.reportBlockCount).toBe(3);
+    expect(inspection.reportValid).toBe(true);
+    expect(inspection.reportDiagnostic).toBe(
+      "Multiple <agent_report> blocks found; parsed the trailing block.",
+    );
+    expect(inspection.parsedReport).toMatchObject({
+      status: "completed",
+      summary: "Third block wins",
+    });
+  });
+
+  test("garbage input with no JSON anywhere returns null with diagnostic", () => {
+    const text = "This is just some plain text with no JSON or report tags at all.";
+
+    expect(parseChildAgentReport(text)).toBeNull();
+    expect(inspectChildAgentReport(text)).toEqual({
+      reportRequired: true,
+      reportFound: false,
+      reportValid: false,
+      reportBlockCount: 0,
+      reportDiagnostic: "No <agent_report> footer or valid legacy report found.",
+      parsedReport: null,
+    });
+  });
+
+  test("garbage input with JSON-like but invalid structure returns null", () => {
+    const text = '{"not_a_report": true, "missing_required_fields": 1}';
+
+    expect(parseChildAgentReport(text)).toBeNull();
+    expect(inspectChildAgentReport(text)).toMatchObject({
+      reportFound: false,
+      reportValid: false,
+      parsedReport: null,
+    });
+  });
 });

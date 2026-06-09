@@ -130,6 +130,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/spreadsheet/workbook`
 - `cowork/workspace/spreadsheet/version`
 - `cowork/workspace/spreadsheet/patch`
+- `cowork/workspace/presentation/preview`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
 
@@ -259,6 +260,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/auth/logout`
   - `cowork/provider/auth/callback`
   - `cowork/provider/auth/setApiKey`
+  - `cowork/provider/auth/setConfig`
   - `cowork/provider/auth/copyApiKey`
 - runtime diagnostics
   - `cowork/runtime/libreoffice/check`
@@ -477,6 +479,14 @@ Requests:
   - params: `{ researchId, format: "markdown" | "pdf" | "docx" }`
   - result: `{ path, sizeBytes }`
   - writes `report.md`, `report.pdf`, or `report.docx` under `~/.cowork/research/<id>/`
+- `research/approvePlan`
+  - params: `{ researchId }`
+  - result: `{ research: ResearchRecord | null }`
+  - approves a pending research plan so the interaction proceeds (used with plan-approval settings)
+- `research/refinePlan`
+  - params: `{ researchId, input }`
+  - result: `{ research: ResearchRecord | null }`
+  - sends refinement input for a pending research plan instead of approving it as-is
 
 `ResearchRecord` currently persists:
 
@@ -551,6 +561,12 @@ Sockets subscribed with `research/subscribe` can receive:
 - `cowork/session/agentSpawned`
 - `cowork/session/agentStatus`
 - `cowork/session/agentWaitResult`
+- `cowork/session/backupState`
+- `cowork/session/harnessContext`
+- `cowork/agentProfiles/catalog`
+- `cowork/control/event`
+- `cowork/log`
+- `cowork/todos`
 
 ### Server-initiated JSON-RPC requests currently available
 
@@ -598,6 +614,19 @@ Non-turn feed items such as `system`, `log`, `todos`, and `error` are emitted wi
 Ask/approval prompts still arrive as server requests, but the harness also emits matching projected `system` feed items so snapshots and live feeds stay aligned.
 
 `item/completed` should be treated as the latest snapshot for that projected item id. For long-lived items, especially `toolCall`, the harness may emit multiple `item/completed` notifications for the same id as the projected state advances.
+
+### JSON-RPC error codes
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `-32700` | `parseError` | Malformed JSON frame |
+| `-32600` | `invalidRequest` | Message is not a valid JSON-RPC-lite envelope |
+| `-32601` | `methodNotFound` | No handler registered for the requested method |
+| `-32602` | `invalidParams` | Missing or invalid parameters for the method |
+| `-32603` | `internalError` | Unexpected server-side error while handling the request |
+| `-32001` | `serverOverloaded` | Bounded-queue overload; retryable with backoff (see below) |
+| `-32002` | `notInitialized` | Request arrived before the `initialize`/`initialized` handshake completed |
+| `-32003` | `alreadyInitialized` | A second `initialize` was received on an already-initialized connection |
 
 ### JSON-RPC overload behavior
 
@@ -2323,7 +2352,7 @@ Internal session event recorded when an action needs user approval. There are tw
 1. **Sandbox-denial escalation** (`dangerous: true`, `reasonCode: "sandbox_denied_escalation"`): the OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this is emitted when a sandboxed command failed like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure), or when a restrictive command would fall back to unsandboxed execution because no backend is available. Approving runs the command with full access; rejecting returns the sandbox failure/refusal to the model.
 2. **Ordinary approval** (`dangerous: false`, `reasonCode: "requires_manual_review"`): a provider/tool approval that is NOT a sandbox escape — e.g. the Codex app-server `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` prompts, routed through `approveCommand` without a sandbox reason. Clients should render these as normal approval prompts, not as "escape the sandbox".
 
-YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always prompts (it is not auto-approved under YOLO). On the JSON-RPC wire, the prompt is sent as the server request `item/commandExecution/requestApproval` (or `item/fileChange/requestApproval`).
+YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always prompts (it is not auto-approved under YOLO). On the JSON-RPC wire, the prompt is always sent as the server request `item/commandExecution/requestApproval` — upstream Codex app-server `item/fileChange/requestApproval` requests are handled internally and surface through the same `approveCommand` prompt.
 
 For a sandbox-denial escalation the event also carries `detail` (a short, safe-to-display reason the command was blocked) and `category` (`"filesystem"` or `"network"`) so clients can render a clear, inline, sandbox-aware approval ("re-run with full disk + network access?") instead of a generic command-approval prompt. These fields are omitted for ordinary approvals. They are mirrored on the JSON-RPC server request `item/commandExecution/requestApproval` params (`detail`, `category`).
 

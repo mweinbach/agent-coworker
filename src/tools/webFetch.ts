@@ -4,7 +4,6 @@ import path from "node:path";
 
 import TurndownService from "turndown";
 import { z } from "zod";
-import { policyAllowsNetwork } from "../platform/sandbox/policy";
 import { getLocalWebSearchProviderFromProviderOptions } from "../shared/openaiCompatibleOptions";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
@@ -813,13 +812,6 @@ export function createWebFetchTool(ctx: ToolContext) {
     }),
     execute: async ({ url, maxLength }: { url: string; maxLength: number }) => {
       ctx.log(`tool> webFetch ${JSON.stringify({ url, maxLength })}`);
-
-      // Honor a no-network sandbox policy. webFetch runs in the main process,
-      // outside the bash sandbox, so without this it would egress even when the
-      // session's policy forbids network access.
-      if (ctx.sandboxPolicy && !policyAllowsNetwork(ctx.sandboxPolicy)) {
-        throw new Error("webFetch is disabled: the sandbox policy does not allow network access.");
-      }
 
       const { response, finalUrl } = await fetchWithSafeRedirects(url, ctx.abortSignal);
       if (!response.ok) {

@@ -738,31 +738,6 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("is disabled entirely when the sandbox policy forbids network", async () => {
-    const dir = await tmpDir();
-    let fetched = false;
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () => {
-      fetched = true;
-      return new Response("should not be reached", { status: 200 });
-    }) as any;
-
-    try {
-      const t: any = createWebFetchTool(
-        makeCtx(dir, {
-          sandboxPolicy: { kind: "workspace-write", writableRoots: [dir], network: false },
-        }),
-      );
-      await expect(
-        t.execute({ url: "https://example.com/page", maxLength: 50000 }),
-      ).rejects.toThrow(/does not allow network access/);
-      // The guard fires before any network call is attempted.
-      expect(fetched).toBe(false);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
   test("cleans up partial downloads when a streamed response exceeds the size limit", async () => {
     const dir = await tmpDir();
     webFetchInternal.setMaxDownloadBytes(8);

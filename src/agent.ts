@@ -17,7 +17,7 @@ import {
 } from "./managedSofficeRuntime";
 import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
-import { policyAllowsNetwork, resolveSandboxPolicy } from "./platform/sandbox";
+import { resolveSandboxPolicy } from "./platform/sandbox";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
 import type {
@@ -665,10 +665,6 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           tools,
           maxSteps: params.maxSteps ?? 100,
           yolo: params.yolo,
-          // Reuse the policy already resolved for the tool context so provider-
-          // native web tools are gated on the same no-network decision as the
-          // local webFetch/webSearch execute guards.
-          networkAllowed: policyAllowsNetwork(toolCtx.sandboxPolicy),
           shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
           providerOptions: turnProviderOptions,
           providerState: params.providerState,

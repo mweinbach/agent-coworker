@@ -208,6 +208,42 @@ describe("bash tool", () => {
     expect(observedEnv?.COWORK_SANDBOX).toBeDefined();
   });
 
+  test("sandboxed run strips secrets from an explicit toolEnv", async () => {
+    const dir = await tmpDir();
+    let observedEnv: Record<string, string | undefined> | undefined;
+    await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: dir,
+      platform: "linux",
+      policy: { kind: "workspace-write", writableRoots: [dir], network: true },
+      capabilities: { seatbelt: false, bwrapPath: "/usr/bin/bwrap", windowsHelperPath: null },
+      // A realistic toolEnv: server process env (secrets) plus allowlisted basics.
+      env: {
+        PATH: "/usr/bin",
+        HOME: "/home/agent",
+        ANTHROPIC_API_KEY: "sk-ant-secret",
+        AWS_SECRET_ACCESS_KEY: "aws-secret",
+        GITHUB_TOKEN: "ghp_secret",
+      },
+      execRunner: async (
+        _file: string,
+        _args: string[],
+        execOpts?: { env?: Record<string, string | undefined> },
+      ) => {
+        observedEnv = execOpts?.env;
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+    // Allowlisted compatibility vars pass through; secrets must be stripped so a
+    // sandboxed command cannot read and exfiltrate them.
+    expect(observedEnv?.PATH).toBe("/usr/bin");
+    expect(observedEnv?.HOME).toBe("/home/agent");
+    expect(observedEnv?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(observedEnv?.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(observedEnv?.GITHUB_TOKEN).toBeUndefined();
+    expect(observedEnv?.COWORK_SANDBOX).toBeDefined();
+  });
+
   test("passes tool environment into shell execution", async () => {
     const dir = await tmpDir();
     let observedEnv: Record<string, string | undefined> | undefined;

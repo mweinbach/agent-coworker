@@ -367,9 +367,16 @@ async function runShellCommandWithExec(
       signal: opts.abortSignal,
       timeoutMs: opts.timeoutMs,
       // Passing an `env` object replaces (not merges) the child environment.
-      // Sandboxed commands receive either the explicit toolEnv or a minimal
-      // compatibility allowlist, then sandbox marker vars overlay last.
-      env: { ...(opts.env ?? minimalSandboxEnv()), ...transformed.env },
+      // The OS sandbox confines filesystem writes, but NOT environment access:
+      // a sandboxed command can still read every variable it is handed and (with
+      // network allowed, the default) exfiltrate it. So the child must never see
+      // the server's full process env — which carries provider API keys and other
+      // secrets. Filter to the compatibility allowlist (PATH/HOME/locale/etc.).
+      // Any runtime-specific vars the command needs (COWORK_ARTIFACT_RUNTIME_*,
+      // COWORK_SOFFICE, the runtime PATH dirs) are already baked into the command
+      // string by buildPlatformShellCommandWithRuntimePrelude, so they do not need
+      // to be passed through here. Sandbox marker vars overlay last.
+      env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
     });
     return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
   }

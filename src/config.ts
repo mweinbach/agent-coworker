@@ -205,6 +205,10 @@ async function resolveConfiguredModelMetadata(
   }
   const supported = getSupportedModel(provider, modelId);
   if (supported) return supported;
+  // Intentional resilience: an unsupported model id (e.g. renamed or removed
+  // after a catalog update) falls back to the provider default instead of
+  // failing config load, so existing sessions keep working. The warning below
+  // is the only signal; do not silently change this to a hard error.
   const fallback = defaultSupportedModel(provider);
   const mismatchHint = describeModelProviderMismatch(provider, modelId);
   console.warn(

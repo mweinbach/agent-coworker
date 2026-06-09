@@ -227,6 +227,18 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         });
         context.queuePersistSessionSnapshot("session.usage_budget_updated");
       },
+      onMcpLoadErrors: (errors) => {
+        // Surface MCP load failures on every turn (including workspace-cache
+        // hits, which skip the initial load-time logging) so users see that
+        // the turn is running with a degraded tool set.
+        for (const err of errors) {
+          log(err.startsWith("[MCP]") ? err : `[MCP] ${err}`);
+        }
+        context.emitTelemetry("agent.mcp.load_errors", "error", {
+          sessionId: context.id,
+          count: errors.length,
+        });
+      },
       onModelError: async (error) => {
         tracker.lastStreamError = error;
         context.emitTelemetry("agent.stream.error", "error", {

@@ -355,4 +355,46 @@ describe("google native interactions request building", () => {
     expect(seenStreamOptions[0]?.thinkingLevel).toBeUndefined();
     expect(seenStreamOptions[0]?.thinkingSummaries).toBe("auto");
   });
+
+  test("suppresses provider-native web search when the sandbox policy blocks network", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-no-net-"));
+    const seenStreamOptions: Array<Record<string, unknown>> = [];
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (opts) => {
+        seenStreamOptions.push({ ...opts.streamOptions });
+        return {
+          assistant: {
+            role: "assistant",
+            api: "google-interactions",
+            provider: "google",
+            model: "gemini-3-flash-preview",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "no-network-native-web",
+        };
+      },
+    });
+
+    await runtime.runTurn(
+      makeParams(
+        makeConfig(homeDir, {
+          providerOptions: { google: { nativeWebSearch: true } },
+        }),
+        {
+          // No-network sandbox: provider-native google_search/url_context must not
+          // be enabled even though nativeWebSearch is requested.
+          networkAllowed: false,
+          tools: {
+            webFetch: { description: "Fetch a web page", parameters: { type: "object" } },
+          } as unknown as RuntimeRunTurnParams["tools"],
+        },
+      ),
+    );
+
+    expect(seenStreamOptions).toHaveLength(1);
+    expect(seenStreamOptions[0]?.nativeWebSearch).toBeUndefined();
+  });
 });

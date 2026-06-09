@@ -61,6 +61,13 @@ export interface RuntimeRunTurnParams {
   tools: RuntimeToolMap;
   maxSteps: number;
   yolo?: boolean;
+  /**
+   * Whether the active sandbox policy permits network egress. When false,
+   * provider-native web tools (e.g. Gemini google_search/url_context) must NOT
+   * be advertised — gating only the local tool execute path would still let the
+   * model make provider-side web requests. Undefined means "allowed/unknown".
+   */
+  networkAllowed?: boolean;
   shellPolicy?: "full" | "no_project_write";
   /** Child-agent filesystem scope; becomes the OS sandbox writable roots. */
   agentTargetPaths?: readonly string[] | null;

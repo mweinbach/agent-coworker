@@ -214,6 +214,7 @@ function buildGoogleStreamOptions(
   providerOptions: Record<string, unknown> | undefined,
   abortSignal: AbortSignal | undefined,
   apiKey?: string,
+  networkAllowed = true,
 ): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (apiKey) options.apiKey = apiKey;
@@ -249,7 +250,10 @@ function buildGoogleStreamOptions(
   const responseMimeType = asNonEmptyString(googleSection.responseMimeType);
   if (responseMimeType) options.responseMimeType = responseMimeType;
 
-  if (getGoogleNativeWebSearchFromProviderOptions(providerOptions) === true) {
+  // Only enable Gemini's provider-native web tools (google_search/url_context,
+  // gated downstream on this flag) when the sandbox policy permits network. A
+  // no-network sandbox must not be able to egress via the provider side.
+  if (networkAllowed && getGoogleNativeWebSearchFromProviderOptions(providerOptions) === true) {
     options.nativeWebSearch = true;
   }
 
@@ -305,6 +309,7 @@ export function createGoogleInteractionsRuntime(
           stepProviderOptions ?? asRecord(params.config.providerOptions) ?? undefined,
           params.abortSignal,
           resolved.apiKey,
+          params.networkAllowed !== false,
         );
         const initialRequestFingerprint = buildGoogleRequestFingerprint({
           modelId: resolved.model.id,
@@ -375,6 +380,7 @@ export function createGoogleInteractionsRuntime(
             stepProviderOptions ?? asRecord(params.config.providerOptions) ?? undefined,
             params.abortSignal,
             resolved.apiKey,
+            params.networkAllowed !== false,
           );
           const mergedStreamOptions = {
             ...googleStreamOptions,

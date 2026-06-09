@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { CloudSyncQueue } from "../../src/sync/queue";
+import { buildCloudSyncSettingsSnapshot } from "../../src/sync/redaction";
 import {
   CLOUD_SYNC_PAYLOAD_VERSION,
   CLOUD_SYNC_SETTINGS_DEDUPE_KEY,
   type CloudSyncPatch,
   type CloudSyncQueueEntry,
 } from "../../src/sync/types";
-import { buildCloudSyncSettingsSnapshot } from "../../src/sync/redaction";
 
 const BASE_TS = "2026-01-01T00:00:00.000Z";
 
@@ -251,11 +251,7 @@ describe("CloudSyncQueue.read()", () => {
       nextAttemptAt: BASE_TS,
     };
     await fs.mkdir(path.dirname(outboxPath), { recursive: true });
-    await fs.writeFile(
-      outboxPath,
-      `\n   \n${JSON.stringify(goodEntry)}\n\n`,
-      "utf8",
-    );
+    await fs.writeFile(outboxPath, `\n   \n${JSON.stringify(goodEntry)}\n\n`, "utf8");
 
     const queue = new CloudSyncQueue({ outboxPath });
     const entries = await queue.read();

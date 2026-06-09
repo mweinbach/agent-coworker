@@ -47,6 +47,15 @@ const SANDBOX_ENV_ALLOWLIST = new Set([
   "USER",
   "USERNAME",
   "WINDIR",
+  // Cowork-internal artifact-runtime pointers (not secrets). The presentations/
+  // artifact helpers resolve the managed @oai/artifact-tool runtime via these:
+  // NODE_OPTIONS carries the `--import=<resolver>` hook and the two COWORK_* vars
+  // point at the managed node_modules / ESM resolver. They are NOT baked into the
+  // shell prelude, so they must survive the allowlist or sandboxed helper commands
+  // fail to find the runtime.
+  "COWORK_ARTIFACT_RUNTIME_NODE_MODULES",
+  "COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER",
+  "NODE_OPTIONS",
 ]);
 
 // Patterns that may indicate secrets in command output (redacted in logs only).
@@ -381,11 +390,11 @@ async function runShellCommandWithExec(
       // a sandboxed command can still read every variable it is handed and (with
       // network allowed, the default) exfiltrate it. So the child must never see
       // the server's full process env — which carries provider API keys and other
-      // secrets. Filter to the compatibility allowlist (PATH/HOME/locale/etc.).
-      // Any runtime-specific vars the command needs (COWORK_ARTIFACT_RUNTIME_*,
-      // COWORK_SOFFICE, the runtime PATH dirs) are already baked into the command
-      // string by buildPlatformShellCommandWithRuntimePrelude, so they do not need
-      // to be passed through here. Sandbox marker vars overlay last.
+      // secrets. Filter to the compatibility allowlist (PATH/HOME/locale plus the
+      // Cowork-internal artifact-runtime pointers; see SANDBOX_ENV_ALLOWLIST).
+      // The runtime PATH dirs and COWORK_SOFFICE shim are injected into the command
+      // string by buildPlatformShellCommandWithRuntimePrelude. Sandbox marker vars
+      // overlay last.
       env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
     });
     return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };

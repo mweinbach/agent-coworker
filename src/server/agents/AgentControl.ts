@@ -266,14 +266,21 @@ export class AgentControl {
     });
   }
 
-  /** Count live (non-closed) child sessions of a parent, bounding fork-bombs. */
+  /**
+   * Count child sessions of a parent that are actively running or still
+   * initializing. A child that has finished its work stays open (persistenceStatus
+   * "active") until the parent explicitly closes it, but it no longer occupies a
+   * concurrency slot — so sequential spawn→wait→spawn workflows are not blocked
+   * once they pass 16 lifetime children. A true fork-bomb still creates many
+   * concurrent RUNNING children and is bounded by MAX_ACTIVE_CHILDREN_PER_PARENT.
+   */
   private countActiveChildren(parentSessionId: string): number {
     let count = 0;
     for (const binding of this.deps.sessionBindings.values()) {
       const session = binding.session;
       if (!session?.isAgentOf?.(parentSessionId)) continue;
-      if (session.persistenceStatus === "closed") continue;
-      count += 1;
+      const state = executionStateForSession(session);
+      if (state === "running" || state === "pending_init") count += 1;
     }
     return count;
   }

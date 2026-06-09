@@ -268,6 +268,10 @@ describe("AgentControl.spawn", () => {
         session: {
           isAgentOf: (parent: string) => parent === "root-1",
           persistenceStatus: "active",
+          // These 16 children are actively running, so they each occupy a slot.
+          isBusy: true,
+          getSessionInfoEvent: () => ({ executionState: "running" }),
+          getLatestAssistantText: () => null,
         },
         socket: null,
       } as unknown as SessionBinding);
@@ -293,6 +297,62 @@ describe("AgentControl.spawn", () => {
         message: "One too many",
       }),
     ).rejects.toThrow(/active child agents/);
+  });
+
+  test("allows spawning when prior children have completed but remain open", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: {
+            isAgentOf: () => false,
+            persistenceStatus: "active",
+            buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
+          },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    // 16 children that already finished: still open (persistenceStatus "active")
+    // but idle (not busy, completed) — these must NOT occupy concurrency slots.
+    for (let i = 0; i < 16; i += 1) {
+      bindings.set(`done-${i}`, {
+        session: {
+          isAgentOf: (parent: string) => parent === "root-1",
+          persistenceStatus: "active",
+          isBusy: false,
+          currentTurnOutcome: "completed",
+          getSessionInfoEvent: () => ({ executionState: "completed" }),
+          getLatestAssistantText: () => "done",
+        },
+        socket: null,
+      } as unknown as SessionBinding);
+    }
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "One more after the others finished",
+      }),
+    ).resolves.toBeDefined();
+    expect(childSession.sendUserMessage).toHaveBeenCalledWith("One more after the others finished");
   });
 
   test("reserves slots so parallel spawns cannot race past the concurrency cap", async () => {

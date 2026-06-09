@@ -1108,7 +1108,7 @@ describe("isLikelySandboxDenied", () => {
     ).toBe(false);
   });
 
-  test("ignores docker/npm/sudo permission errors that are not sandbox denials", () => {
+  test("ignores docker/sudo permission errors that are not sandbox denials", () => {
     expect(
       isLikelySandboxDenied({
         stdout: "",
@@ -1120,17 +1120,23 @@ describe("isLikelySandboxDenied", () => {
     expect(
       isLikelySandboxDenied({
         stdout: "",
-        stderr: "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied, mkdir '/usr/lib'",
-        exitCode: 1,
-      }),
-    ).toBe(false);
-    expect(
-      isLikelySandboxDenied({
-        stdout: "",
         stderr: "sudo: a terminal is required to read the password",
         exitCode: 1,
       }),
     ).toBe(false);
+  });
+
+  test("treats EACCES mkdir/npm write denials as sandbox denials (escalation can fix them)", () => {
+    // A sandboxed command blocked from creating a directory outside the workspace
+    // reports EACCES mkdir — running it unsandboxed WOULD succeed, so the
+    // escalate-on-failure prompt must be offered rather than swallowed.
+    expect(
+      isLikelySandboxDenied({
+        stdout: "",
+        stderr: "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied, mkdir '/usr/lib'",
+        exitCode: 1,
+      }),
+    ).toBe(true);
   });
 });
 

@@ -55,11 +55,12 @@ const NON_SANDBOX_FAILURE_MARKERS = [
   "fatal: could not read from remote repository",
   "publickey,password",
   "403 forbidden",
-  // Ordinary OS/tooling permission errors that are NOT sandbox denials —
-  // escalating to full access would not fix them and the prompt is just noise.
+  // Ordinary permission errors that an unsandboxed retry would NOT fix, so the
+  // escalation prompt is just noise. Kept narrow: a Docker daemon-socket denial
+  // is a unix-group-membership issue, not a sandbox-scope one, so running with
+  // full access does not help. (Bare EACCES on mkdir/npm is intentionally NOT
+  // here — that IS typically a sandbox write-scope block that escalation fixes.)
   "permission denied while trying to connect to the docker daemon",
-  "npm err! code eacces",
-  "eacces: permission denied, mkdir",
   "sudo: a terminal is required",
   "sudo: a password is required",
 ] as const;

@@ -102,6 +102,12 @@ function normalizeNickname(nickname: string | null | undefined): string | undefi
 export class AgentControl {
   private readonly statusBus = new StatusBus();
   private readonly inFlightByAgentId = new Map<string, Promise<void>>();
+  // Synchronous reservation of concurrency slots per parent. spawn() registers
+  // its binding only after several awaits, so without reserving a slot up-front
+  // concurrent spawns would all read the same pre-spawn count and blow past
+  // MAX_ACTIVE_CHILDREN_PER_PARENT. Reserved at the (synchronous) check, released
+  // once the binding is registered (or the spawn fails).
+  private readonly inFlightSpawnsByParent = new Map<string, number>();
 
   constructor(private readonly deps: AgentControlDeps) {}
 
@@ -281,7 +287,12 @@ export class AgentControl {
           "recursive sub-delegation is disabled.",
       );
     }
-    const activeChildren = this.countActiveChildren(opts.parentSessionId);
+    // Count registered children PLUS slots reserved by concurrent in-flight
+    // spawns, then reserve a slot — all synchronously, so parallel spawn() calls
+    // cannot race past the cap before their bindings are registered below.
+    const parentId = opts.parentSessionId;
+    const reserved = this.inFlightSpawnsByParent.get(parentId) ?? 0;
+    const activeChildren = this.countActiveChildren(parentId) + reserved;
     if (activeChildren >= MAX_ACTIVE_CHILDREN_PER_PARENT) {
       throw new Error(
         `Cannot spawn another child agent: this session already has ${activeChildren} active ` +
@@ -289,6 +300,21 @@ export class AgentControl {
           "agents before spawning more.",
       );
     }
+    this.inFlightSpawnsByParent.set(parentId, reserved + 1);
+    try {
+      return await this.spawnReserved(opts, depth);
+    } finally {
+      const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
+      if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
+      else this.inFlightSpawnsByParent.set(parentId, remaining);
+    }
+  }
+
+  /** The reservation-protected body of spawn(); see spawn() for the slot guard. */
+  private async spawnReserved(
+    opts: AgentSpawnOptions,
+    depth: number,
+  ): Promise<PersistentAgentSummary> {
     const profile = opts.profileRef
       ? await resolveAgentProfileSnapshot(opts.parentConfig, opts.profileRef)
       : undefined;

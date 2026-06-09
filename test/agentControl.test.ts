@@ -295,6 +295,69 @@ describe("AgentControl.spawn", () => {
     ).rejects.toThrow(/active child agents/);
   });
 
+  test("reserves slots so parallel spawns cannot race past the concurrency cap", async () => {
+    const parentConfig = makeConfig();
+    let nextId = 0;
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: { isAgentOf: () => false, persistenceStatus: "active" },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    const makeUniqueChild = () => {
+      const id = `child-${nextId++}`;
+      return {
+        id,
+        sessionKind: "agent",
+        parentSessionId: "root-1",
+        role: "worker",
+        persistenceStatus: "active",
+        isBusy: false,
+        currentTurnOutcome: "completed",
+        isAgentOf: (parent: string) => parent === "root-1",
+        beginDisconnectedReplayBuffer: () => {},
+        sendUserMessage: async () => {},
+        getSessionInfoEvent: () => ({ mode: "collaborative", depth: 1, executionState: "running" }),
+        getLatestAssistantText: () => null,
+        getPublicConfig: () => parentConfig,
+        getCompactUsageSnapshot: () => null,
+        getLastTurnUsage: () => null,
+      } as any;
+    };
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        const session = makeUniqueChild();
+        binding.session = session;
+        return { session, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    // Fire many spawns at once. Without the synchronous slot reservation they
+    // would all read the same pre-registration count of 0 and all succeed.
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, () =>
+        control.spawn({ parentSessionId: "root-1", parentConfig, role: "worker", message: "go" }),
+      ),
+    );
+    const fulfilled = results.filter((r) => r.status === "fulfilled").length;
+    const rejected = results.filter(
+      (r): r is PromiseRejectedResult => r.status === "rejected",
+    );
+    expect(fulfilled).toBe(16);
+    expect(rejected).toHaveLength(4);
+    expect(rejected[0]?.reason?.message).toMatch(/active child agents/);
+  });
+
   test("builds a briefing seed with optional structured context when contextMode is brief", async () => {
     const parentConfig = makeConfig();
     const seedContext: SeededSessionContext = {

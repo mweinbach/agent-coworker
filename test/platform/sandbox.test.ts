@@ -647,6 +647,8 @@ posixBackendDescribe("bwrap argv generation", () => {
     expect(file).toBe("bwrap");
     expect(args).toContain("--ro-bind");
     expect(args).toContain("--unshare-net");
+    // IPC isolation is always applied (covert-channel hardening).
+    expect(args).toContain("--unshare-ipc");
     expect(args).not.toContain("--bind"); // no writable roots
     expect(args.slice(-4)).toEqual(["--", "/bin/bash", "-lc", "echo hi"]);
   });

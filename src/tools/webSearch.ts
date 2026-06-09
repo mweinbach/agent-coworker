@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { policyAllowsNetwork } from "../platform/sandbox/policy";
 import {
   getLocalWebSearchProviderFromProviderOptions,
   type LocalWebSearchProvider,
@@ -299,6 +300,14 @@ function createCustomWebSearchTool(ctx: ToolContext) {
     description: provider.description,
     inputSchema: webSearchInputSchema,
     execute: async (input) => {
+      // Honor a no-network sandbox policy (webSearch egresses from the main
+      // process, outside the bash sandbox).
+      if (ctx.sandboxPolicy && !policyAllowsNetwork(ctx.sandboxPolicy)) {
+        const out = "webSearch is disabled: the sandbox policy does not allow network access.";
+        ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "network_disabled" })}`);
+        return out;
+      }
+
       const parsedInput = webSearchInputSchema.safeParse(input);
       if (!parsedInput.success) {
         const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';

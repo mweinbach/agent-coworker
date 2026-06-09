@@ -6,14 +6,19 @@ import { assertWritePathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
+// Cap the input strings (mirrors the write tool's 2 MB content cap) and the
+// target file size so a single edit cannot buffer a huge file into the heap.
+const MAX_EDIT_STRING_LENGTH = 2_000_000;
+const MAX_EDIT_FILE_BYTES = 10_000_000;
+
 export function createEditTool(ctx: ToolContext) {
   return defineTool({
     description:
       "Replace exact text in a file. The oldString must exist and be unique unless replaceAll is true.",
     inputSchema: z.object({
       filePath: z.string().min(1).describe("Path to the file (prefer absolute)"),
-      oldString: z.string().min(1).describe("Exact text to replace"),
-      newString: z.string().describe("Replacement text"),
+      oldString: z.string().min(1).max(MAX_EDIT_STRING_LENGTH).describe("Exact text to replace"),
+      newString: z.string().max(MAX_EDIT_STRING_LENGTH).describe("Replacement text"),
       replaceAll: z.boolean().optional().default(false).describe("Replace all occurrences"),
     }),
     execute: async ({
@@ -42,6 +47,13 @@ export function createEditTool(ctx: ToolContext) {
         "edit",
         ctx.agentTargetPaths,
       );
+      // Reject oversized files by stat() before reading them into a JS string.
+      const stat = await fs.stat(abs);
+      if (Number(stat.size) > MAX_EDIT_FILE_BYTES) {
+        throw new Error(
+          `edit blocked: ${abs} is ${Number(stat.size)} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
+        );
+      }
       let content = await fs.readFile(abs, "utf-8");
       if (!content.includes(oldString)) throw new Error(`oldString not found in ${abs}`);
 

@@ -15,7 +15,6 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
-  currentTodos,
   describe,
   expect,
   fs,
@@ -24,7 +23,6 @@ import {
   makeConfig,
   makeCtx,
   mock,
-  onTodoChange,
   os,
   path,
   test,
@@ -64,6 +62,18 @@ describe("edit tool", () => {
     await expect(
       t.execute({ filePath: p, oldString: "missing", newString: "x", replaceAll: false }),
     ).rejects.toThrow(/oldString not found/);
+  });
+
+  test("refuses to edit a file larger than the size cap", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "huge.txt");
+    // 10_000_001 bytes -> just over the 10 MB edit cap.
+    await fs.writeFile(p, "a".repeat(10_000_001), "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({ filePath: p, oldString: "a", newString: "b", replaceAll: false }),
+    ).rejects.toThrow(/edit blocked: .* bytes \(max/);
   });
 
   test("rejects edits when sandbox policy is explicitly read-only", async () => {

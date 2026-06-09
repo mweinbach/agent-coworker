@@ -49,11 +49,21 @@ const SANDBOX_ENV_ALLOWLIST = new Set([
   "WINDIR",
 ]);
 
-// Patterns that may indicate secrets in command output
+// Patterns that may indicate secrets in command output (redacted in logs only).
 const SECRET_PATTERNS = [
   /(?:api[_-]?key|apikey|token|password|secret|auth[_-]?token)["']?\s*[:=]\s*["']?[\w\-./+=]{8,}/gi,
   /(?:bearer|basic)\s+[\w\-./+=]{10,}/gi,
   /(?:sk-[a-zA-Z0-9]{20,})/g,
+  // Common UPPER_CASE env-var assignments (e.g. ANTHROPIC_API_KEY=..., OPENAI_API_KEY=...)
+  // that the generic api_key pattern above misses (no value separator after the var name).
+  /\b[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)\s*=\s*["']?[\w\-./+=]{8,}/g,
+  // Provider/CI token formats with recognizable prefixes.
+  /\bgh[posru]_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bnpm_[A-Za-z0-9]{36,}/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /X-Amz-Security-Token[:=]\s*[\w+/]{40,}/gi,
 ];
 
 function redactSecrets(text: string): string {

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import TurndownService from "turndown";
 import { z } from "zod";
+import { policyAllowsNetwork } from "../platform/sandbox/policy";
 import { getLocalWebSearchProviderFromProviderOptions } from "../shared/openaiCompatibleOptions";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
@@ -252,8 +253,11 @@ async function finalizeDownloadedFile(
   fileName: string,
 ): Promise<string> {
   // Claim the final path exclusively at finalize time so a late writer cannot
-  // be overwritten by an atomic rename onto an existing destination.
-  for (let suffix = 1; ; suffix += 1) {
+  // be overwritten by an atomic rename onto an existing destination. Bound the
+  // suffix search so a directory already saturated with `name-N.ext` files
+  // cannot spin forever.
+  const maxSuffix = 1000;
+  for (let suffix = 1; suffix <= maxSuffix; suffix += 1) {
     const candidatePath = downloadCandidatePath(downloadDir, fileName, suffix);
     try {
       await fs.copyFile(tempPath, candidatePath, fsConstants.COPYFILE_EXCL);
@@ -264,6 +268,41 @@ async function finalizeDownloadedFile(
       throw error;
     }
   }
+  await removeTemporaryDownloadFile(tempPath);
+  throw new Error(
+    `Could not find an available download filename for "${fileName}" after ${maxSuffix} attempts.`,
+  );
+}
+
+/**
+ * Read an inline (non-download) response body with a hard byte ceiling on the
+ * DECODED stream. `fetch` transparently inflates Content-Encoding, so a small
+ * compressed body can decode to gigabytes (a decompression bomb); counting
+ * decoded bytes and aborting past the cap prevents an OOM before truncation.
+ */
+async function readResponseTextCapped(response: Response, maxBytes: number): Promise<string> {
+  const body = response.body;
+  if (!body) return await response.text();
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new Error(
+          `webFetch response exceeded ${formatByteLimit(maxBytes)}; aborting to avoid memory exhaustion.`,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder("utf-8").decode(Buffer.concat(chunks));
 }
 
 function formatByteLimit(limitBytes: number): string {
@@ -740,6 +779,13 @@ export function createWebFetchTool(ctx: ToolContext) {
     execute: async ({ url, maxLength }: { url: string; maxLength: number }) => {
       ctx.log(`tool> webFetch ${JSON.stringify({ url, maxLength })}`);
 
+      // Honor a no-network sandbox policy. webFetch runs in the main process,
+      // outside the bash sandbox, so without this it would egress even when the
+      // session's policy forbids network access.
+      if (ctx.sandboxPolicy && !policyAllowsNetwork(ctx.sandboxPolicy)) {
+        throw new Error("webFetch is disabled: the sandbox policy does not allow network access.");
+      }
+
       const { response, finalUrl } = await fetchWithSafeRedirects(url, ctx.abortSignal);
       if (!response.ok) {
         throw new Error(`webFetch failed: ${response.status} ${response.statusText}`);
@@ -793,7 +839,7 @@ export function createWebFetchTool(ctx: ToolContext) {
         return out;
       }
 
-      const bodyText = await response.text();
+      const bodyText = await readResponseTextCapped(response, maxDownloadBytes);
       const isHtml = shouldTreatAsHtml(response.headers.get("content-type"), finalUrl, bodyText);
       const baseText = isHtml
         ? await (htmlToMarkdownOverrideForTests ?? htmlToMarkdown)(bodyText, finalUrl, ctx)

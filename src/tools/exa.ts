@@ -88,6 +88,15 @@ export async function resolveExaApiKey(ctx: ToolContext): Promise<string | undef
   return fromEnv || undefined;
 }
 
+// Per-request ceiling so a hung Exa endpoint cannot stall the whole turn (the
+// turn-level abort only fires on user/system cancellation, not on a hang).
+const EXA_REQUEST_TIMEOUT_MS = 30_000;
+
+function withRequestTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 export async function postExaJson(opts: {
   apiKey: string;
   path: string;
@@ -103,7 +112,7 @@ export async function postExaJson(opts: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(opts.body),
-    signal: opts.abortSignal,
+    signal: withRequestTimeout(opts.abortSignal, EXA_REQUEST_TIMEOUT_MS),
   });
 }
 

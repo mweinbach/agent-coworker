@@ -21,6 +21,14 @@ export async function resolveParallelApiKey(ctx: ToolContext): Promise<string | 
   return fromEnv || undefined;
 }
 
+// Per-request ceiling so a hung Parallel endpoint cannot stall the whole turn.
+const PARALLEL_REQUEST_TIMEOUT_MS = 30_000;
+
+function withRequestTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 export async function postParallelJson(opts: {
   apiKey: string;
   path: string;
@@ -36,7 +44,7 @@ export async function postParallelJson(opts: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(opts.body),
-    signal: opts.abortSignal,
+    signal: withRequestTimeout(opts.abortSignal, PARALLEL_REQUEST_TIMEOUT_MS),
   });
 }
 

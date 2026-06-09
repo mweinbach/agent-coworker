@@ -15,7 +15,6 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
-  currentTodos,
   describe,
   expect,
   fs,
@@ -24,7 +23,6 @@ import {
   makeConfig,
   makeCtx,
   mock,
-  onTodoChange,
   os,
   path,
   test,
@@ -640,8 +638,9 @@ describe("webFetch tool", () => {
     }) as any;
 
     try {
+      // network: true isolates the download (write) block from the network block.
       const t: any = createWebFetchTool(
-        makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: false } }),
+        makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: true } }),
       );
       await expect(
         t.execute({
@@ -669,7 +668,7 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(
-        makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: false } }),
+        makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: true } }),
       );
       await expect(
         t.execute({
@@ -678,6 +677,53 @@ describe("webFetch tool", () => {
         }),
       ).rejects.toThrow("webFetch downloads are disabled when sandbox mode is no-project-write");
       await expect(fs.readdir(path.join(dir, "Downloads"))).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("caps an oversized inline (non-download) body to avoid OOM", async () => {
+    const dir = await tmpDir();
+    webFetchInternal.setMaxDownloadBytes(16);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      // A streamed text/plain body larger than the cap simulates a
+      // decompression-bomb-style inline response.
+      return createStreamingResponse(Buffer.from("A".repeat(1024)), {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/big.txt", maxLength: 50000 }),
+      ).rejects.toThrow(/exceeded|memory/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+      webFetchInternal.setMaxDownloadBytes(50 * 1024 * 1024);
+    }
+  });
+
+  test("is disabled entirely when the sandbox policy forbids network", async () => {
+    const dir = await tmpDir();
+    let fetched = false;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      fetched = true;
+      return new Response("should not be reached", { status: 200 });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(
+        makeCtx(dir, { sandboxPolicy: { kind: "workspace-write", writableRoots: [dir], network: false } }),
+      );
+      await expect(
+        t.execute({ url: "https://example.com/page", maxLength: 50000 }),
+      ).rejects.toThrow(/does not allow network access/);
+      // The guard fires before any network call is attempted.
+      expect(fetched).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }

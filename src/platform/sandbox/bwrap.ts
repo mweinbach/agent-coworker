@@ -160,8 +160,11 @@ export function buildBwrapCommand(
     }
   }
 
-  // 3. Namespaces: fresh user/pid namespace + a clean /proc.
-  flags.push("--unshare-user", "--unshare-pid", "--proc", "/proc");
+  // 3. Namespaces: fresh user/pid/ipc namespace + a clean /proc. --unshare-ipc
+  // isolates SysV/POSIX IPC so a sandboxed command cannot use shared memory or
+  // message queues as a covert side channel to other processes on the host
+  // (notably when --unshare-net also blocks the network).
+  flags.push("--unshare-user", "--unshare-pid", "--unshare-ipc", "--proc", "/proc");
 
   // 4. Network isolation unless explicitly enabled.
   const networkEnabled =

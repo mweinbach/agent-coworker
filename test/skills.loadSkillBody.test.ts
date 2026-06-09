@@ -72,6 +72,25 @@ describe("loadSkillBodyByName", () => {
     expect(loaded?.body).not.toContain('name: "documents"');
   });
 
+  test("frames a project-scope skill body as untrusted but not a higher-tier one", async () => {
+    const projectDir = path.join(workspaceRoot, "project-skills");
+    const globalDir = path.join(workspaceRoot, "global-skills");
+    await createSkill(projectDir, "proj-skill", "# Project\nDo the thing.");
+    await createSkill(globalDir, "global-skill", "# Global\nDo the other thing.");
+    // skillsDirs index 0 -> project (untrusted), index 1 -> global (trusted).
+    const config = makeConfig([projectDir, globalDir]);
+
+    const projectLoaded = await loadSkillBodyByName(config, "proj-skill");
+    expect(projectLoaded?.source).toBe("project");
+    expect(projectLoaded?.body).toContain("UNTRUSTED PROJECT SKILL");
+    expect(projectLoaded?.body).toContain("# Project");
+
+    const globalLoaded = await loadSkillBodyByName(config, "global-skill");
+    expect(globalLoaded?.source).toBe("global");
+    expect(globalLoaded?.body).not.toContain("UNTRUSTED PROJECT SKILL");
+    expect(globalLoaded?.body).toContain("# Global");
+  });
+
   test("appends the policy overlay for the presentations skill", async () => {
     const skillsDir = path.join(workspaceRoot, "skills");
     await createSkill(skillsDir, "presentations", "# Slides\nBuild a deck.");

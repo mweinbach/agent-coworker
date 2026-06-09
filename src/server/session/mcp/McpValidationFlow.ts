@@ -56,11 +56,11 @@ export class McpValidationFlow {
       }
 
       // Validation is an explicit, user-initiated request to test THIS server, so
-      // it is allowed to include the workspace's own (otherwise untrusted) stdio
+      // it is allowed to include the workspace's own (otherwise untrusted)
       // servers — this is the per-command approval branch of the trust gate. The
       // automatic turn-setup path does not pass this flag and stays fail-closed.
       const runtimeServers = await loadMCPServers(this.context.state.config, {
-        includeUntrustedWorkspaceStdio: true,
+        includeUntrustedWorkspace: true,
       });
       const runtimeServer = runtimeServers.find((entry) => entry.name === server.name);
       if (!runtimeServer) {

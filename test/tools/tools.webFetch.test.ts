@@ -335,7 +335,8 @@ describe("webFetch tool", () => {
         url: "https://example.com/data.json",
         maxLength: 50000,
       });
-      expect(out).toBe('{"ok":true,"source":"origin"}');
+      expect(out).toContain('{"ok":true,"source":"origin"}');
+      expect(out).toContain("UNTRUSTED WEB CONTENT");
       expect(exaCalls).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
@@ -517,7 +518,10 @@ describe("webFetch tool", () => {
         url: "https://example.com/notes.txt",
         maxLength: 1000,
       });
-      expect(out.length).toBeLessThanOrEqual(1000);
+      // maxLength bounds the fetched content; the untrusted-content markers are
+      // fixed metadata overhead on top of that (well under 200 chars).
+      expect(out).toContain("UNTRUSTED WEB CONTENT");
+      expect(out.length).toBeLessThanOrEqual(1000 + 200);
     } finally {
       globalThis.fetch = originalFetch;
     }

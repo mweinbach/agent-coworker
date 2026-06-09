@@ -638,6 +638,11 @@ async function htmlToMarkdown(html: string, finalUrl: string, ctx: ToolContext):
 
   try {
     const { Readability, JSDOM } = await loadReadabilityDeps();
+    // SECURITY: parse the fetched (untrusted) HTML inertly. We rely on JSDOM's
+    // defaults — `runScripts` unset means <script> tags never execute, and
+    // `resources` unset means no external subresource fetches. Never pass
+    // runScripts: "dangerously" or resources: "usable" here: that would execute
+    // attacker-controlled page scripts / trigger SSRF from within the parser.
     const dom = new JSDOM(html, { url: finalUrl });
     const article = new Readability(dom.window.document).parse();
     if (article?.content) {

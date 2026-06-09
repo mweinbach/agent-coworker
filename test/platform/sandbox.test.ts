@@ -1107,6 +1107,31 @@ describe("isLikelySandboxDenied", () => {
       }),
     ).toBe(false);
   });
+
+  test("ignores docker/npm/sudo permission errors that are not sandbox denials", () => {
+    expect(
+      isLikelySandboxDenied({
+        stdout: "",
+        stderr:
+          "docker: Got permission denied while trying to connect to the Docker daemon socket",
+        exitCode: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isLikelySandboxDenied({
+        stdout: "",
+        stderr: "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied, mkdir '/usr/lib'",
+        exitCode: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isLikelySandboxDenied({
+        stdout: "",
+        stderr: "sudo: a terminal is required to read the password",
+        exitCode: 1,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("classifySandboxDenial", () => {

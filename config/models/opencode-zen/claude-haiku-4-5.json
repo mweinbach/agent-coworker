@@ -1,0 +1,10 @@
+{
+  "id": "claude-haiku-4-5",
+  "provider": "opencode-zen",
+  "displayName": "Claude Haiku 4.5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

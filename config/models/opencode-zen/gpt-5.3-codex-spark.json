@@ -1,0 +1,10 @@
+{
+  "id": "gpt-5.3-codex-spark",
+  "provider": "opencode-zen",
+  "displayName": "GPT-5.3 Codex Spark",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

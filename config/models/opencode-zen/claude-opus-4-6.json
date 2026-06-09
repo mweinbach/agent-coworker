@@ -1,0 +1,10 @@
+{
+  "id": "claude-opus-4-6",
+  "provider": "opencode-zen",
+  "displayName": "Claude Opus 4.6",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

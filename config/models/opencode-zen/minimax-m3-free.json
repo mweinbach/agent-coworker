@@ -1,0 +1,10 @@
+{
+  "id": "minimax-m3-free",
+  "provider": "opencode-zen",
+  "displayName": "MiniMax M3 Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -1,0 +1,10 @@
+{
+  "id": "deepseek-v4-pro",
+  "provider": "opencode-go",
+  "displayName": "DeepSeek V4 Pro",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

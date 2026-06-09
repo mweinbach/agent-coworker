@@ -1,0 +1,10 @@
+{
+  "id": "gpt-5-nano",
+  "provider": "opencode-zen",
+  "displayName": "GPT-5 Nano",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

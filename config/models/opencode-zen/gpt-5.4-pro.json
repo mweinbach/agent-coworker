@@ -1,0 +1,10 @@
+{
+  "id": "gpt-5.4-pro",
+  "provider": "opencode-zen",
+  "displayName": "GPT-5.4 Pro",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

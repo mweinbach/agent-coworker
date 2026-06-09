@@ -1,0 +1,10 @@
+{
+  "id": "mimo-v2-omni",
+  "provider": "opencode-go",
+  "displayName": "MiMo V2 Omni",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -1,0 +1,10 @@
+{
+  "id": "mimo-v2.5-free",
+  "provider": "opencode-zen",
+  "displayName": "MiMo V2.5 Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

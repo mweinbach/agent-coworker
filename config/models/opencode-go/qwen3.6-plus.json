@@ -1,0 +1,10 @@
+{
+  "id": "qwen3.6-plus",
+  "provider": "opencode-go",
+  "displayName": "Qwen3.6 Plus",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

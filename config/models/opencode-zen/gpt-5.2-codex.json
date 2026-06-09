@@ -1,0 +1,10 @@
+{
+  "id": "gpt-5.2-codex",
+  "provider": "opencode-zen",
+  "displayName": "GPT-5.2 Codex",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

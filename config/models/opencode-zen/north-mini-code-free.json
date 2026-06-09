@@ -1,0 +1,10 @@
+{
+  "id": "north-mini-code-free",
+  "provider": "opencode-zen",
+  "displayName": "North Mini Code Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

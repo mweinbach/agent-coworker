@@ -1,0 +1,10 @@
+{
+  "id": "minimax-m3",
+  "provider": "opencode-go",
+  "displayName": "MiniMax M3",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

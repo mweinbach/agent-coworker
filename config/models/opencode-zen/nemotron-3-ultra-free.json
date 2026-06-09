@@ -1,0 +1,10 @@
+{
+  "id": "nemotron-3-ultra-free",
+  "provider": "opencode-zen",
+  "displayName": "Nemotron 3 Ultra Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

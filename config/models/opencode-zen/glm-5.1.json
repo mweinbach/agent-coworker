@@ -1,8 +1,8 @@
 {
-  "id": "mimo-v2-flash-free",
+  "id": "glm-5.1",
   "provider": "opencode-zen",
-  "displayName": "Mimo V2 Flash Free",
-  "knowledgeCutoff": "December 2024",
+  "displayName": "GLM-5.1",
+  "knowledgeCutoff": "Unknown",
   "supportsImageInput": false,
   "promptTemplate": "system.md",
   "providerOptionsDefaults": {},

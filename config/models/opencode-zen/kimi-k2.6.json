@@ -1,0 +1,10 @@
+{
+  "id": "kimi-k2.6",
+  "provider": "opencode-zen",
+  "displayName": "Kimi K2.6",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

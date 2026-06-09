@@ -1,0 +1,10 @@
+{
+  "id": "claude-sonnet-4",
+  "provider": "opencode-zen",
+  "displayName": "Claude Sonnet 4",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -1,7 +1,7 @@
 {
-  "id": "nemotron-3-super-free",
-  "provider": "opencode-zen",
-  "displayName": "Nemotron 3 Super Free",
+  "id": "mimo-v2-pro",
+  "provider": "opencode-go",
+  "displayName": "MiMo V2 Pro",
   "knowledgeCutoff": "Unknown",
   "supportsImageInput": false,
   "promptTemplate": "system.md",

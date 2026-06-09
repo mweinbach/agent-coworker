@@ -157,8 +157,8 @@ describe("src/providers/index.ts", () => {
         model: "glm-5",
         preferredChildModel: "glm-5",
       });
-      expect(() => getModelForProvider(config, "minimax-m2.5")).toThrow(
-        'Unsupported model "minimax-m2.5" for provider opencode-go.',
+      expect(() => getModelForProvider(config, "big-pickle")).toThrow(
+        'Unsupported model "big-pickle" for provider opencode-go.',
       );
     });
 

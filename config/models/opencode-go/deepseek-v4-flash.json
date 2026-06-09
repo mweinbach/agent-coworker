@@ -1,0 +1,10 @@
+{
+  "id": "deepseek-v4-flash",
+  "provider": "opencode-go",
+  "displayName": "DeepSeek V4 Flash",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

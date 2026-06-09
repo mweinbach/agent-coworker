@@ -125,6 +125,8 @@ export interface RunTurnParams {
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
   onModelAbort?: () => void | Promise<void>;
+  /** Invoked when one or more MCP servers fail to load tools for this turn. */
+  onMcpLoadErrors?: (errors: string[]) => void;
   includeRawChunks?: boolean;
   telemetryContext?: {
     functionId?: string;
@@ -176,7 +178,7 @@ function mergeToolSets(
       alias = `${baseAlias}_${i}`;
       i += 1;
     }
-    log(`[warn] MCP tool name collision: "${name}" remapped to "${alias}"`);
+    log(`[MCP warn] Tool name collision: "${name}" remapped to "${alias}" — reference it by the remapped name`);
     merged[alias] = toolDef;
   }
   return merged;
@@ -474,12 +476,14 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           loadMCPTools: deps.loadMCPTools,
         });
         mcpTools = loaded.tools;
+        if (loaded.errors.length > 0) params.onMcpLoadErrors?.(loaded.errors);
       } else {
         const servers = await deps.loadMCPServers(config, { log });
         if (servers.length > 0) {
           const loaded = await deps.loadMCPTools(servers, { log });
           mcpTools = loaded.tools;
           closeMcp = loaded.close;
+          if (loaded.errors.length > 0) params.onMcpLoadErrors?.(loaded.errors);
         }
       }
     }
@@ -683,8 +687,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       } finally {
         try {
           await closeMcp?.();
-        } catch {
-          // ignore MCP close errors
+        } catch (err) {
+          log(`[MCP] Error closing MCP connections: ${String(err)}`);
         }
       }
     })();

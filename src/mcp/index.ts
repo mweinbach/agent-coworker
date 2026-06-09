@@ -649,7 +649,8 @@ export async function loadMCPTools(
       try {
         await client.close();
       } catch {
-        // ignore
+        // Intentionally silent: one client's close failure must not block
+        // closing the remaining clients during teardown.
       }
     }
   };
@@ -712,7 +713,8 @@ export async function loadMCPTools(
         try {
           await client?.close?.();
         } catch {
-          // ignore
+          // Intentionally silent: the connection error below is the real
+          // failure; a close error during its cleanup is noise.
         }
 
         if (attempt === retries) {
@@ -785,8 +787,8 @@ export async function getOrLoadMCPToolsCached(
     opts.log?.(`[MCP] Server configuration changed for workspace ${workspaceKey}. Reloading...`);
     try {
       await cached.close();
-    } catch {
-      // ignore
+    } catch (error) {
+      opts.log?.(`[MCP] Error closing stale MCP cache for workspace ${workspaceKey}: ${String(error)}`);
     }
     workspaceMcpCache.delete(workspaceKey);
   }
@@ -820,8 +822,9 @@ export async function closeMcpServersForSession(sessionId: string): Promise<void
       if (cached.sessionIds.size === 0) {
         try {
           await cached.close();
-        } catch {
-          // ignore
+        } catch (error) {
+          // Session teardown has no log channel; keep the failure visible in server logs.
+          console.warn(`[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`);
         }
         workspaceMcpCache.delete(workspaceKey);
       }

@@ -16,7 +16,20 @@ import type { SessionBinding } from "../startServer/types";
 import { routeAgentConfig } from "./modelRouter";
 import { resolveAgentProfileSnapshot } from "./profiles";
 import { inspectChildAgentReport } from "./reportParser";
-import { getAgentRoleDefinition } from "./roles";
+import { AGENT_ROLE_DEFINITIONS, getAgentRoleDefinition } from "./roles";
+
+// Defense-in-depth caps for child-agent spawning. The primary guard against
+// recursive spawning is that child sessions (sessionKind === "agent") are built
+// without an AgentControl, so only a root session can spawn. These caps bound a
+// runaway or jailbroken root and survive any regression of that guard:
+//  - MAX_SPAWN_DEPTH tracks the role definitions (no role currently permits a
+//    child to spawn, so the only legitimate child depth is 1) and prevents
+//    unbounded recursion.
+//  - MAX_ACTIVE_CHILDREN_PER_PARENT bounds a fork-bomb of sibling agents that
+//    would otherwise exhaust file descriptors, memory, and MCP loads.
+const MAX_SPAWN_DEPTH =
+  Math.max(0, ...Object.values(AGENT_ROLE_DEFINITIONS).map((r) => r.maxDepth)) + 1;
+const MAX_ACTIVE_CHILDREN_PER_PARENT = 16;
 import { StatusBus } from "./StatusBus";
 import type {
   AgentCloseOptions,
@@ -247,13 +260,40 @@ export class AgentControl {
     });
   }
 
+  /** Count live (non-closed) child sessions of a parent, bounding fork-bombs. */
+  private countActiveChildren(parentSessionId: string): number {
+    let count = 0;
+    for (const binding of this.deps.sessionBindings.values()) {
+      const session = binding.session;
+      if (!session?.isAgentOf?.(parentSessionId)) continue;
+      if (session.persistenceStatus === "closed") continue;
+      count += 1;
+    }
+    return count;
+  }
+
   async spawn(opts: AgentSpawnOptions): Promise<PersistentAgentSummary> {
+    const depth = (opts.parentDepth ?? 0) + 1;
+    // Reject runaway recursion and fork-bombs before doing any spawn work.
+    if (depth > MAX_SPAWN_DEPTH) {
+      throw new Error(
+        `Child agent depth ${depth} exceeds the maximum spawn depth of ${MAX_SPAWN_DEPTH}; ` +
+          "recursive sub-delegation is disabled.",
+      );
+    }
+    const activeChildren = this.countActiveChildren(opts.parentSessionId);
+    if (activeChildren >= MAX_ACTIVE_CHILDREN_PER_PARENT) {
+      throw new Error(
+        `Cannot spawn another child agent: this session already has ${activeChildren} active ` +
+          `child agents (limit ${MAX_ACTIVE_CHILDREN_PER_PARENT}). Close or wait on existing ` +
+          "agents before spawning more.",
+      );
+    }
     const profile = opts.profileRef
       ? await resolveAgentProfileSnapshot(opts.parentConfig, opts.profileRef)
       : undefined;
     const role = profile?.baseRole ?? opts.role ?? "default";
     const roleDefinition = getAgentRoleDefinition(role);
-    const depth = (opts.parentDepth ?? 0) + 1;
     const resolvedContext = resolveAgentSpawnContextOptions({
       ...opts,
       contextMode: opts.contextMode ?? profile?.defaultContextMode,

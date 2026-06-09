@@ -217,6 +217,84 @@ describe("AgentControl.spawn", () => {
     expect(childSession.sendUserMessage).toHaveBeenCalledWith("Handle the fix");
   });
 
+  test("rejects spawning beyond the maximum depth", async () => {
+    const parentConfig = makeConfig();
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        [
+          "root-1",
+          {
+            session: { isAgentOf: () => false, persistenceStatus: "active" },
+            socket: null,
+          },
+        ],
+      ]) as unknown as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: (() => {
+        throw new Error("buildSession should not run when the depth cap rejects");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "Recurse",
+        // A child (depth 1) trying to spawn — no role permits this.
+        parentDepth: 1,
+      }),
+    ).rejects.toThrow(/maximum spawn depth/);
+  });
+
+  test("rejects spawning past the active-children limit", async () => {
+    const parentConfig = makeConfig();
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: { isAgentOf: () => false, persistenceStatus: "active" },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    for (let i = 0; i < 16; i += 1) {
+      bindings.set(`child-${i}`, {
+        session: {
+          isAgentOf: (parent: string) => parent === "root-1",
+          persistenceStatus: "active",
+        },
+        socket: null,
+      } as unknown as SessionBinding);
+    }
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: (() => {
+        throw new Error("buildSession should not run when the concurrency cap rejects");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "One too many",
+      }),
+    ).rejects.toThrow(/active child agents/);
+  });
+
   test("builds a briefing seed with optional structured context when contextMode is brief", async () => {
     const parentConfig = makeConfig();
     const seedContext: SeededSessionContext = {

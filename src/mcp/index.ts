@@ -52,6 +52,18 @@ export interface MCPServersSnapshot {
   warnings: string[];
 }
 
+// MCP tool descriptions are supplied by the (possibly remote, possibly
+// workspace-controlled) server and handed straight to the model as tool context.
+// A hostile server can stuff prompt-injection text here. We cannot neutralize
+// natural-language injection, but we cap the length so a single tool cannot flood
+// the context window or bury the rest of the toolset.
+const MAX_MCP_DESCRIPTION_LENGTH = 4_000;
+
+function capMcpDescription(description: string): string {
+  if (description.length <= MAX_MCP_DESCRIPTION_LENGTH) return description;
+  return `${description.slice(0, MAX_MCP_DESCRIPTION_LENGTH)}… [description truncated]`;
+}
+
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const oauthProviderTokensSchema = z
   .object({
@@ -256,8 +268,9 @@ async function createRuntimeMcpClient(opts: {
         const rawEntry = entry as typeof entry & Record<string, unknown>;
         const name = typeof entry.name === "string" ? entry.name : "";
         if (!name) continue;
-        const description =
-          typeof entry.description === "string" ? entry.description : `MCP tool ${name}`;
+        const description = capMcpDescription(
+          typeof entry.description === "string" ? entry.description : `MCP tool ${name}`,
+        );
         discovered[name] = {
           description,
           inputSchema: normalizeMcpJsonSchema(

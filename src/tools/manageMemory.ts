@@ -15,21 +15,34 @@ import { defineTool } from "./defineTool";
 
 const memoryTypeSchema = z.enum(["feedback", "project", "note"]);
 
+// Advanced-memory names/descriptions feed the memory index that is injected into
+// future sessions' system prompts, and bodies are recalled into context. Cap each
+// so a single memory cannot bloat the prompt or smuggle a large instruction block.
+const MAX_MEMORY_NAME_LENGTH = 200;
+const MAX_MEMORY_DESCRIPTION_LENGTH = 500;
+const MAX_MEMORY_BODY_LENGTH = 50_000;
+
 const inputSchema = z.object({
   action: z
     .enum(["list", "read", "create", "edit", "refresh_index"])
     .describe("Memory management action to perform."),
   name: z
     .string()
+    .max(MAX_MEMORY_NAME_LENGTH)
     .optional()
     .describe("Human-facing memory name. Required for create; usable as a read target."),
   slug: z
     .string()
+    .max(MAX_MEMORY_NAME_LENGTH)
     .optional()
     .describe("Stable memory slug. Required for edit; optional for read/create."),
-  description: z.string().optional().describe("Short one-line memory summary."),
+  description: z
+    .string()
+    .max(MAX_MEMORY_DESCRIPTION_LENGTH)
+    .optional()
+    .describe("Short one-line memory summary."),
   type: memoryTypeSchema.optional().describe("Memory type. Defaults to note when creating."),
-  body: z.string().optional().describe("Markdown body for create or edit."),
+  body: z.string().max(MAX_MEMORY_BODY_LENGTH).optional().describe("Markdown body for create or edit."),
   source: z
     .enum(["auto", "active", "chats"])
     .optional()

@@ -159,4 +159,64 @@ describe("MCP Caching and Lifecycle", () => {
     expect(result2.tools).toHaveProperty("bun-tool");
     expect(result2.tools).not.toHaveProperty("node-tool");
   });
+
+  test("returns cached load errors on cache hit so later sessions can surface them", async () => {
+    const config = makeConfig("/path/to/workspace-a");
+    const servers: MCPServerConfig[] = [
+      { name: "broken-server", transport: { type: "stdio", command: "node" } },
+    ];
+
+    const loadMCPServers = mock(async () => servers);
+    const loadMCPTools = mock(async () => ({
+      tools: {},
+      errors: ["[MCP] Failed to connect to broken-server after 4 attempts: boom"],
+      close: mock(async () => {}),
+    }));
+
+    const first = await getOrLoadMCPToolsCached(config, "session-1", {
+      loadMCPServers,
+      loadMCPTools,
+    });
+    expect(first.errors).toHaveLength(1);
+
+    // Cache hit for a different session must still report the load errors.
+    const second = await getOrLoadMCPToolsCached(config, "session-2", {
+      loadMCPServers,
+      loadMCPTools,
+    });
+    expect(loadMCPTools).toHaveBeenCalledTimes(1);
+    expect(second.errors).toEqual(first.errors);
+  });
+
+  test("completes session close and logs when a cached close throws", async () => {
+    const config = makeConfig("/path/to/workspace-a");
+    const servers: MCPServerConfig[] = [
+      { name: "test-server", transport: { type: "stdio", command: "node" } },
+    ];
+
+    const loadMCPServers = mock(async () => servers);
+    const loadMCPTools = mock(async () => ({
+      tools: { "mcp__test-server__tool": {} },
+      errors: [],
+      close: mock(async () => {
+        throw new Error("close exploded");
+      }),
+    }));
+
+    await getOrLoadMCPToolsCached(config, "session-1", { loadMCPServers, loadMCPTools });
+
+    const warnSpy = mock((..._args: unknown[]) => {});
+    const originalWarn = console.warn;
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      await closeMcpServersForSession("session-1");
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(__internal.workspaceMcpCache.has(workspaceA)).toBe(false);
+    expect(
+      warnSpy.mock.calls.some((call) => String(call[0]).includes("Error closing MCP servers")),
+    ).toBe(true);
+  });
 });

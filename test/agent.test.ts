@@ -1395,7 +1395,7 @@ describe("runTurn", () => {
     expect(callArg.tools.bash.type).toBe("builtin-bash");
     expect(callArg.tools).toHaveProperty("mcp__bash");
     expect(callArg.tools["mcp__bash"].type).toBe("mcp-bash");
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("MCP tool name collision"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Tool name collision"));
   });
 
   test("forwards modelSettings maxRetries to streamText", async () => {
@@ -1451,6 +1451,58 @@ describe("runTurn", () => {
 
     const opts = mockLoadMCPTools.mock.calls[0][1] as any;
     expect(opts.log).toBe(logFn);
+  });
+
+  test("invokes onMcpLoadErrors when MCP servers fail to load tools", async () => {
+    const onMcpLoadErrors = mock((_errors: string[]) => {});
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "broken", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: {},
+      errors: ["[MCP] Failed to connect to broken after 4 attempts: boom"],
+    });
+
+    await runTurn(makeParams({ enableMcp: true, onMcpLoadErrors }));
+
+    expect(onMcpLoadErrors).toHaveBeenCalledTimes(1);
+    expect(onMcpLoadErrors.mock.calls[0][0]).toEqual([
+      "[MCP] Failed to connect to broken after 4 attempts: boom",
+    ]);
+  });
+
+  test("does not invoke onMcpLoadErrors when MCP tools load cleanly", async () => {
+    const onMcpLoadErrors = mock((_errors: string[]) => {});
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "ok", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: { mcp__ok__tool: { type: "mcp-tool" } },
+      errors: [],
+    });
+
+    await runTurn(makeParams({ enableMcp: true, onMcpLoadErrors }));
+
+    expect(onMcpLoadErrors).not.toHaveBeenCalled();
+  });
+
+  test("logs MCP close errors instead of swallowing them", async () => {
+    const logLines: string[] = [];
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "srv", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: {},
+      errors: [],
+      close: async () => {
+        throw new Error("close exploded");
+      },
+    });
+
+    await runTurn(makeParams({ enableMcp: true, log: (line: string) => logLines.push(line) }));
+
+    expect(logLines.some((line) => line.includes("Error closing MCP connections"))).toBe(true);
+    expect(logLines.some((line) => line.includes("close exploded"))).toBe(true);
   });
 
   // -------------------------------------------------------------------------

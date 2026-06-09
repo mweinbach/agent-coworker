@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/server/protocol";
+import {
+  jsonRpcNotificationSchemas,
+  jsonRpcRequestSchemas,
+  jsonRpcServerRequestSchemas,
+} from "../../../src/server/jsonrpc/schema";
 
 type CheckResult = { ok: true } | { ok: false; message: string };
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
@@ -166,6 +171,62 @@ export function resolveDocReferencePath(
   return path.resolve(cwd, normalized);
 }
 
+const JSONRPC_METHOD_NAMESPACES = [
+  "thread",
+  "turn",
+  "workspace",
+  "cowork",
+  "research",
+  "item",
+  "serverRequest",
+];
+const JSONRPC_DOC_METHOD_PATTERN = new RegExp(
+  `\`((?:${JSONRPC_METHOD_NAMESPACES.join("|")})/[A-Za-z0-9/_-]+)\``,
+  "g",
+);
+// Method names the protocol doc may reference even though they are not cowork
+// wire methods (e.g. upstream Codex app-server requests handled internally).
+const JSONRPC_DOC_METHOD_ALLOWLIST = new Set<string>(["item/fileChange/requestApproval"]);
+
+export function extractDocumentedJsonRpcMethods(text: string): Set<string> {
+  const methods = new Set<string>();
+  for (const match of text.matchAll(JSONRPC_DOC_METHOD_PATTERN)) {
+    if (match[1]) methods.add(match[1]);
+  }
+  return methods;
+}
+
+export function checkJsonRpcMethodDrift(wsProtocol: string): CheckResult[] {
+  const registered = new Set<string>([
+    ...Object.keys(jsonRpcRequestSchemas),
+    ...Object.keys(jsonRpcNotificationSchemas),
+    ...Object.keys(jsonRpcServerRequestSchemas),
+  ]);
+  const documented = extractDocumentedJsonRpcMethods(wsProtocol);
+  const checks: CheckResult[] = [];
+
+  // Every registered method must be mentioned (backtick-quoted) in the doc.
+  // Plain inclusion handles slash-less methods such as `initialize`.
+  for (const method of [...registered].sort()) {
+    if (!wsProtocol.includes(`\`${method}\``)) {
+      checks.push({
+        ok: false,
+        message: `JSON-RPC method registered in schema but missing from docs/websocket-protocol.md: ${method}`,
+      });
+    }
+  }
+  // Every namespaced method the doc mentions must exist in the schema registry.
+  for (const method of [...documented].sort()) {
+    if (!registered.has(method) && !JSONRPC_DOC_METHOD_ALLOWLIST.has(method)) {
+      checks.push({
+        ok: false,
+        message: `docs/websocket-protocol.md mentions JSON-RPC method not in the schema registry: ${method}`,
+      });
+    }
+  }
+  return checks;
+}
+
 async function validateReferencedPaths(
   cwd: string,
   docPath: string,
@@ -237,6 +298,7 @@ async function main() {
     assertContains(wsProtocol, "cowork/session/harnessContext/get", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, "observability_status", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, protocolVersionNeedle(), "docs/websocket-protocol.md"),
+    ...checkJsonRpcMethodDrift(wsProtocol),
   ];
 
   for (const docPath of CURATED_DOCS_WITH_PATH_CHECKS) {

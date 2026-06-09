@@ -362,7 +362,9 @@ describe("runtime auth injection", () => {
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-api-builtin-"));
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, { trustWorkspaceMcp: true });
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
       await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
         servers: [
           {
@@ -406,7 +408,9 @@ describe("runtime auth injection", () => {
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-builtin-"));
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, { trustWorkspaceMcp: true });
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
 
       await writeJson(path.join(tmpHome, ".cowork", "config", "mcp-servers.json"), {
         servers: [
@@ -465,7 +469,9 @@ describe("runtime auth injection", () => {
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-builtin-"));
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, { trustWorkspaceMcp: true });
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
       await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
         servers: [
           {
@@ -515,7 +521,9 @@ describe("runtime auth injection", () => {
     );
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, { trustWorkspaceMcp: true });
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
       await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
         servers: [
           {

@@ -1112,8 +1112,7 @@ describe("isLikelySandboxDenied", () => {
     expect(
       isLikelySandboxDenied({
         stdout: "",
-        stderr:
-          "docker: Got permission denied while trying to connect to the Docker daemon socket",
+        stderr: "docker: Got permission denied while trying to connect to the Docker daemon socket",
         exitCode: 1,
       }),
     ).toBe(false);

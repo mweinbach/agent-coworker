@@ -132,10 +132,7 @@ describe("InteractionManager prompt timeout", () => {
     expect(settled).toBe(false);
     expect(manager.hasPendingApproval).toBe(true);
     // Resolve it so the pending promise does not dangle past the test.
-    manager.handleApprovalResponse(
-      [...manager.pendingApprovalEventsForReplay.keys()][0],
-      true,
-    );
+    manager.handleApprovalResponse([...manager.pendingApprovalEventsForReplay.keys()][0], true);
     await promise;
   });
 });

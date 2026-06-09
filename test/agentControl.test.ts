@@ -410,9 +410,7 @@ describe("AgentControl.spawn", () => {
       ),
     );
     const fulfilled = results.filter((r) => r.status === "fulfilled").length;
-    const rejected = results.filter(
-      (r): r is PromiseRejectedResult => r.status === "rejected",
-    );
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     expect(fulfilled).toBe(16);
     expect(rejected).toHaveLength(4);
     expect(rejected[0]?.reason?.message).toMatch(/active child agents/);

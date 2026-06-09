@@ -749,7 +749,9 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(
-        makeCtx(dir, { sandboxPolicy: { kind: "workspace-write", writableRoots: [dir], network: false } }),
+        makeCtx(dir, {
+          sandboxPolicy: { kind: "workspace-write", writableRoots: [dir], network: false },
+        }),
       );
       await expect(
         t.execute({ url: "https://example.com/page", maxLength: 50000 }),

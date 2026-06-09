@@ -53,7 +53,10 @@ Actions:
       key: z.string().optional().describe("Memory key/path (for read/write/delete)"),
       content: z
         .string()
-        .max(MAX_MEMORY_CONTENT_LENGTH, `Memory content must be <= ${MAX_MEMORY_CONTENT_LENGTH} characters`)
+        .max(
+          MAX_MEMORY_CONTENT_LENGTH,
+          `Memory content must be <= ${MAX_MEMORY_CONTENT_LENGTH} characters`,
+        )
         .optional()
         .describe("Content to write (required for write)"),
       query: z.string().optional().describe("Search query (required for search)"),

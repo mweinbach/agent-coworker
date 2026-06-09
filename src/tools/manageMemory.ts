@@ -42,7 +42,11 @@ const inputSchema = z.object({
     .optional()
     .describe("Short one-line memory summary."),
   type: memoryTypeSchema.optional().describe("Memory type. Defaults to note when creating."),
-  body: z.string().max(MAX_MEMORY_BODY_LENGTH).optional().describe("Markdown body for create or edit."),
+  body: z
+    .string()
+    .max(MAX_MEMORY_BODY_LENGTH)
+    .optional()
+    .describe("Markdown body for create or edit."),
   source: z
     .enum(["auto", "active", "chats"])
     .optional()

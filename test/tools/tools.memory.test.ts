@@ -1,3 +1,4 @@
+import { MemoryStore } from "../../src/memoryStore";
 import {
   afterEach,
   bashInternal,
@@ -34,7 +35,6 @@ import {
   writeConnectionStore,
   z,
 } from "./tools.harness";
-import { MemoryStore } from "../../src/memoryStore";
 
 describe("memory tool", () => {
   test("imports AGENT.md into sqlite memory on read", async () => {
@@ -119,7 +119,11 @@ describe("memory tool", () => {
     const oversized = "x".repeat(50_001);
     const parsed = t.inputSchema.safeParse({ action: "write", key: "hot", content: oversized });
     expect(parsed.success).toBe(false);
-    const okSized = t.inputSchema.safeParse({ action: "write", key: "hot", content: "x".repeat(50_000) });
+    const okSized = t.inputSchema.safeParse({
+      action: "write",
+      key: "hot",
+      content: "x".repeat(50_000),
+    });
     expect(okSized.success).toBe(true);
   });
 

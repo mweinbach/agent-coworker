@@ -816,7 +816,9 @@ export async function getOrLoadMCPToolsCached(
     try {
       await cached.close();
     } catch (error) {
-      opts.log?.(`[MCP] Error closing stale MCP cache for workspace ${workspaceKey}: ${String(error)}`);
+      opts.log?.(
+        `[MCP] Error closing stale MCP cache for workspace ${workspaceKey}: ${String(error)}`,
+      );
     }
     workspaceMcpCache.delete(workspaceKey);
   }
@@ -852,7 +854,9 @@ export async function closeMcpServersForSession(sessionId: string): Promise<void
           await cached.close();
         } catch (error) {
           // Session teardown has no log channel; keep the failure visible in server logs.
-          console.warn(`[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`);
+          console.warn(
+            `[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`,
+          );
         }
         workspaceMcpCache.delete(workspaceKey);
       }

@@ -669,4 +669,27 @@ describe("mcp json schema normalization", () => {
     expect(choicesArray?.maxItems).toBe(2);
     expect(choicesArray?.prefixItems).toBeUndefined();
   });
+
+  test("caps oversized nested property/enum descriptions", () => {
+    const huge = "A".repeat(10_000);
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        type: "object",
+        description: huge,
+        properties: {
+          query: { type: "string", description: huge },
+        },
+      },
+      true,
+    ) as {
+      description?: string;
+      properties: { query?: { description?: string } };
+    };
+
+    expect(normalized.description?.length).toBeLessThan(huge.length);
+    expect(normalized.description).toContain("[description truncated]");
+    // The nested property description must be capped too, not just the top level.
+    expect(normalized.properties.query?.description?.length).toBeLessThan(huge.length);
+    expect(normalized.properties.query?.description).toContain("[description truncated]");
+  });
 });

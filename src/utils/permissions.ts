@@ -304,8 +304,17 @@ export async function assertReadPathAllowed(
   // Deny credential directories before the root check (the workspace is a read
   // root, so .cowork/auth would otherwise pass). Check the logical path and the
   // symlink-resolved canonical path so a workspace symlink into .cowork/auth is
-  // also blocked.
-  if (isInsideCredentialDir(resolved, config) || isInsideCredentialDir(canonicalTarget, config)) {
+  // also blocked. The deny dirs are canonicalized too: when the workspace path
+  // itself contains a symlink (e.g. macOS /var -> /private/var), the logical deny
+  // dir would not prefix-match the canonical target, so compare both forms.
+  const canonicalDenyDirs = await Promise.all(
+    credentialReadDenyDirs(config).map((dir) => canonicalizeExistingPrefix(dir)),
+  );
+  if (
+    isInsideCredentialDir(resolved, config) ||
+    isInsideCredentialDir(canonicalTarget, config) ||
+    canonicalDenyDirs.some((dir) => isPathInside(dir, canonicalTarget))
+  ) {
     throw new Error(`${action} blocked: credential directory is not readable: ${resolved}`);
   }
 

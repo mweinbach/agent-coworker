@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../store/connections";
+import { withRequestTimeout } from "../utils/abortSignal";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { readToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
@@ -23,11 +24,6 @@ export async function resolveParallelApiKey(ctx: ToolContext): Promise<string | 
 
 // Per-request ceiling so a hung Parallel endpoint cannot stall the whole turn.
 const PARALLEL_REQUEST_TIMEOUT_MS = 30_000;
-
-function withRequestTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
 
 export async function postParallelJson(opts: {
   apiKey: string;

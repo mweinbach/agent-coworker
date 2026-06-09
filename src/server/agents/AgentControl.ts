@@ -17,19 +17,6 @@ import { routeAgentConfig } from "./modelRouter";
 import { resolveAgentProfileSnapshot } from "./profiles";
 import { inspectChildAgentReport } from "./reportParser";
 import { AGENT_ROLE_DEFINITIONS, getAgentRoleDefinition } from "./roles";
-
-// Defense-in-depth caps for child-agent spawning. The primary guard against
-// recursive spawning is that child sessions (sessionKind === "agent") are built
-// without an AgentControl, so only a root session can spawn. These caps bound a
-// runaway or jailbroken root and survive any regression of that guard:
-//  - MAX_SPAWN_DEPTH tracks the role definitions (no role currently permits a
-//    child to spawn, so the only legitimate child depth is 1) and prevents
-//    unbounded recursion.
-//  - MAX_ACTIVE_CHILDREN_PER_PARENT bounds a fork-bomb of sibling agents that
-//    would otherwise exhaust file descriptors, memory, and MCP loads.
-const MAX_SPAWN_DEPTH =
-  Math.max(0, ...Object.values(AGENT_ROLE_DEFINITIONS).map((r) => r.maxDepth)) + 1;
-const MAX_ACTIVE_CHILDREN_PER_PARENT = 16;
 import { StatusBus } from "./StatusBus";
 import type {
   AgentCloseOptions,
@@ -43,6 +30,19 @@ import type {
   AgentWaitOptions,
   AgentWaitResult,
 } from "./types";
+
+// Defense-in-depth caps for child-agent spawning. The primary guard against
+// recursive spawning is that child sessions (sessionKind === "agent") are built
+// without an AgentControl, so only a root session can spawn. These caps bound a
+// runaway or jailbroken root and survive any regression of that guard:
+//  - MAX_SPAWN_DEPTH tracks the role definitions (no role currently permits a
+//    child to spawn, so the only legitimate child depth is 1) and prevents
+//    unbounded recursion.
+//  - MAX_ACTIVE_CHILDREN_PER_PARENT bounds a fork-bomb of sibling agents that
+//    would otherwise exhaust file descriptors, memory, and MCP loads.
+const MAX_SPAWN_DEPTH =
+  Math.max(0, ...Object.values(AGENT_ROLE_DEFINITIONS).map((r) => r.maxDepth)) + 1;
+const MAX_ACTIVE_CHILDREN_PER_PARENT = 16;
 
 function executionStateForSession(
   session: AgentSession,

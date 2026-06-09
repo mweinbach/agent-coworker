@@ -533,6 +533,27 @@ describe("assertReadPathAllowed", () => {
     );
   });
 
+  test("rejects reading a credential file through a workspace symlink", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-cred-symlink-"));
+    const cfg = makeConfig(dir);
+    const authDir = path.join(dir, ".cowork", "auth");
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(path.join(authDir, "mcp-credentials.json"), '{"token":"secret"}', "utf-8");
+
+    // A symlink inside the workspace pointing at the credential dir must not be a
+    // way around the deny list — even when the workspace path itself is symlinked
+    // (e.g. macOS /var -> /private/var), where the logical deny dir would not
+    // prefix-match the canonical target.
+    const link = path.join(dir, "sneaky");
+    await fs.symlink(authDir, link);
+
+    await expect(
+      assertReadPathAllowed(path.join(link, "mcp-credentials.json"), cfg, "read"),
+    ).rejects.toThrow(/credential directory is not readable/i);
+  });
+
   test("allows advanced-memory reads from active and chats folders only", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-read-"));
     const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "perm-adv-mem-read-home-"));

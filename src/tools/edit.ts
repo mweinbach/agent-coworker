@@ -57,13 +57,23 @@ export function createEditTool(ctx: ToolContext) {
       let content = await fs.readFile(abs, "utf-8");
       if (!content.includes(oldString)) throw new Error(`oldString not found in ${abs}`);
 
-      if (!replaceAll) {
-        const count = content.split(oldString).length - 1;
-        if (count > 1) {
-          throw new Error(
-            `oldString found ${count} times in ${abs}. Provide more context or set replaceAll=true.`,
-          );
-        }
+      const occurrences = content.split(oldString).length - 1;
+      if (!replaceAll && occurrences > 1) {
+        throw new Error(
+          `oldString found ${occurrences} times in ${abs}. Provide more context or set replaceAll=true.`,
+        );
+      }
+
+      // A replaceAll over many short matches can multiply the result far beyond
+      // the input caps (e.g. 1M single-char matches × a 2MB replacement). Reject
+      // before building the string so the edit cannot exhaust the heap.
+      const replacedCount = replaceAll ? occurrences : Math.min(occurrences, 1);
+      const projectedLength =
+        content.length + replacedCount * (newString.length - oldString.length);
+      if (projectedLength > MAX_EDIT_FILE_BYTES) {
+        throw new Error(
+          `edit blocked: result would be ~${projectedLength} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
+        );
       }
 
       content = replaceAll

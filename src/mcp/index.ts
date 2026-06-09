@@ -187,6 +187,13 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
         : entry;
       continue;
     }
+    // Cap nested description strings too: a hostile server can stuff a huge
+    // prompt-injection payload into a property/enum description, which is handed
+    // to the model as tool context just like the top-level description.
+    if (key === "description" && typeof entry === "string") {
+      output[key] = capMcpDescription(entry);
+      continue;
+    }
     output[key] = normalizeMcpJsonSchema(entry);
   }
 

@@ -101,6 +101,24 @@ describe("loadSkillBodyByName", () => {
     expect(loaded?.body).toContain("## Cowork Addendum");
   });
 
+  test("keeps the policy overlay outside the untrusted frame for a project-scope skill", async () => {
+    const skillsDir = path.join(workspaceRoot, "project-skills");
+    await createSkill(skillsDir, "presentations", "# Slides\nBuild a deck.");
+    // skillsDirs index 0 -> project scope, so the body is framed as untrusted.
+    const config = makeConfig([skillsDir]);
+
+    const loaded = await loadSkillBodyByName(config, "presentations");
+    expect(loaded?.source).toBe("project");
+    const body = loaded?.body ?? "";
+    const endMarkerIndex = body.indexOf("[END UNTRUSTED PROJECT SKILL");
+    const overlayIndex = body.indexOf("## Cowork Addendum");
+    expect(endMarkerIndex).toBeGreaterThanOrEqual(0);
+    expect(overlayIndex).toBeGreaterThanOrEqual(0);
+    // The operator-authored overlay must follow the untrusted frame's end marker,
+    // not sit inside the markers where the model is told to distrust it.
+    expect(overlayIndex).toBeGreaterThan(endMarkerIndex);
+  });
+
   test("returns null for an unknown skill", async () => {
     const skillsDir = path.join(workspaceRoot, "skills");
     await createSkill(skillsDir, "documents", "# Documents\n");

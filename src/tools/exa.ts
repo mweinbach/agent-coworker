@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../store/connections";
+import { withRequestTimeout } from "../utils/abortSignal";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { readToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
@@ -91,11 +92,6 @@ export async function resolveExaApiKey(ctx: ToolContext): Promise<string | undef
 // Per-request ceiling so a hung Exa endpoint cannot stall the whole turn (the
 // turn-level abort only fires on user/system cancellation, not on a hang).
 const EXA_REQUEST_TIMEOUT_MS = 30_000;
-
-function withRequestTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
 
 export async function postExaJson(opts: {
   apiKey: string;

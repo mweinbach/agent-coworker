@@ -97,11 +97,15 @@ export async function loadSkillBodyByName(
 
   const body = stripSkillFrontMatter(content);
   const overlay = SKILL_POLICY_OVERLAYS[name];
-  const composed = overlay ? `${body}\n\n${overlay}` : body;
+  // Frame only the workspace-controlled skill body as untrusted. The policy
+  // overlay is operator-authored (hardcoded here), so it must stay OUTSIDE the
+  // untrusted markers — otherwise the model is told to distrust our own policy.
+  const framedBody =
+    selected.source === "project" ? frameUntrustedSkillBody(selected.name, body) : body;
+  const composed = overlay ? `${framedBody}\n\n${overlay}` : framedBody;
   return {
     name: selected.name,
-    body:
-      selected.source === "project" ? frameUntrustedSkillBody(selected.name, composed) : composed,
+    body: composed,
     path: selected.path,
     source: selected.source,
   };

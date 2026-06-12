@@ -9,8 +9,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { handleSlashCommand } from "../src/cli/repl/commandRouter";
 import type { ReplCommandContext } from "../src/cli/repl/commandRouter";
+import { handleSlashCommand } from "../src/cli/repl/commandRouter";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,7 +76,13 @@ function makeCtx(overrides: Partial<ReplCommandContext> = {}): {
     ...overrides,
   };
 
-  return { ctx, calls, get rlClosed() { return rlClosed; } };
+  return {
+    ctx,
+    calls,
+    get rlClosed() {
+      return rlClosed;
+    },
+  };
 }
 
 /** Capture console.log/error output during `fn()`. */
@@ -152,7 +158,11 @@ describe("handleSlashCommand — /exit", () => {
   test("returns true and closes readline", async () => {
     let closed = false;
     const { ctx } = makeCtx({
-      rl: { close: () => { closed = true; } } as any,
+      rl: {
+        close: () => {
+          closed = true;
+        },
+      } as any,
     });
     const result = await handleSlashCommand("/exit", ctx);
     expect(result).toBe(true);
@@ -310,7 +320,9 @@ describe("handleSlashCommand — /restart", () => {
   test("calls restartServer with current cwd and returns true", async () => {
     const { ctx, calls } = makeCtx({ getCwd: () => "/my/project" });
     const lines = await captureConsole(() => handleSlashCommand("/restart", ctx));
-    expect(calls.some((c) => c.method === "restartServer" && c.params === "/my/project")).toBe(true);
+    expect(calls.some((c) => c.method === "restartServer" && c.params === "/my/project")).toBe(
+      true,
+    );
     expect(lines.some((l) => l.includes("restarting"))).toBe(true);
   });
 });
@@ -372,17 +384,13 @@ describe("handleSlashCommand — /connect", () => {
 
   test("prints usage for unrecognised provider token", async () => {
     const { ctx } = makeCtx();
-    const lines = await captureConsole(() =>
-      handleSlashCommand("/connect notaprovider", ctx),
-    );
+    const lines = await captureConsole(() => handleSlashCommand("/connect notaprovider", ctx));
     expect(lines.some((l) => l.includes("usage"))).toBe(true);
   });
 
   test("prints not-connected message when valid provider but no thread", async () => {
     const { ctx } = makeCtx({ getThreadId: () => null });
-    const lines = await captureConsole(() =>
-      handleSlashCommand("/connect openai somekey123", ctx),
-    );
+    const lines = await captureConsole(() => handleSlashCommand("/connect openai somekey123", ctx));
     expect(lines.some((l) => l.includes("not connected"))).toBe(true);
   });
 });

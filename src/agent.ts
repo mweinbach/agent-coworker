@@ -178,7 +178,9 @@ function mergeToolSets(
       alias = `${baseAlias}_${i}`;
       i += 1;
     }
-    log(`[MCP warn] Tool name collision: "${name}" remapped to "${alias}" — reference it by the remapped name`);
+    log(
+      `[MCP warn] Tool name collision: "${name}" remapped to "${alias}" — reference it by the remapped name`,
+    );
     merged[alias] = toolDef;
   }
   return merged;

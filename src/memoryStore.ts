@@ -6,6 +6,16 @@ export type MemoryScope = "workspace" | "user";
 
 const HOT_MEMORY_ID = "hot";
 
+// Defensive cap on what the hot cache injects into the system prompt. The write
+// path already bounds entry size, but a DB written by an older build or edited
+// out-of-band could still hold a huge value; never let that overflow the prompt.
+const HOT_CACHE_PROMPT_LIMIT = 16_000;
+
+function truncateForPrompt(content: string, limit = HOT_CACHE_PROMPT_LIMIT): string {
+  if (content.length <= limit) return content;
+  return `${content.slice(0, limit)}\n\n…[hot cache truncated at ${limit} characters]`;
+}
+
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
 }
@@ -279,7 +289,7 @@ export class MemoryStore {
       "",
       `#### ${activeHotCache.scope === "workspace" ? "Workspace" : "User"} Hot Cache`,
       "",
-      activeHotCache.content,
+      truncateForPrompt(activeHotCache.content),
     ].join("\n");
   }
 }

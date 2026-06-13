@@ -15,7 +15,7 @@ import { createManageMemoryTool } from "../../src/tools/manageMemory";
 import { createMemoryTool } from "../../src/tools/memory";
 import { createReadTool } from "../../src/tools/read";
 import { createSkillTool } from "../../src/tools/skill";
-import { createTodoWriteTool, currentTodos, onTodoChange } from "../../src/tools/todoWrite";
+import { createTodoWriteTool } from "../../src/tools/todoWrite";
 import { createWebFetchTool, __internal as webFetchInternal } from "../../src/tools/webFetch";
 import { createWebSearchTool } from "../../src/tools/webSearch";
 import { createWriteTool } from "../../src/tools/write";
@@ -41,14 +41,12 @@ export {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
-  currentTodos,
   describe,
   expect,
   fs,
   getAiCoworkerPaths,
   listSessionToolNames,
   mock,
-  onTodoChange,
   os,
   path,
   test,

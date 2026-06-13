@@ -24,45 +24,24 @@ const todoWriteInputSchema = z
     }
   });
 
-export let currentTodos: TodoItem[] = [];
-
-type TodoListener = (todos: TodoItem[]) => void;
-const listeners: TodoListener[] = [];
-
-export function onTodoChange(fn: TodoListener) {
-  listeners.push(fn);
-}
-
-const todoWrite = defineTool({
-  description: `Update the progress tracker for multi-step tasks. Sends the COMPLETE todo list each call (overwrite, not append).
+const TODO_WRITE_DESCRIPTION = `Update the progress tracker for multi-step tasks. Sends the COMPLETE todo list each call (overwrite, not append).
 
 Rules:
 - Use this for multi-step tasks.
 - No more than one item should be in_progress; when work is done, all items may be completed.
 - Mark tasks completed immediately when done.
-- Include a final verification step for non-trivial work.`,
-  inputSchema: todoWriteInputSchema,
-  execute: async (input: z.input<typeof todoWriteInputSchema>) => {
-    const { todos } = todoWriteInputSchema.parse(input);
-    currentTodos = todos;
-    for (const fn of listeners) fn(todos);
-
-    const summary = todos.map((todo: TodoItem) => `[${todo.status}] ${todo.content}`).join("\n");
-    return `Todo list updated:\n${summary}`;
-  },
-});
+- Include a final verification step for non-trivial work.`;
 
 export function createTodoWriteTool(ctx: ToolContext) {
   return defineTool({
-    description: todoWrite.description,
+    description: TODO_WRITE_DESCRIPTION,
     inputSchema: todoWriteInputSchema,
     execute: async (input: z.input<typeof todoWriteInputSchema>) => {
       const { todos } = todoWriteInputSchema.parse(input);
       ctx.log(`tool> todoWrite ${JSON.stringify({ count: todos.length })}`);
+      // Todos are routed per-session through the context; there is no shared
+      // module-level store (which would cross sessions in the server).
       ctx.updateTodos?.(todos);
-      // Keep global store updated too, so existing CLI renderers still work.
-      currentTodos = todos;
-      for (const fn of listeners) fn(todos);
 
       const summary = todos.map((t: TodoItem) => `[${t.status}] ${t.content}`).join("\n");
       ctx.log(`tool< todoWrite ${JSON.stringify({ count: todos.length })}`);

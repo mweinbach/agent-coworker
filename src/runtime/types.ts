@@ -62,6 +62,8 @@ export interface RuntimeRunTurnParams {
   maxSteps: number;
   yolo?: boolean;
   shellPolicy?: "full" | "no_project_write";
+  /** Whether provider-side/network-backed tools are allowed for this turn. */
+  networkAllowed?: boolean;
   /** Child-agent filesystem scope; becomes the OS sandbox writable roots. */
   agentTargetPaths?: readonly string[] | null;
   providerOptions?: Record<string, any>;

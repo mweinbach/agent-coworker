@@ -217,6 +217,205 @@ describe("AgentControl.spawn", () => {
     expect(childSession.sendUserMessage).toHaveBeenCalledWith("Handle the fix");
   });
 
+  test("rejects spawning beyond the maximum depth", async () => {
+    const parentConfig = makeConfig();
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        [
+          "root-1",
+          {
+            session: { isAgentOf: () => false, persistenceStatus: "active" },
+            socket: null,
+          },
+        ],
+      ]) as unknown as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: (() => {
+        throw new Error("buildSession should not run when the depth cap rejects");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "Recurse",
+        // A child (depth 1) trying to spawn — no role permits this.
+        parentDepth: 1,
+      }),
+    ).rejects.toThrow(/maximum spawn depth/);
+  });
+
+  test("rejects spawning past the active-children limit", async () => {
+    const parentConfig = makeConfig();
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: { isAgentOf: () => false, persistenceStatus: "active" },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    for (let i = 0; i < 16; i += 1) {
+      bindings.set(`child-${i}`, {
+        session: {
+          isAgentOf: (parent: string) => parent === "root-1",
+          persistenceStatus: "active",
+          // These 16 children are actively running, so they each occupy a slot.
+          isBusy: true,
+          getSessionInfoEvent: () => ({ executionState: "running" }),
+          getLatestAssistantText: () => null,
+        },
+        socket: null,
+      } as unknown as SessionBinding);
+    }
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: (() => {
+        throw new Error("buildSession should not run when the concurrency cap rejects");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "One too many",
+      }),
+    ).rejects.toThrow(/active child agents/);
+  });
+
+  test("allows spawning when prior children have completed but remain open", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: {
+            isAgentOf: () => false,
+            persistenceStatus: "active",
+            buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
+          },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    // 16 children that already finished: still open (persistenceStatus "active")
+    // but idle (not busy, completed) — these must NOT occupy concurrency slots.
+    for (let i = 0; i < 16; i += 1) {
+      bindings.set(`done-${i}`, {
+        session: {
+          isAgentOf: (parent: string) => parent === "root-1",
+          persistenceStatus: "active",
+          isBusy: false,
+          currentTurnOutcome: "completed",
+          getSessionInfoEvent: () => ({ executionState: "completed" }),
+          getLatestAssistantText: () => "done",
+        },
+        socket: null,
+      } as unknown as SessionBinding);
+    }
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "One more after the others finished",
+      }),
+    ).resolves.toBeDefined();
+    expect(childSession.sendUserMessage).toHaveBeenCalledWith("One more after the others finished");
+  });
+
+  test("reserves slots so parallel spawns cannot race past the concurrency cap", async () => {
+    const parentConfig = makeConfig();
+    let nextId = 0;
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: { isAgentOf: () => false, persistenceStatus: "active" },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    const makeUniqueChild = () => {
+      const id = `child-${nextId++}`;
+      return {
+        id,
+        sessionKind: "agent",
+        parentSessionId: "root-1",
+        role: "worker",
+        persistenceStatus: "active",
+        isBusy: false,
+        currentTurnOutcome: "completed",
+        isAgentOf: (parent: string) => parent === "root-1",
+        beginDisconnectedReplayBuffer: () => {},
+        sendUserMessage: async () => {},
+        getSessionInfoEvent: () => ({ mode: "collaborative", depth: 1, executionState: "running" }),
+        getLatestAssistantText: () => null,
+        getPublicConfig: () => parentConfig,
+        getCompactUsageSnapshot: () => null,
+        getLastTurnUsage: () => null,
+      } as any;
+    };
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        const session = makeUniqueChild();
+        binding.session = session;
+        return { session, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    // Fire many spawns at once. Without the synchronous slot reservation they
+    // would all read the same pre-registration count of 0 and all succeed.
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, () =>
+        control.spawn({ parentSessionId: "root-1", parentConfig, role: "worker", message: "go" }),
+      ),
+    );
+    const fulfilled = results.filter((r) => r.status === "fulfilled").length;
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(fulfilled).toBe(16);
+    expect(rejected).toHaveLength(4);
+    expect(rejected[0]?.reason?.message).toMatch(/active child agents/);
+  });
+
   test("builds a briefing seed with optional structured context when contextMode is brief", async () => {
     const parentConfig = makeConfig();
     const seedContext: SeededSessionContext = {

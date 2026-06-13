@@ -87,3 +87,52 @@ describe("InteractionManager.approveCommand", () => {
     expect(evt?.type === "approval" && evt.category).toBeUndefined();
   });
 });
+
+describe("InteractionManager prompt timeout", () => {
+  // Build a manager that uses the real pending-promise path (no waitForPromptResponse
+  // override) so the fail-safe timeout actually fires.
+  function makeTimeoutManager(promptTimeoutMs: number) {
+    const events: SessionEvent[] = [];
+    const persistReasons: string[] = [];
+    const manager = new InteractionManager({
+      sessionId: "s1",
+      emit: (evt) => events.push(evt),
+      emitError: () => {},
+      log: () => {},
+      queuePersistSessionSnapshot: (reason) => persistReasons.push(reason),
+      getConfig: () => ({}) as unknown as AgentConfig,
+      isYolo: () => false,
+      promptTimeoutMs,
+    });
+    return { manager, events, persistReasons };
+  }
+
+  test("an unanswered approval denies (false) after the timeout", async () => {
+    const { manager, persistReasons } = makeTimeoutManager(20);
+    // Dangerous command does not auto-approve, so it waits for a response.
+    const approved = await manager.approveCommand("rm -rf build");
+    expect(approved).toBe(false);
+    expect(manager.hasPendingApproval).toBe(false);
+    expect(persistReasons).toContain("session.approval_timeout");
+  });
+
+  test("an unanswered ask rejects after the timeout", async () => {
+    const { manager } = makeTimeoutManager(20);
+    await expect(manager.askUser("Which file?")).rejects.toThrow(/timed out/);
+    expect(manager.hasPendingAsk).toBe(false);
+  });
+
+  test("a timeout of 0 disables the backstop", async () => {
+    const { manager } = makeTimeoutManager(0);
+    let settled = false;
+    const promise = manager.approveCommand("rm -rf build").then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(settled).toBe(false);
+    expect(manager.hasPendingApproval).toBe(true);
+    // Resolve it so the pending promise does not dangle past the test.
+    manager.handleApprovalResponse([...manager.pendingApprovalEventsForReplay.keys()][0], true);
+    await promise;
+  });
+});

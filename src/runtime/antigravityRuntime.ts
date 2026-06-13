@@ -12,7 +12,7 @@ import {
 import { getSavedProviderApiKey } from "../config";
 import { assertAntigravitySupportedPlatform } from "../providers/antigravitySupport";
 import type { ModelMessage } from "../types";
-import { toPiJsonSchema } from "./piRuntimeOptions";
+import { isZodSchema, toPiJsonSchema } from "./piRuntimeOptions";
 import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeUsage } from "./types";
 
@@ -262,7 +262,20 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
                 });
 
                 try {
-                  const result = await toolDef.execute(args);
+                  // Validate model-supplied args against the tool's Zod schema
+                  // before executing (mirrors the pi runtime). Without this, a
+                  // malformed Gemini tool call bypasses schema bounds like read's
+                  // `limit` max or write/edit size caps. safeParse also applies
+                  // declared defaults.
+                  let validatedArgs: unknown = args ?? {};
+                  if (isZodSchema(toolDef.inputSchema)) {
+                    const parsed = toolDef.inputSchema.safeParse(args ?? {});
+                    if (!parsed.success) {
+                      throw new Error(parsed.error.issues[0]?.message ?? "Invalid tool input.");
+                    }
+                    validatedArgs = parsed.data;
+                  }
+                  const result = await toolDef.execute(validatedArgs);
                   const executionError = extractToolExecutionErrorMessage(result);
                   if (executionError) {
                     await emitPart({

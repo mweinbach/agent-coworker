@@ -38,6 +38,24 @@ function readRoots(config: AgentConfig): string[] {
   ];
 }
 
+/**
+ * Credential directories that the read/glob/grep tools must never surface even
+ * though they can sit inside a read root (e.g. a project's `.cowork/auth` holds
+ * MCP OAuth tokens / API keys, and the workspace itself is a read root). This
+ * closes the file-tool exfiltration vector reachable via plain prompt injection.
+ * The OS sandbox still grants `bash` full-disk read by design — that is a
+ * separate, documented capability, not something these tools can tighten.
+ */
+export function credentialReadDenyDirs(config: AgentConfig): string[] {
+  return [path.join(config.projectCoworkDir, "auth"), path.join(config.userCoworkDir, "auth")];
+}
+
+function isInsideCredentialDir(resolvedTarget: string, config: AgentConfig): boolean {
+  return credentialReadDenyDirs(config).some((dir) =>
+    isPathInside(path.resolve(dir), resolvedTarget),
+  );
+}
+
 async function pluginReadRoots(config: AgentConfig): Promise<string[]> {
   try {
     const discovery = await discoverPlugins(config);
@@ -153,6 +171,22 @@ export function isWritePathAllowed(filePath: string, config: AgentConfig): boole
 }
 
 export function isReadPathAllowed(filePath: string, config: AgentConfig): boolean {
+  const resolved = path.resolve(filePath);
+  if (isInsideCredentialDir(resolved, config)) return false;
+  try {
+    const canonicalTarget = canonicalizeExistingPrefixSync(resolved);
+    const canonicalDenyDirs = credentialReadDenyDirs(config).map((dir) =>
+      canonicalizeExistingPrefixSync(dir),
+    );
+    if (
+      isInsideCredentialDir(canonicalTarget, config) ||
+      canonicalDenyDirs.some((dir) => isPathInside(dir, canonicalTarget))
+    ) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
   return isCanonicalPathInsideRoots(filePath, readRoots(config));
 }
 
@@ -281,6 +315,23 @@ export async function assertReadPathAllowed(
     ...roots.map((root) => canonicalizeRoot(root)),
   ]);
   const [canonicalTarget, ...allowedRoots] = canonicalRoots;
+
+  // Deny credential directories before the root check (the workspace is a read
+  // root, so .cowork/auth would otherwise pass). Check the logical path and the
+  // symlink-resolved canonical path so a workspace symlink into .cowork/auth is
+  // also blocked. The deny dirs are canonicalized too: when the workspace path
+  // itself contains a symlink (e.g. macOS /var -> /private/var), the logical deny
+  // dir would not prefix-match the canonical target, so compare both forms.
+  const canonicalDenyDirs = await Promise.all(
+    credentialReadDenyDirs(config).map((dir) => canonicalizeExistingPrefix(dir)),
+  );
+  if (
+    isInsideCredentialDir(resolved, config) ||
+    isInsideCredentialDir(canonicalTarget, config) ||
+    canonicalDenyDirs.some((dir) => isPathInside(dir, canonicalTarget))
+  ) {
+    throw new Error(`${action} blocked: credential directory is not readable: ${resolved}`);
+  }
 
   if (!allowedRoots.some((root) => isPathInside(root, canonicalTarget))) {
     throw new Error(

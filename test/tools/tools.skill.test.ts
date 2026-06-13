@@ -17,7 +17,6 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
-  currentTodos,
   describe,
   expect,
   fs,
@@ -26,7 +25,6 @@ import {
   makeConfig,
   makeCtx,
   mock,
-  onTodoChange,
   os,
   path,
   test,
@@ -131,7 +129,8 @@ describe("skill tool", () => {
     const t: any = createSkillTool(ctx);
     // First call reads from disk
     const res1: string = await t.execute({ skillName: "cached-skill-unique" });
-    expect(res1).toBe("Cached content");
+    // Project-scope skill bodies are framed as untrusted, so assert containment.
+    expect(res1).toContain("Cached content");
 
     // Modify the file on disk
     await fs.writeFile(
@@ -142,7 +141,7 @@ describe("skill tool", () => {
 
     // Second call should reflect updated on-disk content.
     const res2: string = await t.execute({ skillName: "cached-skill-unique" });
-    expect(res2).toBe("Modified content");
+    expect(res2).toContain("Modified content");
   });
 
   test("searches multiple skillsDirs in order", async () => {
@@ -169,7 +168,8 @@ describe("skill tool", () => {
 
     const t: any = createSkillTool(ctx);
     const res: string = await t.execute({ skillName: "myskill-order" });
-    expect(res).toBe("First dir");
+    expect(res).toContain("First dir");
+    expect(res).not.toContain("Second dir");
   });
 
   test("profile skill allowlist filters descriptions and blocks hidden skill loads", async () => {

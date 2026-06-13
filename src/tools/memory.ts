@@ -7,6 +7,13 @@ import { truncateText } from "../utils/paths";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
+// Memory is injected verbatim into future sessions' system prompts. Cap what a
+// single entry can hold so the model cannot (a) persist an arbitrarily large
+// payload that overflows the context window on the next session start, or
+// (b) smuggle a huge instruction block into the prompt. Concise facts fit well
+// under this; see also the render-time truncation in MemoryStore.
+const MAX_MEMORY_CONTENT_LENGTH = 50_000;
+
 function scopeFromInput(scope?: "workspace" | "user"): MemoryScope {
   return scope ?? "workspace";
 }
@@ -44,7 +51,14 @@ Actions:
     inputSchema: z.object({
       action: z.enum(["read", "write", "search", "delete"]),
       key: z.string().optional().describe("Memory key/path (for read/write/delete)"),
-      content: z.string().optional().describe("Content to write (required for write)"),
+      content: z
+        .string()
+        .max(
+          MAX_MEMORY_CONTENT_LENGTH,
+          `Memory content must be <= ${MAX_MEMORY_CONTENT_LENGTH} characters`,
+        )
+        .optional()
+        .describe("Content to write (required for write)"),
       query: z.string().optional().describe("Search query (required for search)"),
       scope: z.enum(["workspace", "user"]).optional().describe("Memory scope (default workspace)"),
     }),

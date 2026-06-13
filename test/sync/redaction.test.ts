@@ -607,7 +607,12 @@ describe("parseCloudSyncRemoteState()", () => {
         scope,
         payload: {
           version: CLOUD_SYNC_PAYLOAD_VERSION,
-          kind: scope === "settings" ? "settings" : scope === "workspaceMetadata" ? "workspaceMetadata" : "threads",
+          kind:
+            scope === "settings"
+              ? "settings"
+              : scope === "workspaceMetadata"
+                ? "workspaceMetadata"
+                : "threads",
         },
       });
       expect(state?.scope).toBe(scope);

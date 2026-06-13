@@ -17,7 +17,7 @@ import {
 } from "./managedSofficeRuntime";
 import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
-import { resolveSandboxPolicy } from "./platform/sandbox";
+import { policyAllowsNetwork, resolveSandboxPolicy } from "./platform/sandbox";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
 import type {
@@ -178,7 +178,9 @@ function mergeToolSets(
       alias = `${baseAlias}_${i}`;
       i += 1;
     }
-    log(`[MCP warn] Tool name collision: "${name}" remapped to "${alias}" — reference it by the remapped name`);
+    log(
+      `[MCP warn] Tool name collision: "${name}" remapped to "${alias}" — reference it by the remapped name`,
+    );
     merged[alias] = toolDef;
   }
   return merged;
@@ -413,6 +415,26 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     } = params;
     let latestTurnMessages = messages;
     const turnToolEnv = await prepareTurnToolEnv(params);
+    const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
+    const turnSandboxPolicy = resolveSandboxPolicy({
+      config: config.sandbox,
+      // Honor an explicit `no_project_write` shell policy even without an
+      // agentRole; otherwise this precomputed policy (preferred by the bash
+      // tool over deriving from shellPolicy) would run mutating commands with
+      // project write access despite the no-project-write shell policy.
+      readOnlyRole:
+        (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
+        shellPolicy === "no_project_write",
+      workingDirectory: config.workingDirectory,
+      projectRoot: path.dirname(config.projectCoworkDir),
+      outputDirectory: config.outputDirectory,
+      uploadsDirectory: config.uploadsDirectory,
+      toolRuntimeWritableRoots: [
+        ...(collectToolRuntimeWritableRoots(config, turnToolEnv) ?? []),
+        ...resolveAdvancedMemoryWriteRoots(config),
+      ],
+      targetPaths: params.agentTargetPaths,
+    });
 
     const toolCtx = {
       config,
@@ -430,26 +452,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
       sessionId: params.sessionId,
-      shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
-      sandboxPolicy: resolveSandboxPolicy({
-        config: config.sandbox,
-        // Honor an explicit `no_project_write` shell policy even without an
-        // agentRole; otherwise this precomputed policy (preferred by the bash
-        // tool over deriving from shellPolicy) would run mutating commands with
-        // project write access despite the no-project-write shell policy.
-        readOnlyRole:
-          (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
-          (params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole)) === "no_project_write",
-        workingDirectory: config.workingDirectory,
-        projectRoot: path.dirname(config.projectCoworkDir),
-        outputDirectory: config.outputDirectory,
-        uploadsDirectory: config.uploadsDirectory,
-        toolRuntimeWritableRoots: [
-          ...(collectToolRuntimeWritableRoots(config, turnToolEnv) ?? []),
-          ...resolveAdvancedMemoryWriteRoots(config),
-        ],
-        targetPaths: params.agentTargetPaths,
-      }),
+      shellPolicy,
+      sandboxPolicy: turnSandboxPolicy,
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,
@@ -663,7 +667,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           tools,
           maxSteps: params.maxSteps ?? 100,
           yolo: params.yolo,
-          shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
+          shellPolicy,
+          networkAllowed: policyAllowsNetwork(turnSandboxPolicy),
           providerOptions: turnProviderOptions,
           providerState: params.providerState,
           toolEnv: turnToolEnv,

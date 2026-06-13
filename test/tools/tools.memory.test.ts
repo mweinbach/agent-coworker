@@ -1,3 +1,4 @@
+import { MemoryStore } from "../../src/memoryStore";
 import {
   afterEach,
   bashInternal,
@@ -15,7 +16,6 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
-  currentTodos,
   describe,
   expect,
   fs,
@@ -24,7 +24,6 @@ import {
   makeConfig,
   makeCtx,
   mock,
-  onTodoChange,
   os,
   path,
   test,
@@ -112,6 +111,33 @@ describe("memory tool", () => {
     await expect(t.execute({ action: "write", key: "test" })).rejects.toThrow(
       /content is required/,
     );
+  });
+
+  test("rejects writing memory content over the size cap", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(makeCtx(dir));
+    const oversized = "x".repeat(50_001);
+    const parsed = t.inputSchema.safeParse({ action: "write", key: "hot", content: oversized });
+    expect(parsed.success).toBe(false);
+    const okSized = t.inputSchema.safeParse({
+      action: "write",
+      key: "hot",
+      content: "x".repeat(50_000),
+    });
+    expect(okSized.success).toBe(true);
+  });
+
+  test("truncates an oversized hot cache when rendering the prompt section", async () => {
+    const dir = await tmpDir();
+    const store = new MemoryStore(
+      path.join(dir, "project-memory.sqlite"),
+      path.join(dir, "user-memory.sqlite"),
+    );
+    // Simulate a DB written out-of-band / by an older build without the cap.
+    await store.upsert("workspace", { id: "hot", content: "Z".repeat(40_000) });
+    const section = await store.renderPromptSection();
+    expect(section).toContain("hot cache truncated at 16000 characters");
+    expect(section.length).toBeLessThan(20_000);
   });
 
   test("rejects mutating actions when sandbox policy is read-only", async () => {

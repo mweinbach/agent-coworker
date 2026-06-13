@@ -66,6 +66,14 @@ export function createReadTool(ctx: ToolContext) {
         });
 
       if (multimodalPartType === "image") {
+        // Reject by stat() BEFORE reading the file into memory. A workspace can
+        // contain an attacker-planted multi-GB file with an image extension;
+        // reading it first would OOM the process before the size check fires.
+        const stat = await fs.stat(abs);
+        const preReadSizeMessage = getAttachmentByteLengthValidationMessage([Number(stat.size)]);
+        if (preReadSizeMessage) {
+          throw new Error(preReadSizeMessage);
+        }
         const buffer = await fs.readFile(abs);
         const sizeMessage = getAttachmentByteLengthValidationMessage([buffer.length]);
         if (sizeMessage) {

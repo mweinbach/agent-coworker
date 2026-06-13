@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
-
-import type { AgentProfileSnapshot } from "../../../src/shared/agentProfiles";
-import {
-  filterToolsForProfile,
-  filterToolsForRole,
-} from "../../../src/server/agents/toolPolicy";
 import type { AgentRoleDefinition } from "../../../src/server/agents/roles";
+import { filterToolsForProfile, filterToolsForRole } from "../../../src/server/agents/toolPolicy";
+import type { AgentProfileSnapshot } from "../../../src/shared/agentProfiles";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -174,7 +170,7 @@ describe("filterToolsForRole", () => {
     // It does start with "mcp__", so for non-readOnly roles it passes via !role.readOnly.
     const role = makeRole({ readOnly: false, allowTools: [] });
     const tools: Record<string, unknown> = {
-      "mcp__github": { type: "mcp_malformed" },
+      mcp__github: { type: "mcp_malformed" },
     };
     const filtered = filterToolsForRole(tools, role);
     // Passes because startsWith("mcp__") is true and role is not readOnly
@@ -184,7 +180,7 @@ describe("filterToolsForRole", () => {
   test("tool that starts with mcp__ is blocked for readOnly role with no double-underscore server separator", () => {
     const role = makeRole({ readOnly: true, allowTools: [] });
     const tools: Record<string, unknown> = {
-      "mcp__github": { type: "mcp_malformed" },
+      mcp__github: { type: "mcp_malformed" },
     };
     const filtered = filterToolsForRole(tools, role);
     expect(filtered).not.toHaveProperty("mcp__github");
@@ -317,7 +313,7 @@ describe("filterToolsForProfile", () => {
       allowedMcpServers: [""],
     });
     const tools: Record<string, unknown> = {
-      "mcp____tool": { type: "mcp" },
+      mcp____tool: { type: "mcp" },
     };
     const filtered = filterToolsForProfile(tools, profile);
     expect(filtered).not.toHaveProperty("mcp____tool");

@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { z } from "zod";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 import { resolveMaybeRelative } from "../utils/paths";
-import { assertReadPathAllowed } from "../utils/permissions";
+import { assertReadPathAllowed, credentialReadDenyDirs } from "../utils/permissions";
 import { ensureRipgrep } from "../utils/ripgrep";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
@@ -28,6 +29,18 @@ const grepInputSchema = z.object({
       `Maximum time to allow ripgrep to run in seconds. Defaults to ${DEFAULT_TIMEOUT_SECONDS}s; max ${MAX_TIMEOUT_SECONDS}s.`,
     ),
 });
+
+function credentialDenyGlobs(searchPath: string, ctx: ToolContext): string[] {
+  const searchRoot = path.resolve(searchPath);
+  const globs: string[] = [];
+  for (const denyDir of credentialReadDenyDirs(ctx.config)) {
+    const relative = path.relative(searchRoot, path.resolve(denyDir));
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    const normalized = relative.replace(/\\/g, "/");
+    globs.push(`!${normalized}`, `!${normalized}/**`);
+  }
+  return globs;
+}
 
 export function createGrepTool(
   ctx: ToolContext,
@@ -75,6 +88,9 @@ export function createGrepTool(
         "grep",
         ctx.agentTargetPaths,
       );
+      for (const denyGlob of credentialDenyGlobs(validatedSearchPath, ctx)) {
+        args.push("--glob", denyGlob);
+      }
 
       args.push("--", pattern);
       args.push(validatedSearchPath);

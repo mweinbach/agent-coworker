@@ -15,7 +15,6 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
-  currentTodos,
   describe,
   expect,
   fs,
@@ -24,7 +23,6 @@ import {
   makeConfig,
   makeCtx,
   mock,
-  onTodoChange,
   os,
   path,
   test,
@@ -52,7 +50,8 @@ describe("grep tool", () => {
       try {
         let caseInsensitive = false;
         let contextLines = 0;
-        let fileGlob: string | undefined;
+        const includeGlobs: string[] = [];
+        const excludeGlobs: string[] = [];
 
         const rest = [...args];
         while (rest.length > 0) {
@@ -74,7 +73,9 @@ describe("grep tool", () => {
           }
           if (a === "--glob") {
             rest.shift();
-            fileGlob = rest.shift();
+            const glob = rest.shift();
+            if (glob?.startsWith("!")) excludeGlobs.push(glob.slice(1));
+            else if (glob) includeGlobs.push(glob);
             continue;
           }
           if (a === "--") {
@@ -89,13 +90,22 @@ describe("grep tool", () => {
         if (!pattern || !searchPath) throw new Error("fake rg: missing pattern or searchPath");
 
         const re = new RegExp(pattern, caseInsensitive ? "i" : "");
-        const globRe = fileGlob ? globToRegExp(fileGlob) : null;
+        const includeRes = includeGlobs.map(globToRegExp);
+        const excludeRes = excludeGlobs.map(globToRegExp);
 
         const files: string[] = [];
         const walk = async (p: string) => {
           const st = await fs.stat(p);
           if (st.isFile()) {
-            if (!globRe || globRe.test(path.basename(p))) files.push(p);
+            const relative = path.relative(searchPath, p).replace(/\\/g, "/");
+            const basename = path.basename(p);
+            const included =
+              includeRes.length === 0 ||
+              includeRes.some((globRe) => globRe.test(basename) || globRe.test(relative));
+            const excluded = excludeRes.some(
+              (globRe) => globRe.test(basename) || globRe.test(relative),
+            );
+            if (included && !excluded) files.push(p);
             return;
           }
           if (!st.isDirectory()) return;
@@ -227,6 +237,33 @@ describe("grep tool", () => {
         caseSensitive: true,
       }),
     ).rejects.toThrow(/targetPaths/);
+  });
+
+  test("skips credential directories when recursively searching an allowed ancestor", async () => {
+    const dir = await tmpDir();
+    const coworkDir = path.join(dir, ".cowork");
+    await fs.mkdir(path.join(coworkDir, "auth"), { recursive: true });
+    await fs.mkdir(path.join(coworkDir, "notes"), { recursive: true });
+    await fs.writeFile(path.join(coworkDir, "auth", "token.txt"), "needle secret-token\n", "utf-8");
+    await fs.writeFile(
+      path.join(coworkDir, "notes", "note.txt"),
+      "needle ordinary-note\n",
+      "utf-8",
+    );
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    const res: string = await t.execute({
+      pattern: "needle",
+      path: coworkDir,
+      caseSensitive: true,
+    });
+
+    expect(res).toContain("ordinary-note");
+    expect(res).not.toContain("secret-token");
+    expect(res).not.toContain(`${path.sep}auth${path.sep}`);
   });
 
   test("returns 'No matches' on no results", async () => {
@@ -485,7 +522,7 @@ describe("grep tool", () => {
 
     expect(capturedArgs).toContain("--line-number");
     expect(capturedArgs).not.toContain("-i");
-    expect(capturedArgs).not.toContain("--glob");
+    expect(capturedArgs).not.toContain("*.ts");
     expect(capturedArgs).not.toContain("-C");
     expect(capturedArgs).toContain("--");
     expect(capturedArgs).toContain("data");

@@ -696,7 +696,7 @@ export class AgentSession {
   getLatestAssistantText(): string | undefined {
     for (let i = this.state.allMessages.length - 1; i >= 0; i -= 1) {
       const message = this.state.allMessages[i];
-      if (!message || message.role !== "assistant") continue;
+      if (message?.role !== "assistant") continue;
       const text = contentText(message.content);
       if (text) return text;
     }

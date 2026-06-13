@@ -47,13 +47,32 @@ const SANDBOX_ENV_ALLOWLIST = new Set([
   "USER",
   "USERNAME",
   "WINDIR",
+  // Cowork-internal artifact-runtime pointers (not secrets). The presentations/
+  // artifact helpers resolve the managed @oai/artifact-tool runtime via these:
+  // NODE_OPTIONS carries the `--import=<resolver>` hook and the two COWORK_* vars
+  // point at the managed node_modules / ESM resolver. They are NOT baked into the
+  // shell prelude, so they must survive the allowlist or sandboxed helper commands
+  // fail to find the runtime.
+  "COWORK_ARTIFACT_RUNTIME_NODE_MODULES",
+  "COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER",
+  "NODE_OPTIONS",
 ]);
 
-// Patterns that may indicate secrets in command output
+// Patterns that may indicate secrets in command output (redacted in logs only).
 const SECRET_PATTERNS = [
   /(?:api[_-]?key|apikey|token|password|secret|auth[_-]?token)["']?\s*[:=]\s*["']?[\w\-./+=]{8,}/gi,
   /(?:bearer|basic)\s+[\w\-./+=]{10,}/gi,
   /(?:sk-[a-zA-Z0-9]{20,})/g,
+  // Common UPPER_CASE env-var assignments (e.g. ANTHROPIC_API_KEY=..., OPENAI_API_KEY=...)
+  // that the generic api_key pattern above misses (no value separator after the var name).
+  /\b[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)\s*=\s*["']?[\w\-./+=]{8,}/g,
+  // Provider/CI token formats with recognizable prefixes.
+  /\bgh[posru]_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bnpm_[A-Za-z0-9]{36,}/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /X-Amz-Security-Token[:=]\s*[\w+/]{40,}/gi,
 ];
 
 function redactSecrets(text: string): string {
@@ -367,9 +386,16 @@ async function runShellCommandWithExec(
       signal: opts.abortSignal,
       timeoutMs: opts.timeoutMs,
       // Passing an `env` object replaces (not merges) the child environment.
-      // Sandboxed commands receive either the explicit toolEnv or a minimal
-      // compatibility allowlist, then sandbox marker vars overlay last.
-      env: { ...(opts.env ?? minimalSandboxEnv()), ...transformed.env },
+      // The OS sandbox confines filesystem writes, but NOT environment access:
+      // a sandboxed command can still read every variable it is handed and (with
+      // network allowed, the default) exfiltrate it. So the child must never see
+      // the server's full process env — which carries provider API keys and other
+      // secrets. Filter to the compatibility allowlist (PATH/HOME/locale plus the
+      // Cowork-internal artifact-runtime pointers; see SANDBOX_ENV_ALLOWLIST).
+      // The runtime PATH dirs and COWORK_SOFFICE shim are injected into the command
+      // string by buildPlatformShellCommandWithRuntimePrelude. Sandbox marker vars
+      // overlay last.
+      env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
     });
     return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
   }

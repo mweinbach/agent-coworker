@@ -52,6 +52,18 @@ export interface MCPServersSnapshot {
   warnings: string[];
 }
 
+// MCP tool descriptions are supplied by the (possibly remote, possibly
+// workspace-controlled) server and handed straight to the model as tool context.
+// A hostile server can stuff prompt-injection text here. We cannot neutralize
+// natural-language injection, but we cap the length so a single tool cannot flood
+// the context window or bury the rest of the toolset.
+const MAX_MCP_DESCRIPTION_LENGTH = 4_000;
+
+function capMcpDescription(description: string): string {
+  if (description.length <= MAX_MCP_DESCRIPTION_LENGTH) return description;
+  return `${description.slice(0, MAX_MCP_DESCRIPTION_LENGTH)}… [description truncated]`;
+}
+
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const oauthProviderTokensSchema = z
   .object({
@@ -175,6 +187,13 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
         : entry;
       continue;
     }
+    // Cap nested description strings too: a hostile server can stuff a huge
+    // prompt-injection payload into a property/enum description, which is handed
+    // to the model as tool context just like the top-level description.
+    if (key === "description" && typeof entry === "string") {
+      output[key] = capMcpDescription(entry);
+      continue;
+    }
     output[key] = normalizeMcpJsonSchema(entry);
   }
 
@@ -256,8 +275,9 @@ async function createRuntimeMcpClient(opts: {
         const rawEntry = entry as typeof entry & Record<string, unknown>;
         const name = typeof entry.name === "string" ? entry.name : "";
         if (!name) continue;
-        const description =
-          typeof entry.description === "string" ? entry.description : `MCP tool ${name}`;
+        const description = capMcpDescription(
+          typeof entry.description === "string" ? entry.description : `MCP tool ${name}`,
+        );
         discovered[name] = {
           description,
           inputSchema: normalizeMcpJsonSchema(
@@ -527,15 +547,20 @@ export async function readMCPServersSnapshot(config: AgentConfig): Promise<MCPSe
 
 /**
  * A workspace's own `.cowork/mcp-servers.json` is attacker-controlled in a
- * malicious repository. Launching a stdio server from it runs a local command
- * with the agent's privileges BEFORE the bash/tool command-approval path, so it
- * must not auto-start unless the workspace is explicitly trusted (resolved only
- * from env/user config — never from the workspace itself). Non-stdio workspace
- * transports do not launch a local process and other sources (user/system/plugin)
- * are installed deliberately. Workspace-scoped plugin stdio servers are also
- * gated because the plugin bundle comes from the repository.
+ * malicious repository, so none of its MCP servers may auto-start unless the
+ * workspace is explicitly trusted (resolved only from env/user config — never
+ * from the workspace itself). Both transports are dangerous on repo open:
+ *  - stdio launches a local command with the agent's privileges BEFORE the
+ *    bash/tool command-approval path runs.
+ *  - http/sse silently opens an outbound connection to a workspace-specified URL
+ *    and forwards every tool invocation (which may carry file contents, secrets,
+ *    or PII read earlier in the turn) to it, optionally with user-config auth
+ *    headers — a drive-by exfiltration/SSRF channel.
+ * Other sources (user/system/plugin) are installed deliberately; only
+ * workspace-owned servers (including workspace-scoped plugin bundles, which ship
+ * inside the repo) are gated.
  */
-function isUntrustedWorkspaceStdioServer(
+function isUntrustedWorkspaceServer(
   server: MCPRegistryServer,
   config: AgentConfig,
   allowUntrusted: boolean,
@@ -544,7 +569,7 @@ function isUntrustedWorkspaceStdioServer(
   const isWorkspaceOwned =
     server.source === "workspace" ||
     (server.source === "plugin" && server.pluginScope === "workspace");
-  return isWorkspaceOwned && server.transport.type === "stdio";
+  return isWorkspaceOwned;
 }
 
 export async function loadMCPServers(
@@ -552,25 +577,28 @@ export async function loadMCPServers(
   opts: {
     log?: (line: string) => void;
     /**
-     * Allow this call to include the workspace's own (otherwise untrusted) stdio
-     * MCP servers. Reserved for explicit, user-initiated actions (e.g. MCP server
+     * Allow this call to include the workspace's own (otherwise untrusted) MCP
+     * servers. Reserved for explicit, user-initiated actions (e.g. MCP server
      * validation), which serve as per-command approval. The automatic turn-setup
-     * path leaves this false so a malicious workspace cannot auto-launch commands.
+     * path leaves this false so a malicious workspace cannot auto-launch commands
+     * or auto-connect to its own endpoints.
      */
-    includeUntrustedWorkspaceStdio?: boolean;
+    includeUntrustedWorkspace?: boolean;
   } = {},
 ): Promise<MCPServerConfig[]> {
   const registry = await loadMCPConfigRegistry(config);
   const allowed: MCPRegistryServer[] = [];
   for (const server of registry.servers) {
     if (server.enabled === false) continue;
-    if (
-      isUntrustedWorkspaceStdioServer(server, config, opts.includeUntrustedWorkspaceStdio === true)
-    ) {
+    if (isUntrustedWorkspaceServer(server, config, opts.includeUntrustedWorkspace === true)) {
+      const action =
+        server.transport.type === "stdio"
+          ? "launch local commands"
+          : "connect to its own network endpoints";
       opts.log?.(
-        `[MCP] Not auto-starting workspace stdio server "${server.name}" from ` +
-          `.cowork/${MCP_SERVERS_FILE_NAME}: this workspace is not trusted to launch local ` +
-          `commands. Set "trustWorkspaceMcp": true in ~/.cowork/config/config.json or ` +
+        `[MCP] Not auto-starting workspace ${server.transport.type} server "${server.name}" from ` +
+          `.cowork/${MCP_SERVERS_FILE_NAME}: this workspace is not trusted to ${action}. ` +
+          `Set "trustWorkspaceMcp": true in ~/.cowork/config/config.json or ` +
           `AGENT_TRUST_WORKSPACE_MCP=1 to allow it.`,
       );
       continue;
@@ -788,7 +816,9 @@ export async function getOrLoadMCPToolsCached(
     try {
       await cached.close();
     } catch (error) {
-      opts.log?.(`[MCP] Error closing stale MCP cache for workspace ${workspaceKey}: ${String(error)}`);
+      opts.log?.(
+        `[MCP] Error closing stale MCP cache for workspace ${workspaceKey}: ${String(error)}`,
+      );
     }
     workspaceMcpCache.delete(workspaceKey);
   }
@@ -824,7 +854,9 @@ export async function closeMcpServersForSession(sessionId: string): Promise<void
           await cached.close();
         } catch (error) {
           // Session teardown has no log channel; keep the failure visible in server logs.
-          console.warn(`[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`);
+          console.warn(
+            `[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`,
+          );
         }
         workspaceMcpCache.delete(workspaceKey);
       }

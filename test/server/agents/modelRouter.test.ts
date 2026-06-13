@@ -14,8 +14,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   // google so the base config doesn't need overriding for most tests. When
   // tests use openai they should supply a valid preferredChildModel.
   const provider = (overrides.provider ?? "google") as string;
-  const defaultPreferredChildModel =
-    provider === "openai" ? "gpt-5.4" : "gemini-3-flash-preview";
+  const defaultPreferredChildModel = provider === "openai" ? "gpt-5.4" : "gemini-3-flash-preview";
   return {
     provider: "google",
     model: "gemini-3-flash-preview",

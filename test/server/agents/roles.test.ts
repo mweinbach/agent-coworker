@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-
-import { AGENT_ROLE_VALUES } from "../../../src/shared/agents";
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,
   getAgentRoleDefinition,
   getAgentRoleShellPolicy,
 } from "../../../src/server/agents/roles";
+import { AGENT_ROLE_VALUES } from "../../../src/shared/agents";
 
 describe("getAgentRoleDefinition", () => {
   test("returns a definition for every AgentRole value", () => {
@@ -152,10 +151,7 @@ describe("buildSpawnAgentRolePromptLines", () => {
   test("readOnly roles mention 'Read-only'", () => {
     const lines = buildSpawnAgentRolePromptLines();
     const linesByRole = Object.fromEntries(
-      AGENT_ROLE_VALUES.map((role) => [
-        role,
-        lines.find((l) => l.includes(`**${role}**`)) ?? "",
-      ]),
+      AGENT_ROLE_VALUES.map((role) => [role, lines.find((l) => l.includes(`**${role}**`)) ?? ""]),
     );
     for (const role of AGENT_ROLE_VALUES) {
       const def = getAgentRoleDefinition(role);

@@ -18,6 +18,9 @@ import { canonicalWorkspacePath } from "../utils/workspacePath";
 export const CHATS_FOLDER = "(chats)";
 export const MEMORY_INDEX_FILE = "MEMORY.md";
 export const MEMORY_INDEX_HEADING = "# Memory Index";
+export const MAX_ADVANCED_MEMORY_NAME_LENGTH = 200;
+export const MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH = 500;
+export const MAX_ADVANCED_MEMORY_BODY_LENGTH = 50_000;
 const INVALID_FOLDER_CHARS = /[/\\\0]/;
 
 export type AdvancedMemoryEntry = {
@@ -158,6 +161,54 @@ function serializeMemory(entry: {
   return lines.join("\n");
 }
 
+function assertMaxLength(value: string, limit: number, label: string): void {
+  if (value.length > limit) {
+    throw new Error(`${label} must be <= ${limit} characters.`);
+  }
+}
+
+function normalizeAdvancedMemoryWriteInput(input: AdvancedMemoryWriteInput): {
+  slug?: string;
+  name: string;
+  description: string;
+  type: string;
+  originSessionId?: string;
+  body: string;
+} {
+  const slug = input.slug?.trim() || undefined;
+  const name = input.name.trim();
+  const description = input.description.trim();
+  const type = input.type?.trim() || "note";
+  const body = input.body.trim();
+  assertMaxLength(name, MAX_ADVANCED_MEMORY_NAME_LENGTH, "advanced memory name");
+  assertMaxLength(
+    description,
+    MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH,
+    "advanced memory description",
+  );
+  assertMaxLength(body, MAX_ADVANCED_MEMORY_BODY_LENGTH, "advanced memory body");
+  return {
+    ...(slug ? { slug } : {}),
+    name,
+    description,
+    type,
+    ...(input.originSessionId ? { originSessionId: input.originSessionId } : {}),
+    body,
+  };
+}
+
+function truncateIndexField(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}...[truncated]`;
+}
+
+function renderIndexLine(entry: AdvancedMemoryEntry): string {
+  const name = truncateIndexField(entry.name, MAX_ADVANCED_MEMORY_NAME_LENGTH);
+  const description = truncateIndexField(entry.description, MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH);
+  const suffix = description ? ` — ${description}` : "";
+  return `- [${name}](${entry.slug}.md)${suffix}`;
+}
+
 function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: string } {
   const re = /^﻿?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
   const match = raw.match(re);
@@ -273,16 +324,16 @@ export class AdvancedMemoryStore {
   }
 
   async writeMemory(folder: string, input: AdvancedMemoryWriteInput): Promise<AdvancedMemoryEntry> {
-    const slug = slugify(input.slug?.trim() || input.name);
+    const normalized = normalizeAdvancedMemoryWriteInput(input);
+    const slug = slugify(normalized.slug || normalized.name);
     const dir = this.folderPath(folder);
     await fs.mkdir(dir, { recursive: true });
-    const type = input.type?.trim() || "note";
     const content = serializeMemory({
-      name: input.name.trim() || slug,
-      description: input.description.trim(),
-      type,
-      originSessionId: input.originSessionId,
-      body: input.body,
+      name: normalized.name || slug,
+      description: normalized.description,
+      type: normalized.type,
+      originSessionId: normalized.originSessionId,
+      body: normalized.body,
     });
     await fs.writeFile(path.join(dir, `${slug}.md`), content, "utf-8");
     await this.regenerateIndex(folder);
@@ -321,8 +372,7 @@ export class AdvancedMemoryStore {
     const entries = await this.listMemories(folder);
     const lines = [MEMORY_INDEX_HEADING, ""];
     for (const entry of entries) {
-      const suffix = entry.description ? ` — ${entry.description}` : "";
-      lines.push(`- [${entry.name}](${entry.slug}.md)${suffix}`);
+      lines.push(renderIndexLine(entry));
     }
     lines.push("");
     const dir = this.folderPath(folder);
@@ -336,8 +386,7 @@ export class AdvancedMemoryStore {
     if (entries.length === 0) return "";
     const lines = [MEMORY_INDEX_HEADING, ""];
     for (const entry of entries) {
-      const suffix = entry.description ? ` — ${entry.description}` : "";
-      lines.push(`- [${entry.name}](${entry.slug}.md)${suffix}`);
+      lines.push(renderIndexLine(entry));
     }
     return lines.join("\n");
   }

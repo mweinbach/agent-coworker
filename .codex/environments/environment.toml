@@ -7,7 +7,7 @@ script = "bun install"
 
 [[actions]]
 name = "Run Desktop"
-icon = "tool"
+icon = "run"
 command = "bun run desktop:dev"
 
 [[actions]]

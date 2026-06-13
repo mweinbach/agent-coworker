@@ -755,7 +755,7 @@ describe("desktop transcript feed mapping", () => {
     const feed = mapTranscriptToFeed(transcript);
     const assistant = feed.find((item) => item.kind === "message" && item.role === "assistant");
     expect(assistant?.kind).toBe("message");
-    if (!assistant || assistant.kind !== "message") throw new Error("Expected assistant message");
+    if (assistant?.kind !== "message") throw new Error("Expected assistant message");
     expect(assistant.text).toBe("Answer");
     expect(assistant.annotations).toEqual([
       {
@@ -840,7 +840,7 @@ describe("desktop transcript feed mapping", () => {
     const feed = mapTranscriptToFeed(transcript);
     const tool = feed.find((item) => item.kind === "tool");
     expect(tool?.kind).toBe("tool");
-    if (!tool || tool.kind !== "tool") throw new Error("Expected tool item");
+    if (tool?.kind !== "tool") throw new Error("Expected tool item");
     expect(tool.name).toBe("nativeWebSearch");
     expect(tool.state).toBe("output-available");
     expect(tool.result).toEqual({
@@ -1049,7 +1049,7 @@ describe("desktop transcript feed mapping", () => {
 
     const reasoning = feed.find((item) => item.kind === "reasoning");
     expect(reasoning?.kind).toBe("reasoning");
-    if (!reasoning || reasoning.kind !== "reasoning") throw new Error("Expected reasoning item");
+    if (reasoning?.kind !== "reasoning") throw new Error("Expected reasoning item");
     expect(reasoning.text).toBe("Searching for trailer visuals.");
 
     const tools = feed.filter((item) => item.kind === "tool");
@@ -1145,7 +1145,7 @@ describe("desktop transcript feed mapping", () => {
     const tool = feed.find((item) => item.kind === "tool");
 
     expect(tool?.kind).toBe("tool");
-    if (!tool || tool.kind !== "tool") throw new Error("Expected tool item");
+    if (tool?.kind !== "tool") throw new Error("Expected tool item");
     expect(tool).toMatchObject({
       name: "read",
       state: "output-error",

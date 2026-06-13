@@ -926,7 +926,7 @@ function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
   }
 
   const [match] = matches;
-  if (!match || match.start !== 0 || match.end !== candidate.length) {
+  if (match?.start !== 0 || match.end !== candidate.length) {
     return null;
   }
 

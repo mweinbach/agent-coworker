@@ -656,7 +656,7 @@ function normalizeCachedSessionSnapshot(
     targetSessionId: sessionId,
     snapshot,
   });
-  if (!parsed || parsed.type !== "session_snapshot" || parsed.snapshot.sessionId !== sessionId) {
+  if (parsed?.type !== "session_snapshot" || parsed.snapshot.sessionId !== sessionId) {
     return null;
   }
 

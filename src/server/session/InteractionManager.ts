@@ -13,6 +13,14 @@ function makeId(): string {
   return crypto.randomUUID();
 }
 
+// Fail-safe backstop for an abandoned prompt. Transient disconnects are already
+// covered: pending prompts are replayed to a reconnecting client, so this only
+// fires when nobody ever answers (e.g. a headless client died, or a turn was
+// orphaned). On expiry an approval denies (returns false) and an ask rejects, so
+// the turn unblocks instead of hanging forever and holding the session busy.
+// Generous by default so a human who steps away is not auto-denied mid-thought.
+const DEFAULT_PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
+
 type PromptBucket<T> = Map<string, PromiseWithResolvers<T>>;
 export type PendingPromptReplayEvent =
   | Extract<SessionEvent, { type: "ask" }>
@@ -37,8 +45,23 @@ export class InteractionManager {
       getConfig: () => AgentConfig;
       isYolo: () => boolean;
       waitForPromptResponse?: <T>(requestId: string, bucket: PromptBucket<T>) => Promise<T>;
+      /** Override the abandoned-prompt timeout (ms). <= 0 disables it. */
+      promptTimeoutMs?: number;
     },
   ) {}
+
+  /**
+   * Arm a fail-safe timer that fires when a prompt is never answered. Returns a
+   * clear() to cancel it on resolution. The timer is unref'd so a still-armed
+   * backstop never keeps the process alive.
+   */
+  private armPromptTimeout(onTimeout: () => void): { clear: () => void } | null {
+    const ms = this.opts.promptTimeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
+    if (!Number.isFinite(ms) || ms <= 0) return null;
+    const handle = setTimeout(onTimeout, ms);
+    (handle as { unref?: () => void }).unref?.();
+    return { clear: () => clearTimeout(handle) };
+  }
 
   get hasPendingAsk(): boolean {
     return this.pendingAsk.size > 0;
@@ -140,7 +163,17 @@ export class InteractionManager {
     this.opts.emit(evt);
     this.opts.queuePersistSessionSnapshot("session.ask_pending");
 
+    const timeout = this.armPromptTimeout(() => {
+      // Only act if still pending (delete() returns false if already answered).
+      if (!this.pendingAsk.delete(requestId)) return;
+      this.pendingAskEvents.delete(requestId);
+      this.opts.log(`[warn] ask ${requestId} timed out without a response`);
+      this.opts.queuePersistSessionSnapshot("session.ask_timeout");
+      pending.reject(new Error("Ask prompt timed out without a response."));
+    });
+
     return await this.waitForPromptResponse(requestId, this.pendingAsk).finally(() => {
+      timeout?.clear();
       this.pendingAskEvents.delete(requestId);
     });
   }
@@ -193,7 +226,17 @@ export class InteractionManager {
     });
     this.opts.queuePersistSessionSnapshot("session.approval_pending");
 
+    const timeout = this.armPromptTimeout(() => {
+      // Fail safe: an abandoned approval denies (false), never silently runs.
+      if (!this.pendingApproval.delete(requestId)) return;
+      this.pendingApprovalEvents.delete(requestId);
+      this.opts.log(`[warn] approval ${requestId} timed out without a response; denying`);
+      this.opts.queuePersistSessionSnapshot("session.approval_timeout");
+      pending.resolve(false);
+    });
+
     return await this.waitForPromptResponse(requestId, this.pendingApproval).finally(() => {
+      timeout?.clear();
       this.pendingApprovalEvents.delete(requestId);
     });
   }

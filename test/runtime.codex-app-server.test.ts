@@ -432,6 +432,44 @@ describe("codex app-server runtime", () => {
     },
   );
 
+  test.serial("omits Codex web search config when network is disabled", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-network-"));
+    const script = await writeMockAppServer(dir);
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    const config = {
+      ...makeConfig(dir),
+      providerOptions: {
+        "codex-cli": {
+          textVerbosity: "high",
+          webSearchMode: "live",
+          webSearch: {
+            contextSize: "high",
+            allowedDomains: ["openai.com"],
+          },
+        },
+      },
+    };
+    const runtime = createRuntime(config);
+    await runtime.runTurn({
+      config,
+      providerOptions: config.providerOptions,
+      system: "You are Codex.",
+      messages: [{ role: "user", content: "Say hi" }],
+      tools: {},
+      maxSteps: 1,
+      networkAllowed: false,
+    });
+
+    const requests = await readCapturedRequests(capturePath);
+    expect(requests.find((entry) => entry.method === "thread/start")?.params.config).toEqual({
+      model_verbosity: "high",
+    });
+  });
+
   test.serial("does not emit empty rich web search config", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-empty-web-"));
     const script = await writeMockAppServer(dir);

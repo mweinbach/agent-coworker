@@ -8,7 +8,6 @@ import {
   __internal as googleNativeInternal,
   runGoogleNativeInteractionStep,
 } from "../../../src/runtime/googleNativeInteractions";
-import type { RuntimeRunTurnParams } from "../../../src/runtime/types";
 import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
 import type { ModelMessage } from "../../../src/types";
 import {

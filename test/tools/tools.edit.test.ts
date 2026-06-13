@@ -15,7 +15,6 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
-  currentTodos,
   describe,
   expect,
   fs,
@@ -24,7 +23,6 @@ import {
   makeConfig,
   makeCtx,
   mock,
-  onTodoChange,
   os,
   path,
   test,
@@ -64,6 +62,38 @@ describe("edit tool", () => {
     await expect(
       t.execute({ filePath: p, oldString: "missing", newString: "x", replaceAll: false }),
     ).rejects.toThrow(/oldString not found/);
+  });
+
+  test("refuses to edit a file larger than the size cap", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "huge.txt");
+    // 10_000_001 bytes -> just over the 10 MB edit cap.
+    await fs.writeFile(p, "a".repeat(10_000_001), "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({ filePath: p, oldString: "a", newString: "b", replaceAll: false }),
+    ).rejects.toThrow(/edit blocked: .* bytes \(max/);
+  });
+
+  test("refuses a replaceAll whose result would blow past the size cap", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "small.txt");
+    // A small file (well under the file-size cap) full of single-char matches.
+    await fs.writeFile(p, "a".repeat(100_000), "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        filePath: p,
+        // 100k matches × a 2MB replacement would build a ~200GB string.
+        oldString: "a",
+        newString: "b".repeat(2_000_000),
+        replaceAll: true,
+      }),
+    ).rejects.toThrow(/result would be .* bytes \(max/);
+    // The original file must be left untouched.
+    expect((await fs.readFile(p, "utf-8")).length).toBe(100_000);
   });
 
   test("rejects edits when sandbox policy is explicitly read-only", async () => {

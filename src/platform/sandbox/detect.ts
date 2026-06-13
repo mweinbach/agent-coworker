@@ -89,6 +89,7 @@ export function isBwrapUsable(program: string): boolean {
         "/dev",
         "--unshare-user",
         "--unshare-pid",
+        "--unshare-ipc",
         "--proc",
         "/proc",
         // Use a tiny host utility that exits 0. Do not probe with process.execPath:

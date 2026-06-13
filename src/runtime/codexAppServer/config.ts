@@ -122,10 +122,11 @@ export function codexThreadConfig(
   const webSearchMode = normalizeWebSearchMode(asString(codexOptions.webSearchMode));
   const textVerbosity = normalizeTextVerbosity(asString(codexOptions.textVerbosity));
   const webSearchToolConfig = codexWebSearchToolConfig(codexOptions);
+  const webSearchAllowed = params.networkAllowed !== false;
   const config: Record<string, unknown> = {};
-  if (webSearchMode) config.web_search = webSearchMode;
+  if (webSearchAllowed && webSearchMode) config.web_search = webSearchMode;
   if (textVerbosity) config.model_verbosity = textVerbosity;
-  if (webSearchToolConfig) config.tools = { web_search: webSearchToolConfig };
+  if (webSearchAllowed && webSearchToolConfig) config.tools = { web_search: webSearchToolConfig };
   return Object.keys(config).length > 0 ? config : undefined;
 }
 

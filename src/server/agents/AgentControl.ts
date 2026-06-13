@@ -16,7 +16,7 @@ import type { SessionBinding } from "../startServer/types";
 import { routeAgentConfig } from "./modelRouter";
 import { resolveAgentProfileSnapshot } from "./profiles";
 import { inspectChildAgentReport } from "./reportParser";
-import { getAgentRoleDefinition } from "./roles";
+import { AGENT_ROLE_DEFINITIONS, getAgentRoleDefinition } from "./roles";
 import { StatusBus } from "./StatusBus";
 import type {
   AgentCloseOptions,
@@ -30,6 +30,19 @@ import type {
   AgentWaitOptions,
   AgentWaitResult,
 } from "./types";
+
+// Defense-in-depth caps for child-agent spawning. The primary guard against
+// recursive spawning is that child sessions (sessionKind === "agent") are built
+// without an AgentControl, so only a root session can spawn. These caps bound a
+// runaway or jailbroken root and survive any regression of that guard:
+//  - MAX_SPAWN_DEPTH tracks the role definitions (no role currently permits a
+//    child to spawn, so the only legitimate child depth is 1) and prevents
+//    unbounded recursion.
+//  - MAX_ACTIVE_CHILDREN_PER_PARENT bounds a fork-bomb of sibling agents that
+//    would otherwise exhaust file descriptors, memory, and MCP loads.
+const MAX_SPAWN_DEPTH =
+  Math.max(0, ...Object.values(AGENT_ROLE_DEFINITIONS).map((r) => r.maxDepth)) + 1;
+const MAX_ACTIVE_CHILDREN_PER_PARENT = 16;
 
 function executionStateForSession(
   session: AgentSession,
@@ -89,6 +102,12 @@ function normalizeNickname(nickname: string | null | undefined): string | undefi
 export class AgentControl {
   private readonly statusBus = new StatusBus();
   private readonly inFlightByAgentId = new Map<string, Promise<void>>();
+  // Synchronous reservation of concurrency slots per parent. spawn() registers
+  // its binding only after several awaits, so without reserving a slot up-front
+  // concurrent spawns would all read the same pre-spawn count and blow past
+  // MAX_ACTIVE_CHILDREN_PER_PARENT. Reserved at the (synchronous) check, released
+  // once the binding is registered (or the spawn fails).
+  private readonly inFlightSpawnsByParent = new Map<string, number>();
 
   constructor(private readonly deps: AgentControlDeps) {}
 
@@ -247,13 +266,67 @@ export class AgentControl {
     });
   }
 
+  /**
+   * Count child sessions of a parent that are actively running or still
+   * initializing. A child that has finished its work stays open (persistenceStatus
+   * "active") until the parent explicitly closes it, but it no longer occupies a
+   * concurrency slot — so sequential spawn→wait→spawn workflows are not blocked
+   * once they pass 16 lifetime children. A true fork-bomb still creates many
+   * concurrent RUNNING children and is bounded by MAX_ACTIVE_CHILDREN_PER_PARENT.
+   */
+  private countActiveChildren(parentSessionId: string): number {
+    let count = 0;
+    for (const binding of this.deps.sessionBindings.values()) {
+      const session = binding.session;
+      if (!session?.isAgentOf?.(parentSessionId)) continue;
+      const state = executionStateForSession(session);
+      if (state === "running" || state === "pending_init") count += 1;
+    }
+    return count;
+  }
+
   async spawn(opts: AgentSpawnOptions): Promise<PersistentAgentSummary> {
+    const depth = (opts.parentDepth ?? 0) + 1;
+    // Reject runaway recursion and fork-bombs before doing any spawn work.
+    if (depth > MAX_SPAWN_DEPTH) {
+      throw new Error(
+        `Child agent depth ${depth} exceeds the maximum spawn depth of ${MAX_SPAWN_DEPTH}; ` +
+          "recursive sub-delegation is disabled.",
+      );
+    }
+    // Count registered children PLUS slots reserved by concurrent in-flight
+    // spawns, then reserve a slot — all synchronously, so parallel spawn() calls
+    // cannot race past the cap before their bindings are registered below.
+    const parentId = opts.parentSessionId;
+    const reserved = this.inFlightSpawnsByParent.get(parentId) ?? 0;
+    const activeChildren = this.countActiveChildren(parentId) + reserved;
+    if (activeChildren >= MAX_ACTIVE_CHILDREN_PER_PARENT) {
+      throw new Error(
+        `Cannot spawn another child agent: this session already has ${activeChildren} active ` +
+          `child agents (limit ${MAX_ACTIVE_CHILDREN_PER_PARENT}). Close or wait on existing ` +
+          "agents before spawning more.",
+      );
+    }
+    this.inFlightSpawnsByParent.set(parentId, reserved + 1);
+    try {
+      return await this.spawnReserved(opts, depth);
+    } finally {
+      const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
+      if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
+      else this.inFlightSpawnsByParent.set(parentId, remaining);
+    }
+  }
+
+  /** The reservation-protected body of spawn(); see spawn() for the slot guard. */
+  private async spawnReserved(
+    opts: AgentSpawnOptions,
+    depth: number,
+  ): Promise<PersistentAgentSummary> {
     const profile = opts.profileRef
       ? await resolveAgentProfileSnapshot(opts.parentConfig, opts.profileRef)
       : undefined;
     const role = profile?.baseRole ?? opts.role ?? "default";
     const roleDefinition = getAgentRoleDefinition(role);
-    const depth = (opts.parentDepth ?? 0) + 1;
     const resolvedContext = resolveAgentSpawnContextOptions({
       ...opts,
       contextMode: opts.contextMode ?? profile?.defaultContextMode,

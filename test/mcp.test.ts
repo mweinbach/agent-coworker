@@ -22,6 +22,7 @@ function makeConfig(
   workspaceRoot: string,
   userHome: string,
   builtInConfigDir: string,
+  opts: { trustWorkspaceMcp?: boolean } = {},
 ): AgentConfig {
   return {
     provider: "google",
@@ -40,6 +41,10 @@ function makeConfig(
     memoryDirs: [],
     configDirs: [],
     enableMcp: true,
+    // Several auth-injection tests below seed workspace-scoped servers and need
+    // them to actually load; the workspace-trust gate is covered separately in
+    // test/mcp.workspace-trust.test.ts.
+    ...(opts.trustWorkspaceMcp !== undefined ? { trustWorkspaceMcp: opts.trustWorkspaceMcp } : {}),
   };
 }
 
@@ -357,7 +362,9 @@ describe("runtime auth injection", () => {
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-api-builtin-"));
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
       await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
         servers: [
           {
@@ -401,7 +408,9 @@ describe("runtime auth injection", () => {
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-builtin-"));
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
 
       await writeJson(path.join(tmpHome, ".cowork", "config", "mcp-servers.json"), {
         servers: [
@@ -460,7 +469,9 @@ describe("runtime auth injection", () => {
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-builtin-"));
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
       await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
         servers: [
           {
@@ -510,7 +521,9 @@ describe("runtime auth injection", () => {
     );
 
     try {
-      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
       await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
         servers: [
           {
@@ -663,5 +676,28 @@ describe("mcp json schema normalization", () => {
     });
     expect(choicesArray?.maxItems).toBe(2);
     expect(choicesArray?.prefixItems).toBeUndefined();
+  });
+
+  test("caps oversized nested property/enum descriptions", () => {
+    const huge = "A".repeat(10_000);
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        type: "object",
+        description: huge,
+        properties: {
+          query: { type: "string", description: huge },
+        },
+      },
+      true,
+    ) as {
+      description?: string;
+      properties: { query?: { description?: string } };
+    };
+
+    expect(normalized.description?.length).toBeLessThan(huge.length);
+    expect(normalized.description).toContain("[description truncated]");
+    // The nested property description must be capped too, not just the top level.
+    expect(normalized.properties.query?.description?.length).toBeLessThan(huge.length);
+    expect(normalized.properties.query?.description).toContain("[description truncated]");
   });
 });

@@ -4,3 +4,13 @@ name = "agent-coworker"
 
 [setup]
 script = "bun install"
+
+[[actions]]
+name = "Run Desktop"
+icon = "run"
+command = "bun run desktop:dev"
+
+[[actions]]
+name = "Test"
+icon = "tool"
+command = "bun run test"

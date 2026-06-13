@@ -6,6 +6,9 @@ import path from "node:path";
 import {
   AdvancedMemoryStore,
   CHATS_FOLDER,
+  MAX_ADVANCED_MEMORY_BODY_LENGTH,
+  MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH,
+  MAX_ADVANCED_MEMORY_NAME_LENGTH,
   MEMORY_INDEX_HEADING,
   normalizeMemoryFolderName,
   resolveAdvancedMemoryAccessRoots,
@@ -90,6 +93,32 @@ describe("AdvancedMemoryStore", () => {
     await expect(fs.stat(path.join(path.dirname(tmpDir), outsideName))).rejects.toThrow();
   });
 
+  test("rejects oversized memory fields in the shared store path", async () => {
+    await expect(
+      store.writeMemory("proj", {
+        name: "n".repeat(MAX_ADVANCED_MEMORY_NAME_LENGTH + 1),
+        description: "ok",
+        body: "ok",
+      }),
+    ).rejects.toThrow(/advanced memory name/i);
+
+    await expect(
+      store.writeMemory("proj", {
+        name: "ok",
+        description: "d".repeat(MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH + 1),
+        body: "ok",
+      }),
+    ).rejects.toThrow(/advanced memory description/i);
+
+    await expect(
+      store.writeMemory("proj", {
+        name: "ok",
+        description: "ok",
+        body: "b".repeat(MAX_ADVANCED_MEMORY_BODY_LENGTH + 1),
+      }),
+    ).rejects.toThrow(/advanced memory body/i);
+  });
+
   test("renderPromptSection surfaces active and chats indexes", async () => {
     await store.writeMemory("proj", { name: "p1", description: "proj memory", body: "x" });
     await store.writeMemory(CHATS_FOLDER, { name: "c1", description: "chat memory", body: "y" });
@@ -99,6 +128,31 @@ describe("AdvancedMemoryStore", () => {
     expect(section).toContain("manageMemory");
     expect(section).toContain("proj memory");
     expect(section).toContain("chat memory");
+  });
+
+  test("renderPromptSection truncates oversized names and descriptions from existing files", async () => {
+    const dir = path.join(tmpDir, "proj");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "legacy.md"),
+      [
+        "---",
+        `name: "${"n".repeat(MAX_ADVANCED_MEMORY_NAME_LENGTH + 20)}"`,
+        `description: "${"d".repeat(MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH + 20)}"`,
+        "metadata:",
+        '  node_type: "memory"',
+        '  type: "note"',
+        "---",
+        "",
+        "body",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const section = await store.renderPromptSection("proj");
+    expect(section).toContain("...[truncated]");
+    expect(section).not.toContain("n".repeat(MAX_ADVANCED_MEMORY_NAME_LENGTH + 20));
+    expect(section).not.toContain("d".repeat(MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH + 20));
   });
 
   test("renderPromptSection is empty when no memories exist", async () => {

@@ -22,7 +22,7 @@ export class SessionSnapshotBuilder {
 
     for (let i = this.opts.state.allMessages.length - 1; i >= 0; i -= 1) {
       const message = this.opts.state.allMessages[i];
-      if (!message || message.role !== "assistant") continue;
+      if (message?.role !== "assistant") continue;
       const text = extractAssistantPreviewText(message.content);
       if (text) return text;
     }

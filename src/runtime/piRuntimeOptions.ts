@@ -576,7 +576,7 @@ export function extractToolCallsFromAssistant(
   const out: PiToolCallLike[] = [];
   for (const rawPart of rawContent) {
     const part = asRecord(rawPart);
-    if (!part || part.type !== "toolCall") continue;
+    if (part?.type !== "toolCall") continue;
     const id = asNonEmptyString(part.id) ?? `tool_${Date.now()}_${out.length + 1}`;
     const name = asNonEmptyString(part.name) ?? "tool";
     const argumentsRecord = asRecord(part.arguments) ?? {};

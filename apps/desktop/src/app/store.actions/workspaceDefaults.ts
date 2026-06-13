@@ -781,7 +781,7 @@ export function createWorkspaceDefaultsActions(
           ...(globalA2uiEnabled ? { a2uiEnabled: true } : {}),
         },
       });
-      if (!message || message.type !== "apply_session_defaults") {
+      if (message?.type !== "apply_session_defaults") {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
         flushQueuedThreadMessageIfReady(threadId);
         return;

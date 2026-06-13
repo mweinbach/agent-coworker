@@ -20,7 +20,7 @@ import type { SessionContext } from "./SessionContext";
 function snapshotToTopLevelSessionSummary(
   liveSnapshot: SessionSnapshot | null,
 ): PersistedSessionSummary | null {
-  if (!liveSnapshot || liveSnapshot.sessionKind !== "root") {
+  if (liveSnapshot?.sessionKind !== "root") {
     return null;
   }
 

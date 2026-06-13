@@ -335,7 +335,7 @@ export async function authorizeMCPServerOAuth(
   if (!isHttpLikeServer(server)) {
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
   }
-  if (!server.auth || server.auth.type !== "oauth") {
+  if (server.auth?.type !== "oauth") {
     throw new Error(`Server "${server.name}" is not configured for OAuth.`);
   }
   const transport = server.transport;
@@ -442,7 +442,7 @@ export async function exchangeMCPServerOAuthCode(opts: {
   if (!code) {
     throw new Error("OAuth code is required.");
   }
-  if (!opts.server.auth || opts.server.auth.type !== "oauth") {
+  if (opts.server.auth?.type !== "oauth") {
     throw new Error(`Server "${opts.server.name}" is not configured for OAuth.`);
   }
   if (!isHttpLikeServer(opts.server)) {

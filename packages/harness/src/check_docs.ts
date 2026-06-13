@@ -2,13 +2,12 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/server/protocol";
 import {
   jsonRpcNotificationSchemas,
   jsonRpcRequestSchemas,
   jsonRpcServerRequestSchemas,
 } from "../../../src/server/jsonrpc/schema";
+import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/server/protocol";
 
 type CheckResult = { ok: true } | { ok: false; message: string };
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");

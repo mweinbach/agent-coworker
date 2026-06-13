@@ -29,7 +29,7 @@ function redactTelemetrySecrets(value: unknown, seen = new WeakSet<object>()): u
 
 export function parseTelemetrySettings(raw: unknown): TelemetrySettings | undefined {
   const parsed = asRecord(raw);
-  if (!parsed || parsed.isEnabled !== true) return undefined;
+  if (parsed?.isEnabled !== true) return undefined;
 
   const metadataInput = asRecord(parsed.metadata);
   const metadata: Record<string, AttributeValue> = {};

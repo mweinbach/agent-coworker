@@ -247,7 +247,7 @@ function richToolResultContentFromOutput(output: unknown): PiToolResultContentPa
   if (directParts && directParts.length > 0) return directParts;
 
   const record = asRecord(output);
-  if (!record || record.type !== "content") return null;
+  if (record?.type !== "content") return null;
 
   const parts = normalizedToolResultParts(record.content);
   if (!parts || parts.length === 0) return null;
@@ -522,11 +522,10 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
 export function extractPiAssistantText(messages: PiMessage[]): string {
   const chunks: string[] = [];
   for (const rawMessage of messages as any[]) {
-    if (!rawMessage || rawMessage.role !== "assistant" || !Array.isArray(rawMessage.content))
-      continue;
+    if (rawMessage?.role !== "assistant" || !Array.isArray(rawMessage.content)) continue;
     for (const rawPart of rawMessage.content) {
       const part = asRecord(rawPart);
-      if (!part || part.type !== "text") continue;
+      if (part?.type !== "text") continue;
       if (!shouldPersistAssistantTextPhase(assistantTextPhase(part))) continue;
       const text = asString(part.text);
       if (text?.trim()) chunks.push(text);
@@ -538,11 +537,10 @@ export function extractPiAssistantText(messages: PiMessage[]): string {
 export function extractPiReasoningText(messages: PiMessage[]): string | undefined {
   const chunks: string[] = [];
   for (const rawMessage of messages as any[]) {
-    if (!rawMessage || rawMessage.role !== "assistant" || !Array.isArray(rawMessage.content))
-      continue;
+    if (rawMessage?.role !== "assistant" || !Array.isArray(rawMessage.content)) continue;
     for (const rawPart of rawMessage.content) {
       const part = asRecord(rawPart);
-      if (!part || part.type !== "thinking") continue;
+      if (part?.type !== "thinking") continue;
       const text = asString(part.thinking);
       if (text?.trim()) chunks.push(text);
     }

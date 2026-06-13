@@ -1059,7 +1059,7 @@ function failActiveToolStreamsInFeed(
     const idx = out.findIndex((item) => item.id === itemId);
     if (idx < 0) continue;
     const current = out[idx];
-    if (!current || current.kind !== "tool" || isTerminalToolState(current.state)) continue;
+    if (current?.kind !== "tool" || isTerminalToolState(current.state)) continue;
     out[idx] = { ...current, state: "output-error", result: incompleteToolStreamResult(error) };
   }
 }

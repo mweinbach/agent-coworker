@@ -838,12 +838,18 @@ export function createWebFetchTool(ctx: ToolContext) {
         }
         const downloadDir = resolveMaybeRelative("Downloads", ctx.config.workingDirectory);
         const targetPath = path.join(downloadDir, contentKind.fileName);
-        const allowedTargetPath = await assertWritePathAllowed(targetPath, ctx.config, "write");
+        const allowedTargetPath = await assertWritePathAllowed(
+          targetPath,
+          ctx.config,
+          "write",
+          ctx.agentTargetPaths,
+        );
         const allowedDownloadDir = path.dirname(allowedTargetPath);
         const allowedTempPath = await assertWritePathAllowed(
           temporaryDownloadPath(allowedDownloadDir, path.basename(allowedTargetPath)),
           ctx.config,
           "write",
+          ctx.agentTargetPaths,
         );
         await fs.mkdir(allowedDownloadDir, { recursive: true });
         const { bytesWritten, finalPath } = await downloadResponseToFile({

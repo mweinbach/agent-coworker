@@ -512,6 +512,21 @@ describe("isReadPathAllowed", () => {
 
     expect(isReadPathAllowed(path.join(link, "pwned.txt"), cfg)).toBe(false);
   });
+
+  test("denies credential files reached through a workspace symlink in the sync helper", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-read-cred-symlink-"));
+    const cfg = makeConfig(dir);
+    const authDir = path.join(dir, ".cowork", "auth");
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(path.join(authDir, "token.json"), '{"token":"secret"}', "utf-8");
+
+    const link = path.join(dir, "sneaky");
+    await fs.symlink(authDir, link);
+
+    expect(isReadPathAllowed(path.join(link, "token.json"), cfg)).toBe(false);
+  });
 });
 
 describe("assertReadPathAllowed", () => {

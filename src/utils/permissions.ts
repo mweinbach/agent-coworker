@@ -46,7 +46,7 @@ function readRoots(config: AgentConfig): string[] {
  * The OS sandbox still grants `bash` full-disk read by design — that is a
  * separate, documented capability, not something these tools can tighten.
  */
-function credentialReadDenyDirs(config: AgentConfig): string[] {
+export function credentialReadDenyDirs(config: AgentConfig): string[] {
   return [path.join(config.projectCoworkDir, "auth"), path.join(config.userCoworkDir, "auth")];
 }
 
@@ -171,7 +171,22 @@ export function isWritePathAllowed(filePath: string, config: AgentConfig): boole
 }
 
 export function isReadPathAllowed(filePath: string, config: AgentConfig): boolean {
-  if (isInsideCredentialDir(path.resolve(filePath), config)) return false;
+  const resolved = path.resolve(filePath);
+  if (isInsideCredentialDir(resolved, config)) return false;
+  try {
+    const canonicalTarget = canonicalizeExistingPrefixSync(resolved);
+    const canonicalDenyDirs = credentialReadDenyDirs(config).map((dir) =>
+      canonicalizeExistingPrefixSync(dir),
+    );
+    if (
+      isInsideCredentialDir(canonicalTarget, config) ||
+      canonicalDenyDirs.some((dir) => isPathInside(dir, canonicalTarget))
+    ) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
   return isCanonicalPathInsideRoots(filePath, readRoots(config));
 }
 

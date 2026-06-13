@@ -631,6 +631,32 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("blocks downloads outside a scoped child agent targetPaths", async () => {
+    const dir = await tmpDir();
+    const pdfBytes = Buffer.from("%PDF-1.7\nfake\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return createStreamingResponse(pdfBytes, {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir, { agentTargetPaths: ["src/auth"] }));
+      await expect(
+        t.execute({
+          url: "https://example.com/reports/q1-summary.pdf",
+          maxLength: 50000,
+        }),
+      ).rejects.toThrow(/targetPaths/);
+      await expect(fs.readdir(path.join(dir, "Downloads"))).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("blocks downloads for no-write roles", async () => {
     const dir = await tmpDir();
     const pdfBytes = Buffer.from("%PDF-1.7\nfake\n");

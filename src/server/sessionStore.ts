@@ -6,13 +6,13 @@ import type { AiCoworkerPaths } from "../connect";
 import { sameWorkspacePath } from "../utils/workspacePath";
 import {
   LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ,
-  parsePersistedSessionSnapshot,
   type PersistedSessionSnapshot,
   type PersistedSessionSummary,
+  parsePersistedSessionSnapshot,
 } from "./sessionStore/snapshots";
 
 export type { PersistedSessionSnapshot, PersistedSessionSummary };
-export { parsePersistedSessionSnapshot, LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ };
+export { LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ, parsePersistedSessionSnapshot };
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;

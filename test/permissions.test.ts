@@ -491,6 +491,15 @@ describe("isReadPathAllowed", () => {
     expect(isReadPathAllowed("/etc/passwd", cfg)).toBe(false);
   });
 
+  test("denies reads of the project credential directory (.cowork/auth)", () => {
+    const cfg = makeConfig(PROJECT);
+    expect(
+      isReadPathAllowed(path.join(PROJECT, ".cowork", "auth", "mcp-credentials.json"), cfg),
+    ).toBe(false);
+    // A non-credential file elsewhere in the workspace is still readable.
+    expect(isReadPathAllowed(path.join(PROJECT, "src", "index.ts"), cfg)).toBe(true);
+  });
+
   test("denies symlink escapes in the sync helper", async () => {
     if (process.platform === "win32") return;
 
@@ -503,6 +512,21 @@ describe("isReadPathAllowed", () => {
 
     expect(isReadPathAllowed(path.join(link, "pwned.txt"), cfg)).toBe(false);
   });
+
+  test("denies credential files reached through a workspace symlink in the sync helper", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-read-cred-symlink-"));
+    const cfg = makeConfig(dir);
+    const authDir = path.join(dir, ".cowork", "auth");
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(path.join(authDir, "token.json"), '{"token":"secret"}', "utf-8");
+
+    const link = path.join(dir, "sneaky");
+    await fs.symlink(authDir, link);
+
+    expect(isReadPathAllowed(path.join(link, "token.json"), cfg)).toBe(false);
+  });
 });
 
 describe("assertReadPathAllowed", () => {
@@ -511,6 +535,38 @@ describe("assertReadPathAllowed", () => {
     const cfg = makeConfig(dir);
     const target = path.join(dir, "src", "file.txt");
     await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
+  });
+
+  test("rejects reading a project credential file even though it sits in the workspace", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-cred-read-"));
+    const cfg = makeConfig(dir);
+    const credFile = path.join(dir, ".cowork", "auth", "mcp-credentials.json");
+    await fs.mkdir(path.dirname(credFile), { recursive: true });
+    await fs.writeFile(credFile, JSON.stringify({ token: "secret" }), "utf-8");
+    await expect(assertReadPathAllowed(credFile, cfg, "read")).rejects.toThrow(
+      /credential directory is not readable/i,
+    );
+  });
+
+  test("rejects reading a credential file through a workspace symlink", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-cred-symlink-"));
+    const cfg = makeConfig(dir);
+    const authDir = path.join(dir, ".cowork", "auth");
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(path.join(authDir, "mcp-credentials.json"), '{"token":"secret"}', "utf-8");
+
+    // A symlink inside the workspace pointing at the credential dir must not be a
+    // way around the deny list — even when the workspace path itself is symlinked
+    // (e.g. macOS /var -> /private/var), where the logical deny dir would not
+    // prefix-match the canonical target.
+    const link = path.join(dir, "sneaky");
+    await fs.symlink(authDir, link);
+
+    await expect(
+      assertReadPathAllowed(path.join(link, "mcp-credentials.json"), cfg, "read"),
+    ).rejects.toThrow(/credential directory is not readable/i);
   });
 
   test("allows advanced-memory reads from active and chats folders only", async () => {

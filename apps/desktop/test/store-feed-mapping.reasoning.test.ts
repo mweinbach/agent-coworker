@@ -139,7 +139,7 @@ describe("desktop transcript feed mapping", () => {
 
     const tool = feed.find((item) => item.kind === "tool");
     expect(tool?.kind).toBe("tool");
-    if (!tool || tool.kind !== "tool") throw new Error("Expected tool feed item");
+    if (tool?.kind !== "tool") throw new Error("Expected tool feed item");
     expect(tool.name).toBe("read");
     expect(tool.state).toBe("output-available");
   });

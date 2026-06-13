@@ -322,7 +322,7 @@ export function applyProjectedAgentMessageDelta(
     ];
   }
   const existing = feed[index];
-  if (!existing || existing.kind !== "message" || existing.role !== "assistant") {
+  if (existing?.kind !== "message" || existing.role !== "assistant") {
     return feed;
   }
   const updated = [...feed];
@@ -354,7 +354,7 @@ export function applyProjectedReasoningDelta(
     ];
   }
   const existing = feed[index];
-  if (!existing || existing.kind !== "reasoning") {
+  if (existing?.kind !== "reasoning") {
     return feed;
   }
   const updated = [...feed];

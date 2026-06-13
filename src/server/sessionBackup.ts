@@ -251,7 +251,7 @@ export class SessionBackupManager implements SessionBackupHandle {
       if (opts?.skipSessionId && entry.name === opts.skipSessionId) continue;
       const sessionDir = path.join(backupsRootDir, entry.name);
       const metadata = await readMetadata(path.join(sessionDir, METADATA_FILE));
-      if (!metadata || metadata.state !== "closed") continue;
+      if (metadata?.state !== "closed") continue;
       const closedAtMs = Date.parse(metadata.closedAt ?? metadata.createdAt);
       closedSessions.push({
         sessionId: metadata.sessionId,

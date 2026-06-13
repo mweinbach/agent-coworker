@@ -1095,7 +1095,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   private sendControlMessage(payload: Record<string, unknown>): boolean {
-    if (!this.socket || this.socket.readyState !== 1) {
+    if (this.socket?.readyState !== 1) {
       return false;
     }
     this.socket.send(JSON.stringify(payload));
@@ -1103,12 +1103,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   private queueOrSendApplicationMessage(text: string): void {
-    if (
-      !this.socket ||
-      this.socket.readyState !== 1 ||
-      !this.sharedKey ||
-      !this.secureChannelReady
-    ) {
+    if (this.socket?.readyState !== 1 || !this.sharedKey || !this.secureChannelReady) {
       this.queuedOutboundMessages.push(text);
       return;
     }
@@ -1116,7 +1111,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   private sendSecureEnvelope(text: string): boolean {
-    if (!this.socket || this.socket.readyState !== 1 || !this.sharedKey) {
+    if (this.socket?.readyState !== 1 || !this.sharedKey) {
       return false;
     }
     const envelope = encodeRelaySecureEnvelope({
@@ -1136,8 +1131,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
 
   private flushQueuedOutboundMessages(): void {
     if (
-      !this.socket ||
-      this.socket.readyState !== 1 ||
+      this.socket?.readyState !== 1 ||
       !this.sharedKey ||
       !this.secureChannelReady ||
       this.queuedOutboundMessages.length === 0
@@ -1714,12 +1708,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   async sendPlaintext(text: string): Promise<void> {
-    if (
-      !this.socket ||
-      this.socket.readyState !== 1 ||
-      !this.sharedKey ||
-      !this.secureChannelReady
-    ) {
+    if (this.socket?.readyState !== 1 || !this.sharedKey || !this.secureChannelReady) {
       throw new Error("Secure relay is not connected.");
     }
     this.queueOrSendApplicationMessage(text);

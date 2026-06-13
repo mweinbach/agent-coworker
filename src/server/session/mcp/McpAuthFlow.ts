@@ -77,7 +77,7 @@ export class McpAuthFlow {
     const server = await this.resolver.resolveByName(nameRaw);
     if (!server) return;
 
-    if (!server.auth || server.auth.type !== "oauth") {
+    if (server.auth?.type !== "oauth") {
       this.context.emit({
         type: "mcp_server_auth_result",
         sessionId: this.context.id,
@@ -141,7 +141,7 @@ export class McpAuthFlow {
     const server = await this.resolver.resolveByName(nameRaw);
     if (!server) return null;
 
-    if (!server.auth || server.auth.type !== "oauth") {
+    if (server.auth?.type !== "oauth") {
       this.context.emit({
         type: "mcp_server_auth_result",
         sessionId: this.context.id,
@@ -339,7 +339,7 @@ export class McpAuthFlow {
     const server = await this.resolver.resolveByName(nameRaw);
     if (!server) return null;
 
-    if (!server.auth || server.auth.type !== "api_key") {
+    if (server.auth?.type !== "api_key") {
       this.context.emit({
         type: "mcp_server_auth_result",
         sessionId: this.context.id,

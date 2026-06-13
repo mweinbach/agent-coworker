@@ -51,13 +51,13 @@ function validateToolInput(def: RuntimeToolDefinition, input: unknown): unknown 
 
 export function extractToolExecutionErrorMessage(result: unknown): string | undefined {
   const record = asRecord(result);
-  if (!record || record.isError !== true) return undefined;
+  if (record?.isError !== true) return undefined;
 
   const contentParts = Array.isArray(record.content) ? record.content : [];
   const contentText = contentParts
     .map((part) => {
       const partRecord = asRecord(part);
-      if (!partRecord || partRecord.type !== "text") return "";
+      if (partRecord?.type !== "text") return "";
       return asString(partRecord.text) ?? "";
     })
     .join("\n")

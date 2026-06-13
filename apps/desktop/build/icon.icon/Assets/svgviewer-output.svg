@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" shape-rendering="geometricPrecision">
+        <title>Cowork app icon</title>
         <defs>
           <!-- Folder body gradient -->
           <linearGradient id="panelGrad" x1="0%" y1="0%" x2="0%" y2="100%">

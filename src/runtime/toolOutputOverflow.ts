@@ -31,7 +31,7 @@ function isTextOnlyRichOutput(value: unknown): boolean {
   }
 
   const record = asRecord(value);
-  if (!record || record.type !== "content" || !Array.isArray(record.content)) return false;
+  if (record?.type !== "content" || !Array.isArray(record.content)) return false;
   return record.content.length > 0 && record.content.every((part) => isTextContentPart(part));
 }
 

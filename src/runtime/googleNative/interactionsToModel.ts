@@ -178,7 +178,7 @@ function googleAssistantContentBlockToModelPart(rawPart: unknown): Record<string
 
 function googleAssistantMessageToModelMessage(message: unknown): ModelMessage | null {
   const record = asRecord(message);
-  if (!record || record.role !== "assistant") return null;
+  if (record?.role !== "assistant") return null;
 
   if (typeof record.content === "string") {
     const text = record.content.trim();

@@ -18,14 +18,16 @@ function agentStateColor(
   theme: ReturnType<typeof useAppTheme>,
 ): string {
   switch (state) {
+    // Mirror desktop ContextSidebar agentStatusIcon: running=accent, completed=success,
+    // errored=warning, idle/closed=muted.
     case "running":
-      return theme.success;
+      return theme.primary;
     case "completed":
-      return theme.textTertiary;
+      return theme.success;
     case "error":
-      return theme.danger;
+      return theme.warning;
     default:
-      return theme.textSecondary;
+      return theme.textTertiary;
   }
 }
 

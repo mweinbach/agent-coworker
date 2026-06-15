@@ -1,3 +1,4 @@
+import { MAX_ATTACHMENT_INLINE_BYTE_SIZE } from "../../src/shared/attachments";
 import {
   afterEach,
   bashInternal,
@@ -178,6 +179,23 @@ describe("read tool", () => {
         { type: "image", data: pngBase64, mimeType: "image/png" },
       ],
     });
+  });
+
+  test("rejects oversized image files before reading bytes", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "huge.png");
+    await fs.writeFile(p, "");
+    await fs.truncate(p, MAX_ATTACHMENT_INLINE_BYTE_SIZE + 1);
+    await fs.chmod(p, 0);
+
+    const t: any = createReadTool(makeCtx(dir));
+    try {
+      await expect(t.execute({ filePath: p, limit: 2000 })).rejects.toThrow(
+        "File too large to send inline (max 25MB)",
+      );
+    } finally {
+      await fs.chmod(p, 0o600);
+    }
   });
 
   test("returns a binary guard for audio and video with Google provider", async () => {

@@ -343,6 +343,39 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("keeps inline web fetch available when the shell sandbox forbids network", async () => {
+    const dir = await tmpDir();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(
+        "<html><body><article><h1>Sandbox-independent page</h1><p>Harness fetch still runs.</p></article></body></html>",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        },
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(
+        makeCtx(dir, {
+          sandboxPolicy: { kind: "read-only", network: false },
+        }),
+      );
+      const out: string = await t.execute({
+        url: "https://example.com/no-network-shell",
+        maxLength: 50000,
+      });
+
+      expect(out).toContain("Sandbox-independent page");
+      expect(out).toContain("Harness fetch still runs.");
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+      await expect(fs.readdir(path.join(dir, "Downloads"))).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("defangs embedded frame markers so page content cannot break out of the untrusted frame", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;

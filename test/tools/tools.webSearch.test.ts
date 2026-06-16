@@ -299,6 +299,69 @@ describe("webSearch tool", () => {
     }
   });
 
+  test("keeps web search available when the shell sandbox forbids network", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "exa_test_key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.query).toBe("sandbox policy web search");
+      expect(body.numResults).toBe(1);
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "Harness web search result",
+              url: "https://example.com/search",
+              highlights: ["Search remains a harness tool."],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(
+        makeCtx(dir, {
+          config: makeConfig(dir, {
+            provider: "openai",
+            model: "gpt-5.2",
+            preferredChildModel: "gpt-5.2",
+          }),
+          sandboxPolicy: { kind: "read-only", network: false },
+        }),
+      );
+      const out = await t.execute({
+        query: "sandbox policy web search",
+        maxResults: 1,
+      });
+
+      expect(out).toMatchObject({
+        provider: "exa",
+        count: 1,
+        request: {
+          query: "sandbox policy web search",
+          numResults: 1,
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "Harness web search result",
+          url: "https://example.com/search",
+          highlights: ["Search remains a harness tool."],
+        },
+      ]);
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
   test("passes abort signal to Exa search requests", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;

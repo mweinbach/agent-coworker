@@ -1,0 +1,1185 @@
+import { cjk } from "@streamdown/cjk";
+import { code } from "@streamdown/code";
+import { math } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
+import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import {
+  defaultRehypePlugins,
+  defaultRemarkPlugins,
+  type StreamdownProps,
+} from "streamdown";
+import type { PluggableList } from "unified";
+
+import {
+  type CitationSource,
+  describeCitationSource,
+  normalizeDisplayCitationMarkers,
+} from "../../../../../src/shared/displayCitationMarkers";
+import { useAppStore } from "../../app/store";
+import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
+import { getFilePreviewKind } from "../../lib/filePreviewKind";
+import { cn } from "../../lib/utils";
+import { MessageResponse } from "../../components/ai-elements/message";
+import { Button } from "../../components/ui/button";
+
+const streamdownPlugins = { cjk, code, math, mermaid };
+const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
+const DESKTOP_EXTERNAL_URL_PROTOCOL = "cowork-external:";
+const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
+const CITATION_POPUP_MARGIN = 16;
+const CITATION_POPUP_GAP = 10;
+const preloadedCitationFaviconUrls = new Set<string>();
+const desktopSanitizeSchema: RehypeSanitizeOptions = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "cite", "span", "sup"],
+  attributes: {
+    ...defaultSchema.attributes,
+    a: [...(defaultSchema.attributes?.a ?? []), "title"],
+    cite: [...(defaultSchema.attributes?.cite ?? []), "data-citation-sources", "title"],
+    span: [...(defaultSchema.attributes?.span ?? []), "title"],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "tel", "cowork-file", "cowork-external"],
+  },
+};
+export const defaultDesktopRehypePlugins: PluggableList = [
+  defaultRehypePlugins.raw,
+  [rehypeSanitize, desktopSanitizeSchema],
+  defaultRehypePlugins.harden,
+];
+const bareDesktopFilePathPatterns = [
+  /(?:[A-Za-z]:\\(?:[^\\\r\n<>:"|?*]+\\)*[^\\\r\n<>:"|?*]+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
+  /(?:\\\\[^\\\r\n<>:"|?*]+\\(?:[^\\\r\n<>:"|?*]+\\)*[^\\\r\n<>:"|?*]+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
+  /(?:\/(?:Users|home|tmp|var|opt|Applications|Volumes)(?:\/[^/\r\n]+)+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
+] as const;
+const autoLinkSkippedNodeTypes = new Set(["code", "inlineCode", "html", "link", "linkReference"]);
+
+type HastNode = {
+  type?: string;
+  tagName?: string;
+  url?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+
+type DesktopMessageLinkProps = ComponentProps<"a"> & {
+  node?: unknown;
+};
+
+type DesktopPathMatch = {
+  start: number;
+  end: number;
+  path: string;
+};
+
+type CitationChipSourcePayload = CitationSource & {
+  id?: string;
+};
+
+type DesktopCitationChipProps = ComponentProps<"cite"> & {
+  node?: unknown;
+  "data-citation-sources"?: string;
+};
+
+type CitationPopupPosition = {
+  left: number;
+  top: number;
+};
+
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function decodeCitationChipSources(rawValue?: string): CitationChipSourcePayload[] {
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(rawValue));
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.url !== "string" || entry.url.trim().length === 0) {
+        return [];
+      }
+
+      return [
+        {
+          url: entry.url,
+          ...(typeof entry.title === "string" && entry.title.trim().length > 0
+            ? { title: entry.title }
+            : {}),
+          ...(typeof entry.id === "string" && entry.id.trim().length > 0 ? { id: entry.id } : {}),
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function citationChipSourcesAttrFromNode(node: unknown): string | undefined {
+  if (!isRecord(node)) {
+    return undefined;
+  }
+
+  const directValue = node["data-citation-sources"];
+  if (typeof directValue === "string" && directValue.trim().length > 0) {
+    return directValue;
+  }
+
+  const properties = isRecord(node.properties) ? node.properties : null;
+  const propertyValue = properties?.["data-citation-sources"];
+  if (typeof propertyValue === "string" && propertyValue.trim().length > 0) {
+    return propertyValue;
+  }
+
+  return undefined;
+}
+
+function citationChipSourcesAttrFromTitle(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith(CITATION_CHIP_TITLE_PREFIX)) {
+    return undefined;
+  }
+  const encodedSources = value.slice(CITATION_CHIP_TITLE_PREFIX.length);
+  return encodedSources.trim().length > 0 ? encodedSources : undefined;
+}
+
+function flattenReactText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map((entry) => flattenReactText(entry)).join("");
+  }
+  if (isRecord(node) && "props" in node && isRecord(node.props) && "children" in node.props) {
+    return flattenReactText(node.props.children as ReactNode);
+  }
+  return "";
+}
+
+function citationSourceTitle(source: CitationSource): string {
+  return describeCitationSource(source).titleLabel;
+}
+
+function faviconUrl(hostname: string): string {
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
+}
+
+function citationFaviconSrc(source: CitationSource): string {
+  const display = describeCitationSource(source);
+  return display.faviconHostname ? faviconUrl(display.faviconHostname) : "";
+}
+
+function CitationFavicon({ source, className }: { source: CitationSource; className?: string }) {
+  const display = useMemo(() => describeCitationSource(source), [source]);
+  const src = useMemo(() => citationFaviconSrc(source), [source]);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+    setFailed(false);
+  }, [src]);
+
+  return (
+    <div
+      className={cn(
+        "relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/80 text-[10px] font-semibold uppercase text-muted-foreground",
+        className,
+      )}
+    >
+      <span aria-hidden="true">{display.hostLabel.charAt(0)}</span>
+      {src && !failed ? (
+        <img
+          src={src}
+          alt=""
+          className={cn(
+            "absolute inset-0 size-full rounded-full object-contain transition-opacity duration-150",
+            loaded ? "opacity-100" : "opacity-0",
+          )}
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+async function openExternalCitationSource(source: CitationSource): Promise<void> {
+  const display = describeCitationSource(source);
+  const confirmed = await confirmAction({
+    title: "Open external link?",
+    message: "This will open the link in your default browser.",
+    detail: display.displayUrl ?? display.hostLabel,
+    kind: "info",
+    confirmLabel: "Open link",
+    cancelLabel: "Cancel",
+    defaultAction: "cancel",
+  });
+  if (confirmed) {
+    await openExternalUrl({ url: source.url });
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function computeCitationPopupPosition(
+  anchorRect: DOMRect,
+  cardRect: DOMRect,
+): CitationPopupPosition {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxLeft = Math.max(
+    CITATION_POPUP_MARGIN,
+    viewportWidth - cardRect.width - CITATION_POPUP_MARGIN,
+  );
+  const preferredLeft = clamp(anchorRect.left, CITATION_POPUP_MARGIN, maxLeft);
+  const belowTop = anchorRect.bottom + CITATION_POPUP_GAP;
+  const aboveTop = anchorRect.top - cardRect.height - CITATION_POPUP_GAP;
+  const maxTop = Math.max(
+    CITATION_POPUP_MARGIN,
+    viewportHeight - cardRect.height - CITATION_POPUP_MARGIN,
+  );
+  const top =
+    belowTop + cardRect.height <= viewportHeight - CITATION_POPUP_MARGIN
+      ? belowTop
+      : aboveTop >= CITATION_POPUP_MARGIN
+        ? aboveTop
+        : clamp(belowTop, CITATION_POPUP_MARGIN, maxTop);
+
+  return { left: preferredLeft, top };
+}
+
+function DesktopCitationChip({
+  children,
+  className,
+  "data-citation-sources": encodedSources,
+  node,
+  title,
+  ...props
+}: DesktopCitationChipProps) {
+  const resolvedEncodedSources =
+    encodedSources ??
+    citationChipSourcesAttrFromTitle(title) ??
+    citationChipSourcesAttrFromNode(node);
+  const sources = useMemo(
+    () => decodeCitationChipSources(resolvedEncodedSources),
+    [resolvedEncodedSources],
+  );
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const citationTitleContainerRef = useRef<HTMLDivElement | null>(null);
+  const citationTitleTextRef = useRef<HTMLParagraphElement | null>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+  const [popupPosition, setPopupPosition] = useState<CitationPopupPosition | null>(null);
+
+  const cancelScheduledHoverClose = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  };
+
+  const handleHoverEnter = () => {
+    cancelScheduledHoverClose();
+    setOpen(true);
+  };
+
+  const handleHoverLeave = () => {
+    cancelScheduledHoverClose();
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      setOpen(false);
+      hoverCloseTimerRef.current = null;
+    }, 180);
+  };
+
+  useEffect(() => () => cancelScheduledHoverClose(), []);
+
+  const label = useMemo(() => {
+    const text = flattenReactText(children).trim();
+    return text.length > 0 ? text : "Source";
+  }, [children]);
+  const currentSource = sources[Math.min(activeIndex, Math.max(0, sources.length - 1))] ?? null;
+  const currentSourceDisplay = useMemo(
+    () => (currentSource ? describeCitationSource(currentSource) : null),
+    [currentSource],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.Image !== "function") {
+      return;
+    }
+
+    for (const source of sources) {
+      const src = citationFaviconSrc(source);
+      if (!src || preloadedCitationFaviconUrls.has(src)) {
+        continue;
+      }
+      preloadedCitationFaviconUrls.add(src);
+      const image = new window.Image();
+      image.src = src;
+    }
+  }, [sources]);
+
+  useEffect(() => {
+    if (activeIndex < sources.length) {
+      return;
+    }
+    setActiveIndex(0);
+  }, [activeIndex, sources.length]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    const container = citationTitleContainerRef.current;
+    const textEl = citationTitleTextRef.current;
+    if (!container || !textEl) {
+      return;
+    }
+
+    let animation: Animation | null = null;
+
+    const applyPan = () => {
+      animation?.cancel();
+      animation = null;
+      textEl.style.transform = "";
+
+      const overflow = textEl.scrollWidth - container.clientWidth;
+      const reduceMotion =
+        typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (overflow <= 1 || typeof textEl.animate !== "function" || reduceMotion) {
+        return;
+      }
+
+      const duration = clamp(Math.round(4500 + overflow * 38), 5500, 15_000);
+      animation = textEl.animate(
+        [{ transform: "translateX(0)" }, { transform: `translateX(-${overflow}px)` }],
+        {
+          duration,
+          direction: "alternate",
+          easing: "ease-in-out",
+          iterations: Infinity,
+        },
+      );
+    };
+
+    applyPan();
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(() => applyPan());
+      resizeObserver.observe(container);
+      resizeObserver.observe(textEl);
+    }
+
+    return () => {
+      resizeObserver?.disconnect();
+      animation?.cancel();
+      textEl.style.transform = "";
+    };
+  }, [open, activeIndex, currentSource]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (rootRef.current?.contains(target) || cardRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      if (sources.length <= 1) {
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setActiveIndex((index) => (index - 1 + sources.length) % sources.length);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setActiveIndex((index) => (index + 1) % sources.length);
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, sources.length]);
+
+  useIsomorphicLayoutEffect(() => {
+    if (!open) {
+      setPopupPosition(null);
+      return;
+    }
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const updatePosition = () => {
+      const anchor = buttonRef.current;
+      const card = cardRef.current;
+      if (!anchor || !card) {
+        return;
+      }
+      setPopupPosition(
+        computeCitationPopupPosition(anchor.getBoundingClientRect(), card.getBoundingClientRect()),
+      );
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [currentSource, open]);
+
+  if (sources.length === 0) {
+    return (
+      <cite className={cn("ml-2 inline-flex not-italic", className)} {...props}>
+        {children}
+      </cite>
+    );
+  }
+
+  return (
+    <cite
+      ref={rootRef}
+      className={cn("relative ml-2 inline-flex not-italic", className)}
+      onMouseEnter={handleHoverEnter}
+      onMouseLeave={handleHoverLeave}
+      {...props}
+    >
+      <Button
+        ref={buttonRef}
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-auto min-w-0 rounded-full border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => {
+          cancelScheduledHoverClose();
+          setOpen((value) => !value);
+        }}
+      >
+        {label}
+      </Button>
+      {open && currentSource && currentSourceDisplay && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={cardRef}
+              role="dialog"
+              aria-label="Citation sources"
+              className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
+              style={
+                popupPosition
+                  ? { left: popupPosition.left, top: popupPosition.top }
+                  : { left: 0, top: 0, visibility: "hidden" }
+              }
+              onMouseEnter={handleHoverEnter}
+              onMouseLeave={handleHoverLeave}
+            >
+              <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                  aria-label="Previous source"
+                  disabled={sources.length <= 1}
+                  onClick={() =>
+                    setActiveIndex((index) => (index - 1 + sources.length) % sources.length)
+                  }
+                >
+                  <ChevronLeftIcon data-icon="inline-start" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                  aria-label="Next source"
+                  disabled={sources.length <= 1}
+                  onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
+                >
+                  <ChevronRightIcon data-icon="inline-start" />
+                </Button>
+                <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+                  {activeIndex + 1}/{sources.length}
+                </div>
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label={`Open source: ${citationSourceTitle(currentSource)}`}
+                className="w-full cursor-pointer text-left outline-none transition-colors hover:bg-muted/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => {
+                  setOpen(false);
+                  void openExternalCitationSource(currentSource);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setOpen(false);
+                    void openExternalCitationSource(currentSource);
+                  }
+                }}
+              >
+                <div className="flex items-start gap-2.5 px-3 py-2.5">
+                  <CitationFavicon
+                    source={currentSource}
+                    className="mt-0.5 size-5 shrink-0 text-[10px]"
+                  />
+                  <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
+                    <p
+                      ref={citationTitleTextRef}
+                      className="block overflow-hidden text-[0.92rem] font-semibold leading-snug text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+                    >
+                      {currentSourceDisplay.titleLabel}
+                    </p>
+                    <p className="mt-1 truncate text-[0.72rem] font-medium leading-snug text-muted-foreground">
+                      {currentSourceDisplay.displayUrl ?? currentSourceDisplay.hostLabel}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </cite>
+  );
+}
+
+function classifyExternalMessageHref(rawHref: string): "browser" | "mail" | "app" | null {
+  try {
+    const parsed = new URL(rawHref);
+    switch (parsed.protocol) {
+      case "http:":
+      case "https:":
+        return "browser";
+      case "mailto:":
+        return "mail";
+      case "file:":
+      case DESKTOP_LOCAL_FILE_PROTOCOL:
+      case DESKTOP_EXTERNAL_URL_PROTOCOL:
+      case "about:":
+      case "blob:":
+      case "data:":
+      case "javascript:":
+        return null;
+      default:
+        return "app";
+    }
+  } catch {
+    return null;
+  }
+}
+
+function isExternalMessageHref(rawHref: string): boolean {
+  return classifyExternalMessageHref(rawHref) !== null;
+}
+
+function desktopPathBasename(rawPath: string): string {
+  const normalized = rawPath.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || rawPath;
+}
+
+export function fileUrlToDesktopPath(rawHref: string): string | null {
+  try {
+    const parsed = new URL(rawHref);
+    if (parsed.protocol !== "file:") {
+      return null;
+    }
+
+    const pathname = decodeURIComponent(parsed.pathname);
+    if (!pathname) {
+      return null;
+    }
+
+    if (parsed.hostname && parsed.hostname !== "localhost") {
+      return `\\\\${parsed.hostname}${pathname.replace(/\//g, "\\")}`;
+    }
+
+    if (/^\/[a-zA-Z]:/.test(pathname)) {
+      return pathname.slice(1).replace(/\//g, "\\");
+    }
+
+    return pathname;
+  } catch {
+    return null;
+  }
+}
+
+function desktopPathToFileUrl(rawPath: string): string | null {
+  const normalized = rawPath.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.startsWith("\\\\")) {
+    const parts = normalized.slice(2).split("\\").filter(Boolean);
+    const [host, ...rest] = parts;
+    if (!host || rest.length === 0) {
+      return null;
+    }
+    return `file://${host}/${rest.map((part) => encodeURIComponent(part)).join("/")}`;
+  }
+
+  const slashPath = normalized.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(slashPath)) {
+    const [drive, ...rest] = slashPath.split("/");
+    return `file:///${drive}/${rest.map((part) => encodeURIComponent(part)).join("/")}`;
+  }
+
+  if (!slashPath.startsWith("/")) {
+    return null;
+  }
+
+  return `file:///${slashPath
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/")}`;
+}
+
+export function encodeDesktopLocalFileHref(rawHref: string): string | null {
+  const path = fileUrlToDesktopPath(rawHref);
+  if (!path) {
+    return null;
+  }
+  return `${DESKTOP_LOCAL_FILE_PROTOCOL}//open?path=${encodeURIComponent(path)}`;
+}
+
+export function encodeDesktopExternalHref(rawHref: string): string | null {
+  return classifyExternalMessageHref(rawHref) === "app"
+    ? `${DESKTOP_EXTERNAL_URL_PROTOCOL}//open?url=${encodeURIComponent(rawHref)}`
+    : null;
+}
+
+export function decodeDesktopLocalFileHref(rawHref?: string | null): string | null {
+  if (!rawHref) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(rawHref);
+    if (parsed.protocol !== DESKTOP_LOCAL_FILE_PROTOCOL) {
+      return null;
+    }
+    const path = parsed.searchParams.get("path");
+    return path ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+export function decodeDesktopExternalHref(rawHref?: string | null): string | null {
+  if (!rawHref) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(rawHref);
+    if (parsed.protocol !== DESKTOP_EXTERNAL_URL_PROTOCOL) {
+      return null;
+    }
+    const url = parsed.searchParams.get("url");
+    return url ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDesktopFileLinkLabel(node: HastNode, desktopPath: string, rawHref: string): void {
+  if (!Array.isArray(node.children) || node.children.length !== 1) {
+    return;
+  }
+
+  const [onlyChild] = node.children;
+  if (onlyChild?.type !== "text" || typeof onlyChild.value !== "string") {
+    return;
+  }
+
+  const candidate = onlyChild.value.trim();
+  const normalizedDesktopPath = desktopPath.replace(/\\/g, "/");
+  if (candidate === desktopPath || candidate === normalizedDesktopPath || candidate === rawHref) {
+    onlyChild.value = desktopPathBasename(desktopPath);
+  }
+}
+
+function isAutoLinkSkippedNode(node: HastNode): boolean {
+  if (autoLinkSkippedNodeTypes.has(node.type ?? "")) {
+    return true;
+  }
+
+  return (
+    node.type === "element" &&
+    (node.tagName === "a" || node.tagName === "code" || node.tagName === "pre")
+  );
+}
+
+function findBareDesktopFilePathMatches(text: string): DesktopPathMatch[] {
+  const matches: DesktopPathMatch[] = [];
+
+  for (const pattern of bareDesktopFilePathPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      if (typeof match.index !== "number") {
+        continue;
+      }
+
+      matches.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        path: match[0],
+      });
+    }
+  }
+
+  matches.sort(
+    (left, right) => left.start - right.start || right.end - right.start - (left.end - left.start),
+  );
+
+  const deduped: DesktopPathMatch[] = [];
+  for (const match of matches) {
+    const previous = deduped[deduped.length - 1];
+    if (previous && match.start < previous.end) {
+      continue;
+    }
+    deduped.push(match);
+  }
+
+  return deduped;
+}
+
+function buildBareDesktopPathNodes(text: string): HastNode[] | null {
+  const matches = findBareDesktopFilePathMatches(text);
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const nodes: HastNode[] = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    if (match.start > cursor) {
+      nodes.push({ type: "text", value: text.slice(cursor, match.start) });
+    }
+
+    const fileUrl = desktopPathToFileUrl(match.path);
+    if (fileUrl) {
+      nodes.push({
+        type: "link",
+        url: fileUrl,
+        children: [{ type: "text", value: desktopPathBasename(match.path) }],
+      });
+    } else {
+      nodes.push({ type: "text", value: text.slice(match.start, match.end) });
+    }
+
+    cursor = match.end;
+  }
+
+  if (cursor < text.length) {
+    nodes.push({ type: "text", value: text.slice(cursor) });
+  }
+
+  return nodes.filter((node) => node.type !== "text" || Boolean(node.value));
+}
+
+export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
+  if (isAutoLinkSkippedNode(node) || !Array.isArray(node.children)) {
+    return;
+  }
+
+  const nextChildren: HastNode[] = [];
+  for (const child of node.children) {
+    if (child.type === "text" && typeof child.value === "string") {
+      const rewrittenNodes = buildBareDesktopPathNodes(child.value);
+      if (rewrittenNodes) {
+        nextChildren.push(...rewrittenNodes);
+        continue;
+      }
+    }
+
+    // Convert inlineCode nodes that are entirely a file path into a clickable link
+    if (child.type === "inlineCode" && typeof child.value === "string") {
+      const trimmed = child.value.trim();
+      const matches = findBareDesktopFilePathMatches(trimmed);
+      if (matches.length === 1 && matches[0].start === 0 && matches[0].end === trimmed.length) {
+        const fileUrl = desktopPathToFileUrl(matches[0].path);
+        if (fileUrl) {
+          nextChildren.push({
+            type: "link",
+            url: fileUrl,
+            children: [{ type: "text", value: desktopPathBasename(matches[0].path) }],
+          });
+          continue;
+        }
+      }
+    }
+
+    rewriteBareDesktopFilePathsInTree(child);
+    nextChildren.push(child);
+  }
+
+  node.children = nextChildren;
+}
+
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+const RELATIVE_FILENAME_RE = /^[\w.\-+ ()%,&'!@$=~^]+\.[A-Za-z0-9]{1,12}$/;
+
+function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
+  if (!rawHref || rawHref.startsWith("#")) {
+    return null;
+  }
+
+  const hasNonPathScheme = URL_SCHEME_RE.test(rawHref) && !/^[A-Za-z]:[\\/]/.test(rawHref);
+  if (hasNonPathScheme) {
+    return null;
+  }
+
+  const withoutDecorations = rawHref.replace(/[?#].*$/, "");
+  let candidate = withoutDecorations;
+  try {
+    candidate = decodeURIComponent(withoutDecorations);
+  } catch {
+    candidate = withoutDecorations;
+  }
+
+  const matches = findBareDesktopFilePathMatches(candidate);
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  const [match] = matches;
+  if (match?.start !== 0 || match.end !== candidate.length) {
+    return null;
+  }
+
+  return desktopPathToFileUrl(match.path);
+}
+
+/** Resolve a markdown href that looks like a bare filename (no scheme, no slashes) against the active workspace path. */
+function resolveRelativeFileHref(rawHref: string, basePath: string | null): string | null {
+  if (!basePath) return null;
+  if (!rawHref || URL_SCHEME_RE.test(rawHref)) return null;
+  if (rawHref.startsWith("/") || rawHref.startsWith("\\") || rawHref.startsWith("#")) {
+    return null;
+  }
+  // Strip a query/fragment so `Foo.docx?x=1` still resolves.
+  const cleaned = rawHref.replace(/[?#].*$/, "");
+  if (!RELATIVE_FILENAME_RE.test(cleaned)) {
+    return null;
+  }
+  const normalizedBase = basePath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedBase) return null;
+  return desktopPathToFileUrl(`${normalizedBase}/${cleaned}`);
+}
+
+export function rewriteDesktopFileLinksInTree(
+  node: HastNode,
+  basePath: string | null = null,
+): void {
+  if (typeof node.url === "string") {
+    const rebased =
+      resolveAbsoluteDesktopFileHref(node.url) ?? resolveRelativeFileHref(node.url, basePath);
+    if (rebased) {
+      node.url = rebased;
+    }
+    const desktopPath = fileUrlToDesktopPath(node.url);
+    if (desktopPath) {
+      normalizeDesktopFileLinkLabel(node, desktopPath, node.url);
+    }
+
+    const rewrittenUrl = encodeDesktopLocalFileHref(node.url);
+    if (rewrittenUrl) {
+      node.url = rewrittenUrl;
+    } else {
+      const rewrittenExternalUrl = encodeDesktopExternalHref(node.url);
+      if (rewrittenExternalUrl) {
+        node.url = rewrittenExternalUrl;
+      }
+    }
+  }
+
+  if (
+    node.type === "element" &&
+    node.tagName === "a" &&
+    typeof node.properties?.href === "string"
+  ) {
+    const href = node.properties.href;
+    const rebased = resolveAbsoluteDesktopFileHref(href) ?? resolveRelativeFileHref(href, basePath);
+    if (rebased) {
+      node.properties.href = rebased;
+    }
+    const currentHref = node.properties.href as string;
+    const desktopPath = fileUrlToDesktopPath(currentHref);
+    if (desktopPath) {
+      normalizeDesktopFileLinkLabel(node, desktopPath, currentHref);
+    }
+
+    const rewrittenHref = encodeDesktopLocalFileHref(currentHref);
+    if (rewrittenHref) {
+      node.properties.href = rewrittenHref;
+    } else {
+      const rewrittenExternalHref = encodeDesktopExternalHref(currentHref);
+      if (rewrittenExternalHref) {
+        node.properties.href = rewrittenExternalHref;
+      }
+    }
+  }
+
+  if (!Array.isArray(node.children)) {
+    return;
+  }
+
+  for (const child of node.children) {
+    rewriteDesktopFileLinksInTree(child, basePath);
+  }
+}
+
+export function remarkRewriteDesktopFileLinks(opts?: { basePath?: string | null }) {
+  const basePath = opts?.basePath ?? null;
+  return (tree: HastNode) => {
+    rewriteBareDesktopFilePathsInTree(tree);
+    rewriteDesktopFileLinksInTree(tree, basePath);
+  };
+}
+
+async function openDesktopMessageLink(href: string): Promise<void> {
+  const localPath = decodeDesktopLocalFileHref(href);
+  if (localPath) {
+    const kind = getFilePreviewKind(localPath);
+    if (kind !== "unsupported" && kind !== "unknown") {
+      useAppStore.getState().openFilePreview({ path: localPath });
+      return;
+    }
+    await openPath({ path: localPath });
+    return;
+  }
+
+  const forwardedExternalHref = decodeDesktopExternalHref(href) ?? href;
+  const externalTarget = classifyExternalMessageHref(forwardedExternalHref);
+  if (externalTarget) {
+    const confirmed = await confirmAction({
+      title:
+        externalTarget === "browser"
+          ? "Open external link?"
+          : externalTarget === "mail"
+            ? "Open mail link?"
+            : "Open app link?",
+      message:
+        externalTarget === "browser"
+          ? "This will open the link in your default browser."
+          : externalTarget === "mail"
+            ? "This will open the link in your default mail app."
+            : "This will open the link in another app on this Mac.",
+      detail: forwardedExternalHref,
+      kind: "info",
+      confirmLabel: externalTarget === "browser" ? "Open link" : "Open",
+      cancelLabel: "Cancel",
+      defaultAction: "cancel",
+    });
+    if (!confirmed) {
+      return;
+    }
+    await openExternalUrl({ url: forwardedExternalHref });
+    return;
+  }
+
+  window.open(href, "_blank", "noopener,noreferrer");
+}
+
+export function DesktopMessageLink({
+  children,
+  className,
+  href,
+  node: _node,
+  onClick,
+  rel: _rel,
+  target: _target,
+  ...props
+}: DesktopMessageLinkProps) {
+  const localPath = decodeDesktopLocalFileHref(href);
+  const forwardedExternalHref = decodeDesktopExternalHref(href);
+
+  if (localPath || forwardedExternalHref) {
+    return (
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
+        className={cn(
+          "wrap-anywhere appearance-none bg-transparent p-0 text-left font-medium text-primary underline",
+          className,
+        )}
+        data-streamdown="link"
+        onClick={(_event) => {
+          if (!href) {
+            return;
+          }
+          void openDesktopMessageLink(href);
+        }}
+      >
+        {children}
+      </Button>
+    );
+  }
+
+  return (
+    <a
+      className={cn("wrap-anywhere font-medium text-primary underline", className)}
+      data-streamdown="link"
+      href={href}
+      onClick={(event) => {
+        onClick?.(event);
+        if (event.defaultPrevented || !href || !isExternalMessageHref(href)) {
+          return;
+        }
+        event.preventDefault();
+        void openDesktopMessageLink(href);
+      }}
+      rel="noreferrer"
+      target="_blank"
+      {...props}
+    >
+      {children}
+    </a>
+  );
+}
+
+export type DesktopMarkdownProps = StreamdownProps & {
+  normalizeDisplayCitations?: boolean;
+  citationUrlsByIndex?: ReadonlyMap<number, string>;
+  citationSources?: readonly CitationSource[];
+  citationAnnotations?: unknown;
+  fallbackToSourcesFooter?: boolean;
+  /** Absolute workspace path used to resolve bare filename hrefs in markdown links. */
+  desktopBasePath?: string | null;
+};
+
+function normalizeMessageResponseChildren(
+  children: StreamdownProps["children"],
+  normalizeDisplayCitations: boolean,
+  citationUrlsByIndex?: ReadonlyMap<number, string>,
+  citationSources?: readonly CitationSource[],
+  citationAnnotations?: unknown,
+  fallbackToSourcesFooter = true,
+): StreamdownProps["children"] {
+  if (!normalizeDisplayCitations) {
+    return children;
+  }
+
+  if (typeof children === "string") {
+    return normalizeDisplayCitationMarkers(children, {
+      citationUrlsByIndex,
+      citationSourcesByIndex: citationSources
+        ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
+        : undefined,
+      citationMode: "html",
+      annotations: citationAnnotations,
+      fallbackToSourcesFooter,
+    });
+  }
+
+  return Children.map(children, (child) =>
+    typeof child === "string"
+      ? normalizeDisplayCitationMarkers(child, {
+          citationUrlsByIndex,
+          citationSourcesByIndex: citationSources
+            ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
+            : undefined,
+          citationMode: "html",
+          annotations: citationAnnotations,
+          fallbackToSourcesFooter,
+        })
+      : child,
+  );
+}
+
+export const DesktopMarkdown = memo(function DesktopMarkdown({
+  className,
+  citationUrlsByIndex,
+  citationSources,
+  citationAnnotations,
+  normalizeDisplayCitations = false,
+  fallbackToSourcesFooter = true,
+  desktopBasePath = null,
+  ...props
+}: DesktopMarkdownProps) {
+  const { children, components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
+  const desktopFileLinksPlugin = useMemo<
+    [typeof remarkRewriteDesktopFileLinks, { basePath: string | null }]
+  >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
+
+  return (
+    <MessageResponse
+      {...restProps}
+      children={normalizeMessageResponseChildren(
+        children,
+        normalizeDisplayCitations,
+        citationUrlsByIndex,
+        citationSources,
+        citationAnnotations,
+        fallbackToSourcesFooter,
+      )}
+      className={className}
+      components={{
+        ...components,
+        a: DesktopMessageLink,
+        cite: DesktopCitationChip,
+      }}
+      plugins={{
+        ...streamdownPlugins,
+        ...plugins,
+      }}
+      remarkPlugins={
+        remarkPlugins
+          ? [...remarkPlugins, desktopFileLinksPlugin]
+          : [defaultRemarkPlugins.gfm, desktopFileLinksPlugin]
+      }
+      rehypePlugins={rehypePlugins ?? defaultDesktopRehypePlugins}
+    />
+  );
+});

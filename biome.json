@@ -143,7 +143,7 @@
       }
     },
     {
-      "includes": ["apps/desktop/src/components/ai-elements/message.tsx"],
+      "includes": ["apps/desktop/src/ui/markdown/DesktopMarkdown.tsx"],
       "linter": {
         "rules": {
           "a11y": {

@@ -4,7 +4,7 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { useMemo } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
-import { defaultDesktopRehypePlugins } from "../components/ai-elements/message";
+import { defaultDesktopRehypePlugins } from "./markdown";
 import { getExtensionLower } from "../lib/filePreviewKind";
 
 const previewPlugins = { cjk, code, math, mermaid };

@@ -16,6 +16,7 @@ import {
   PromptInputSubmit,
   PromptInputTools,
 } from "../../components/ai-elements/prompt-input";
+import { Button } from "../../components/ui/button";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import type { ProviderName } from "../../lib/wsProtocol";
@@ -164,16 +165,18 @@ export function ChatComposer(props: {
                   className="hidden"
                   onChange={handleFileSelect}
                 />
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={inputDisabled}
-                  className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:opacity-50"
+                  className="rounded-full text-muted-foreground hover:bg-muted/45 hover:text-foreground"
                   aria-label="Attach files"
                   title="Attach files"
                 >
-                  <PaperclipIcon className="h-4 w-4" />
-                </button>
+                  <PaperclipIcon />
+                </Button>
                 {threadModelConfig ? (
                   threadDraft ? (
                     <DraftThreadModelSelector

@@ -11,7 +11,7 @@ import {
   defaultDesktopRehypePlugins,
   fileUrlToDesktopPath,
   remarkRewriteDesktopFileLinks,
-} from "../components/ai-elements/message";
+} from "./markdown";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {

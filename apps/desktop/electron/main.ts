@@ -44,6 +44,7 @@ import { createBeforeQuitHandler } from "./services/shutdown";
 import { resolveTrayIconPath } from "./services/trayIcon";
 import { DesktopUpdaterService } from "./services/updater";
 import { revealAndActivateWindow } from "./services/windowActivation";
+import { loadMainWindowBounds, trackMainWindowBounds } from "./services/windowState";
 import {
   applyPlatformWindowCreated,
   getPlatformBrowserWindowOptions,
@@ -51,7 +52,8 @@ import {
 } from "./services/windowEnhancements";
 
 const require = createRequire(import.meta.url);
-const { app, BrowserWindow, Menu, Notification, shell } = require("electron") as typeof Electron;
+const { app, BrowserWindow, Menu, Notification, screen, shell } =
+  require("electron") as typeof Electron;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -420,10 +422,16 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
   });
   const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
 
+  // Restore last-saved window bounds (clamped to a visible display) so the
+  // window reopens where the user left it. Falls back to defaults on first
+  // launch or if the saved state is unusable.
+  const savedBounds = await loadMainWindowBounds(app, screen);
+
   const win = new BrowserWindow({
     title: "Cowork",
-    width: 1240,
-    height: 820,
+    width: savedBounds?.width ?? 1240,
+    height: savedBounds?.height ?? 820,
+    ...(savedBounds ? { x: savedBounds.x, y: savedBounds.y } : {}),
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
     ...getPlatformBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
     webPreferences: {
@@ -438,7 +446,12 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
       devTools: !app.isPackaged,
     },
   });
+  if (savedBounds?.isMaximized) {
+    win.maximize();
+  }
   mainWindow = win;
+  // Persist bounds on resize/move so the next launch restores them.
+  const stopTrackingBounds = trackMainWindowBounds(app, win);
   applyPlatformWindowCreated(win, process.platform);
   applyWindowSecurity(win);
   syncWindowAppearance(win, {
@@ -487,6 +500,8 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
 
   win.on("closed", () => {
     clearTimeout(readyToShowTimeout);
+    // Flush final bounds to disk before the window reference is dropped.
+    stopTrackingBounds();
     if (mainWindow === win) {
       mainWindow = null;
     }

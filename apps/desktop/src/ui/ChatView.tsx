@@ -438,16 +438,55 @@ export function ChatView() {
 
     const isThreadChange = autoScrolledThreadIdRef.current !== selectedThreadId;
     if (isThreadChange) {
+      // Capture the outgoing thread's scroll offset before its DOM is replaced.
+      const previousThreadId = autoScrolledThreadIdRef.current;
+      if (previousThreadId) {
+        useAppStore.setState((state) => {
+          const prev = state.scrollPositionsByThreadId[previousThreadId];
+          if (prev === el.scrollTop) return state; // no change -> skip update
+          return {
+            scrollPositionsByThreadId: {
+              ...state.scrollPositionsByThreadId,
+              [previousThreadId]: el.scrollTop,
+            },
+          };
+        });
+      }
       autoScrolledThreadIdRef.current = selectedThreadId;
       lastCountRef.current = visibleFeed.length;
       userScrolledAwayRef.current = false;
+      // Restore the incoming thread's last scroll offset instead of always
+      // jumping to the bottom. We only look up a saved offset on a real thread
+      // switch (previousThreadId set); on first mount we keep the original
+      // bottom-pin behavior so we don't clobber callers that set scroll after
+      // mount.
+      const savedOffset =
+        previousThreadId && selectedThreadId != null
+          ? useAppStore.getState().scrollPositionsByThreadId[selectedThreadId]
+          : undefined;
+      if (typeof savedOffset !== "number") {
+        window.requestAnimationFrame(() => {
+          const nextEl = feedRef.current;
+          if (nextEl) {
+            nextEl.scrollTop = nextEl.scrollHeight;
+          }
+        });
+        setShowScrollButton(false);
+        return;
+      }
       window.requestAnimationFrame(() => {
         const nextEl = feedRef.current;
-        if (nextEl) {
+        if (!nextEl) return;
+        if (savedOffset <= nextEl.scrollHeight) {
+          nextEl.scrollTop = savedOffset;
+          const distanceFromBottom =
+            nextEl.scrollHeight - nextEl.scrollTop - nextEl.clientHeight;
+          setShowScrollButton(distanceFromBottom > FEED_BOTTOM_STICKY_THRESHOLD_PX);
+        } else {
           nextEl.scrollTop = nextEl.scrollHeight;
+          setShowScrollButton(false);
         }
       });
-      setShowScrollButton(false);
       return;
     }
 

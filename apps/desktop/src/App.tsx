@@ -33,7 +33,6 @@ import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
-import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
@@ -323,7 +322,9 @@ const ChatShell = memo(function ChatShell({
                     ? "skills"
                     : effectiveView === "research"
                       ? "research"
-                      : "chat"
+                      : effectiveView === "settings"
+                        ? "settings"
+                        : "chat"
                 }
               />
             </div>
@@ -560,13 +561,6 @@ export default function App() {
             <InlineErrorBoundary label="This canvas couldn't be rendered.">
               <Canvas path={new URLSearchParams(window.location.search).get("path") || ""} />
             </InlineErrorBoundary>
-          </div>
-        </div>
-      ) : view === "settings" ? (
-        <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
-          <div className="app-window-drag-strip" aria-hidden="true" />
-          <div className="min-h-0 flex-1">
-            <SettingsContent init={init} ready={ready} startupError={startupError} />
           </div>
         </div>
       ) : (

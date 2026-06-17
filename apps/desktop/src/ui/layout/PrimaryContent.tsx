@@ -2,15 +2,16 @@ import { Button } from "../../components/ui/button";
 import { ChatView } from "../ChatView";
 import { ResearchView } from "../ResearchView";
 import { SkillsView } from "../SkillsView";
+import { SettingsContent } from "./SettingsContent";
 
 interface PrimaryContentProps {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
-  view: "chat" | "skills" | "research";
+  view: "chat" | "skills" | "research" | "settings";
 }
 
-type PrimaryContentVariant = "starting" | "error" | "chat" | "skills" | "research";
+type PrimaryContentVariant = "starting" | "error" | "chat" | "skills" | "research" | "settings";
 
 function resolveVariant({
   ready,
@@ -28,6 +29,9 @@ function resolveVariant({
   }
   if (view === "research") {
     return "research";
+  }
+  if (view === "settings") {
+    return "settings";
   }
   return "chat";
 }
@@ -69,6 +73,12 @@ export function PrimaryContent({ init, ready, startupError, view }: PrimaryConte
       return (
         <div className="h-full min-h-0 bg-panel">
           <ResearchView />
+        </div>
+      );
+    case "settings":
+      return (
+        <div className="h-full min-h-0 bg-panel">
+          <SettingsContent init={init} ready={ready} startupError={startupError} />
         </div>
       );
     case "chat":

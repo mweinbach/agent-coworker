@@ -349,6 +349,9 @@ const persistedUiSchema = z
     contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
     canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
     messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
+    scrollPositionsByThreadId: z
+      .record(z.string(), z.number().finite().nonnegative())
+      .optional(),
   })
   .passthrough()
   .transform(
@@ -366,6 +369,7 @@ const persistedUiSchema = z
       contextSidebarWidth: ui.contextSidebarWidth ?? 300,
       canvasSidebarWidth: ui.canvasSidebarWidth ?? 500,
       messageBarHeight: ui.messageBarHeight ?? 96,
+      scrollPositionsByThreadId: ui.scrollPositionsByThreadId ?? {},
     }),
   );
 
@@ -610,6 +614,7 @@ function buildResolvedDesktopUiState(
     contextSidebarWidth: normalizedUi.contextSidebarWidth ?? 300,
     canvasSidebarWidth: normalizedUi.canvasSidebarWidth ?? 500,
     messageBarHeight: normalizedUi.messageBarHeight ?? 96,
+    scrollPositionsByThreadId: normalizedUi.scrollPositionsByThreadId ?? {},
   };
 }
 
@@ -749,6 +754,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       contextSidebarWidth: ui.contextSidebarWidth,
       canvasSidebarWidth: ui.canvasSidebarWidth,
       messageBarHeight: ui.messageBarHeight,
+      scrollPositionsByThreadId: ui.scrollPositionsByThreadId ?? {},
     };
   } catch {
     return null;

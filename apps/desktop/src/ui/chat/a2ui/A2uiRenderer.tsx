@@ -7,6 +7,8 @@ import {
   stringifyDynamic,
 } from "../../../../../../src/experimental/a2ui/expressions";
 import { resolveDynamicWithFunctions } from "../../../../../../src/experimental/a2ui/functions";
+import { Input } from "../../../components/ui/input";
+import { Textarea } from "../../../components/ui/textarea";
 import { cn } from "../../../lib/utils";
 
 /**
@@ -737,7 +739,7 @@ function ControlledTextField({
   return (
     <label className="flex w-full flex-col gap-1 text-sm" htmlFor={inputId}>
       {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : null}
-      <input
+      <Input
         id={inputId}
         type="text"
         value={value}
@@ -754,7 +756,6 @@ function ControlledTextField({
             onBlurSubmit(value);
           }
         }}
-        className="h-10 w-full rounded-lg border border-border/60 bg-background/70 px-3 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
       />
     </label>
   );
@@ -778,7 +779,7 @@ function ControlledTextArea({
   return (
     <label className="flex w-full flex-col gap-1 text-sm" htmlFor={inputId}>
       {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : null}
-      <textarea
+      <Textarea
         id={inputId}
         value={value}
         rows={rows}
@@ -787,7 +788,7 @@ function ControlledTextArea({
         onBlur={() => {
           if (onBlurSubmit && value !== defaultValue) onBlurSubmit(value);
         }}
-        className="w-full resize-y rounded-lg border border-border/60 bg-background/70 px-3 py-2 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+        className="resize-y"
       />
     </label>
   );

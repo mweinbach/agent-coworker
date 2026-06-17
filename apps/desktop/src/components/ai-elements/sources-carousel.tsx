@@ -1,8 +1,11 @@
 import { memo, useCallback, useRef, useState } from "react";
-import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
-import { confirmAction } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+
+export type SourceItem = {
+  url: string;
+  title?: string;
+};
 
 function faviconUrl(siteUrl: string): string {
   try {
@@ -46,24 +49,9 @@ function titleFromUrlSlug(siteUrl: string): string | null {
   }
 }
 
-function displayTitle(source: CitationSource): string {
+function displayTitle(source: SourceItem): string {
   if (source.title) return source.title;
   return titleFromUrlSlug(source.url) ?? displayDomain(source.url);
-}
-
-async function openSourceLink(url: string): Promise<void> {
-  const confirmed = await confirmAction({
-    title: "Open external link?",
-    message: "This will open the link in your default browser.",
-    detail: url,
-    kind: "info",
-    confirmLabel: "Open link",
-    cancelLabel: "Cancel",
-    defaultAction: "cancel",
-  });
-  if (confirmed) {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
 }
 
 function FaviconImage({ url, className }: { url: string; className?: string }) {
@@ -93,7 +81,13 @@ function FaviconImage({ url, className }: { url: string; className?: string }) {
   );
 }
 
-function SourceCard({ source }: { source: CitationSource }) {
+function SourceCard({
+  source,
+  onOpenSource,
+}: {
+  source: SourceItem;
+  onOpenSource?: (url: string) => void;
+}) {
   const title = displayTitle(source);
   const domain = displayDomain(source.url);
 
@@ -103,7 +97,7 @@ function SourceCard({ source }: { source: CitationSource }) {
       variant="ghost"
       size="sm"
       className="h-auto w-44 shrink-0 justify-start gap-2.5 rounded-lg border border-border/70 bg-card px-3 py-2.5 text-left shadow-none transition-colors hover:border-border hover:bg-accent/50"
-      onClick={() => void openSourceLink(source.url)}
+      onClick={() => onOpenSource?.(source.url)}
     >
       <FaviconImage url={source.url} className="size-5 shrink-0" />
       <div className="min-w-0 flex-1">
@@ -115,12 +109,15 @@ function SourceCard({ source }: { source: CitationSource }) {
 }
 
 export type SourcesCarouselProps = {
-  sources: CitationSource[];
+  sources: SourceItem[];
+  /** Invoked with the source URL when a card is activated. The caller owns the open flow. */
+  onOpenSource?: (url: string) => void;
   className?: string;
 };
 
 export const SourcesCarousel = memo(function SourcesCarousel({
   sources,
+  onOpenSource,
   className,
 }: SourcesCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -164,7 +161,7 @@ export const SourcesCarousel = memo(function SourcesCarousel({
           onScroll={onScroll}
         >
           {sources.map((source) => (
-            <SourceCard key={source.url} source={source} />
+            <SourceCard key={source.url} source={source} onOpenSource={onOpenSource} />
           ))}
         </div>
 

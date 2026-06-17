@@ -9,11 +9,11 @@ import {
   encodeDesktopExternalHref,
   encodeDesktopLocalFileHref,
   fileUrlToDesktopPath,
-  MessageResponse,
+  DesktopMarkdown,
   remarkRewriteDesktopFileLinks,
   rewriteBareDesktopFilePathsInTree,
   rewriteDesktopFileLinksInTree,
-} from "../src/components/ai-elements/message";
+} from "../src/ui/markdown";
 import { setupJsdom } from "./jsdomHarness";
 
 describe("desktop message local file links", () => {
@@ -183,7 +183,7 @@ describe("desktop message local file links", () => {
   test("normalizes full-path local markdown labels down to basenames", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         null,
         "[C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py](file:///C:/Users/Test/Desktop/Cowork%20Test/create_models.py)",
       ),
@@ -196,7 +196,7 @@ describe("desktop message local file links", () => {
 
   test("assistant markdown lists keep explicit bullet spacing", () => {
     const html = renderToStaticMarkup(
-      createElement(MessageResponse, null, "- First item\n- Second item"),
+      createElement(DesktopMarkdown, null, "- First item\n- Second item"),
     );
 
     expect(html).toContain("[&amp;_ul]:list-disc");
@@ -208,7 +208,7 @@ describe("desktop message local file links", () => {
   test("renders local file citations without blocked markers", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         null,
         "- [create_models.py](file:///Users/mweinbach/Desktop/Cowork%20Test/create_models.py)",
       ),
@@ -222,7 +222,7 @@ describe("desktop message local file links", () => {
   test("renders absolute desktop path markdown links as in-app file buttons", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         null,
         "[Gemini_2.5_Flash_TPU_Companion.xlsx](/Users/mweinbach/.cowork/chats/example/outputs/Gemini_2.5_Flash_TPU_Companion.xlsx)",
       ),
@@ -237,7 +237,7 @@ describe("desktop message local file links", () => {
   test("renders custom app markdown links without blocked markers", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         null,
         "[Intel Pro Day 2026](craftdocs://open?spaceId=abc&documentId=def)",
       ),
@@ -251,7 +251,7 @@ describe("desktop message local file links", () => {
   test("resolves bare filename hrefs against the workspace base path", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         {
           desktopBasePath: "/Users/mweinbach/.cowork/chats/20260516T160131Z-chat-a602792b35",
         },
@@ -267,7 +267,7 @@ describe("desktop message local file links", () => {
   test("leaves bare filename hrefs alone when no base path is provided", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         null,
         "[Citadel_TV_Show_Research.docx](Citadel_TV_Show_Research.docx)",
       ),
@@ -281,7 +281,7 @@ describe("desktop message local file links", () => {
   test("auto-links bare absolute file paths in rendered assistant text", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         null,
         [
           "Updated files:",
@@ -303,7 +303,7 @@ describe("desktop message local file links", () => {
   test("auto-links file paths inside inline code when the entire value is a path", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         null,
         "`C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py`",
       ),
@@ -317,7 +317,7 @@ describe("desktop message local file links", () => {
   test("renders assistant citations as superscript links when URLs are available", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         {
           normalizeDisplayCitations: true,
           citationUrlsByIndex: new Map([[5, "https://example.com/source-5"]]),
@@ -335,7 +335,7 @@ describe("desktop message local file links", () => {
   test("renders markdown-backed native annotations after the visible sentence", () => {
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         {
           normalizeDisplayCitations: true,
           citationSources: [{ title: "Collision Report", url: "https://example.com/collision" }],
@@ -368,7 +368,7 @@ describe("desktop message local file links", () => {
 
     const html = renderToStaticMarkup(
       createElement(
-        MessageResponse,
+        DesktopMarkdown,
         {
           normalizeDisplayCitations: true,
           citationSources: [
@@ -432,7 +432,7 @@ describe("desktop message local file links", () => {
       await act(async () => {
         root.render(
           createElement(
-            MessageResponse,
+            DesktopMarkdown,
             {
               normalizeDisplayCitations: true,
               citationSources: [
@@ -542,7 +542,7 @@ describe("desktop message local file links", () => {
         await act(async () => {
           root.render(
             createElement(
-              MessageResponse,
+              DesktopMarkdown,
               {
                 normalizeDisplayCitations: true,
                 citationSources: [
@@ -595,7 +595,7 @@ describe("desktop message local file links", () => {
       await act(async () => {
         root.render(
           createElement(
-            MessageResponse,
+            DesktopMarkdown,
             {
               normalizeDisplayCitations: true,
               citationSources: [{ title: "cbsnews.com", url: redirectUrl }],

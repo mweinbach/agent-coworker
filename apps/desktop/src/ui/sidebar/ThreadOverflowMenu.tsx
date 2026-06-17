@@ -66,7 +66,7 @@ export function ThreadOverflowMenu({
           onPointerDown={stop}
           onClick={stop}
           className={cn(
-            "size-5 shrink-0 rounded-md text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06]",
+            "size-5 shrink-0 rounded-md text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06] data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:scale-100",
             triggerVisibilityClassName,
             className,
           )}

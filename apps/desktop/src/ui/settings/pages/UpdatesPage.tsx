@@ -1,7 +1,7 @@
 import { DownloadIcon, LoaderCircleIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useAppStore } from "../../../app/store";
-import { MessageResponse } from "../../../components/ai-elements/message";
+import { DesktopMarkdown } from "../../markdown";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -228,9 +228,9 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
                 <div className="text-xs uppercase tracking-wide text-muted-foreground">
                   Release notes
                 </div>
-                <MessageResponse className="mt-2 max-w-none text-sm leading-6 text-muted-foreground [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_p]:text-muted-foreground [&_ul]:text-muted-foreground">
+                <DesktopMarkdown className="mt-2 max-w-none text-sm leading-6 text-muted-foreground [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_p]:text-muted-foreground [&_ul]:text-muted-foreground">
                   {updateState.release.releaseNotes}
-                </MessageResponse>
+                </DesktopMarkdown>
               </div>
             ) : null}
 

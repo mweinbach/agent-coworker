@@ -5,8 +5,8 @@
     "": {
       "name": "agent-coworker",
       "dependencies": {
-        "@aws-sdk/client-bedrock": "^3.1063.0",
-        "@aws-sdk/client-bedrock-runtime": "^3.1063.0",
+        "@aws-sdk/client-bedrock": "^3.1068.0",
+        "@aws-sdk/client-bedrock-runtime": "^3.1068.0",
         "@earendil-works/pi-ai": "^0.75.5",
         "@google/genai": "^2.8.0",
         "@langfuse/otel": "^5.4.1",
@@ -22,7 +22,7 @@
         "jsdom": "^29.1.1",
         "partial-json": "^0.1.7",
         "posthog-node": "5.35.8",
-        "proxy-agent": "^8.0.1",
+        "proxy-agent": "^8.0.2",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
         "reflect-metadata": "^0.2.2",
@@ -34,14 +34,14 @@
         "zod": "4.4.3",
       },
       "devDependencies": {
-        "@biomejs/biome": "^2.4.16",
+        "@biomejs/biome": "^2.5.0",
         "@types/jsdom": "^28.0.3",
-        "@types/node": "^25.9.1",
+        "@types/node": "^25.9.3",
         "@types/react": "^19.2.17",
         "@types/react-dom": "^19.2.3",
         "@types/turndown": "^5.0.6",
         "bun-types": "^1.3.14",
-        "knip": "^6.16.0",
+        "knip": "^6.16.1",
         "typescript": "^6.0.3",
       },
       "optionalDependencies": {

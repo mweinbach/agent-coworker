@@ -501,9 +501,10 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                                 <Input
                                   className="max-w-xs"
                                   value={apiKeyValue}
-                                  onChange={(e) =>
-                                    setApiKeys((s) => ({ ...s, [stateKey]: e.currentTarget.value }))
-                                  }
+                                  onChange={(e) => {
+                                    const nextValue = e.currentTarget.value;
+                                    setApiKeys((s) => ({ ...s, [stateKey]: nextValue }));
+                                  }}
                                   placeholder="Paste your API key"
                                   type="password"
                                   aria-label={`${providerDisplayName} API key`}
@@ -531,12 +532,13 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                                     <Input
                                       className="max-w-xs"
                                       value={codeValue}
-                                      onChange={(e) =>
+                                      onChange={(e) => {
+                                        const nextValue = e.currentTarget.value;
                                         setOauthCodes((s) => ({
                                           ...s,
-                                          [stateKey]: e.currentTarget.value,
-                                        }))
-                                      }
+                                          [stateKey]: nextValue,
+                                        }));
+                                      }}
                                       placeholder="Paste authorization code"
                                       type="text"
                                       aria-label={`${providerDisplayName} authorization code`}

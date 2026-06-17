@@ -14,7 +14,7 @@ import { memo } from "react";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
 import type { ThreadAgentSummary } from "../app/types";
-import { MessageResponse } from "../components/ai-elements/message";
+import { DesktopMarkdown } from "./markdown";
 import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
@@ -221,9 +221,9 @@ export const ContextSidebar = memo(function ContextSidebar() {
                       </div>
                     </div>
                     {agent.lastMessagePreview ? (
-                      <MessageResponse className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
+                      <DesktopMarkdown className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
                         {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
-                      </MessageResponse>
+                      </DesktopMarkdown>
                     ) : null}
                   </div>
                 );

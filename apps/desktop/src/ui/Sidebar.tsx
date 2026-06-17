@@ -382,41 +382,34 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
-  const handleThreadContextMenu = async (
-    e: MouseEvent<HTMLElement>,
-    tId: string,
-    tTitle: string,
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const canGenerateMemoryForThread = useCallback(
+    (tId: string): boolean => {
+      const thread = threads.find((entry) => entry.id === tId);
+      const workspace = thread
+        ? workspaces.find((entry) => entry.id === thread.workspaceId)
+        : undefined;
+      return Boolean(thread && workspace && !thread.draft && thread.messageCount > 0);
+    },
+    [threads, workspaces],
+  );
 
-    const thread = threads.find((entry) => entry.id === tId);
-    const workspace = thread
-      ? workspaces.find((entry) => entry.id === thread.workspaceId)
-      : undefined;
-    const canGenerateMemory = Boolean(
-      thread && workspace && !thread.draft && thread.messageCount > 0,
-    );
-    const result = await showContextMenu([
-      ...(!isPackagedDesktopApp()
-        ? [
-            {
-              id: "generate_memory",
-              label: "Generate memory from conversation",
-              enabled: canGenerateMemory,
-            },
-          ]
-        : []),
-      { id: "delete_history", label: "Delete session history" },
-    ]);
-
-    if (result === "generate_memory") {
+  const generateMemoryForThread = useCallback(
+    (tId: string) => {
+      const thread = threads.find((entry) => entry.id === tId);
+      const workspace = thread
+        ? workspaces.find((entry) => entry.id === thread.workspaceId)
+        : undefined;
       if (thread && workspace) {
         void generateAdvancedMemoryForThread(thread.workspaceId, thread.id, {
           cwd: workspace.path,
         });
       }
-    } else if (result === "delete_history") {
+    },
+    [threads, workspaces, generateAdvancedMemoryForThread],
+  );
+
+  const deleteThreadHistoryWithConfirm = useCallback(
+    async (tId: string, tTitle: string) => {
       const confirmed = await confirmAction({
         title: "Delete session history",
         message: `Delete session history for "${tTitle}"?`,
@@ -429,6 +422,43 @@ export const Sidebar = memo(function Sidebar() {
       if (confirmed) {
         void deleteThreadHistory(tId);
       }
+    },
+    [deleteThreadHistory],
+  );
+
+  const displayTitleForThread = useCallback(
+    (tId: string): string => {
+      const thread = threads.find((entry) => entry.id === tId);
+      return thread?.title || "New chat";
+    },
+    [threads],
+  );
+
+  const handleThreadContextMenu = async (
+    e: MouseEvent<HTMLElement>,
+    tId: string,
+    tTitle: string,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const result = await showContextMenu([
+      ...(!isPackagedDesktopApp()
+        ? [
+            {
+              id: "generate_memory",
+              label: "Generate memory from conversation",
+              enabled: canGenerateMemoryForThread(tId),
+            },
+          ]
+        : []),
+      { id: "delete_history", label: "Delete session history" },
+    ]);
+
+    if (result === "generate_memory") {
+      generateMemoryForThread(tId);
+    } else if (result === "delete_history") {
+      void deleteThreadHistoryWithConfirm(tId, tTitle);
     }
   };
 
@@ -477,6 +507,11 @@ export const Sidebar = memo(function Sidebar() {
         visibleThreads={visibleThreads}
         workspace={workspace}
         workspaceThreads={workspaceThreads}
+        canGenerateMemoryForThread={canGenerateMemoryForThread}
+        onGenerateMemoryForThread={generateMemoryForThread}
+        onDeleteHistoryForThread={(tId, tTitle) =>
+          void deleteThreadHistoryWithConfirm(tId, tTitle)
+        }
       />
     );
   });
@@ -494,7 +529,7 @@ export const Sidebar = memo(function Sidebar() {
           <Button
             aria-expanded={chatsOpen}
             aria-label={chatsOpen ? "Collapse chats" : "Expand chats"}
-            className="size-6 shrink-0 rounded-md bg-transparent text-muted-foreground/75 hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md bg-transparent text-muted-foreground/75 hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setChatsOpen((open) => !open)}
             size="icon-sm"
@@ -510,7 +545,7 @@ export const Sidebar = memo(function Sidebar() {
           <Button
             size="icon-sm"
             variant="ghost"
-            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => void openNewChatLanding({ defaultTargetKind: "oneOff" })}
             aria-label="New chat"
@@ -545,6 +580,9 @@ export const Sidebar = memo(function Sidebar() {
                   selectThread={handleSelectThread}
                   thread={thread}
                   threadRuntimeById={threadRuntimeById}
+                  canGenerateMemory={canGenerateMemoryForThread(thread.id)}
+                  onGenerateMemory={() => generateMemoryForThread(thread.id)}
+                  onDeleteHistory={() => void deleteThreadHistoryWithConfirm(thread.id, displayTitleForThread(thread.id))}
                 />
               ))}
             </div>
@@ -577,7 +615,7 @@ export const Sidebar = memo(function Sidebar() {
           <Button
             aria-expanded={projectsOpen}
             aria-label={projectsOpen ? "Collapse projects" : "Expand projects"}
-            className="size-6 shrink-0 rounded-md bg-transparent text-muted-foreground/75 hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md bg-transparent text-muted-foreground/75 hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setProjectsOpen((open) => !open)}
             size="icon-sm"
@@ -592,7 +630,7 @@ export const Sidebar = memo(function Sidebar() {
         <div className="flex items-center">
           <Button
             aria-label="Project section options"
-            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={handleProjectSectionMenu}
             size="icon-sm"

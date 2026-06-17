@@ -17,6 +17,7 @@ import { Input } from "../../components/ui/input";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
 import { formatSidebarRelativeAge } from "../sidebarHelpers";
+import { ThreadOverflowMenu } from "./ThreadOverflowMenu";
 
 export const MAX_VISIBLE_THREADS = 5;
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item min-w-0 [&:not(:last-child)]:mb-3";
@@ -66,6 +67,9 @@ export type SidebarWorkspaceItemProps = {
   visibleThreads: ThreadRecord[];
   workspace: WorkspaceRecord;
   workspaceThreads: ThreadRecord[];
+  canGenerateMemoryForThread: (threadId: string) => boolean;
+  onGenerateMemoryForThread: (threadId: string) => void;
+  onDeleteHistoryForThread: (threadId: string, title: string) => void;
 };
 
 export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
@@ -95,6 +99,9 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   visibleThreads,
   workspace,
   workspaceThreads,
+  canGenerateMemoryForThread,
+  onGenerateMemoryForThread,
+  onDeleteHistoryForThread,
 }: SidebarWorkspaceItemProps) {
   const controls = useDragControls();
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -347,26 +354,39 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                                 aria-hidden="true"
                               />
                             ) : ageLabel ? (
-                              <span className="text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none">
+                              <span className="text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none">
                                 {ageLabel}
                               </span>
                             ) : null}
                           </span>
                         </Button>
                         {!busy ? (
-                          <button
-                            type="button"
-                            className="absolute right-2.5 top-1/2 z-10 h-5 w-5 -translate-y-1/2 flex items-center justify-center rounded-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06] transition-all duration-200 ease-out transform scale-75 group-hover:scale-100"
-                            title="Archive thread"
-                            aria-label="Archive thread"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              event.preventDefault();
-                              void archiveThread(thread.id);
-                            }}
-                          >
-                            <ArchiveIcon className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+                            <button
+                              type="button"
+                              className="h-5 w-5 flex items-center justify-center rounded-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto group-focus-within:scale-100 text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06] transition-all duration-200 ease-out transform scale-75 group-hover:scale-100"
+                              title="Archive thread"
+                              aria-label="Archive thread"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                event.preventDefault();
+                                void archiveThread(thread.id);
+                              }}
+                            >
+                              <ArchiveIcon className="h-3.5 w-3.5" />
+                            </button>
+                            <ThreadOverflowMenu
+                              canGenerateMemory={canGenerateMemoryForThread(thread.id)}
+                              ariaLabelSuffix={displayTitle}
+                              triggerVisibilityClassName="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100"
+                              onRename={() => onStartEditing(thread.id, displayTitle)}
+                              onArchive={() => void archiveThread(thread.id)}
+                              onGenerateMemory={() => onGenerateMemoryForThread(thread.id)}
+                              onDeleteHistory={() =>
+                                onDeleteHistoryForThread(thread.id, displayTitle)
+                              }
+                            />
+                          </div>
                         ) : null}
                       </div>
                     );

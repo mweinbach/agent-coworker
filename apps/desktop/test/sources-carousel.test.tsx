@@ -15,6 +15,7 @@ mock.module("../src/lib/desktopCommands", () =>
 );
 
 const { SourcesCarousel } = await import("../src/components/ai-elements/sources-carousel");
+const { openExternalSource } = await import("../src/lib/openExternalSource");
 
 describe("desktop sources carousel", () => {
   test("renders nothing when no sources are available", () => {
@@ -22,12 +23,9 @@ describe("desktop sources carousel", () => {
     expect(html).toBe("");
   });
 
-  test("opens a source in the browser after confirmation", async () => {
+  test("invokes onOpenSource with the source url when a card is clicked", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
-    const originalWindowOpen = harness.dom.window.open;
-    const openSpy = mock(() => null);
-    harness.dom.window.open = openSpy as typeof harness.dom.window.open;
-    confirmActionMock.mockClear();
+    const onOpenSource = mock((_url: string) => {});
 
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -43,6 +41,7 @@ describe("desktop sources carousel", () => {
                 url: "https://example.com/articles/hero-ui-migration-guide",
               },
             ],
+            onOpenSource,
           }),
         );
       });
@@ -58,19 +57,61 @@ describe("desktop sources carousel", () => {
         sourceButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(confirmActionMock).toHaveBeenCalledTimes(1);
-      expect(openSpy).toHaveBeenCalledWith(
+      expect(onOpenSource).toHaveBeenCalledTimes(1);
+      expect(onOpenSource).toHaveBeenCalledWith(
         "https://example.com/articles/hero-ui-migration-guide",
-        "_blank",
-        "noopener,noreferrer",
       );
 
       await act(async () => {
         root.unmount();
       });
     } finally {
+      harness.restore();
+    }
+  });
+});
+
+describe("openExternalSource", () => {
+  test("opens a source in the browser after confirmation", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const originalWindowOpen = harness.dom.window.open;
+    const openSpy = mock(() => null);
+    harness.dom.window.open = openSpy as typeof harness.dom.window.open;
+    confirmActionMock.mockClear();
+    confirmActionMock.mockImplementation(async () => true);
+
+    try {
+      await openExternalSource("https://example.com/articles/hero-ui-migration-guide");
+
+      expect(confirmActionMock).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith(
+        "https://example.com/articles/hero-ui-migration-guide",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } finally {
       harness.dom.window.open = originalWindowOpen;
       harness.restore();
+    }
+  });
+
+  test("does not open the browser when the user cancels", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const originalWindowOpen = harness.dom.window.open;
+    const openSpy = mock(() => null);
+    harness.dom.window.open = openSpy as typeof harness.dom.window.open;
+    confirmActionMock.mockClear();
+    confirmActionMock.mockImplementation(async () => false);
+
+    try {
+      await openExternalSource("https://example.com/x");
+
+      expect(confirmActionMock).toHaveBeenCalledTimes(1);
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      harness.dom.window.open = originalWindowOpen;
+      harness.restore();
+      confirmActionMock.mockImplementation(async () => true);
     }
   });
 });

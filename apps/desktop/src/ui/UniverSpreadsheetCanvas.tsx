@@ -678,7 +678,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
   if (loading) {
     return (
-      <div className="flex h-full min-h-[360px] items-center justify-center bg-white text-sm text-muted-foreground">
+      <div className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] text-sm text-muted-foreground">
         <Loader2Icon className="mr-2 size-4 animate-spin" />
         Loading workbook
       </div>
@@ -687,7 +687,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
   if (loadError) {
     return (
-      <div className="flex h-full min-h-[360px] items-center justify-center bg-white p-6">
+      <div className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] p-6">
         <div className="flex max-w-md items-start gap-3 rounded-md border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive">
           <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
           <span>{loadError}</span>
@@ -699,12 +699,12 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   return (
     <section
       className={cn(
-        "flex h-full min-h-[420px] flex-col overflow-hidden bg-white text-foreground",
+        "flex h-full min-h-[420px] flex-col overflow-hidden bg-[var(--surface-spreadsheet)] text-foreground",
         compact ? "min-h-0" : "min-h-[680px]",
       )}
       data-cowork-univer-canvas="true"
     >
-      <div className="flex shrink-0 items-center gap-3 border-b border-border bg-white px-3 py-2">
+      <div className="flex shrink-0 items-center gap-3 border-b border-border bg-[var(--surface-spreadsheet)] px-3 py-2">
         <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <SaveStateIcon state={saveState} />
           <span className="truncate">{statusLabel}</span>
@@ -715,7 +715,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           onSubmit={handlePromptSubmit}
         >
           <Input
-            className="h-8 border-border bg-white text-sm shadow-none"
+            className="h-8 border-border bg-[var(--surface-spreadsheet)] text-sm shadow-none"
             value={promptText}
             onChange={(event) => setPromptText(event.currentTarget.value)}
             placeholder="Ask agent about this selection..."
@@ -726,7 +726,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           </Button>
         </form>
       </div>
-      <div ref={containerRef} className="min-h-0 flex-1 bg-white" />
+      <div ref={containerRef} className="min-h-0 flex-1 bg-[var(--surface-spreadsheet)]" />
     </section>
   );
 }

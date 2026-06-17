@@ -17,6 +17,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { ActivityGroupCard } from "./ActivityGroupCard";
 import type { ChatRenderItem } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
+import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
 export type VisibleSandboxApproval = {
@@ -122,15 +123,19 @@ export function ChatFeed(props: {
                 liveStartedAt={liveStartedAt}
               />
             ) : (
-              <FeedRow
+              <InlineErrorBoundary
                 key={item.item.id}
-                item={item.item}
-                citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
-                citationSources={citationSourcesByMessageId.get(item.item.id)}
-                desktopBasePath={desktopBasePath}
-                isLatestUiSurface={item.item.id === latestUiSurfaceItemId}
-                a2uiEnabled={a2uiEnabled}
-              />
+                label={`This message couldn't be rendered (${item.item.kind}).`}
+              >
+                <FeedRow
+                  item={item.item}
+                  citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
+                  citationSources={citationSourcesByMessageId.get(item.item.id)}
+                  desktopBasePath={desktopBasePath}
+                  isLatestUiSurface={item.item.id === latestUiSurfaceItemId}
+                  a2uiEnabled={a2uiEnabled}
+                />
+              </InlineErrorBoundary>
             ),
           )
         )}

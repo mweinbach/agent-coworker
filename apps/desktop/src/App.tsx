@@ -27,6 +27,7 @@ import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { Canvas } from "./ui/Canvas";
 import { ContextSidebar } from "./ui/ContextSidebar";
+import { InlineErrorBoundary } from "./ui/CrashReportingErrorBoundary";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
@@ -91,7 +92,13 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
         )}
         style={canvasContainerStyle}
       >
-        {showCanvas && filePreview?.path ? <Canvas path={filePreview.path} /> : <ContextSidebar />}
+        {showCanvas && filePreview?.path ? (
+          <InlineErrorBoundary label="This canvas couldn't be rendered.">
+            <Canvas path={filePreview.path} />
+          </InlineErrorBoundary>
+        ) : (
+          <ContextSidebar />
+        )}
       </div>
     </div>
   );
@@ -534,7 +541,9 @@ export default function App() {
           }
         >
           <div className="flex-1 min-h-0 min-w-0">
-            <Canvas path={new URLSearchParams(window.location.search).get("path") || ""} />
+            <InlineErrorBoundary label="This canvas couldn't be rendered.">
+              <Canvas path={new URLSearchParams(window.location.search).get("path") || ""} />
+            </InlineErrorBoundary>
           </div>
         </div>
       ) : view === "settings" ? (

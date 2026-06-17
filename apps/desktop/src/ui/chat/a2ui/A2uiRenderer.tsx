@@ -10,6 +10,7 @@ import { resolveDynamicWithFunctions } from "../../../../../../src/experimental/
 import { Input } from "../../../components/ui/input";
 import { Textarea } from "../../../components/ui/textarea";
 import { cn } from "../../../lib/utils";
+import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
 
 /**
  * Permissive shape of an A2UI v0.9 component. We defensively introspect
@@ -919,5 +920,12 @@ export function A2uiRenderer({ root, dataModel, interactive, onAction }: A2uiRen
     depth: 0,
     path: typeof root.id === "string" ? root.id : "root",
   };
-  return <RenderNode component={root} context={context} />;
+  // The model drives the entire rendered subtree, so a bad component deep in
+  // the tree can throw. Contain it to this surface so a malformed a2ui payload
+  // degrades to one inline tile instead of taking the window down.
+  return (
+    <InlineErrorBoundary label="This surface couldn't be rendered.">
+      <RenderNode component={root} context={context} />
+    </InlineErrorBoundary>
+  );
 }

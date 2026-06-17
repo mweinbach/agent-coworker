@@ -23,6 +23,7 @@ import type { SettingsPageId } from "../../app/types";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { cn } from "../../lib/utils";
+import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { BackupPage } from "./pages/BackupPage";
 import { DesktopPage } from "./pages/DesktopPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
@@ -467,7 +468,9 @@ export function SettingsShell() {
                     isBackupPage ? "flex min-h-0 flex-1 flex-col" : "",
                   )}
                 >
-                  {activePage.render()}
+                  <InlineErrorBoundary label="This settings page couldn't be rendered.">
+                    {activePage.render()}
+                  </InlineErrorBoundary>
                 </div>
               </div>
             </div>

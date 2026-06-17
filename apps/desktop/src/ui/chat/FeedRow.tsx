@@ -12,9 +12,11 @@ import { memo } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import { extractCitationUrlsFromAnnotations } from "../../../../../src/shared/displayCitationMarkers";
 import type { FeedItem } from "../../app/types";
-import { Message, MessageContent, MessageResponse } from "../../components/ai-elements/message";
+import { Message, MessageContent } from "../../components/ai-elements/message";
+import { DesktopMarkdown } from "../markdown";
 import { SourcesCarousel } from "../../components/ai-elements/sources-carousel";
 import { Card, CardContent } from "../../components/ui/card";
+import { openExternalSource } from "../../lib/openExternalSource";
 import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
 import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
 import { useChatViewContext } from "./ChatViewContext";
@@ -120,7 +122,7 @@ export const FeedRow = memo(function FeedRow(props: {
       <Message from={item.role}>
         <MessageContent>
           {item.role === "assistant" ? (
-            <MessageResponse
+            <DesktopMarkdown
               citationAnnotations={item.annotations}
               citationSources={props.citationSources}
               citationUrlsByIndex={props.citationUrlsByIndex}
@@ -129,7 +131,7 @@ export const FeedRow = memo(function FeedRow(props: {
               fallbackToSourcesFooter={!hasSources}
             >
               {item.text}
-            </MessageResponse>
+            </DesktopMarkdown>
           ) : (
             <div className="whitespace-pre-wrap">
               {(() => {
@@ -185,7 +187,11 @@ export const FeedRow = memo(function FeedRow(props: {
           )}
         </MessageContent>
         {hasSources && !hasInlineCitationChip && props.citationSources ? (
-          <SourcesCarousel sources={props.citationSources} className="mt-1" />
+          <SourcesCarousel
+            sources={props.citationSources}
+            onOpenSource={openExternalSource}
+            className="mt-1"
+          />
         ) : null}
       </Message>
     );

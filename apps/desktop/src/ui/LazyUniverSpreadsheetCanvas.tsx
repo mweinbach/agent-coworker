@@ -16,7 +16,7 @@ export function LazyUniverSpreadsheetCanvas(props: LazyUniverSpreadsheetCanvasPr
   return (
     <Suspense
       fallback={
-        <div className="flex h-full min-h-[360px] items-center justify-center bg-white text-sm text-muted-foreground">
+        <div className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] text-sm text-muted-foreground">
           <Loader2Icon className="mr-2 size-4 animate-spin" />
           Opening workbook
         </div>

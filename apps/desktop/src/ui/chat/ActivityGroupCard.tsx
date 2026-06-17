@@ -14,7 +14,7 @@ import {
 import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ToolFeedState } from "../../app/types";
-import { MessageResponse } from "../../components/ai-elements/message";
+import { DesktopMarkdown } from "../markdown";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader } from "../../components/ui/card";
 import {
@@ -163,12 +163,12 @@ function ReasoningSectionNode({
 
   if (!title) {
     return (
-      <MessageResponse
+      <DesktopMarkdown
         normalizeDisplayCitations
         className="text-[13px] leading-snug text-foreground/82"
       >
         {body}
-      </MessageResponse>
+      </DesktopMarkdown>
     );
   }
 
@@ -189,9 +189,9 @@ function ReasoningSectionNode({
       </button>
       {open && body && (
         <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground/80 pl-0.5 select-text">
-          <MessageResponse normalizeDisplayCitations className="prose-sm leading-relaxed">
+          <DesktopMarkdown normalizeDisplayCitations className="prose-sm leading-relaxed">
             {body}
-          </MessageResponse>
+          </DesktopMarkdown>
         </div>
       )}
     </div>

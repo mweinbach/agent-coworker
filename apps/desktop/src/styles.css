@@ -746,6 +746,30 @@ body.app-animating-sidebars .app-topbar__content-fill {
   }
 }
 
+/* Indeterminate progress bar: slide a third-width slug across the track. */
+@keyframes app-progress-indeterminate {
+  0% {
+    left: -33%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.app-progress-indeterminate {
+  animation: app-progress-indeterminate 1100ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  border-radius: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Static half-filled bar instead of a moving slug for users who opt out of motion. */
+  .app-progress-indeterminate {
+    animation: none;
+    left: 0;
+    width: 50%;
+  }
+}
+
 .sidebar-chats-scroll-container {
   max-height: 396px; /* Capped to exactly 10 items (10 * 36px + 9 * 4px gap) */
   overflow-y: auto;

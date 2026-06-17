@@ -38,7 +38,6 @@ export function ChatComposer(props: {
   transcriptOnly: boolean;
   ingestAttachmentFiles: (files: File[]) => void;
   isUploading: boolean;
-  uploadProgress: number;
   pendingAttachments: ComposerAttachmentFile[];
   removeAttachment: (index: number) => void;
   submitComposer: (busyPolicy: "reject" | "steer") => void;
@@ -69,7 +68,6 @@ export function ChatComposer(props: {
     transcriptOnly,
     ingestAttachmentFiles,
     isUploading,
-    uploadProgress,
     pendingAttachments,
     removeAttachment,
     submitComposer,
@@ -112,14 +110,16 @@ export function ChatComposer(props: {
           }
         >
           {isUploading && (
-            <div className="w-full mb-3 px-3 pt-2.5">
-              <Progress value={uploadProgress} className="h-1 bg-primary/10 rounded-full" />
+            <div
+              className="w-full mb-3 px-3 pt-2.5"
+              role="status"
+              aria-busy="true"
+              aria-live="polite"
+            >
+              <Progress indeterminate className="h-1 bg-primary/10 rounded-full" />
               <div className="flex items-center gap-2 mt-1.5 px-0.5 text-xs text-muted-foreground select-none font-medium">
                 <LoaderCircleIcon className="size-3.5 animate-spin text-primary shrink-0" />
-                <span>
-                  Uploading and preparing message...{" "}
-                  {uploadProgress < 100 ? `${uploadProgress}%` : "Done"}
-                </span>
+                <span>Uploading and preparing message…</span>
               </div>
             </div>
           )}

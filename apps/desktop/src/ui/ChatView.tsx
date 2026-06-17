@@ -142,25 +142,6 @@ export function ChatView() {
 
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
   const isUploading = preparingAttachments || pendingTurnStart?.status === "sending";
-  const [uploadProgress, setUploadProgress] = useState(0);
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | undefined;
-    if (isUploading) {
-      setUploadProgress(10);
-      timer = setInterval(() => {
-        setUploadProgress((prev) => {
-          if (prev >= 95) return prev;
-          return prev + Math.floor(Math.random() * 5) + 1;
-        });
-      }, 500);
-    } else {
-      setUploadProgress(100);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [isUploading]);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -752,7 +733,6 @@ export function ChatView() {
           transcriptOnly={transcriptOnly}
           ingestAttachmentFiles={ingestAttachmentFiles}
           isUploading={isUploading}
-          uploadProgress={uploadProgress}
           pendingAttachments={pendingAttachments}
           removeAttachment={removeAttachment}
           submitComposer={submitComposer}

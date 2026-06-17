@@ -3,6 +3,7 @@
 import { Command as CommandPrimitive } from "cmdk";
 import { SearchIcon } from "lucide-react";
 import type * as React from "react";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
@@ -99,8 +100,36 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
   );
 }
 
+/**
+ * Command palette shell: a centered Dialog hosting a Command. Mirrors the
+ * standard shadcn CommandDialog composition. The dialog owns open state and
+ * the overlay; callers populate the inner Command groups.
+ */
+function CommandDialog({
+  children,
+  className,
+  ...props
+}: React.ComponentProps<typeof Dialog> & { className?: string }) {
+  return (
+    <Dialog {...props}>
+      <DialogContent
+        showCloseButton={false}
+        aria-describedby={undefined}
+        className={cn("overflow-hidden p-0 shadow-lg sm:max-w-[560px]", className)}
+      >
+        {/* Visually-hidden title satisfies Radix's a11y requirement for Dialog. */}
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
+          {children}
+        </Command>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export {
   Command,
+  CommandDialog,
   CommandEmpty,
   CommandGroup,
   CommandInput,

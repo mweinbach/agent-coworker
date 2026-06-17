@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
@@ -26,6 +26,7 @@ import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { Canvas } from "./ui/Canvas";
+import { CommandPalette } from "./ui/CommandPalette";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { InlineErrorBoundary } from "./ui/CrashReportingErrorBoundary";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
@@ -344,6 +345,7 @@ export default function App() {
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
   const seenNotificationIds = useRef(new Set<string>());
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.windowMode = windowMode;
@@ -418,6 +420,20 @@ export default function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  // Cmd/Ctrl+K opens the command palette. Scoped to the main window so the
+  // popout quick-chat / menu-bar / canvas windows keep their minimal shells.
+  useEffect(() => {
+    if (windowMode !== "main") return;
+    function handlePaletteShortcut(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key === "k") {
+        event.preventDefault();
+        setCommandPaletteOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", handlePaletteShortcut);
+    return () => window.removeEventListener("keydown", handlePaletteShortcut);
+  }, [windowMode]);
 
   useEffect(() => {
     function handleMenuCommand(command: DesktopMenuCommand): void {
@@ -558,6 +574,9 @@ export default function App() {
       )}
       <PromptModal />
       <FilePreviewModal />
+      {windowMode === "main" ? (
+        <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      ) : null}
       {windowMode === "main" ? <DesktopOnboarding /> : null}
     </>
   );

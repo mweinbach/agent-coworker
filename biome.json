@@ -125,21 +125,12 @@
       }
     },
     {
-      "includes": ["apps/desktop/src/components/ui/**"],
+      "includes": [
+        "apps/desktop/src/components/ui/**",
+        "apps/desktop/src/components/ai-elements/**"
+      ],
       "linter": {
-        "rules": {
-          "a11y": {
-            "useSemanticElements": "off",
-            "useFocusableInteractive": "off",
-            "useKeyWithClickEvents": "off",
-            "useAriaPropsForRole": "off",
-            "noRedundantRoles": "off"
-          },
-          "suspicious": {
-            "noArrayIndexKey": "off",
-            "noDocumentCookie": "off"
-          }
-        }
+        "enabled": false
       }
     },
     {

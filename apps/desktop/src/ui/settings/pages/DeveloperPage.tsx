@@ -452,7 +452,18 @@ export function DeveloperPage() {
             type="button"
             variant="outline"
             aria-label="Run onboarding again"
-            onClick={() => startOnboarding()}
+            onClick={async () => {
+              const confirmed = await confirmAction({
+                title: "Run onboarding again",
+                message: "Restart the first-time setup walkthrough?",
+                detail: "Your workspaces and settings will be kept.",
+                confirmLabel: "Run onboarding",
+                cancelLabel: "Cancel",
+                kind: "info",
+                defaultAction: "cancel",
+              });
+              if (confirmed) startOnboarding();
+            }}
           >
             Run onboarding again
           </Button>

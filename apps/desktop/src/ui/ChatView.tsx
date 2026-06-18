@@ -119,6 +119,15 @@ export function ChatView() {
     return visible.length > 0 ? visible : EMPTY_SANDBOX_APPROVALS;
   }, [sandboxApprovalsByThread, selectedThreadId]);
   const answerApproval = useAppStore((s) => s.answerApproval);
+  const selectThread = useAppStore((s) => s.selectThread);
+  const allThreads = useAppStore((s) => s.threads);
+  const threadTitleById = useMemo(() => {
+    const onlyOtherThreads = sandboxApprovals.some((a) => a.threadId !== selectedThreadId);
+    if (!onlyOtherThreads) return undefined;
+    const map = new Map<string, string>();
+    for (const t of allThreads) map.set(t.id, t.title);
+    return map;
+  }, [allThreads, sandboxApprovals, selectedThreadId]);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const desktopA2uiEnabled = useAppStore((s) => s.desktopFeatureFlags.a2ui);
@@ -432,7 +441,7 @@ export function ChatView() {
     [cancelThread, selectedThreadId],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = feedRef.current;
     if (!el) return;
 
@@ -459,34 +468,25 @@ export function ChatView() {
       // jumping to the bottom. We only look up a saved offset on a real thread
       // switch (previousThreadId set); on first mount we keep the original
       // bottom-pin behavior so we don't clobber callers that set scroll after
-      // mount.
+      // mount. This runs in a layout effect and sets scrollTop synchronously so
+      // the new thread doesn't flash at the top before the offset is applied.
       const savedOffset =
         previousThreadId && selectedThreadId != null
           ? useAppStore.getState().scrollPositionsByThreadId[selectedThreadId]
           : undefined;
       if (typeof savedOffset !== "number") {
-        window.requestAnimationFrame(() => {
-          const nextEl = feedRef.current;
-          if (nextEl) {
-            nextEl.scrollTop = nextEl.scrollHeight;
-          }
-        });
+        el.scrollTop = el.scrollHeight;
         setShowScrollButton(false);
         return;
       }
-      window.requestAnimationFrame(() => {
-        const nextEl = feedRef.current;
-        if (!nextEl) return;
-        if (savedOffset <= nextEl.scrollHeight) {
-          nextEl.scrollTop = savedOffset;
-          const distanceFromBottom =
-            nextEl.scrollHeight - nextEl.scrollTop - nextEl.clientHeight;
-          setShowScrollButton(distanceFromBottom > FEED_BOTTOM_STICKY_THRESHOLD_PX);
-        } else {
-          nextEl.scrollTop = nextEl.scrollHeight;
-          setShowScrollButton(false);
-        }
-      });
+      if (savedOffset <= el.scrollHeight) {
+        el.scrollTop = savedOffset;
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        setShowScrollButton(distanceFromBottom > FEED_BOTTOM_STICKY_THRESHOLD_PX);
+      } else {
+        el.scrollTop = el.scrollHeight;
+        setShowScrollButton(false);
+      }
       return;
     }
 
@@ -548,9 +548,14 @@ export function ChatView() {
     };
   }, [citationOverflowFilePathsByMessageId]);
 
+  const didAutoFocusRef = useRef(false);
   useEffect(() => {
-    if (selectedThreadId && textareaRef.current) {
+    // Focus the composer once on first mount so the user can type immediately,
+    // but don't steal focus on every thread switch (that disrupts reading
+    // history and races the scroll-restore below).
+    if (selectedThreadId && !didAutoFocusRef.current && textareaRef.current) {
       textareaRef.current.focus();
+      didAutoFocusRef.current = true;
     }
   }, [selectedThreadId]);
 
@@ -751,6 +756,9 @@ export function ChatView() {
           composerOverlayHeight={composerOverlayHeight}
           sandboxApprovals={sandboxApprovals}
           onAnswerApproval={answerApproval}
+          selectedThreadId={selectedThreadId}
+          threadTitleById={threadTitleById}
+          onSelectThread={(id) => void selectThread(id)}
         />
         <ConversationScrollButton
           bottomOffset={scrollButtonBottomOffset}

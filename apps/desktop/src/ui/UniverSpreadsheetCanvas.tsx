@@ -137,6 +137,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selection, setSelection] = useState<UniverSelectionContext | null>(null);
   const [promptText, setPromptText] = useState("");
+  const [promptError, setPromptError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
@@ -633,9 +634,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     const request = promptText.trim();
     if (!request || !activeWorkbook) return;
     if (!selectedThreadId) {
-      alert("Please select or start a chat thread to collaborate with the agent.");
+      setPromptError("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
+    setPromptError(null);
     const saved = await flushSaveRef.current();
     if (!saved) return;
     const currentWorkbook =
@@ -647,7 +649,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       activeSelection?.sheetName ? { sheetName: activeSelection.sheetName } : undefined,
     );
     if (!latestWorkbookResult.ok) {
-      alert(`Could not refresh workbook context: ${latestWorkbookResult.error.message}`);
+      setPromptError(`Could not refresh workbook context: ${latestWorkbookResult.error.message}`);
       return;
     }
     const latestWorkbook = latestWorkbookResult.workbook;
@@ -672,7 +674,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     const accepted = await sendMessage(prompt);
     if (!accepted) {
       setPromptText(originalPrompt);
-      alert("Please select or start a chat thread to collaborate with the agent.");
+      setPromptError("Please select or start a chat thread to collaborate with the agent.");
     }
   };
 
@@ -710,6 +712,15 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           <span className="truncate">{statusLabel}</span>
         </div>
         {saveError ? <span className="truncate text-xs text-destructive">{saveError}</span> : null}
+        {promptError ? (
+          <span
+            role="alert"
+            data-testid="univer-prompt-error"
+            className="truncate text-xs text-destructive"
+          >
+            {promptError}
+          </span>
+        ) : null}
         <form
           className="ml-auto flex min-w-[260px] max-w-[560px] flex-1 items-center gap-2"
           onSubmit={handlePromptSubmit}

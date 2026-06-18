@@ -66,32 +66,18 @@ describe("ThreadOverflowMenu", () => {
     expect(trigger.getAttribute("aria-label")).toBe("More actions for Research plan");
   });
 
-  test("trigger opens the menu on click and focuses the first item via Radix", () => {
+  test("trigger click does not preventDefault so Radix can open it", () => {
     renderMenu();
     const trigger = container.querySelector(
       "button[data-thread-overflow-trigger]",
     ) as HTMLButtonElement;
-    // Radix DropdownMenu opens on pointerdown/click. We dispatch a click and
-    // assert the menu content mounts in the portal.
+    const event = new harness.dom.window.Event("click", { bubbles: true });
     act(() => {
-      trigger.dispatchEvent(
-        new harness.dom.window.PointerEvent("pointerdown", { bubbles: true, button: 0 }),
-      );
-      trigger.click();
+      trigger.dispatchEvent(event);
     });
-    const body = harness.dom.window.document.body;
-    const content = body.querySelector("[data-slot='dropdown-menu-content']");
-    // Some jsdom runs skip pointer gating; either the content is mounted or
-    // the trigger still exists. We assert no crash and a stable trigger.
-    expect(trigger).toBeTruthy();
-    if (content) {
-      const itemTexts = Array.from(content.querySelectorAll("[role='menuitem']")).map((node) =>
-        node.textContent?.replace(/\s+/g, " ").trim(),
-      );
-      expect(itemTexts).toContain("Rename");
-      expect(itemTexts).toContain("Archive");
-      expect(itemTexts).toContain("Generate memory from conversation");
-      expect(itemTexts).toContain("Delete session history");
-    }
+    // Our handler must only stopPropagation; calling preventDefault would make
+    // Radix bail (defaultPrevented === true) and the menu would never open —
+    // which is the regression this guards against.
+    expect(event.defaultPrevented).toBe(false);
   });
 });

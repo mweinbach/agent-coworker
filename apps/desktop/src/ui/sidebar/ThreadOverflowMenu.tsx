@@ -1,5 +1,11 @@
-import { ArchiveIcon, BrainCircuitIcon, HistoryIcon, MoreHorizontalIcon, PencilIcon } from "lucide-react";
-import { type MouseEvent } from "react";
+import {
+  ArchiveIcon,
+  BrainCircuitIcon,
+  HistoryIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+} from "lucide-react";
+import type { MouseEvent } from "react";
 import { Button } from "../../components/ui/button";
 import {
   DropdownMenu,
@@ -49,9 +55,12 @@ export function ThreadOverflowMenu({
   triggerVisibilityClassName,
   className,
 }: ThreadOverflowMenuProps) {
-  const stop = (event: MouseEvent) => {
+  // Stop the click/pointer from bubbling up to the thread row (which would
+  // select it), but do NOT call preventDefault(): Radix composes its own open
+  // handler after ours and bails when `event.defaultPrevented` is true, which
+  // previously prevented the menu from ever opening.
+  const stopPropagationOnly = (event: MouseEvent) => {
     event.stopPropagation();
-    event.preventDefault();
   };
 
   return (
@@ -63,8 +72,8 @@ export function ThreadOverflowMenu({
           size="icon-sm"
           variant="ghost"
           data-thread-overflow-trigger="true"
-          onPointerDown={stop}
-          onClick={stop}
+          onPointerDown={stopPropagationOnly}
+          onClick={stopPropagationOnly}
           className={cn(
             "size-5 shrink-0 rounded-md text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06] data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:scale-100",
             triggerVisibilityClassName,
@@ -74,22 +83,35 @@ export function ThreadOverflowMenu({
           <MoreHorizontalIcon className="h-3.5 w-3.5" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" onClick={stop}>
-        <DropdownMenuItem onSelect={onRename}>
-          <PencilIcon />
-          Rename
+      <DropdownMenuContent
+        align="start"
+        onClick={stopPropagationOnly}
+        className="min-w-[12.5rem] rounded-lg border-border/50 bg-popover/95 p-1 text-popover-foreground app-shadow-popover ring-1 ring-black/[0.04] backdrop-blur-md"
+      >
+        <DropdownMenuItem onSelect={onRename} className="gap-2.5 rounded-md">
+          <PencilIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0">Rename</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onArchive}>
-          <ArchiveIcon />
-          Archive
+        <DropdownMenuItem onSelect={onArchive} className="gap-2.5 rounded-md">
+          <ArchiveIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0">Archive</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onGenerateMemory} disabled={!canGenerateMemory}>
-          <BrainCircuitIcon />
-          Generate memory from conversation
+        <DropdownMenuItem
+          onSelect={onGenerateMemory}
+          disabled={!canGenerateMemory}
+          className="gap-2.5 rounded-md"
+        >
+          <BrainCircuitIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">Generate memory from conversation</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onDeleteHistory} variant="destructive">
-          <HistoryIcon />
-          Delete session history
+        <hr className="my-1 h-px border-0 bg-border/45" />
+        <DropdownMenuItem
+          onSelect={onDeleteHistory}
+          variant="destructive"
+          className="gap-2.5 rounded-md"
+        >
+          <HistoryIcon className="size-4 shrink-0" />
+          <span className="min-w-0">Delete session history</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -64,6 +64,7 @@ export function ComposerMentionInput(props: {
   const [menuOpen, setMenuOpen] = useState(false);
   const [items, setItems] = useState<MentionItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [query, setQuery] = useState("");
 
   const syncScroll = useCallback(() => {
     const textarea = textareaRef.current;
@@ -91,11 +92,8 @@ export function ComposerMentionInput(props: {
         return;
       }
       const next = filterMentionItems(catalog, active.query);
-      if (next.length === 0) {
-        setMenuOpen(false);
-        return;
-      }
       setItems(next);
+      setQuery(active.query);
       setActiveIndex(0);
       setMenuOpen(true);
     },
@@ -132,28 +130,31 @@ export function ComposerMentionInput(props: {
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      if (menuOpen && items.length > 0) {
-        switch (event.key) {
-          case "ArrowDown":
-            event.preventDefault();
-            setActiveIndex((index) => (index + 1) % items.length);
-            return;
-          case "ArrowUp":
-            event.preventDefault();
-            setActiveIndex((index) => (index - 1 + items.length) % items.length);
-            return;
-          case "Enter":
-          case "Tab":
-            event.preventDefault();
-            handleSelect(items[activeIndex] ?? items[0]);
-            return;
-          case "Escape":
-            event.preventDefault();
-            event.stopPropagation();
-            setMenuOpen(false);
-            return;
-          default:
-            break;
+      if (menuOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setMenuOpen(false);
+          return;
+        }
+        if (items.length > 0) {
+          switch (event.key) {
+            case "ArrowDown":
+              event.preventDefault();
+              setActiveIndex((index) => (index + 1) % items.length);
+              return;
+            case "ArrowUp":
+              event.preventDefault();
+              setActiveIndex((index) => (index - 1 + items.length) % items.length);
+              return;
+            case "Enter":
+            case "Tab":
+              event.preventDefault();
+              handleSelect(items[activeIndex] ?? items[0]);
+              return;
+            default:
+              break;
+          }
         }
       }
       onKeyDown(event);
@@ -197,6 +198,7 @@ export function ComposerMentionInput(props: {
         <ComposerMentionMenu
           items={items}
           activeIndex={activeIndex}
+          query={query}
           onSelect={handleSelect}
           onHover={setActiveIndex}
         />

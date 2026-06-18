@@ -2,15 +2,19 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 
+import { GroupedRow, GroupedSection } from "@/components/pairing/grouped-list";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -185,17 +189,22 @@ export default function McpServersScreen() {
   }
 
   return (
-    <Screen scroll contentStyle={{ gap: 18 }}>
+    <Screen scroll avoidKeyboard contentStyle={{ gap: 18 }}>
       <Modal
         visible={editorVisible}
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={() => setEditorVisible(false)}
       >
-        <ScrollView
+        <KeyboardAvoidingView
           style={{ flex: 1, backgroundColor: theme.background }}
-          contentContainerStyle={{ gap: 16, padding: 20 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
+          <ScrollView
+            style={{ flex: 1, backgroundColor: theme.background }}
+            contentContainerStyle={{ gap: 16, padding: 20 }}
+            keyboardShouldPersistTaps="handled"
+          >
           <View
             style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}
           >
@@ -346,7 +355,8 @@ export default function McpServersScreen() {
                 <Switch
                   value={draft.required}
                   onValueChange={(value) => setDraft((state) => ({ ...state, required: value }))}
-                  trackColor={{ true: theme.primary }}
+                  trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+                  ios_backgroundColor={theme.surfaceMuted}
                 />
               </View>
             </View>
@@ -512,10 +522,11 @@ export default function McpServersScreen() {
                 textAlign: "center",
               }}
             >
-              Save integration
-            </Text>
-          </Pressable>
-        </ScrollView>
+            Save integration
+          </Text>
+        </Pressable>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {loading && servers.length === 0 ? (
@@ -561,22 +572,19 @@ export default function McpServersScreen() {
       ) : null}
 
       {servers.length > 0 ? (
-        <SectionCard title="Configured servers" description={`${servers.length} MCP servers`}>
-          <View style={{ gap: 10 }}>
-            {servers.map((server) => {
+        <GroupedSection title="Configured servers" footer={`${servers.length} MCP servers`}>
+            {servers.map((server, index) => {
               const validation = validationByName[server.name];
+              const isLast = index === servers.length - 1;
               return (
                 <View
                   key={server.name}
                   style={{
                     gap: 8,
-                    borderRadius: 18,
-                    borderCurve: "continuous",
-                    borderWidth: 1,
-                    borderColor: theme.borderMuted,
-                    backgroundColor: theme.surfaceElevated,
                     paddingHorizontal: 14,
                     paddingVertical: 12,
+                    borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                    borderBottomColor: theme.borderMuted,
                   }}
                 >
                   <View
@@ -757,6 +765,7 @@ export default function McpServersScreen() {
                   <View style={{ flexDirection: "row", gap: 8 }}>
                     <Pressable
                       onPress={() => openEdit(server)}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                       style={({ pressed }) => ({
                         borderRadius: 999,
                         borderWidth: 1,
@@ -772,6 +781,7 @@ export default function McpServersScreen() {
                     </Pressable>
                     <Pressable
                       onPress={() => void validateServer(server.name)}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                       style={({ pressed }) => ({
                         borderRadius: 999,
                         borderWidth: 1,
@@ -787,6 +797,7 @@ export default function McpServersScreen() {
                     </Pressable>
                     <Pressable
                       onPress={() => handleDelete(server.name)}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                       style={({ pressed }) => ({
                         borderRadius: 999,
                         borderWidth: 1,
@@ -804,8 +815,7 @@ export default function McpServersScreen() {
                 </View>
               );
             })}
-          </View>
-        </SectionCard>
+        </GroupedSection>
       ) : !loading ? (
         <SectionCard
           title="No servers"

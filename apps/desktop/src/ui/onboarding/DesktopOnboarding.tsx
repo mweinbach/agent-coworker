@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
+import { Switch } from "../../components/ui/switch";
 import {
   availableProvidersFromCatalog,
   type CatalogVisibilityOptions,
@@ -60,6 +61,14 @@ function stepIndex(step: OnboardingStep): number {
   return STEP_ORDER.indexOf(step);
 }
 
+const STEP_LABELS: Record<OnboardingStep, string> = {
+  welcome: "Welcome",
+  workspace: "Workspace",
+  provider: "Provider",
+  defaults: "Defaults",
+  firstThread: "First thread",
+};
+
 // ── Step indicators ──
 
 function StepIndicator({ current }: { current: OnboardingStep }) {
@@ -69,6 +78,9 @@ function StepIndicator({ current }: { current: OnboardingStep }) {
       {STEP_ORDER.map((step, i) => (
         <div
           key={step}
+          role="img"
+          aria-label={`Step ${i + 1}: ${STEP_LABELS[step]}`}
+          aria-current={i === currentIdx ? "step" : undefined}
           className={cn(
             "h-1.5 rounded-full transition-all duration-300",
             i === currentIdx
@@ -787,15 +799,13 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
             <div className="text-sm font-medium">MCP servers</div>
             <div className="text-xs text-muted-foreground">Allow external tool servers.</div>
           </div>
-          <Button
-            variant={enableMcp ? "default" : "outline"}
-            size="sm"
-            onClick={() =>
-              void updateWorkspaceDefaults(workspace.id, { defaultEnableMcp: !enableMcp })
+          <Switch
+            checked={enableMcp}
+            aria-label="MCP servers"
+            onCheckedChange={(checked) =>
+              void updateWorkspaceDefaults(workspace.id, { defaultEnableMcp: checked })
             }
-          >
-            {enableMcp ? "Enabled" : "Disabled"}
-          </Button>
+          />
         </div>
 
         <div className="flex items-center justify-between gap-4">
@@ -803,17 +813,15 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
             <div className="text-sm font-medium">Backups</div>
             <div className="text-xs text-muted-foreground">Opt-in recovery snapshots.</div>
           </div>
-          <Button
-            variant={backupsEnabled ? "default" : "outline"}
-            size="sm"
-            onClick={() =>
+          <Switch
+            checked={backupsEnabled}
+            aria-label="Backups"
+            onCheckedChange={(checked) =>
               void updateWorkspaceDefaults(workspace.id, {
-                defaultBackupsEnabled: !backupsEnabled,
+                defaultBackupsEnabled: checked,
               })
             }
-          >
-            {backupsEnabled ? "Enabled" : "Disabled"}
-          </Button>
+          />
         </div>
       </div>
 
@@ -849,7 +857,13 @@ const STARTER_PROMPTS = [
   },
 ];
 
-function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) => Promise<void> }) {
+function FirstThreadStep({
+  onComplete,
+  error,
+}: {
+  onComplete: (firstMessage?: string) => Promise<void>;
+  error: string | null;
+}) {
   const [creating, setCreating] = useState(false);
 
   const handleClick = (firstMessage?: string) => {
@@ -866,6 +880,12 @@ function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) =
           Pick a starter prompt or start with a blank thread.
         </p>
       </div>
+
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
 
       <div className="space-y-2">
         {STARTER_PROMPTS.map((prompt) => (
@@ -996,13 +1016,33 @@ export function DesktopOnboarding() {
   const complete = useAppStore((s) => s.completeOnboarding);
   const newThread = useAppStore((s) => s.newThread);
   const cardRef = useRef<HTMLDivElement>(null);
+  const [completionError, setCompletionError] = useState<string | null>(null);
 
   useFocusTrap(cardRef, visible);
+
+  // Escape dismisses the overlay, unless a sub-surface (Select listbox /
+  // radix Dialog) is open and should swallow Escape first.
+  useEffect(() => {
+    if (!visible) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (event.defaultPrevented) return;
+      const openOverlay = document.querySelector(
+        '[role="listbox"][data-state="open"], [role="dialog"][data-state="open"]',
+      );
+      if (openOverlay) return;
+      event.preventDefault();
+      dismiss();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [visible, dismiss]);
 
   const goTo = useCallback((next: OnboardingStep) => setStep(next), [setStep]);
 
   const handleComplete = useCallback(
     async (firstMessage?: string) => {
+      setCompletionError(null);
       const threadsBefore = useAppStore.getState().threads.length;
       try {
         if (firstMessage) {
@@ -1011,15 +1051,22 @@ export function DesktopOnboarding() {
           await newThread();
         }
       } catch {
-        // Thread creation threw — leave onboarding open.
+        // Thread creation threw — leave onboarding open with an inline error.
+        setCompletionError(
+          "Couldn't create the thread. Check your workspace and try again.",
+        );
         return;
       }
       // newThread silently returns early on some failure paths (e.g.
-      // no workspace server URL) instead of throwing.  Only mark
-      // onboarding complete when a thread was actually created.
+      // no workspace server URL) instead of throwing. Surface an inline
+      // error instead of stranding the user.
       const threadsAfter = useAppStore.getState().threads.length;
       if (threadsAfter > threadsBefore) {
         complete();
+      } else {
+        setCompletionError(
+          "Couldn't create the thread. Check your workspace and try again.",
+        );
       }
     },
     [complete, newThread],
@@ -1048,6 +1095,16 @@ export function DesktopOnboarding() {
         transition={{ duration: 0.2 }}
         className="app-shadow-overlay relative z-10 w-[min(92vw,520px)] rounded-xl border border-border/80 bg-card p-6"
       >
+        <button
+          type="button"
+          aria-label="Close onboarding"
+          className="absolute right-3 top-3 z-20 flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={dismiss}
+        >
+          <span aria-hidden="true" className="text-lg leading-none">
+            ×
+          </span>
+        </button>
         <div className="mb-5 flex items-center justify-between">
           <StepIndicator current={step} />
           <span className="text-xs text-muted-foreground">
@@ -1068,7 +1125,9 @@ export function DesktopOnboarding() {
           {step === "defaults" && (
             <DefaultsStep onContinue={() => goTo("firstThread")} onBack={() => goTo("provider")} />
           )}
-          {step === "firstThread" && <FirstThreadStep onComplete={handleComplete} />}
+          {step === "firstThread" && (
+            <FirstThreadStep onComplete={handleComplete} error={completionError} />
+          )}
         </AnimatedStepContainer>
       </motion.div>
     </div>

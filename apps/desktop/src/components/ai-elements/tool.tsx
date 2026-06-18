@@ -1,8 +1,10 @@
 import {
   CheckCircleIcon,
+  CheckIcon,
   ChevronDownIcon,
   CircleIcon,
   ClockIcon,
+  CopyIcon,
   GlobeIcon,
   ListTodoIcon,
   SearchIcon,
@@ -10,7 +12,7 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
-import type { ComponentProps } from "react";
+import { type ComponentProps, useState } from "react";
 import type { ToolFeedState } from "../../app/types";
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
@@ -212,14 +214,55 @@ export type ToolCodeBlockProps = {
 };
 
 export function ToolCodeBlock({ label, value, tone = "default" }: ToolCodeBlockProps) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard unavailable — fail silently.
+    }
+  };
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-        {label}
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+          {label}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={handleCopy}
+            aria-label={copied ? "Copied" : "Copy"}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            {copied ? (
+              <CheckIcon className="size-3 text-success" />
+            ) : (
+              <CopyIcon className="size-3" />
+            )}
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            aria-label={expanded ? "Collapse" : "Expand"}
+            aria-expanded={expanded}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            <ChevronDownIcon
+              className={cn("size-3 transition-transform", expanded && "rotate-180")}
+            />
+            {expanded ? "Less" : "More"}
+          </button>
+        </div>
       </div>
       <pre
         className={cn(
-          "app-shadow-surface max-h-72 overflow-auto rounded-lg bg-background/40 p-3 text-[11px] leading-relaxed ring-1 ring-border/20",
+          "app-shadow-surface overflow-auto rounded-lg bg-background/40 p-3 text-[11px] leading-relaxed ring-1 ring-border/20",
+          expanded ? "max-h-none" : "max-h-72",
           tone === "error"
             ? "bg-destructive/5 text-destructive ring-destructive/20"
             : "text-foreground/80",

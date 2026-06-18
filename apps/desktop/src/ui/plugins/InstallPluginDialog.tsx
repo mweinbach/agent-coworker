@@ -248,7 +248,7 @@ export function InstallPluginDialog({
                   onClick={() => void handlePreview("user")}
                   type="button"
                 >
-                  Preview in Global
+                  Preview in Library
                 </Button>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -267,7 +267,7 @@ export function InstallPluginDialog({
                   onClick={() => void handleInstall("user")}
                   type="button"
                 >
-                  Install to Global
+                  Install to Library
                 </Button>
               </div>
             </div>
@@ -285,7 +285,7 @@ export function InstallPluginDialog({
                 </div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
                   Previewed for{" "}
-                  {pluginPreview?.targetScope === "workspace" ? "workspace" : "global"} install.
+                  {pluginPreview?.targetScope === "workspace" ? "workspace" : "library"} install.
                 </div>
                 <div className="mt-2 space-y-1.5">
                   {pluginPreview?.candidates.map((candidate) => (
@@ -306,7 +306,7 @@ export function InstallPluginDialog({
                           {candidate.conflictsWithScope === "workspace"
                             ? "Workspace"
                             : candidate.conflictsWithScope === "user"
-                              ? "Global"
+                              ? "Library"
                               : candidate.wouldBePrimary
                                 ? "Primary"
                                 : "Shadowed"}
@@ -345,13 +345,13 @@ export function InstallPluginDialog({
             {dialogError && lastMutationTargetScope ? (
               <div className="text-[11px] text-muted-foreground">
                 Last attempted target:{" "}
-                {lastMutationTargetScope === "workspace" ? "workspace" : "global"}.
+                {lastMutationTargetScope === "workspace" ? "workspace" : "library"}.
               </div>
             ) : null}
             {showPreview ? (
               <div className="text-[11px] text-muted-foreground">
-                To install to {lastPreviewTargetScope === "workspace" ? "global" : "workspace"}, run
-                a new preview for that scope first.
+                To install to {lastPreviewTargetScope === "workspace" ? "library" : "workspace"},
+                run a new preview for that scope first.
               </div>
             ) : null}
             {showPreview && validPreviewCandidateRows.length === 0 ? (

@@ -223,4 +223,43 @@ describe("desktop onboarding", () => {
     );
     expect(source).not.toContain("[stateKey]: e.currentTarget.value");
   });
+
+  test("surfaces an inline error when first-thread creation silently fails", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      useAppStore.setState({
+        onboardingStep: "firstThread",
+        // newThread resolves but does not add a thread — mirrors the silent
+        // early-return path (e.g. no workspace server URL).
+        newThread: mock(async () => {}),
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(DesktopOnboarding));
+      });
+
+      const blankButton = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Start blank thread"),
+      );
+      if (!blankButton) throw new Error("missing start blank thread button");
+
+      await act(async () => {
+        blankButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("Couldn't create the thread");
+      expect(container.querySelector('[aria-label="Onboarding"]')).not.toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
 });

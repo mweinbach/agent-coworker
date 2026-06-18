@@ -15,7 +15,7 @@ import {
   WifiIcon,
   WrenchIcon,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
 
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
@@ -138,6 +138,20 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
     title: "Chats",
     description: "Archived chat history, restore actions, and retention.",
   },
+};
+
+// Legacy settings page ids that no longer appear in the nav but may still
+// arrive via deep links or persisted state. Map them to their canonical id so
+// lookups land on the right page instead of silently falling back to "models".
+export const SETTINGS_PAGE_ALIASES: Partial<Record<SettingsPageId, SettingsPageId>> = {
+  providers: "models",
+  openAiNativeConnectors: "toolAccess",
+  mcp: "toolAccess",
+  workspaces: "defaults",
+  memory: "profileMemory",
+  featureFlags: "experiments",
+  developer: "diagnostics",
+  archivedChats: "chats",
 };
 
 export function getSettingsGroups(
@@ -350,8 +364,24 @@ export function SettingsShell() {
     includeDevelopmentPages: includeDevelopmentSettings(packaged || isPackagedDesktopApp()),
   });
   const settingsPages = settingsGroups.flatMap((group) => group.pages);
-  const activePage = settingsPages.find((page) => page.id === settingsPage) ?? settingsPages[0];
+  const resolvedSettingsPage = SETTINGS_PAGE_ALIASES[settingsPage] ?? settingsPage;
+  const activePage =
+    settingsPages.find((page) => page.id === resolvedSettingsPage) ?? settingsPages[0];
   const meta = SETTINGS_PAGE_META[activePage.id];
+
+  // Escape closes settings, but only when no modal surface (Dialog/Sheet) is
+  // open — otherwise Escape should be handled by the inner overlay first.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (event.defaultPrevented) return;
+      const openOverlay = document.querySelector('[role="dialog"][data-state="open"]');
+      if (openOverlay) return;
+      closeSettings();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [closeSettings]);
 
   const [pageChrome, setPageChromeState] = useState<SettingsChromeState>({});
   const handleChromeChange = useCallback((next: SettingsChromeState) => {
@@ -462,7 +492,7 @@ export function SettingsShell() {
                 )}
               >
                 <div
-                  key={activePage.id}
+                  data-settings-page={activePage.id}
                   className={cn(
                     "animate-in fade-in duration-150",
                     isBackupPage ? "flex min-h-0 flex-1 flex-col" : "",

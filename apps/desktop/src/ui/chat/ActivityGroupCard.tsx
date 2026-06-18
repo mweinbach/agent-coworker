@@ -14,7 +14,6 @@ import {
 import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ToolFeedState } from "../../app/types";
-import { DesktopMarkdown } from "../markdown";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader } from "../../components/ui/card";
 import {
@@ -23,6 +22,7 @@ import {
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
 import { cn } from "../../lib/utils";
+import { DesktopMarkdown } from "../markdown";
 import type { ActivityFeedItem, ActivityGroupSummary } from "./activityGroups";
 
 import {
@@ -355,11 +355,18 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   const shouldAutoExpand =
     displayStatus === "approval" || displayStatus === "issue" || displayStatus === "running";
   const [expanded, setExpanded] = useState(shouldAutoExpand);
+  // Remember whether the user has manually expanded/collapsed this group, so a
+  // turn completing doesn't slam the card shut while they're still reading it.
+  const userToggledRef = useRef(false);
+  const handleOpenChange = (open: boolean) => {
+    userToggledRef.current = true;
+    setExpanded(open);
+  };
 
   useEffect(() => {
     if (shouldAutoExpand) {
       setExpanded(true);
-    } else if (isComplete) {
+    } else if (isComplete && !userToggledRef.current) {
       setExpanded(false);
     }
   }, [shouldAutoExpand, isComplete]);
@@ -373,7 +380,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
 
   if (useCompactElapsedHeader) {
     return (
-      <Collapsible open={expanded} onOpenChange={setExpanded}>
+      <Collapsible open={expanded} onOpenChange={handleOpenChange}>
         <CollapsibleTrigger className="group flex w-full max-w-3xl items-center gap-1.5 border-b border-border/25 pb-2.5 pt-1.5 text-left outline-none">
           <span className="text-sm font-mono tracking-tight text-muted-foreground/80 transition-colors group-hover:text-foreground">
             {props.live
@@ -398,7 +405,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
 
   return (
     <Card className="max-w-3xl gap-0 rounded-xl border border-border/32 bg-muted/[0.07] p-0 shadow-none backdrop-blur-none">
-      <Collapsible open={expanded} onOpenChange={setExpanded}>
+      <Collapsible open={expanded} onOpenChange={handleOpenChange}>
         {/* ── Trigger / header ──────────────────────────────────────────────── */}
         <CollapsibleTrigger className="group flex w-full flex-col gap-0 rounded-xl text-left outline-none focus-visible:ring-1 focus-visible:ring-border/45 focus-visible:ring-inset focus-visible:shadow-none">
           <CardHeader className="flex items-center justify-between gap-2 px-2.5 pt-1.5 pb-1 transition-colors hover:bg-muted/[0.06]">

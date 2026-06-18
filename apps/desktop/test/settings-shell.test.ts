@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DesktopPlatformInfo } from "../src/lib/desktopPlatform";
-import { getSettingsDragZoneStyle, getSettingsGroups } from "../src/ui/settings/SettingsShell";
+import { getSettingsDragZoneStyle, getSettingsGroups, SETTINGS_PAGE_ALIASES } from "../src/ui/settings/SettingsShell";
 
 function makePlatformInfo(overrides: Partial<DesktopPlatformInfo> = {}): DesktopPlatformInfo {
   return {
@@ -108,5 +108,22 @@ describe("settings shell", () => {
     expect(stylesCss).toMatch(
       /\.settings-shell__header-actions,\s*\.settings-shell__header-actions \*\s*\{[^}]*-webkit-app-region:\s*no-drag\s*;/s,
     );
+  });
+
+  test("resolves legacy settings page ids to their canonical nav id", () => {
+    const pageIds = getSettingsGroups(true).flatMap((group) => group.pages.map((page) => page.id));
+    for (const [legacy, canonical] of Object.entries(SETTINGS_PAGE_ALIASES)) {
+      // Every legacy alias must point at a page that actually exists in the nav.
+      expect(pageIds).not.toContain(legacy);
+      expect(pageIds).toContain(canonical);
+    }
+    expect(SETTINGS_PAGE_ALIASES.providers).toBe("models");
+    expect(SETTINGS_PAGE_ALIASES.mcp).toBe("toolAccess");
+    expect(SETTINGS_PAGE_ALIASES.openAiNativeConnectors).toBe("toolAccess");
+    expect(SETTINGS_PAGE_ALIASES.workspaces).toBe("defaults");
+    expect(SETTINGS_PAGE_ALIASES.memory).toBe("profileMemory");
+    expect(SETTINGS_PAGE_ALIASES.featureFlags).toBe("experiments");
+    expect(SETTINGS_PAGE_ALIASES.developer).toBe("diagnostics");
+    expect(SETTINGS_PAGE_ALIASES.archivedChats).toBe("chats");
   });
 });

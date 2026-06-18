@@ -249,6 +249,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
                     <img
                       src={s.pngBase64}
                       alt={`Slide ${s.slideIndex + 1}`}
+                      loading="lazy"
                       className="object-cover w-full h-full select-none"
                     />
                     <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[11px] font-semibold text-muted-foreground">

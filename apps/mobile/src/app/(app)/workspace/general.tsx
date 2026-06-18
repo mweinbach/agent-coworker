@@ -137,7 +137,7 @@ export default function WorkspaceGeneralScreen() {
   }
 
   return (
-    <Screen scroll contentStyle={{ gap: 18 }}>
+    <Screen scroll avoidKeyboard contentStyle={{ gap: 18 }}>
       <SectionCard
         title={activeWorkspaceName ?? "Workspace"}
         description={activeWorkspaceCwd ?? "No workspace path available"}
@@ -213,7 +213,8 @@ export default function WorkspaceGeneralScreen() {
               onValueChange={(value) => {
                 void applyWorkspaceDefaults({ enableMcp: value });
               }}
-              trackColor={{ true: theme.primary }}
+              trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+              ios_backgroundColor={theme.surfaceMuted}
             />
           </View>
 
@@ -236,7 +237,8 @@ export default function WorkspaceGeneralScreen() {
               onValueChange={(value) => {
                 void applyWorkspaceDefaults({ config: { backupsEnabled: value } });
               }}
-              trackColor={{ true: theme.primary }}
+              trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+              ios_backgroundColor={theme.surfaceMuted}
             />
           </View>
         </View>
@@ -329,7 +331,8 @@ export default function WorkspaceGeneralScreen() {
                   },
                 });
               }}
-              trackColor={{ true: theme.primary }}
+              trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+              ios_backgroundColor={theme.surfaceMuted}
             />
           </View>
         ) : (

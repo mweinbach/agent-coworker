@@ -58,6 +58,7 @@ export function AdvancedMemoryEditorDialog({
   editingSlug,
   draft,
   saving,
+  isDirty,
   setDraft,
   onCancel,
   onSave,
@@ -66,6 +67,7 @@ export function AdvancedMemoryEditorDialog({
   editingSlug: string | null;
   draft: DraftAdvancedMemory;
   saving: boolean;
+  isDirty: boolean;
   setDraft: Dispatch<SetStateAction<DraftAdvancedMemory>>;
   onCancel: () => void;
   onSave: () => void;
@@ -73,7 +75,18 @@ export function AdvancedMemoryEditorDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={(nextOpen) => {
+      onOpenChange={async (nextOpen) => {
+        if (!nextOpen && isDirty) {
+          const confirmed = await confirmAction({
+            title: "Discard changes?",
+            message: "You have unsaved changes to this memory.",
+            confirmLabel: "Discard",
+            cancelLabel: "Keep editing",
+            kind: "warning",
+            defaultAction: "cancel",
+          });
+          if (!confirmed) return;
+        }
         if (!nextOpen) onCancel();
       }}
     >
@@ -212,6 +225,26 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
     setEditingSlug(null);
     setDraft(emptyDraft());
   };
+
+  const isDraftDirty = useCallback((): boolean => {
+    if (editingSlug) {
+      const original = memories.find((entry) => entry.slug === editingSlug);
+      if (!original) return true;
+      return (
+        draft.name !== original.name ||
+        draft.description !== original.description ||
+        draft.type !== (original.type || "note") ||
+        draft.body !== original.body
+      );
+    }
+    const fresh = emptyDraft();
+    return (
+      draft.name !== fresh.name ||
+      draft.description !== fresh.description ||
+      draft.type !== fresh.type ||
+      draft.body !== fresh.body
+    );
+  }, [draft, editingSlug, memories]);
 
   const [saving, setSaving] = useState(false);
 
@@ -359,6 +392,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
         editingSlug={editingSlug}
         draft={draft}
         saving={saving}
+        isDirty={isDraftDirty()}
         setDraft={setDraft}
         onCancel={closeDialog}
         onSave={() => void handleSave()}

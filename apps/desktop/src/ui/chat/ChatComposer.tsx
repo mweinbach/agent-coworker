@@ -109,7 +109,7 @@ export function ChatComposer(props: {
               : { onFiles: (files) => void ingestAttachmentFiles(files) }
           }
         >
-          {isUploading && (
+          {isUploading && !attachmentPickerError && (
             <div
               className="w-full mb-3 px-3 pt-2.5"
               role="status"
@@ -119,7 +119,9 @@ export function ChatComposer(props: {
               <Progress indeterminate className="h-1 bg-primary/10 rounded-full" />
               <div className="flex items-center gap-2 mt-1.5 px-0.5 text-xs text-muted-foreground select-none font-medium">
                 <LoaderCircleIcon className="size-3.5 animate-spin text-primary shrink-0" />
-                <span>Uploading and preparing message…</span>
+                <span>
+                  {preparingAttachments ? "Uploading and preparing message…" : "Sending message…"}
+                </span>
               </div>
             </div>
           )}

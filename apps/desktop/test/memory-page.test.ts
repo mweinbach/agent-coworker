@@ -155,9 +155,10 @@ describe("desktop memory page", () => {
         await new Promise((resolve) => setTimeout(resolve, MEMORY_LOADING_STALL_MS + 100));
       });
 
-      expect(container.textContent).toContain("No remembered facts yet");
+      expect(container.textContent).toContain("Still loading…");
+      expect(container.textContent).not.toContain("No remembered facts yet");
+      expect(container.textContent).toContain("Retry");
       expect(container.textContent).not.toContain("Loading...");
-      expect(container.textContent).toContain("Refresh");
 
       await act(async () => {
         root.unmount();

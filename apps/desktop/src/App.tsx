@@ -252,6 +252,12 @@ const ChatShell = memo(function ChatShell({
 
   return (
     <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
+      <a
+        href="#main-content"
+        className="sr-only z-50 rounded-md bg-background px-3 py-2 text-sm font-medium text-foreground shadow-md focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:outline-none focus:ring-2 focus:ring-ring/50"
+      >
+        Skip to content
+      </a>
       <div className="app-window-drag-strip" aria-hidden="true" />
       <AppTopBar
         busy={effectiveView === "chat" ? busy : false}
@@ -310,7 +316,20 @@ const ChatShell = memo(function ChatShell({
       />
       <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
-        <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          aria-label={
+            effectiveView === "settings"
+              ? "Settings"
+              : effectiveView === "skills"
+                ? "Skills and plugins"
+                : effectiveView === "research"
+                  ? "Research"
+                  : "Chat"
+          }
+          className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
+        >
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
               <PrimaryContent
@@ -427,7 +446,12 @@ export default function App() {
   useEffect(() => {
     if (windowMode !== "main") return;
     function handlePaletteShortcut(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key === "k") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key === "k"
+      ) {
         event.preventDefault();
         setCommandPaletteOpen((open) => !open);
       }
@@ -567,7 +591,7 @@ export default function App() {
         <ChatShell init={init} ready={ready} startupError={startupError} />
       )}
       <PromptModal />
-      <FilePreviewModal />
+      {windowMode === "main" ? <FilePreviewModal /> : null}
       {windowMode === "main" ? (
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       ) : null}

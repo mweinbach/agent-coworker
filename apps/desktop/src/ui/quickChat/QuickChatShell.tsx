@@ -6,6 +6,7 @@ import { Button } from "../../components/ui/button";
 import { showMainWindow, windowClose } from "../../lib/desktopCommands";
 import { getDesktopWindowThreadId, shouldStartNewQuickChatThread } from "../../lib/windowMode";
 import { ChatView } from "../ChatView";
+import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 
 type QuickChatShellProps = {
   init: () => Promise<void>;
@@ -159,7 +160,9 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
                 </Button>
               </div>
             ) : (
-              <ChatView />
+              <InlineErrorBoundary label="This chat couldn't be rendered.">
+                <ChatView />
+              </InlineErrorBoundary>
             )}
           </div>
         </div>

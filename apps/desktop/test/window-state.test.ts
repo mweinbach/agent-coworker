@@ -1,8 +1,7 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 // Import after the shim types are in scope.
 import type * as Electron from "electron";
@@ -11,7 +10,9 @@ import { loadMainWindowBounds, trackMainWindowBounds } from "../electron/service
 
 type Display = { workArea: Electron.Rectangle };
 
-function makeFakeScreen(displayFor: Electron.Rectangle): Pick<Electron.Screen, "getDisplayMatching"> {
+function makeFakeScreen(
+  displayFor: Electron.Rectangle,
+): Pick<Electron.Screen, "getDisplayMatching"> {
   return {
     getDisplayMatching: (_rect: Electron.Rectangle): Display => ({ workArea: displayFor }),
   };
@@ -27,11 +28,7 @@ async function makeFakeApp(userDataDir: string) {
 }
 
 async function writeBoundsFile(userDataDir: string, bounds: Record<string, unknown>) {
-  await fs.writeFile(
-    path.join(userDataDir, "window-state.json"),
-    JSON.stringify(bounds),
-    "utf8",
-  );
+  await fs.writeFile(path.join(userDataDir, "window-state.json"), JSON.stringify(bounds), "utf8");
 }
 
 describe("windowState", () => {
@@ -82,6 +79,19 @@ describe("windowState", () => {
     expect(result!.y).toBe(300);
     expect(result!.width).toBe(1240);
     expect(result!.height).toBe(820);
+  });
+
+  test("clamps an oversized saved window down to the work area", async () => {
+    // Saved at 2560×1600 (e.g. a 4K monitor) but reopened on a 1920×1080 work
+    // area. Width/height must clamp to the work area so the window fits.
+    const dir = await freshUserDataDir();
+    await writeBoundsFile(dir, { x: 0, y: 0, width: 2560, height: 1600 });
+    const app = await makeFakeApp(dir);
+    const screen = makeFakeScreen({ x: 0, y: 0, width: 1920, height: 1080 });
+    const result = await loadMainWindowBounds(app, screen);
+    expect(result).not.toBeNull();
+    expect(result!.width).toBe(1920);
+    expect(result!.height).toBe(1080);
   });
 
   test("returns null for corrupt / partial saved state", async () => {

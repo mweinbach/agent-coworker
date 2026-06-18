@@ -93,7 +93,7 @@ export function ComposerModelSelector({
       >
         <SelectTrigger
           size="sm"
-          className="h-7 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-2 text-xs font-medium text-muted-foreground/85 shadow-none transition-colors hover:bg-muted/30 hover:text-foreground focus:ring-0"
+          className="h-7 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-2 text-xs font-medium text-muted-foreground/85 shadow-none transition-colors hover:bg-muted/30 hover:text-foreground focus:ring-0 focus-visible:ring-2 focus-visible:ring-ring/40"
         >
           <span className="truncate">
             <SelectValue placeholder="Model" />

@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import { writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import type * as Electron from "electron";
@@ -73,15 +73,20 @@ export async function loadMainWindowBounds(
 
   const display = screen.getDisplayMatching(saved);
   const workArea = display.workArea;
-  const minVisibleWidth = Math.min(200, saved.width);
-  const minVisibleHeight = Math.min(120, saved.height);
+  // Clamp size to the work area too — otherwise a window saved at 2560×1600 on a
+  // 4K monitor reopens oversized on a 1920×1080 laptop (only a sliver visible
+  // and the off-screen resize edge is hard to grab on Windows).
+  const width = Math.min(saved.width, workArea.width);
+  const height = Math.min(saved.height, workArea.height);
+  const minVisibleWidth = Math.min(200, width);
+  const minVisibleHeight = Math.min(120, height);
 
   const x = Math.min(
-    Math.max(saved.x, workArea.x - saved.width + minVisibleWidth),
+    Math.max(saved.x, workArea.x - width + minVisibleWidth),
     workArea.x + workArea.width - minVisibleWidth,
   );
   const y = Math.min(
-    Math.max(saved.y, workArea.y - saved.height + minVisibleHeight),
+    Math.max(saved.y, workArea.y - height + minVisibleHeight),
     workArea.y + workArea.height - minVisibleHeight,
   );
 
@@ -89,6 +94,8 @@ export async function loadMainWindowBounds(
     ...saved,
     x,
     y,
+    width,
+    height,
   };
 }
 
@@ -96,10 +103,7 @@ export async function loadMainWindowBounds(
  * Captures the main window's bounds on resize/move/close and persists them.
  * Returns a cleanup function that flushes the final bounds (call on app quit).
  */
-export function trackMainWindowBounds(
-  app: Electron.App,
-  win: Electron.BrowserWindow,
-): () => void {
+export function trackMainWindowBounds(app: Electron.App, win: Electron.BrowserWindow): () => void {
   let saveHandle: ReturnType<typeof setTimeout> | undefined;
 
   const scheduleSave = () => {

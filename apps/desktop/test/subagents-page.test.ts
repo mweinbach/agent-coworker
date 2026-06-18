@@ -832,8 +832,9 @@ describe("subagents settings page", () => {
       expect(text).toContain("Profile workspace");
       expect(text).toContain("Project One");
       expect(text).toContain("/tmp/project-1");
-      expect(text).toContain("Change workspace");
-      expect(text.match(/Project One/g)?.length ?? 0).toBe(1);
+      // The select trigger renders the active workspace name (not a static
+      // "Change workspace" label), but the file path stays on the left only.
+      expect(text.match(/\/tmp\/project-1/g)?.length ?? 0).toBe(1);
     } finally {
       if (root) {
         await act(async () => {

@@ -53,14 +53,19 @@ describe("research export menu", () => {
           throw new Error("missing download trigger");
         }
         await act(async () => {
-          trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+          trigger.dispatchEvent(
+            new harness.dom.window.PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+          );
+          trigger.click();
           await Promise.resolve();
         });
 
-        const action = [...container.querySelectorAll('button[role="menuitem"]')].find((node) =>
+        // Radix DropdownMenu portals content into document.body.
+        const body = harness.dom.window.document.body;
+        const action = [...body.querySelectorAll('[role="menuitem"]')].find((node) =>
           node.textContent?.includes(entry.label),
         );
-        if (!(action instanceof harness.dom.window.HTMLButtonElement)) {
+        if (!action) {
           throw new Error(`missing ${entry.label} menu item`);
         }
 
@@ -118,14 +123,19 @@ describe("research export menu", () => {
       expect(trigger.disabled).toBe(false);
 
       await act(async () => {
-        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        trigger.dispatchEvent(
+          new harness.dom.window.PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+        );
+        trigger.click();
         await Promise.resolve();
       });
 
-      const actions = [...container.querySelectorAll('button[role="menuitem"]')];
+      // Radix DropdownMenu portals content into document.body.
+      const body = harness.dom.window.document.body;
+      const actions = [...body.querySelectorAll('[role="menuitem"]')];
       expect(actions).toHaveLength(3);
       for (const action of actions) {
-        expect((action as HTMLButtonElement).disabled).toBe(true);
+        expect(action.getAttribute("aria-disabled")).toBe("true");
       }
       expect(exportResearchMock).not.toHaveBeenCalled();
 

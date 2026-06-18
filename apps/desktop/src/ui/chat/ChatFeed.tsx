@@ -14,10 +14,10 @@ import {
 } from "../../components/ai-elements/conversation";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
+import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { ActivityGroupCard } from "./ActivityGroupCard";
 import type { ChatRenderItem } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
-import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
 export type VisibleSandboxApproval = {
@@ -44,6 +44,9 @@ export function ChatFeed(props: {
   composerOverlayHeight: number;
   sandboxApprovals: VisibleSandboxApproval[];
   onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => void;
+  selectedThreadId?: string | null;
+  threadTitleById?: ReadonlyMap<string, string>;
+  onSelectThread?: (threadId: string) => void;
 }) {
   const {
     feedRef,
@@ -64,6 +67,9 @@ export function ChatFeed(props: {
     composerOverlayHeight,
     sandboxApprovals,
     onAnswerApproval,
+    selectedThreadId,
+    threadTitleById,
+    onSelectThread,
   } = props;
 
   return (
@@ -100,7 +106,7 @@ export function ChatFeed(props: {
           </Card>
         ) : null}
 
-        {visibleFeedLength === 0 ? (
+        {visibleFeedLength === 0 && !disconnected ? (
           hydrating ? (
             <ConversationEmptyState
               icon={<LoaderCircleIcon className="size-6 animate-spin" />}
@@ -108,10 +114,11 @@ export function ChatFeed(props: {
               description="Restoring messages and reconnecting the session."
             />
           ) : (
-            <div className="flex flex-col items-center gap-2 py-8 text-center">
-              <MessageSquareIcon className="size-5 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Send a message to start.</p>
-            </div>
+            <ConversationEmptyState
+              icon={<MessageSquareIcon className="size-6" />}
+              title="No messages yet"
+              description="Send a message to start."
+            />
           )
         ) : (
           renderItems.map((item) =>
@@ -146,6 +153,9 @@ export function ChatFeed(props: {
                 threadId={threadId}
                 prompt={prompt}
                 onAnswer={onAnswerApproval}
+                selectedThreadId={selectedThreadId}
+                threadTitle={threadTitleById?.get(threadId)}
+                onSelectThread={onSelectThread}
               />
             ))
           : null}

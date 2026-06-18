@@ -66,7 +66,7 @@ export function ArchivedChatsPage() {
               value={String(currentAutoDelete)}
               onValueChange={(val) => setArchivedChatsAutoDeleteDays(Number(val))}
             >
-              <SelectTrigger className="w-48 text-[13px] h-9">
+              <SelectTrigger className="w-48 text-[13px] h-9" aria-label="Auto-delete retention">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

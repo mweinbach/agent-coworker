@@ -537,6 +537,21 @@ samp {
   }
 }
 
+/*
+ * Global reduced-motion guard for Tailwind animation utilities (animate-pulse,
+ * animate-spin, animate-bounce, animate-ping). The hand-rolled keyframes above
+ * are each guarded individually, but these utility classes were not — neutralize
+ * them in one place so the whole app respects the OS preference.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-spin,
+  .animate-bounce,
+  .animate-ping {
+    animation: none !important;
+  }
+}
+
 .activity-thinking-shimmer {
   position: relative;
   display: inline-block;

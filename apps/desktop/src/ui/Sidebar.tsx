@@ -509,9 +509,7 @@ export const Sidebar = memo(function Sidebar() {
         workspaceThreads={workspaceThreads}
         canGenerateMemoryForThread={canGenerateMemoryForThread}
         onGenerateMemoryForThread={generateMemoryForThread}
-        onDeleteHistoryForThread={(tId, tTitle) =>
-          void deleteThreadHistoryWithConfirm(tId, tTitle)
-        }
+        onDeleteHistoryForThread={(tId, tTitle) => void deleteThreadHistoryWithConfirm(tId, tTitle)}
       />
     );
   });
@@ -582,7 +580,9 @@ export const Sidebar = memo(function Sidebar() {
                   threadRuntimeById={threadRuntimeById}
                   canGenerateMemory={canGenerateMemoryForThread(thread.id)}
                   onGenerateMemory={() => generateMemoryForThread(thread.id)}
-                  onDeleteHistory={() => void deleteThreadHistoryWithConfirm(thread.id, displayTitleForThread(thread.id))}
+                  onDeleteHistory={() =>
+                    void deleteThreadHistoryWithConfirm(thread.id, displayTitleForThread(thread.id))
+                  }
                 />
               ))}
             </div>
@@ -695,6 +695,7 @@ export const Sidebar = memo(function Sidebar() {
             <Button
               variant="ghost"
               size="sm"
+              aria-current={view === "settings" ? "page" : undefined}
               className={cn(
                 "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
                 "hover:bg-foreground/[0.045] hover:text-foreground",
@@ -721,11 +722,12 @@ export const Sidebar = memo(function Sidebar() {
           New Chat
         </Button>
       ) : null}
-      <nav className="grid w-full min-w-0 gap-1.5">
+      <nav aria-label="Primary" className="grid w-full min-w-0 gap-1.5">
         {googleResearchAvailable ? (
           <Button
             variant="ghost"
             size="sm"
+            aria-current={effectiveView === "research" ? "page" : undefined}
             className={cn(
               "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
               "hover:bg-foreground/[0.045] hover:text-foreground",
@@ -740,6 +742,7 @@ export const Sidebar = memo(function Sidebar() {
         <Button
           variant="ghost"
           size="sm"
+          aria-current={effectiveView === "skills" ? "page" : undefined}
           className={cn(
             "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
             "hover:bg-foreground/[0.045] hover:text-foreground",
@@ -754,6 +757,7 @@ export const Sidebar = memo(function Sidebar() {
 
       <Reorder.Group
         as="section"
+        aria-label="Threads"
         axis="y"
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto pr-1"
         onReorder={handleSectionReorder}

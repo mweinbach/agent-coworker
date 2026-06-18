@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { MentionItem } from "./composerMentions";
@@ -11,11 +13,34 @@ import type { MentionItem } from "./composerMentions";
 export function ComposerMentionMenu(props: {
   items: MentionItem[];
   activeIndex: number;
+  query?: string;
   onSelect: (item: MentionItem) => void;
   onHover: (index: number) => void;
 }) {
-  const { items, activeIndex, onSelect, onHover } = props;
-  if (items.length === 0) return null;
+  const { items, activeIndex, query, onSelect, onHover } = props;
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // Keep the keyboard-active option visible inside the scrollable list.
+  useEffect(() => {
+    const el = itemRefs.current[activeIndex];
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, items]);
+
+  if (items.length === 0) {
+    const trimmed = (query ?? "").trim();
+    return (
+      <div
+        data-slot="composer-mention-menu"
+        role="listbox"
+        aria-busy="false"
+        className="absolute bottom-full left-0 z-50 mb-2 w-[24rem] max-w-[92vw] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-md"
+      >
+        <div className="p-2 text-xs text-muted-foreground">
+          {trimmed ? `No skills or plugins match “${trimmed}”.` : "No skills or plugins available."}
+        </div>
+      </div>
+    );
+  }
 
   let lastKind: MentionItem["kind"] | null = null;
 
@@ -38,6 +63,9 @@ export function ComposerMentionMenu(props: {
                 </div>
               ) : null}
               <button
+                ref={(el) => {
+                  itemRefs.current[index] = el;
+                }}
                 type="button"
                 role="option"
                 aria-selected={active}

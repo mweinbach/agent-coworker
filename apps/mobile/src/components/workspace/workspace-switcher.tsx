@@ -1,4 +1,5 @@
 import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { StatusPill } from "@/components/ui/status-pill";
 import type { SessionSnapshotLike } from "@/features/cowork/protocolTypes";
@@ -41,6 +42,7 @@ type WorkspaceSwitcherProps = {
 
 export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) {
   const theme = useAppTheme();
+  const insets = useSafeAreaInsets();
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
   const switchWorkspace = useWorkspaceStore((state) => state.switchWorkspace);
@@ -91,7 +93,7 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={{ flex: 1, backgroundColor: theme.background, paddingTop: 20 }}>
+      <View style={{ flex: 1, backgroundColor: theme.background, paddingTop: Math.max(insets.top, 8) }}>
         <View
           style={{
             flexDirection: "row",
@@ -117,7 +119,13 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
             </Text>
           </View>
         ) : (
-          <ScrollView contentContainerStyle={{ paddingHorizontal: 20, gap: 10, paddingBottom: 40 }}>
+          <ScrollView
+            contentContainerStyle={{
+              paddingHorizontal: 20,
+              gap: 10,
+              paddingBottom: Math.max(insets.bottom + 16, 32),
+            }}
+          >
             {workspaces.map((workspace) => {
               const isActive = workspace.id === activeWorkspaceId;
               return (

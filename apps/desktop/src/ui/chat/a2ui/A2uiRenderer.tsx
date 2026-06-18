@@ -259,12 +259,16 @@ function RenderNode({
       );
 
     case "Stack":
+      // The a2ui protocol models Stack as overlapping layers, but this renderer
+      // has no active-index switching, so absolute-overlapping children always
+      // paint on top of each other. Lay them out as a vertical stack instead —
+      // safe and non-colliding — until a real active-child policy exists.
       return (
-        <div className="relative">
+        <div className="flex flex-col gap-2">
           {children.map((child, index) => (
-            <div key={childKey(child, index)} className="absolute inset-0">
+            <Fragment key={childKey(child, index)}>
               <RenderNode component={child} context={childContext} />
-            </div>
+            </Fragment>
           ))}
         </div>
       );

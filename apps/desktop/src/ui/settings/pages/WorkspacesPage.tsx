@@ -755,10 +755,35 @@ export function WorkspaceUserProfileCard({
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const savedProfileKey = useMemo(
+    () =>
+      `${workspace.id}\u0000${workspace.userName ?? ""}\u0000${
+        normalizeWorkspaceUserProfile(workspace.userProfile).instructions
+      }\u0000${normalizeWorkspaceUserProfile(workspace.userProfile).work}\u0000${
+        normalizeWorkspaceUserProfile(workspace.userProfile).details
+      }`,
+    [workspace],
+  );
+
   useEffect(() => {
-    setDraft(buildUserProfileDraft(workspace));
+    // Only re-seed the draft when the saved profile content (or workspace id)
+    // actually changes. Unrelated workspace object-identity churn (provider
+    // status refreshes, remote defaults updates) must not wipe in-progress
+    // typing. If the user has unsaved edits, those always win.
+    const next = buildUserProfileDraft(workspace);
+    const current = draftRef.current;
+    const isDirty =
+      current.userName !== next.userName ||
+      current.instructions !== next.instructions ||
+      current.work !== next.work ||
+      current.details !== next.details;
+    if (isDirty) return;
+    setDraft(next);
     setSaveSuccess(false);
-  }, [workspace]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedProfileKey]);
 
   const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
   const isDirty =
@@ -871,7 +896,11 @@ export function WorkspaceUserProfileCard({
           <Button onClick={handleSave} disabled={!isDirty || saving}>
             {saving ? "Saving..." : "Save changes"}
           </Button>
-          {saveSuccess && <span className="text-sm text-success">Saved successfully</span>}
+          {saveSuccess && (
+            <span className="text-sm text-success" role="status" aria-live="polite">
+              Saved successfully
+            </span>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -1358,39 +1387,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <CardContent className="space-y-4 border-t border-border/70 pt-4">
-                      <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                        <div>
-                          <div className="text-sm font-medium">
-                            Configure settings per folder or chat
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            When enabled, each folder or one-off chat can keep different provider,
-                            model, and behavior settings.
-                          </div>
-                        </div>
-                        <Switch
-                          checked={perWorkspaceSettings}
-                          aria-label="Configure settings per folder or chat"
-                          onCheckedChange={async (checked) => {
-                            if (!checked && workspaces.length > 1) {
-                              const confirmed = await confirmAction({
-                                title: "Share settings everywhere",
-                                message:
-                                  "All folders and chats will be synced to the current settings.",
-                                detail:
-                                  "This will overwrite provider, model, and behavior settings on other folders and chats.",
-                                confirmLabel: "Share settings",
-                                cancelLabel: "Cancel",
-                                kind: "warning",
-                                defaultAction: "cancel",
-                              });
-                              if (!confirmed) return;
-                            }
-                            setPerWorkspaceSettings(checked);
-                          }}
-                        />
-                      </div>
-
                       {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                         <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>

@@ -98,7 +98,7 @@ export function ConversationScrollButton({
         size="icon"
         variant="outline"
         className={cn(
-          "absolute left-1/2 z-30 -translate-x-1/2 rounded-full border border-border/40 bg-background/80 hover:bg-background/95 hover:text-foreground text-muted-foreground shadow-md backdrop-blur-md transition-all duration-300 hover:scale-110 active:scale-95 size-9 opacity-0 scale-90 pointer-events-none hover:opacity-100 hover:scale-100 hover:pointer-events-auto peer-hover:opacity-100 peer-hover:scale-100 peer-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:scale-100 focus-visible:pointer-events-auto",
+          "absolute left-1/2 z-30 -translate-x-1/2 rounded-full border border-border/40 bg-background/80 hover:bg-background/95 hover:text-foreground text-muted-foreground shadow-md backdrop-blur-md transition-all duration-300 hover:scale-110 active:scale-95 size-9 opacity-60 scale-90 pointer-events-auto hover:opacity-100 hover:scale-100 peer-hover:opacity-100 peer-hover:scale-100 focus-visible:opacity-100 focus-visible:scale-100",
           bottomOffset === undefined && "bottom-3.5",
         )}
         style={bottomOffset === undefined ? undefined : { bottom: bottomOffset }}

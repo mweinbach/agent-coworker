@@ -1,4 +1,3 @@
-import { ArchiveIcon } from "lucide-react";
 import { type MouseEvent, memo, type RefObject } from "react";
 import { useAppStore } from "../../app/store";
 import type { ThreadRecord, ThreadRuntime } from "../../app/types";
@@ -113,19 +112,6 @@ export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
       </Button>
       {!busy ? (
         <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
-          <button
-            type="button"
-            className="h-5 w-5 flex items-center justify-center rounded-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto group-focus-within:scale-100 text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06] transition-all duration-200 ease-out transform scale-75 group-hover:scale-100"
-            title="Archive chat"
-            aria-label="Archive chat"
-            onClick={(event) => {
-              event.stopPropagation();
-              event.preventDefault();
-              void archiveThread(thread.id);
-            }}
-          >
-            <ArchiveIcon className="h-3.5 w-3.5" />
-          </button>
           <ThreadOverflowMenu
             canGenerateMemory={canGenerateMemory}
             ariaLabelSuffix={displayTitle}

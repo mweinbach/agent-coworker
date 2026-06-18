@@ -20,7 +20,6 @@ import {
   CardHeader,
   CardTitle,
 } from "../../../components/ui/card";
-import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Collapsible,
   CollapsibleContent,
@@ -36,6 +35,7 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { Switch } from "../../../components/ui/switch";
+import { confirmAction } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import {
   buildServerFromDraft,
@@ -235,7 +235,8 @@ export function McpServersPage() {
                 />
                 <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
                   <span className="text-sm">Required server</span>
-                  <Checkbox
+                  <Switch
+                    aria-label="Required server"
                     checked={draft.required}
                     onCheckedChange={(checked) =>
                       setDraft((prev) => ({ ...prev, required: toBool(checked) }))
@@ -537,10 +538,21 @@ export function McpServersPage() {
                         variant="destructive"
                         size="sm"
                         className="h-7 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive shadow-none border-transparent"
-                        onClick={() =>
-                          workspace &&
-                          void deleteWorkspaceMcpServer(workspace.id, server.name, "user")
-                        }
+                        onClick={async () => {
+                          if (!workspace) return;
+                          const confirmed = await confirmAction({
+                            title: "Delete server",
+                            message: `Delete the "${server.name}" MCP server?`,
+                            detail: "This server will be removed from your workspace configuration.",
+                            confirmLabel: "Delete",
+                            cancelLabel: "Cancel",
+                            kind: "warning",
+                            defaultAction: "cancel",
+                          });
+                          if (confirmed) {
+                            void deleteWorkspaceMcpServer(workspace.id, server.name, "user");
+                          }
+                        }}
                       >
                         Delete Server
                       </Button>

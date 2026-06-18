@@ -1,4 +1,6 @@
 import {
+  CheckIcon,
+  CopyIcon,
   FileAudioIcon,
   FileIcon,
   FileImageIcon,
@@ -8,15 +10,16 @@ import {
   MousePointerClickIcon,
   Table2Icon,
 } from "lucide-react";
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import { extractCitationUrlsFromAnnotations } from "../../../../../src/shared/displayCitationMarkers";
 import type { FeedItem } from "../../app/types";
 import { Message, MessageContent } from "../../components/ai-elements/message";
-import { DesktopMarkdown } from "../markdown";
 import { SourcesCarousel } from "../../components/ai-elements/sources-carousel";
 import { Card, CardContent } from "../../components/ui/card";
 import { openExternalSource } from "../../lib/openExternalSource";
+import { cn } from "../../lib/utils";
+import { DesktopMarkdown } from "../markdown";
 import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
 import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
 import { useChatViewContext } from "./ChatViewContext";
@@ -29,6 +32,87 @@ import {
 } from "./feedMessageParsing";
 import { MentionText } from "./MentionText";
 import { ToolCard } from "./toolCards/ToolCard";
+
+function MessageCopyAction(props: { text: string; align: "start" | "end" }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(props.text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard may be unavailable (permissions, non-secure context). Fail silently.
+    }
+  };
+  return (
+    <div className={props.align === "end" ? "flex justify-end" : "flex justify-start"}>
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={copied ? "Copied" : "Copy message"}
+        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {copied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+function ErrorFeedRow(props: { message: string }) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(props.message);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard unavailable — fail silently.
+    }
+  };
+  return (
+    <Card className="w-full min-w-0 max-w-3xl overflow-hidden border-destructive/40 bg-destructive/10">
+      <CardContent className="select-text p-3 text-sm">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <div className="font-semibold uppercase tracking-wide text-destructive">Error</div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleCopy}
+              aria-label={copied ? "Copied" : "Copy error"}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              {copied ? (
+                <CheckIcon className="size-3 text-success" />
+              ) : (
+                <CopyIcon className="size-3" />
+              )}
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpanded((e) => !e)}
+              aria-label={expanded ? "Collapse" : "Show full error"}
+              aria-expanded={expanded}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              {expanded ? "Less" : "More"}
+            </button>
+          </div>
+        </div>
+        <div
+          className={cn(
+            "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
+            expanded ? "max-h-none" : "max-h-72 overflow-auto",
+          )}
+        >
+          {props.message}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function CanvasRequestBody(props: { request: CanvasRequest; catalog: MentionCatalog }) {
   const { request, catalog } = props;
@@ -186,6 +270,7 @@ export const FeedRow = memo(function FeedRow(props: {
             </div>
           )}
         </MessageContent>
+        <MessageCopyAction text={item.text} align={item.role === "user" ? "end" : "start"} />
         {hasSources && !hasInlineCitationChip && props.citationSources ? (
           <SourcesCarousel
             sources={props.citationSources}
@@ -241,16 +326,7 @@ export const FeedRow = memo(function FeedRow(props: {
   }
 
   if (item.kind === "error") {
-    return (
-      <Card className="w-full min-w-0 max-w-3xl overflow-hidden border-destructive/40 bg-destructive/10">
-        <CardContent className="select-text p-3 text-sm">
-          <div className="mb-1 font-semibold uppercase tracking-wide text-destructive">Error</div>
-          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-            {item.message}
-          </div>
-        </CardContent>
-      </Card>
-    );
+    return <ErrorFeedRow message={item.message} />;
   }
 
   if (item.kind === "system") {

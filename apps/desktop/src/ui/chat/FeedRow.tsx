@@ -13,10 +13,10 @@ import type { CitationSource } from "../../../../../src/shared/displayCitationMa
 import { extractCitationUrlsFromAnnotations } from "../../../../../src/shared/displayCitationMarkers";
 import type { FeedItem } from "../../app/types";
 import { Message, MessageContent } from "../../components/ai-elements/message";
-import { DesktopMarkdown } from "../markdown";
 import { SourcesCarousel } from "../../components/ai-elements/sources-carousel";
 import { Card, CardContent } from "../../components/ui/card";
 import { openExternalSource } from "../../lib/openExternalSource";
+import { DesktopMarkdown } from "../markdown";
 import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
 import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
 import { useChatViewContext } from "./ChatViewContext";

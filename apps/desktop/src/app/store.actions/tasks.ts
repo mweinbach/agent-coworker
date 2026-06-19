@@ -78,6 +78,7 @@ function taskSummary(task: TaskRecord): TaskSummary {
     ...(task.context ? { context: task.context } : {}),
     ...(task.sourceSessionId !== undefined ? { sourceSessionId: task.sourceSessionId } : {}),
     ...(task.creationOrigin ? { creationOrigin: task.creationOrigin } : {}),
+    ...(task.reviewRounds !== undefined ? { reviewRounds: task.reviewRounds } : {}),
   };
 }
 

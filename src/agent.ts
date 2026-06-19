@@ -102,6 +102,7 @@ export interface RunTurnParams {
   providerState?: ProviderContinuationState | null;
   harnessContext?: HarnessContextState | null;
   taskContext?: TaskContextSnapshot | null;
+  getTaskContext?: () => TaskContextSnapshot | null;
   applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
   createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
   /** Plugins the user @-mentioned this turn; rendered as a soft-awareness system block. */
@@ -461,6 +462,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
       harnessContext: params.harnessContext,
       taskContext: params.taskContext,
+      getTaskContext: params.getTaskContext,
       applyTaskDirective: params.applyTaskDirective
         ? async (directive: TaskDirective) => {
             const directiveResult = await params.applyTaskDirective?.(directive);

@@ -68,6 +68,9 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       providerState: providerStateOverride,
       harnessContext,
       taskContext,
+      getTaskContext: taskContext
+        ? () => context.deps.getTaskContextImpl?.(context.id) ?? null
+        : undefined,
       applyTaskDirective:
         taskContext && applyTaskDirective
           ? async (directive) => await applyTaskDirective(context.id, directive)

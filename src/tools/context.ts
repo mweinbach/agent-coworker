@@ -75,6 +75,7 @@ export interface ToolContext {
   /** Structured run intent for the active session/turn. */
   harnessContext?: HarnessContextState | null;
   taskContext?: TaskContextSnapshot | null;
+  getTaskContext?: () => TaskContextSnapshot | null;
   applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
   createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
 

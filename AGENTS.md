@@ -251,6 +251,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
 - **Model tool defaults**: normalize provider-emitted `null` for optional/defaulted tool fields before validation; a recoverable tool-input mismatch must not cascade into an unrecoverable provider continuation.
 - **Chat-to-task promotion**: task mode is a one-shot harness tool and `/task` skill handoff from ordinary chat. Require a complete brief and dependency-aware initial plan before creation, lock the source chat while the task is active, and keep lifecycle/state enforcement in the coordinator rather than the desktop UI.
+- **Task review rounds**: treat `reviewRounds` as the required minimum, never as a hard stop. Let the task agent request additional fresh independent rounds when risk or uncertainty warrants them, subject only to the explicit safety cap.
 
 ### Mobile UI Patterns
 

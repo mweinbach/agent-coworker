@@ -148,6 +148,15 @@ const taskDirectiveSchema = z.discriminatedUnion("type", [
   z
     .object({
       ...base,
+      type: z.literal("address_review"),
+      expectedRevision: z.number().int().nonnegative(),
+      reviewId: z.string().trim().min(1),
+      implementationSummary: z.string().trim().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      ...base,
       type: z.literal("propose_completion"),
       expectedRevision: z.number().int().nonnegative(),
       summary: z.string().trim().min(1),
@@ -165,11 +174,28 @@ const taskDirectiveSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
+function omitProviderNullOptionals(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitProviderNullOptionals);
+  if (!value || typeof value !== "object") return value;
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) => {
+      if (entry === null) return [];
+      // Provenance is intentionally free-form and may contain meaningful nulls.
+      return [[key, key === "provenance" ? entry : omitProviderNullOptionals(entry)]];
+    }),
+  );
+}
+
+const taskDirectiveInputSchema = z.preprocess(omitProviderNullOptionals, taskDirectiveSchema);
+
 const TASK_UPDATE_DESCRIPTION = `Update the shared task record for this task-mode thread.
 
 Use this instead of chat todos. The task coordinator validates graph dependencies, work ownership, revision conflicts, artifacts, lifecycle transitions, and completion readiness.
 
 Use request_input only for decisions with material consequences. Batch related questions. Non-blocking questions require a reversible default and let work continue; blocking questions pause the task after this tool call.
+
+Use address_review only after implementing and verifying every actionable finding from that review. The implementationSummary must identify the concrete changes and verification evidence; it is not a waiver or acknowledgement-only step.
 
 Mutating directives require the latest task revision. The tool result returns the new revision. Use a stable unique idempotencyKey so retrying the same logical directive cannot duplicate it.`;
 
@@ -177,9 +203,9 @@ export function createTaskUpdateTool(ctx: ToolContext) {
   if (!ctx.taskContext || !ctx.applyTaskDirective) return null;
   return defineTool({
     description: TASK_UPDATE_DESCRIPTION,
-    inputSchema: taskDirectiveSchema,
-    execute: async (input: z.input<typeof taskDirectiveSchema>) => {
-      const directive: TaskDirective = taskDirectiveSchema.parse(input);
+    inputSchema: taskDirectiveInputSchema,
+    execute: async (input: z.input<typeof taskDirectiveInputSchema>) => {
+      const directive: TaskDirective = taskDirectiveInputSchema.parse(input);
       ctx.log(`tool> taskUpdate ${JSON.stringify({ type: directive.type })}`);
       const result = await ctx.applyTaskDirective?.(directive);
       if (!result) throw new Error("Task directive handler is unavailable");

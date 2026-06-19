@@ -28,6 +28,7 @@ import { createReadPastConversationTool } from "./readPastConversation";
 import { createRecallMemoryTool } from "./recallMemory";
 import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
+import { createTaskReviewTool } from "./taskReview";
 import { createTaskUpdateTool } from "./taskUpdate";
 import { createTodoWriteTool } from "./todoWrite";
 import { createWebFetchTool } from "./webFetch";
@@ -119,6 +120,7 @@ export function listSessionToolNames(
 export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
   const taskCreationTool = createTaskCreationTool(ctx);
+  const taskReviewTool = createTaskReviewTool(ctx);
   const taskUpdateTool = createTaskUpdateTool(ctx);
   const includeLegacyWebSearch =
     !usesGoogleNativeWebTools(ctx) &&
@@ -138,6 +140,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     webFetch: createWebFetchTool(ctx),
     ...(ctx.taskContext ? {} : { AskUserQuestion: askTool }),
     ...(taskUpdateTool ? { taskUpdate: taskUpdateTool } : { todoWrite: createTodoWriteTool(ctx) }),
+    ...(taskReviewTool ? { reviewTask: taskReviewTool } : {}),
     ...(taskCreationTool ? { createTask: taskCreationTool } : {}),
     ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     skill: createSkillTool(ctx),

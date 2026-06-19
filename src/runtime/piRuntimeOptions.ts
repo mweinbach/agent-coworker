@@ -275,6 +275,10 @@ function usesFireworksToolSchemaRules(provider?: ProviderName): boolean {
   return provider !== undefined && isFireworksInferenceProvider(provider);
 }
 
+function usesGoogleToolSchemaRules(provider?: ProviderName): boolean {
+  return provider === "google";
+}
+
 type ToolSchemaBudgetState = {
   totalBytes: number;
 };
@@ -384,6 +388,96 @@ function normalizeToolJsonSchema(schema: unknown): ToolJsonSchema | undefined {
   return normalized;
 }
 
+function mergeGoogleObjectUnionPropertySchemas(
+  schemas: ToolJsonSchema[],
+): ToolJsonSchema | undefined {
+  const uniqueSchemas = schemas.filter(
+    (schema, index) =>
+      schemas.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(schema)) ===
+      index,
+  );
+  if (uniqueSchemas.length === 1) return uniqueSchemas[0];
+
+  const records = uniqueSchemas.map((schema) => asRecord(schema));
+  if (records.some((record) => !record || !Object.hasOwn(record, "const"))) return undefined;
+
+  const constValues = records.map((record) => record?.const);
+  const valueTypes = new Set(constValues.map((value) => typeof value));
+  if (valueTypes.size !== 1 || constValues.some((value) => value === null)) return undefined;
+
+  const declaredTypes = new Set(
+    records
+      .map((record) => record?.type)
+      .filter((type): type is string => typeof type === "string"),
+  );
+  if (declaredTypes.size > 1) return undefined;
+
+  const [type] = declaredTypes;
+  return {
+    ...(type ? { type } : {}),
+    enum: constValues,
+  };
+}
+
+function collapseGoogleTopLevelObjectUnion(schema: ToolJsonSchema): ToolJsonSchema {
+  const root = asRecord(schema);
+  if (!root) return schema;
+
+  const unionKey = Array.isArray(root.oneOf)
+    ? "oneOf"
+    : Array.isArray(root.anyOf)
+      ? "anyOf"
+      : null;
+  if (!unionKey) return schema;
+
+  const branches = (root[unionKey] as unknown[]).map((branch) => asRecord(branch));
+  if (
+    branches.length === 0 ||
+    branches.some((branch) => branch?.type !== "object" || !asRecord(branch.properties))
+  ) {
+    return schema;
+  }
+
+  const propertySchemas = new Map<string, ToolJsonSchema[]>();
+  for (const branch of branches) {
+    const properties = asRecord(branch?.properties);
+    if (!properties) return schema;
+    for (const [name, propertySchema] of Object.entries(properties)) {
+      if (typeof propertySchema !== "boolean" && !asRecord(propertySchema)) return schema;
+      const schemas = propertySchemas.get(name) ?? [];
+      schemas.push(propertySchema as ToolJsonSchema);
+      propertySchemas.set(name, schemas);
+    }
+  }
+
+  const properties: Record<string, ToolJsonSchema> = {};
+  for (const [name, schemas] of propertySchemas) {
+    const merged = mergeGoogleObjectUnionPropertySchemas(schemas);
+    if (merged === undefined) return schema;
+    properties[name] = merged;
+  }
+
+  const firstRequired = Array.isArray(branches[0]?.required)
+    ? branches[0].required.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const required = firstRequired.filter((name) =>
+    branches.every(
+      (branch) => Array.isArray(branch?.required) && branch.required.includes(name),
+    ),
+  );
+  const { oneOf: _oneOf, anyOf: _anyOf, ...rootMetadata } = root;
+
+  return {
+    ...rootMetadata,
+    type: "object",
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+    ...(branches.every((branch) => branch?.additionalProperties === false)
+      ? { additionalProperties: false }
+      : {}),
+  };
+}
+
 function sanitizeProviderSchemaArray(value: unknown, provider?: ProviderName): ToolJsonSchema[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -395,6 +489,9 @@ function sanitizeProviderToolJsonSchema(
   schema: ToolJsonSchema | undefined,
   provider?: ProviderName,
 ): ToolJsonSchema | undefined {
+  if (schema !== undefined && typeof schema !== "boolean" && usesGoogleToolSchemaRules(provider)) {
+    return collapseGoogleTopLevelObjectUnion(schema);
+  }
   if (
     !usesFireworksToolSchemaRules(provider) ||
     schema === undefined ||

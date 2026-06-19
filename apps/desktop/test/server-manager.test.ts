@@ -656,6 +656,35 @@ describe("desktop server manager startup mode", () => {
     }
   });
 
+  test("buildServerEnv points Windows source servers at the bundled sandbox helper", async () => {
+    const previousHelper = process.env.COWORK_WIN_SANDBOX_HELPER;
+    const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-sandbox-helper-"));
+    const sidecar = path.join(dir, resolvePackagedSidecarFilename(process.platform, process.arch));
+    const helper = path.join(dir, "cowork-win-sandbox.exe");
+
+    try {
+      delete process.env.COWORK_WIN_SANDBOX_HELPER;
+      process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
+      await fs.writeFile(sidecar, "");
+      await fs.writeFile(helper, "");
+
+      expect(__internal.findBundledWindowsSandboxHelper()).toBe(helper);
+      if (process.platform === "win32") {
+        expect(__internal.buildServerEnv().COWORK_WIN_SANDBOX_HELPER).toBe(helper);
+      }
+    } finally {
+      if (previousHelper === undefined) delete process.env.COWORK_WIN_SANDBOX_HELPER;
+      else process.env.COWORK_WIN_SANDBOX_HELPER = previousHelper;
+      if (previousSidecarPath === undefined) {
+        delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
+      } else {
+        process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("buildServerEnv enables OpenAI native connectors only from the desktop feature flag", () => {
     const previous = process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
     delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;

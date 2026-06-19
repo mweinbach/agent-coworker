@@ -34,7 +34,7 @@ import {
   withAuthHome,
   withEnv,
   writeConnectionStore,
-  z,
+  type z,
 } from "./tools.harness";
 
 describe("createTools", () => {
@@ -70,6 +70,58 @@ describe("createTools", () => {
     const chatTools = createTools(makeCtx(dir));
     expect(chatTools).toHaveProperty("todoWrite");
     expect(chatTools).not.toHaveProperty("taskUpdate");
+  });
+
+  test("taskUpdate treats provider nulls as omitted optional fields", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        taskContext: {
+          id: "task-1",
+          title: "Task",
+          objective: "Do the work",
+          status: "working",
+          revision: 2,
+          requirements: [],
+          workItems: [],
+          decisions: [],
+          questions: [],
+          blockers: [],
+          artifacts: [],
+          activeThreadId: "task-thread-1",
+        },
+        applyTaskDirective: async () => {
+          throw new Error("not invoked");
+        },
+      }),
+    );
+    const taskUpdate = tools.taskUpdate as { inputSchema: z.ZodType };
+
+    const parsed = taskUpdate.inputSchema.safeParse({
+      type: "update_plan",
+      idempotencyKey: "normalize-null-optionals",
+      expectedRevision: 2,
+      objective: null,
+      requirements: null,
+      workItems: [
+        {
+          id: "research",
+          title: "Research",
+          description: null,
+          dependsOn: null,
+          expectedOutputs: null,
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw parsed.error;
+    expect(parsed.data).toEqual({
+      type: "update_plan",
+      idempotencyKey: "normalize-null-optionals",
+      expectedRevision: 2,
+      workItems: [{ id: "research", title: "Research" }],
+    });
   });
 
   test("offers one-shot task creation only to ordinary root chats", async () => {
@@ -142,6 +194,7 @@ describe("createTools", () => {
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(createTask).toHaveBeenCalledWith(
       expect.objectContaining({
+        reviewRounds: 3,
         workItems: [expect.objectContaining({ key: "implement", dependsOn: [] })],
       }),
     );

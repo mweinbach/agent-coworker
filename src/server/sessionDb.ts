@@ -702,6 +702,17 @@ export class SessionDb {
     );
   }
 
+  async appendTaskActivityWithRevision(
+    activity: TaskActivity,
+    expectedRevision: number,
+  ): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "append_task_activity_with_revision",
+      async () => this.taskRepository.appendActivityWithRevision(activity, expectedRevision),
+      { taskId: activity.taskId, kind: activity.kind },
+    );
+  }
+
   async createTaskCheckpoint(checkpoint: TaskCheckpoint): Promise<TaskCheckpoint> {
     return await this.writeCoordinator.runExclusive(
       "create_task_checkpoint",

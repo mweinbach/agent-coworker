@@ -526,6 +526,151 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("requires bounded independent review rounds and implemented feedback", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    const artifactPath = path.join(harness.workspacePath, "report.md");
+    await fs.writeFile(artifactPath, "# Report\n");
+    try {
+      let task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Reviewed report",
+        objective: "Produce a report that survives independent critique.",
+        sessionId: "session-1",
+        reviewRounds: 2,
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [{ id: "deliver", title: "Deliver report", expectedOutputs: ["report.md"] }],
+      });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Work started",
+      });
+      task = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: "deliver",
+        status: "done",
+        completionEvidence: "Report generated and checked.",
+      });
+      task = await harness.coordinator.registerArtifact({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        path: artifactPath,
+        title: "Report",
+        kind: "markdown",
+        workItemId: "deliver",
+      });
+
+      await expect(
+        harness.coordinator.proposeCompletion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          summary: "Ready",
+        }),
+      ).rejects.toThrow("2 independent review round");
+
+      const first = await harness.coordinator.recordReview({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        sessionId: "session-1",
+        expectedRevision: task.revision,
+        reviewerAgentId: "reviewer-1",
+        reviewerProvider: "openai",
+        reviewerModel: "gpt-5.4",
+        verdict: "fail",
+        feedback: "The report omits the downside case.",
+      });
+      task = first.task;
+      expect(first.round).toBe(1);
+      expect(typeof first.reviewId).toBe("string");
+
+      await expect(
+        harness.coordinator.recordReview({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          sessionId: "session-1",
+          expectedRevision: task.revision,
+          reviewerAgentId: "reviewer-2",
+          reviewerProvider: "google",
+          reviewerModel: "gemini-3.1-pro-preview",
+          verdict: "pass",
+          feedback: "Looks good.",
+        }),
+      ).rejects.toThrow("must be addressed");
+
+      task = await harness.coordinator.addressReview({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        sessionId: "session-1",
+        expectedRevision: task.revision,
+        reviewId: first.reviewId,
+        implementationSummary: "Added and verified a downside scenario section.",
+      });
+      const second = await harness.coordinator.recordReview({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        sessionId: "session-1",
+        expectedRevision: task.revision,
+        reviewerAgentId: "reviewer-2",
+        reviewerProvider: "google",
+        reviewerModel: "gemini-3.1-pro-preview",
+        verdict: "pass",
+        feedback: "The downside case is present and the report meets the acceptance criteria.",
+      });
+      task = second.task;
+
+      task = (
+        await harness.coordinator.recordReview({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          sessionId: "session-1",
+          expectedRevision: task.revision,
+          reviewerAgentId: "reviewer-3",
+          reviewerProvider: "anthropic",
+          reviewerModel: "claude-opus-4-6",
+          verdict: "pass",
+          feedback: "Optional review round three found no regressions.",
+        })
+      ).task;
+      task = (
+        await harness.coordinator.recordReview({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          sessionId: "session-1",
+          expectedRevision: task.revision,
+          reviewerAgentId: "reviewer-4",
+          reviewerProvider: "openai",
+          reviewerModel: "gpt-5.4",
+          verdict: "pass",
+          feedback: "Optional review round four confirmed the final deliverable.",
+        })
+      ).task;
+
+      task = await harness.coordinator.proposeCompletion({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        summary: "Reviewed report ready",
+      });
+
+      expect(task.status).toBe("awaiting_review");
+      expect(task.activity.filter((item) => item.kind === "review_completed")).toHaveLength(4);
+      expect(task.activity.filter((item) => item.kind === "review_addressed")).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("deduplicates retried agent directives", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

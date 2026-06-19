@@ -111,6 +111,7 @@ type TaskRow = {
   status: TaskStatus;
   revision: number;
   review_required: number;
+  review_rounds: number;
   created_at: string;
   updated_at: string;
 };
@@ -126,6 +127,7 @@ export type CreateTaskInput = {
   creationIdempotencyKey?: string | null;
   initialStatus?: TaskStatus;
   reviewRequired: boolean;
+  reviewRounds?: number;
   thread: TaskThread;
   requirements?: TaskRequirementInput[];
   workItems?: WorkItemInput[];
@@ -199,6 +201,7 @@ export class SessionTaskRepository {
         "  status TEXT NOT NULL,",
         "  revision INTEGER NOT NULL DEFAULT 0,",
         "  review_required INTEGER NOT NULL DEFAULT 1,",
+        "  review_rounds INTEGER NOT NULL DEFAULT 0,",
         "  created_at TEXT NOT NULL,",
         "  updated_at TEXT NOT NULL",
         ");",
@@ -340,6 +343,9 @@ export class SessionTaskRepository {
     if (!columns.some((column) => column.name === "creation_idempotency_key")) {
       this.db.exec("ALTER TABLE tasks ADD COLUMN creation_idempotency_key TEXT NULL");
     }
+    if (!columns.some((column) => column.name === "review_rounds")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN review_rounds INTEGER NOT NULL DEFAULT 0");
+    }
     this.db.exec("DROP INDEX IF EXISTS idx_tasks_creation_key");
     this.db.exec(
       sql([
@@ -441,7 +447,7 @@ export class SessionTaskRepository {
     this.db.transaction(() => {
       this.db
         .query(
-          "INSERT INTO tasks(task_id, workspace_path, title, objective, context, source_session_id, creation_origin, creation_idempotency_key, status, revision, review_required, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+          "INSERT INTO tasks(task_id, workspace_path, title, objective, context, source_session_id, creation_origin, creation_idempotency_key, status, revision, review_required, review_rounds, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
         )
         .run(
           input.id,
@@ -454,6 +460,7 @@ export class SessionTaskRepository {
           input.creationIdempotencyKey ?? null,
           input.initialStatus ?? "draft",
           input.reviewRequired ? 1 : 0,
+          input.reviewRounds ?? 0,
           now,
           now,
         );
@@ -1611,6 +1618,14 @@ export class SessionTaskRepository {
     return this.requireTask(activity.taskId);
   }
 
+  appendActivityWithRevision(activity: TaskActivity, expectedRevision: number): TaskRecord {
+    this.db.transaction(() => {
+      this.bumpRevision(activity.taskId, expectedRevision, activity.createdAt);
+      this.insertActivity(activity);
+    })();
+    return this.requireTask(activity.taskId);
+  }
+
   createCheckpoint(checkpoint: TaskCheckpoint): TaskCheckpoint {
     this.db
       .query(
@@ -2094,6 +2109,7 @@ export class SessionTaskRepository {
       status: row.status,
       revision: Number(row.revision),
       reviewRequired: bool(row.review_required),
+      reviewRounds: Number(row.review_rounds ?? 0),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       threadCount: threads.length,

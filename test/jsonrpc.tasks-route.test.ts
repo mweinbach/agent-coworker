@@ -196,6 +196,7 @@ describe("task JSON-RPC routes", () => {
       ],
       decisions: [],
       reviewRequired: true,
+      reviewRounds: 5,
     });
 
     expect(harness.waited).toBe(true);
@@ -208,7 +209,10 @@ describe("task JSON-RPC routes", () => {
       expect.objectContaining({
         creationOrigin: "manual",
         sourceSessionId: null,
-        creation: expect.objectContaining({ idempotencyKey: "manual-task-1" }),
+        creation: expect.objectContaining({
+          idempotencyKey: "manual-task-1",
+          reviewRounds: 5,
+        }),
       }),
     );
   });

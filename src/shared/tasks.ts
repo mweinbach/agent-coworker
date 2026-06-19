@@ -24,6 +24,10 @@ export const REQUIREMENT_KINDS = ["requirement", "constraint", "acceptance_crite
 
 export const TASK_CREATION_ORIGINS = ["manual", "chat_tool"] as const;
 
+export const TASK_REVIEW_VERDICTS = ["pass", "partial", "fail"] as const;
+export const DEFAULT_TASK_REVIEW_ROUNDS = 3;
+export const MAX_TASK_REVIEW_ROUNDS = 10;
+
 export const TASK_QUESTION_URGENCIES = ["now", "before_delivery", "optional"] as const;
 
 export const TASK_QUESTION_STATUSES = [
@@ -54,6 +58,8 @@ export const TASK_ACTIVITY_KINDS = [
   "artifact_revision_started",
   "artifact_revision_completed",
   "artifact_revision_failed",
+  "review_completed",
+  "review_addressed",
   "thread_created",
   "status_changed",
   "checkpoint_created",
@@ -63,6 +69,7 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
 export type TaskRequirementKind = (typeof REQUIREMENT_KINDS)[number];
 export type TaskCreationOrigin = (typeof TASK_CREATION_ORIGINS)[number];
+export type TaskReviewVerdict = (typeof TASK_REVIEW_VERDICTS)[number];
 export type TaskActivityKind = (typeof TASK_ACTIVITY_KINDS)[number];
 export type TaskQuestionUrgency = (typeof TASK_QUESTION_URGENCIES)[number];
 export type TaskQuestionStatus = (typeof TASK_QUESTION_STATUSES)[number];
@@ -119,6 +126,12 @@ export const taskCreationInputSchema = z
     workItems: z.array(taskCreationWorkItemInputSchema).min(1),
     decisions: z.array(taskCreationDecisionInputSchema).default([]),
     reviewRequired: z.boolean().default(true),
+    reviewRounds: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_TASK_REVIEW_ROUNDS)
+      .default(DEFAULT_TASK_REVIEW_ROUNDS),
   })
   .strict()
   .superRefine((input, refinement) => {
@@ -217,6 +230,7 @@ export const taskCreationToolInputSchema = z
     workItems: z.array(taskCreationToolWorkItemInputSchema).min(1),
     decisions: z.array(taskCreationToolDecisionInputSchema).nullable().optional(),
     reviewRequired: z.boolean().nullable().optional(),
+    reviewRounds: z.number().int().min(0).max(MAX_TASK_REVIEW_ROUNDS).nullable().optional(),
   })
   .strict();
 
@@ -240,6 +254,7 @@ export function parseTaskCreationToolInput(
       confidence: decision.confidence ?? undefined,
     })),
     reviewRequired: input.reviewRequired ?? undefined,
+    reviewRounds: input.reviewRounds ?? undefined,
   });
 }
 
@@ -457,6 +472,7 @@ export const taskSummarySchema = z
     status: z.enum(TASK_STATUSES),
     revision: z.number().int().nonnegative(),
     reviewRequired: z.boolean(),
+    reviewRounds: z.number().int().min(0).max(MAX_TASK_REVIEW_ROUNDS).optional(),
     createdAt: isoTimestampSchema,
     updatedAt: isoTimestampSchema,
     threadCount: z.number().int().nonnegative(),
@@ -515,6 +531,9 @@ export type TaskContextSnapshot = Pick<
   | "artifacts"
 > & {
   activeThreadId: string;
+  reviewRequired?: boolean;
+  reviewRounds?: number;
+  activity?: TaskActivity[];
 };
 
 export type TaskDirective =
@@ -602,6 +621,23 @@ export type TaskDirective =
       changeSummary?: string;
       workItemId?: string;
       provenance?: Record<string, unknown>;
+    }
+  | {
+      type: "record_review";
+      idempotencyKey: string;
+      expectedRevision: number;
+      reviewerAgentId: string;
+      reviewerProvider: string;
+      reviewerModel: string;
+      verdict: TaskReviewVerdict;
+      feedback: string;
+    }
+  | {
+      type: "address_review";
+      idempotencyKey: string;
+      expectedRevision: number;
+      reviewId: string;
+      implementationSummary: string;
     }
   | {
       type: "propose_completion";

@@ -73,4 +73,49 @@ describe("renderTaskContextSection", () => {
   test("does not affect standard chat prompts", () => {
     expect(renderTaskContextSection(null)).toBe("");
   });
+
+  test("renders the required review loop and pending implementation gate", () => {
+    const rendered = renderTaskContextSection({
+      id: "task-1",
+      title: "Analysis",
+      objective: "Deliver a rigorous analysis",
+      status: "working",
+      revision: 8,
+      activeThreadId: "thread-1",
+      reviewRequired: true,
+      reviewRounds: 3,
+      requirements: [],
+      workItems: [],
+      decisions: [],
+      questions: [],
+      blockers: [],
+      artifacts: [],
+      activity: [
+        {
+          id: "review-1",
+          seq: 2,
+          taskId: "task-1",
+          threadId: "thread-1",
+          workItemId: null,
+          kind: "review_completed",
+          summary: "Independent review round 1: FAIL",
+          detail: JSON.stringify({
+            round: 1,
+            verdict: "fail",
+            feedback: "Missing downside case.",
+            reviewerAgentId: "reviewer-1",
+            reviewerProvider: "openai",
+            reviewerModel: "gpt-5.4",
+          }),
+          createdAt: "2026-06-19T12:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(rendered).toContain("Required independent review loop");
+    expect(rendered).toContain("Progress: 1/3 minimum review rounds recorded");
+    expect(rendered).toContain("taskUpdate address_review");
+    expect(rendered).toContain("Pending implementation: review review-1");
+    expect(rendered).toContain("minimum, not a stopping point");
+  });
 });

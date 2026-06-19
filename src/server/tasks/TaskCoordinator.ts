@@ -1,35 +1,39 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type {
-  TaskActivity,
-  TaskArtifact,
-  TaskArtifactDetail,
-  TaskArtifactRevision,
-  TaskArtifactVersion,
-  TaskBlocker,
-  TaskContextSnapshot,
-  TaskCreationInput,
-  TaskCreationResult,
-  TaskDecision,
-  TaskDirective,
-  TaskDirectiveResult,
-  TaskQuestion,
-  TaskQuestionAnswerInput,
-  TaskQuestionResumeStatus,
-  TaskRecord,
-  TaskRequirement,
-  TaskRequirementKind,
-  TaskStatus,
-  TaskSummary,
-  TaskThread,
-  WorkItem,
-  WorkItemStatus,
+import {
+  DEFAULT_TASK_REVIEW_ROUNDS,
+  MAX_TASK_REVIEW_ROUNDS,
+  type TaskActivity,
+  type TaskArtifact,
+  type TaskArtifactDetail,
+  type TaskArtifactRevision,
+  type TaskArtifactVersion,
+  type TaskBlocker,
+  type TaskContextSnapshot,
+  type TaskCreationInput,
+  type TaskCreationResult,
+  type TaskDecision,
+  type TaskDirective,
+  type TaskDirectiveResult,
+  type TaskQuestion,
+  type TaskQuestionAnswerInput,
+  type TaskQuestionResumeStatus,
+  type TaskRecord,
+  type TaskRequirement,
+  type TaskRequirementKind,
+  type TaskReviewVerdict,
+  type TaskStatus,
+  type TaskSummary,
+  type TaskThread,
+  type WorkItem,
+  type WorkItemStatus,
 } from "../../shared/tasks";
 import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import type { SessionDb } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
+import { getPendingTaskReview, getTaskReviewRounds } from "./taskReviewPolicy";
 
 type TaskNotification = {
   method: "task/created" | "task/updated" | "task/activity" | "task/checkpointCreated";
@@ -149,6 +153,7 @@ function taskSnapshot(task: TaskRecord): Record<string, unknown> {
     status: task.status,
     revision: task.revision,
     reviewRequired: task.reviewRequired,
+    reviewRounds: task.reviewRounds ?? 0,
     requirements: task.requirements,
     threads: task.threads,
     workItems: task.workItems,
@@ -301,6 +306,9 @@ export class TaskCoordinator {
       questions: task.questions,
       blockers: task.blockers.filter((item) => item.status === "active"),
       artifacts: task.artifacts,
+      reviewRequired: task.reviewRequired,
+      reviewRounds: task.reviewRounds ?? 0,
+      activity: task.activity,
       activeThreadId: thread.id,
     };
   }
@@ -312,6 +320,7 @@ export class TaskCoordinator {
     sessionId: string;
     threadTitle?: string;
     reviewRequired?: boolean;
+    reviewRounds?: number;
   }): Promise<TaskRecord> {
     const createdAt = nowIso();
     const taskId = crypto.randomUUID();
@@ -330,6 +339,7 @@ export class TaskCoordinator {
       title: nonEmpty(input.title, "Task title"),
       objective: nonEmpty(input.objective, "Task objective"),
       reviewRequired: input.reviewRequired ?? true,
+      reviewRounds: input.reviewRounds ?? 0,
       thread,
     });
     this.notifyUpdated(task);
@@ -379,6 +389,7 @@ export class TaskCoordinator {
       creationIdempotencyKey: input.creation.idempotencyKey,
       initialStatus: "working",
       reviewRequired: input.creation.reviewRequired ?? true,
+      reviewRounds: input.creation.reviewRounds ?? DEFAULT_TASK_REVIEW_ROUNDS,
       thread,
       requirements: input.creation.requirements.map((requirement) => ({
         id: crypto.randomUUID(),
@@ -1715,6 +1726,128 @@ export class TaskCoordinator {
     return updated;
   }
 
+  async recordReview(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    expectedRevision: number;
+    reviewerAgentId: string;
+    reviewerProvider: string;
+    reviewerModel: string;
+    verdict: TaskReviewVerdict;
+    feedback: string;
+  }): Promise<{ task: TaskRecord; reviewId: string; round: number }> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    if (task.revision !== input.expectedRevision) {
+      throw new Error(
+        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
+      );
+    }
+    if (task.status !== "working") {
+      throw new Error("Independent reviews can run only while a task is working");
+    }
+    const requiredRounds = task.reviewRounds ?? 0;
+    if (requiredRounds === 0) throw new Error("This task does not require independent reviews");
+    if (task.workItems.length === 0) throw new Error("Task has no work plan");
+    const unfinished = task.workItems.filter(
+      (item) => item.status !== "done" && item.status !== "review" && item.status !== "abandoned",
+    );
+    if (unfinished.length > 0) {
+      throw new Error(`Task has ${unfinished.length} unfinished work item(s)`);
+    }
+    const missingOutput = task.workItems.find(
+      (item) =>
+        item.expectedOutputs.length > 0 &&
+        !task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id),
+    );
+    if (missingOutput) {
+      throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
+    }
+
+    const rounds = getTaskReviewRounds(task.activity);
+    const pending = getPendingTaskReview(task.activity);
+    if (pending) {
+      throw new Error(
+        `Review round ${pending.round} feedback must be addressed before another review`,
+      );
+    }
+    if (rounds.length >= MAX_TASK_REVIEW_ROUNDS) {
+      throw new Error(`Task reached the ${MAX_TASK_REVIEW_ROUNDS}-round review safety cap`);
+    }
+    const reviewerAgentId = nonEmpty(input.reviewerAgentId, "Reviewer agent id");
+    if (rounds.some((round) => round.reviewerAgentId === reviewerAgentId)) {
+      throw new Error("Each independent review round must use a new reviewer agent");
+    }
+
+    const round = rounds.length + 1;
+    const reviewActivity = activity({
+      taskId: task.id,
+      threadId:
+        task.threads.find((candidate) => candidate.sessionId === input.sessionId)?.id ?? null,
+      workItemId: null,
+      kind: "review_completed",
+      summary: `Independent review round ${round}: ${input.verdict.toUpperCase()}`,
+      detail: JSON.stringify({
+        round,
+        verdict: input.verdict,
+        feedback: nonEmpty(input.feedback, "Review feedback"),
+        reviewerAgentId,
+        reviewerProvider: nonEmpty(input.reviewerProvider, "Reviewer provider"),
+        reviewerModel: nonEmpty(input.reviewerModel, "Reviewer model"),
+      }),
+    });
+    const updated = await this.options.sessionDb.appendTaskActivityWithRevision(
+      reviewActivity,
+      input.expectedRevision,
+    );
+    this.notifyUpdated(updated);
+    this.notifyActivity(updated);
+    return { task: updated, reviewId: reviewActivity.id, round };
+  }
+
+  async addressReview(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    expectedRevision: number;
+    reviewId: string;
+    implementationSummary: string;
+  }): Promise<TaskRecord> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    if (task.revision !== input.expectedRevision) {
+      throw new Error(
+        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
+      );
+    }
+    const pending = getPendingTaskReview(task.activity);
+    if (!pending) throw new Error("Task has no unaddressed review feedback");
+    if (pending.reviewId !== input.reviewId) {
+      throw new Error(`Review ${input.reviewId} is not the pending review`);
+    }
+    const addressedActivity = activity({
+      taskId: task.id,
+      threadId:
+        task.threads.find((candidate) => candidate.sessionId === input.sessionId)?.id ?? null,
+      workItemId: null,
+      kind: "review_addressed",
+      summary: `Independent review round ${pending.round} feedback implemented`,
+      detail: JSON.stringify({
+        reviewId: pending.reviewId,
+        implementationSummary: nonEmpty(
+          input.implementationSummary,
+          "Review implementation summary",
+        ),
+      }),
+    });
+    const updated = await this.options.sessionDb.appendTaskActivityWithRevision(
+      addressedActivity,
+      input.expectedRevision,
+    );
+    this.notifyUpdated(updated);
+    this.notifyActivity(updated);
+    return updated;
+  }
+
   async proposeCompletion(input: {
     taskId: string;
     workspacePath: string;
@@ -1752,6 +1885,19 @@ export class TaskCoordinator {
     );
     if (missingOutput) {
       throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
+    }
+    const requiredReviewRounds = task.reviewRounds ?? 0;
+    if (requiredReviewRounds > 0) {
+      const reviewRounds = getTaskReviewRounds(task.activity);
+      if (reviewRounds.length < requiredReviewRounds) {
+        throw new Error(
+          `Task requires ${requiredReviewRounds} independent review round(s); ${reviewRounds.length} recorded`,
+        );
+      }
+      const pendingReview = getPendingTaskReview(task.activity);
+      if (pendingReview) {
+        throw new Error(`Review round ${pendingReview.round} feedback must be addressed`);
+      }
     }
     const ready = await this.transition({
       taskId: task.id,
@@ -1957,6 +2103,31 @@ export class TaskCoordinator {
           changeSummary: directive.changeSummary,
           workItemId: directive.workItemId,
           provenance: directive.provenance,
+        });
+        break;
+      case "record_review": {
+        const result = await this.recordReview({
+          taskId: current.id,
+          workspacePath: current.workspacePath,
+          expectedRevision: directive.expectedRevision,
+          sessionId,
+          reviewerAgentId: directive.reviewerAgentId,
+          reviewerProvider: directive.reviewerProvider,
+          reviewerModel: directive.reviewerModel,
+          verdict: directive.verdict,
+          feedback: directive.feedback,
+        });
+        updated = result.task;
+        break;
+      }
+      case "address_review":
+        updated = await this.addressReview({
+          taskId: current.id,
+          workspacePath: current.workspacePath,
+          expectedRevision: directive.expectedRevision,
+          sessionId,
+          reviewId: directive.reviewId,
+          implementationSummary: directive.implementationSummary,
         });
         break;
       case "propose_completion":

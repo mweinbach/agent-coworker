@@ -6,6 +6,7 @@ import readline from "node:readline";
 import type { Readable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
+import { findWindowsHelper } from "../../../../src/platform/sandbox/detect";
 import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   captureError,
@@ -241,6 +242,10 @@ function getSidecarSearchDirs(): string[] {
 
   const appRoot = app.getAppPath();
   return [path.join(appRoot, "resources", "binaries")];
+}
+
+function findBundledWindowsSandboxHelper(): string | null {
+  return findWindowsHelper(getSidecarSearchDirs(), process.env);
 }
 
 function findSidecarLaunchCommand() {
@@ -611,6 +616,8 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
+  const bundledWindowsSandboxHelper =
+    process.platform === "win32" ? findBundledWindowsSandboxHelper() : null;
   const telemetryConsentEnv = withoutInheritedTelemetryConsentEnv(process.env);
   const privacyTelemetrySettings = resolveTelemetryConsent({
     settings: opts.privacyTelemetrySettings,
@@ -640,6 +647,9 @@ function buildServerEnv(
     ...(bundledFoundationModelsSdk ? { COWORK_TSFMSDK_DIR: bundledFoundationModelsSdk } : {}),
     ...(bundledWindowsAiElectron
       ? { COWORK_WINDOWS_AI_ELECTRON_DIR: bundledWindowsAiElectron }
+      : {}),
+    ...(bundledWindowsSandboxHelper
+      ? { COWORK_WIN_SANDBOX_HELPER: bundledWindowsSandboxHelper }
       : {}),
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
@@ -1283,6 +1293,7 @@ export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
   findBundledFoundationModelsSdkDir,
+  findBundledWindowsSandboxHelper,
   findBundledWindowsAiElectronDir,
   findSidecarLaunchCommand,
   getServerTerminationSignal,

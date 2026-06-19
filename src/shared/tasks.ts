@@ -193,6 +193,56 @@ export const taskCreationInputSchema = z
     }
   });
 
+const taskCreationToolRequirementInputSchema = taskCreationRequirementInputSchema.extend({
+  permanence: z.enum(["fixed", "temporary"]).nullable().optional(),
+});
+
+const taskCreationToolWorkItemInputSchema = taskCreationWorkItemInputSchema.extend({
+  description: z.string().trim().nullable().optional(),
+  dependsOn: z.array(nonEmptyStringSchema.max(80)).nullable().optional(),
+  expectedOutputs: z.array(nonEmptyStringSchema).nullable().optional(),
+});
+
+const taskCreationToolDecisionInputSchema = taskCreationDecisionInputSchema.extend({
+  confidence: z.number().min(0).max(1).nullable().optional(),
+});
+
+export const taskCreationToolInputSchema = z
+  .object({
+    idempotencyKey: nonEmptyStringSchema.max(200),
+    title: nonEmptyStringSchema.max(160),
+    objective: nonEmptyStringSchema,
+    context: nonEmptyStringSchema,
+    requirements: z.array(taskCreationToolRequirementInputSchema).min(1),
+    workItems: z.array(taskCreationToolWorkItemInputSchema).min(1),
+    decisions: z.array(taskCreationToolDecisionInputSchema).nullable().optional(),
+    reviewRequired: z.boolean().nullable().optional(),
+  })
+  .strict();
+
+export function parseTaskCreationToolInput(
+  input: z.input<typeof taskCreationToolInputSchema>,
+): z.output<typeof taskCreationInputSchema> {
+  return taskCreationInputSchema.parse({
+    ...input,
+    requirements: input.requirements.map((requirement) => ({
+      ...requirement,
+      permanence: requirement.permanence ?? undefined,
+    })),
+    workItems: input.workItems.map((workItem) => ({
+      ...workItem,
+      description: workItem.description ?? undefined,
+      dependsOn: workItem.dependsOn ?? undefined,
+      expectedOutputs: workItem.expectedOutputs ?? undefined,
+    })),
+    decisions: (input.decisions ?? []).map((decision) => ({
+      ...decision,
+      confidence: decision.confidence ?? undefined,
+    })),
+    reviewRequired: input.reviewRequired ?? undefined,
+  });
+}
+
 export const taskRequirementSchema = z
   .object({
     id: nonEmptyStringSchema,

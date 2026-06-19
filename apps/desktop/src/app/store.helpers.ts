@@ -371,6 +371,7 @@ export type AppStoreState = {
   requestTaskChanges: (taskId: string, feedback: string) => Promise<void>;
   cancelTask: (taskId: string, reason?: string) => Promise<void>;
   reopenTask: (taskId: string, reason?: string) => Promise<void>;
+  retryTask: (taskId: string) => Promise<boolean>;
   resolveTaskQuestions: (
     taskId: string,
     answers: TaskQuestionAnswerInput[],

@@ -436,6 +436,29 @@ describe("desktop task actions", () => {
     expect(harness.state.taskError).toContain("revision conflict");
   });
 
+  test("retries a failed task and stores the working task returned by the harness", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 7 });
+    requestJsonRpc.mockImplementationOnce(async () => ({
+      task: taskRecord({ status: "working", revision: 8 }),
+      retryStatus: "queued",
+    }));
+
+    await expect(actions.retryTask("task-1")).resolves.toBe(true);
+    expect(requestJsonRpc.mock.calls.at(-1)?.slice(3)).toEqual([
+      "task/retry",
+      {
+        cwd: "C:\\Users\\Max\\Projects\\Demo\\",
+        taskId: "task-1",
+        expectedRevision: 7,
+      },
+    ]);
+    expect(harness.state.tasksById["task-1"]?.status).toBe("working");
+    expect(harness.state.tasksById["task-1"]?.revision).toBe(8);
+  });
+
   test("does not recurse when project creation is cancelled", async () => {
     const harness = createHarness();
     harness.state.workspaces.length = 0;

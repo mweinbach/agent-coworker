@@ -255,6 +255,9 @@ export const jsonRpcTaskRequestSchemas = {
       reason: nonEmptyTrimmedStringSchema.optional(),
     })
     .strict(),
+  "task/retry": z
+    .object({ ...taskIdentitySchema, expectedRevision: expectedRevisionSchema })
+    .strict(),
 } as const;
 
 const taskResultSchema = z.object({ task: taskRecordSchema }).strict();
@@ -307,6 +310,12 @@ export const jsonRpcTaskResultSchemas = {
   "task/accept": taskResultSchema,
   "task/requestChanges": taskResultSchema,
   "task/reopen": taskResultSchema,
+  "task/retry": z
+    .object({
+      task: taskRecordSchema,
+      retryStatus: z.enum(["queued", "steered", "failed"]),
+    })
+    .strict(),
 } as const;
 
 export const jsonRpcTaskNotificationSchemas = {

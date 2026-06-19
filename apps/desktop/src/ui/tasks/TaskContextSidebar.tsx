@@ -27,6 +27,7 @@ import { Field, FieldGroup, FieldLabel } from "../../components/ui/field";
 import { Input } from "../../components/ui/input";
 import { Progress } from "../../components/ui/progress";
 import { Separator } from "../../components/ui/separator";
+import { Spinner } from "../../components/ui/spinner";
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
 import { ArtifactReviewCard } from "./ArtifactReviewCard";
@@ -65,12 +66,14 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const requestTaskChanges = useAppStore((state) => state.requestTaskChanges);
   const cancelTask = useAppStore((state) => state.cancelTask);
   const reopenTask = useAppStore((state) => state.reopenTask);
+  const retryTask = useAppStore((state) => state.retryTask);
   const openFilePreview = useAppStore((state) => state.openFilePreview);
   const selectThread = useAppStore((state) => state.selectThread);
   const [title, setTitle] = useState(task?.title ?? "");
   const [objective, setObjective] = useState(task?.objective ?? "");
   const [briefDirty, setBriefDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
 
@@ -98,7 +101,17 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const terminal = ["completed", "cancelled", "failed"].includes(task.status);
   const canEdit = !terminal;
   const canCancel = !["completed", "cancelled", "failed"].includes(task.status);
-  const canReopen = ["completed", "cancelled", "failed"].includes(task.status);
+  const canReopen = ["completed", "cancelled"].includes(task.status);
+
+  const retry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await retryTask(task.id);
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const saveBrief = async () => {
     if (!briefDirty || saving || !title.trim() || !objective.trim()) return;
@@ -395,6 +408,16 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
               >
                 <RotateCcwIcon data-icon="inline-start" />
                 Reopen task
+              </Button>
+            ) : null}
+            {task.status === "failed" ? (
+              <Button type="button" size="sm" disabled={retrying} onClick={() => void retry()}>
+                {retrying ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <RotateCcwIcon data-icon="inline-start" />
+                )}
+                {retrying ? "Retrying…" : "Retry task"}
               </Button>
             ) : null}
             {terminal && task.sourceSessionId ? (

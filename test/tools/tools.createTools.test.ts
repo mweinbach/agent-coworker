@@ -132,6 +132,7 @@ describe("createTools", () => {
           {
             key: "implement",
             title: "Implement promotion",
+            dependsOn: null,
             expectedOutputs: ["Working task promotion"],
           },
         ],
@@ -139,6 +140,11 @@ describe("createTools", () => {
     );
 
     expect(createTask).toHaveBeenCalledTimes(1);
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItems: [expect.objectContaining({ key: "implement", dependsOn: [] })],
+      }),
+    );
     expect(output).toMatchObject({
       taskId: "task-created",
       taskThreadId: "task-session-1",

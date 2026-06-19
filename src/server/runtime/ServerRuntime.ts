@@ -313,6 +313,7 @@ export async function createAgentServerRuntime(
     return { sessionId: runtime.id };
   });
   tasks.setContinuationDispatcher(async (input) => await registry.dispatchTaskContinuation(input));
+  await tasks.reconcileFailedRuns();
 
   const refreshLocalSkillState = async ({
     workingDirectory,

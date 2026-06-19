@@ -1,4 +1,4 @@
-import { type TaskCreationInput, taskCreationInputSchema } from "../shared/tasks";
+import { parseTaskCreationToolInput, taskCreationToolInputSchema } from "../shared/tasks";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -12,9 +12,9 @@ export function createTaskCreationTool(ctx: ToolContext) {
   if (!ctx.createTask || ctx.taskContext || ctx.agentRole) return null;
   return defineTool({
     description: CREATE_TASK_DESCRIPTION,
-    inputSchema: taskCreationInputSchema,
-    execute: async (input: TaskCreationInput) => {
-      const creation = taskCreationInputSchema.parse(input);
+    inputSchema: taskCreationToolInputSchema,
+    execute: async (input) => {
+      const creation = parseTaskCreationToolInput(input);
       ctx.log(`tool> createTask ${JSON.stringify({ title: creation.title })}`);
       const result = await ctx.createTask?.(creation);
       if (!result) throw new Error("Task creation handler is unavailable");

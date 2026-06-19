@@ -247,6 +247,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Bun-compiled sidecars**: never read `package.json` via runtime `__dirname` paths — compiled binaries run from `/$bunfs`. Use bundled imports or build-time injection.
 - **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
 - **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
+- **Model tool defaults**: normalize provider-emitted `null` for optional/defaulted tool fields before validation; a recoverable tool-input mismatch must not cascade into an unrecoverable provider continuation.
 - **Chat-to-task promotion**: task mode is a one-shot harness tool and `/task` skill handoff from ordinary chat. Require a complete brief and dependency-aware initial plan before creation, lock the source chat while the task is active, and keep lifecycle/state enforcement in the coordinator rather than the desktop UI.
 
 ### Mobile UI Patterns

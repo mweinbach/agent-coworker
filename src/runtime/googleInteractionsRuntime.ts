@@ -473,7 +473,10 @@ export function createGoogleInteractionsRuntime(
             interactionId = result.interactionId;
             markModelCallSpanSuccess(span, telemetry, assistantRecord);
           } catch (error) {
-            if (previousInteractionId && isInvalidGoogleContinuationError(error)) {
+            if (
+              previousInteractionId &&
+              (isInvalidGoogleContinuationError(error) || isGoogleNotImplementedError(error))
+            ) {
               params.log?.(
                 "google-interactions: Stateful request failed. Retrying with clean state.",
               );

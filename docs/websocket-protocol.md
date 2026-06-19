@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.37`
+- Current protocol version: `7.38`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -471,8 +471,9 @@ Requests:
 - `task/requestChanges` — params `{ cwd?, taskId, expectedRevision, feedback }`; returns a delivered task to working state
 - `task/cancel` — params `{ cwd?, taskId, expectedRevision, reason? }`; cancels the task and interrupts its live task threads
 - `task/reopen` — params `{ cwd?, taskId, expectedRevision, reason? }`; reopens a terminal task
+- `task/retry` — params `{ cwd?, taskId, expectedRevision }`; retries a failed task in its existing primary thread and returns `{ task, retryStatus }`, where `retryStatus` is `queued`, `steered`, or `failed`
 
-Task records contain the durable brief, requirements, task threads, dependency-aware work items, decisions, queued questions, logical artifacts, blockers, semantic activity, and latest checkpoint. Summaries expose `pendingQuestionCount` and `blockingQuestionCount`; full records expose each question's urgency, options, default, provisional decision, answer, and resolution status. Artifact bytes are immutable, content-addressed objects under `~/.cowork/artifacts`; SQLite stores version lineage, review state, provenance, and active revision ownership. The workspace path remains the live editable copy. The coordinator owns lifecycle transitions; an agent proposes changes through the task directive tool but cannot bypass revision, evidence, dependency, fingerprint, question, or artifact checks.
+Task records contain the durable brief, requirements, task threads, dependency-aware work items, decisions, queued questions, logical artifacts, blockers, semantic activity, and latest checkpoint. Summaries expose `pendingQuestionCount` and `blockingQuestionCount`; full records expose each question's urgency, options, default, provisional decision, answer, and resolution status. Artifact bytes are immutable, content-addressed objects under `~/.cowork/artifacts`; SQLite stores version lineage, review state, provenance, and active revision ownership. The workspace path remains the live editable copy. The coordinator owns lifecycle transitions; an agent proposes changes through the task directive tool but cannot bypass revision, evidence, dependency, fingerprint, question, or artifact checks. An error from the primary task thread moves an active task to `failed`; server startup also reconciles older `working` tasks whose persisted primary session already ended in an error. Retrying preserves the task brief, work graph, decisions, artifacts, and thread history.
 
 Task-mode agents request durable input with the `taskUpdate` directive `request_input`; the synchronous chat `AskUserQuestion` tool is not exposed in task threads. One directive may bundle 1–3 related questions. A non-blocking question must include a reversible `defaultAction`; the coordinator records that default as a provisional agent decision and lets the current turn continue. A later user answer supersedes the provisional decision. If delivery is proposed before the user answers, remaining non-blocking questions resolve to their recorded defaults.
 
@@ -715,6 +716,11 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.38`:
+
+- Added `task/retry` to resume a failed task in its existing primary thread without discarding completed work or artifacts.
+- Primary task-thread errors now transition active tasks to `failed`, and persisted errored runs are reconciled on server startup so clients can offer retry.
 
 Changes in `7.37`:
 

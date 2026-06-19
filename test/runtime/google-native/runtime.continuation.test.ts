@@ -372,6 +372,64 @@ describe("google interactions runtime — continuation", () => {
     expect(result.text).toBe("Recovered with full history");
   });
 
+  test("retries not-implemented Google continuation with full transcript history", async () => {
+    const homeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "google-interactions-continuation-not-implemented-"),
+    );
+    const seenRequests: GoogleNativeStepRequest[] = [];
+    const logs: string[] = [];
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (opts) => {
+        seenRequests.push(opts);
+        if (seenRequests.length === 1) {
+          throw new Error(
+            '501 {"error":{"message":"Operation is not implemented, or supported, or enabled.","code":"not_implemented"}}',
+          );
+        }
+        return {
+          assistant: {
+            role: "assistant",
+            api: "google-interactions",
+            provider: "google",
+            model: "gemini-3-flash-preview",
+            content: [{ type: "text", text: "Recovered from unsupported continuation" }],
+            usage: { input: 12, output: 7, totalTokens: 19 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "interaction_recovered",
+        };
+      },
+    });
+    const fullHistory = [
+      { role: "user", content: "Create a managed task" },
+      { role: "assistant", content: [{ type: "text", text: "I need one more detail." }] },
+      { role: "user", content: "Use the default." },
+    ] as ModelMessage[];
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        messages: fullHistory,
+        allMessages: fullHistory,
+        log: (message) => logs.push(message),
+        providerState: {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          interactionId: "interaction_unsupported",
+          updatedAt: "2026-03-18T12:00:00.000Z",
+        },
+      }),
+    );
+
+    expect(seenRequests).toHaveLength(2);
+    expect(seenRequests[0]?.previousInteractionId).toBe("interaction_unsupported");
+    expect(seenRequests[0]?.messages).toEqual([{ role: "user", content: "Use the default." }]);
+    expect(seenRequests[1]?.previousInteractionId).toBeUndefined();
+    expect(seenRequests[1]?.messages).toEqual(fullHistory);
+    expect(result.text).toBe("Recovered from unsupported continuation");
+    expect(logs.some((message) => message.includes("Retrying with clean state"))).toBe(true);
+  });
+
   test("retries changed-context replay with text-only history when clean replay is unsupported", async () => {
     const homeDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "google-interactions-continuation-not-implemented-fallback-"),

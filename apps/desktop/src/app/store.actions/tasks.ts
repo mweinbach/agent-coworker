@@ -347,6 +347,7 @@ export function createTaskActions(
   | "requestTaskChanges"
   | "cancelTask"
   | "reopenTask"
+  | "retryTask"
   | "resolveTaskQuestions"
   | "readTaskArtifact"
   | "captureTaskArtifactVersion"
@@ -358,14 +359,14 @@ export function createTaskActions(
 > {
   const mutateLifecycle = async (
     taskId: string,
-    method: "task/accept" | "task/requestChanges" | "task/cancel" | "task/reopen",
+    method: "task/accept" | "task/requestChanges" | "task/cancel" | "task/reopen" | "task/retry",
     extra: Record<string, unknown> = {},
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const task = get().tasksById[taskId];
-    if (!task) return;
+    if (!task) return false;
     const workspaceId = workspaceIdForTask(get, task);
     const workspace = workspaceId ? get().workspaces.find((item) => item.id === workspaceId) : null;
-    if (!workspaceId || !workspace) return;
+    if (!workspaceId || !workspace) return false;
     try {
       await ensureTaskTransport(get, set, workspaceId, deps);
       const result = await deps.requestJsonRpc(get, set, workspaceId, method, {
@@ -377,8 +378,10 @@ export function createTaskActions(
       const parsed = taskRecordSchema.safeParse(result?.task);
       if (!parsed.success) throw new Error(`Invalid ${method} response`);
       upsertTask(set, get, parsed.data, deps);
+      return true;
     } catch (error) {
       notifyError(set, "Unable to update task", error);
+      return false;
     }
   };
 
@@ -633,13 +636,19 @@ export function createTaskActions(
       }
     },
 
-    acceptTask: async (taskId) => await mutateLifecycle(taskId, "task/accept"),
-    requestTaskChanges: async (taskId, feedback) =>
-      await mutateLifecycle(taskId, "task/requestChanges", { feedback }),
-    cancelTask: async (taskId, reason) =>
-      await mutateLifecycle(taskId, "task/cancel", reason ? { reason } : {}),
-    reopenTask: async (taskId, reason) =>
-      await mutateLifecycle(taskId, "task/reopen", reason ? { reason } : {}),
+    acceptTask: async (taskId) => {
+      await mutateLifecycle(taskId, "task/accept");
+    },
+    requestTaskChanges: async (taskId, feedback) => {
+      await mutateLifecycle(taskId, "task/requestChanges", { feedback });
+    },
+    cancelTask: async (taskId, reason) => {
+      await mutateLifecycle(taskId, "task/cancel", reason ? { reason } : {});
+    },
+    reopenTask: async (taskId, reason) => {
+      await mutateLifecycle(taskId, "task/reopen", reason ? { reason } : {});
+    },
+    retryTask: async (taskId) => await mutateLifecycle(taskId, "task/retry"),
 
     resolveTaskQuestions: async (
       taskId: string,

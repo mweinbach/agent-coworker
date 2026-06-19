@@ -125,7 +125,9 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       ].join("\n\n");
       void runtime.turns
         .sendUserMessage(kickoff, undefined, `Start task: ${result.task.title}`)
-        .catch(() => undefined);
+        .catch((error) =>
+          context.tasks.handleThreadOutcome(runtime.id, "error", error).catch(() => undefined),
+        );
       return { task: result.task, thread: context.utils.buildThreadFromSession(runtime) };
     }),
     "task/list": createTaskHandler(context, "task/list", (params) => {
@@ -483,5 +485,15 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         detail: params.reason,
       }),
     })),
+    "task/retry": createTaskHandler(
+      context,
+      "task/retry",
+      async (params) =>
+        await context.tasks.retryTask({
+          taskId: params.taskId,
+          workspacePath: resolveCwd(context, params, "task/retry"),
+          expectedRevision: params.expectedRevision,
+        }),
+    ),
   };
 }

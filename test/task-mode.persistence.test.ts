@@ -30,6 +30,165 @@ async function createHarness() {
 }
 
 describe("task mode persistence", () => {
+  test("marks a task failed when its primary thread errors", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "task-session-1",
+        sourceSessionId: "source-chat-1",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: "primary-thread-failure",
+          title: "Failing task",
+          objective: "Exercise task failure handling.",
+          context: "The primary task run fails before any work item starts.",
+          requirements: [
+            { kind: "acceptance_criterion", text: "The failure is visible to the user." },
+          ],
+          workItems: [{ key: "run", title: "Run", expectedOutputs: ["A visible result"] }],
+        },
+      });
+
+      await harness.coordinator.handleThreadOutcome(
+        "task-session-1",
+        "error",
+        new Error("Provider rejected the request"),
+      );
+
+      const failed = harness.coordinator.get(created.task.id, harness.workspacePath);
+      expect(failed?.status).toBe("failed");
+      expect(failed?.activity[0]).toMatchObject({
+        kind: "status_changed",
+        summary: "Task run failed",
+        detail: "Provider rejected the request",
+      });
+      expect(harness.sessionDb.getActiveTaskForSourceSession("source-chat-1")).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("retries a failed task in its existing primary thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "task-session-1",
+        sourceSessionId: "source-chat-1",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: "retry-failed-task",
+          title: "Retryable task",
+          objective: "Continue after a provider failure.",
+          context: "Existing task state and artifacts must be preserved.",
+          requirements: [
+            { kind: "acceptance_criterion", text: "Retry uses the original task thread." },
+          ],
+          workItems: [{ key: "run", title: "Run", expectedOutputs: ["A visible result"] }],
+        },
+      });
+      await harness.coordinator.handleThreadOutcome("task-session-1", "error");
+      const failed = harness.coordinator.get(created.task.id, harness.workspacePath);
+      if (!failed) throw new Error("Expected failed task");
+
+      let dispatched:
+        | {
+            sessionId: string;
+            prompt: string;
+            displayText: string;
+            onFailure: (error: unknown) => Promise<void>;
+          }
+        | undefined;
+      harness.coordinator.setContinuationDispatcher(async (input) => {
+        dispatched = input;
+        return "queued";
+      });
+
+      const retried = await harness.coordinator.retryTask({
+        taskId: failed.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: failed.revision,
+      });
+
+      expect(retried.retryStatus).toBe("queued");
+      expect(retried.task.status).toBe("working");
+      expect(dispatched?.sessionId).toBe("task-session-1");
+      expect(dispatched?.prompt).toContain("previous run failed");
+      expect(retried.task.activity[0]?.summary).toBe("Task retry started");
+
+      await dispatched?.onFailure(new Error("Retry failed too"));
+      expect(harness.coordinator.get(failed.id, harness.workspacePath)?.status).toBe("failed");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("recovers persisted working tasks whose primary run already errored", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "task-session-1",
+        sourceSessionId: null,
+        creationOrigin: "manual",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: "recover-errored-run",
+          title: "Interrupted task",
+          objective: "Recover the task lifecycle after restart.",
+          context: "The persisted task session is already errored.",
+          requirements: [{ kind: "acceptance_criterion", text: "The task becomes retryable." }],
+          workItems: [{ key: "run", title: "Run", expectedOutputs: ["A visible result"] }],
+        },
+      });
+      const createdAt = "2099-01-01T00:00:00.000Z";
+      await harness.sessionDb.persistSessionMutation({
+        sessionId: "task-session-1",
+        eventType: "session.errored",
+        snapshot: {
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          executionState: "errored",
+          lastMessagePreview: "Request failed",
+          title: "Interrupted task",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          workingDirectory: harness.workspacePath,
+          enableMcp: false,
+          backupsEnabledOverride: null,
+          createdAt,
+          updatedAt: createdAt,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "",
+          messages: [],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      });
+
+      expect(created.task.status).toBe("working");
+      expect(await harness.coordinator.reconcileFailedRuns()).toBe(1);
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)?.status).toBe(
+        "failed",
+      );
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("creates a complete working plan and locks its source chat idempotently", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

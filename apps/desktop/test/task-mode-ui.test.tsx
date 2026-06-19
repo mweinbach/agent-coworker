@@ -219,6 +219,7 @@ function resetStore(task: TaskRecord | null) {
     requestTaskChanges: async () => {},
     cancelTask: async () => {},
     reopenTask: async () => {},
+    retryTask: async () => true,
     resolveTaskQuestions: async () => "not_needed",
     openFilePreview: () => {},
     readTaskArtifact: async () => artifactDetail(),
@@ -354,6 +355,36 @@ describe("desktop task mode UI", () => {
 
       await act(async () => root.render(createElement(TaskContextSidebar)));
       expect(container.textContent).toContain("Return to source chat");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("offers retry instead of reopen when a task fails", async () => {
+    const harness = setupJsdom();
+    const retryTask = mock(async () => true);
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+      const root = createRoot(container);
+      resetStore(taskRecord({ status: "failed" }));
+      useAppStore.setState({ retryTask } as never);
+
+      await act(async () => root.render(createElement(TaskContextSidebar)));
+      const retryButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Retry task",
+      );
+      expect(retryButton).toBeDefined();
+      expect(container.textContent).not.toContain("Reopen task");
+
+      await act(async () => {
+        retryButton?.click();
+        await Promise.resolve();
+      });
+      expect(retryTask).toHaveBeenCalledWith("task-1");
 
       await act(async () => root.unmount());
     } finally {

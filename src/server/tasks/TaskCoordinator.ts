@@ -171,6 +171,15 @@ export function buildTaskQuestionContinuationPrompt(input: {
   ].join("\n");
 }
 
+export function buildTaskRetryPrompt(task: TaskRecord): string {
+  return [
+    `Retry the task "${task.title}" in its existing task thread.`,
+    "The previous run failed before the task reached a review or completion state.",
+    "Review the authoritative task brief, work graph, decisions, artifacts, and latest checkpoint before continuing.",
+    "Preserve completed work and resume the first unblocked unfinished work item. Do not restart completed work unless validation shows it is invalid.",
+  ].join("\n\n");
+}
+
 function mediaTypeForArtifact(filePath: string, kind: string): string {
   const extension = path.extname(filePath).toLowerCase();
   const byExtension: Record<string, string> = {
@@ -1463,13 +1472,17 @@ export class TaskCoordinator {
   async handleThreadOutcome(
     sessionId: string,
     outcome: "completed" | "cancelled" | "error",
+    failure?: unknown,
   ): Promise<{
     task: TaskRecord;
     detail: TaskArtifactDetail;
     revision: TaskArtifactRevision;
   } | null> {
     const revision = this.options.sessionDb.getActiveTaskArtifactRevisionForSession(sessionId);
-    if (!revision) return null;
+    if (!revision) {
+      if (outcome === "error") await this.failPrimaryTaskRun(sessionId, failure);
+      return null;
+    }
     const task = this.options.sessionDb.getTask(revision.taskId);
     if (!task) throw new Error(`Unknown task: ${revision.taskId}`);
     const detail = this.options.sessionDb.getTaskArtifactDetail(task.id, revision.artifactId);
@@ -1553,6 +1566,110 @@ export class TaskCoordinator {
     if (!failedRevision || !updatedDetail) throw new Error("Artifact revision did not finalize");
     this.notifyUpdated(failedTask);
     return { task: failedTask, detail: updatedDetail, revision: failedRevision };
+  }
+
+  async retryTask(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+  }): Promise<{
+    task: TaskRecord;
+    retryStatus: Exclude<TaskQuestionResumeStatus, "not_needed">;
+  }> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    if (task.revision !== input.expectedRevision) {
+      throw new Error(
+        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
+      );
+    }
+    if (task.status !== "failed") throw new Error("Only failed tasks can be retried");
+    const primaryThread = task.threads[0];
+    if (!primaryThread) throw new Error("Task has no primary thread to retry");
+
+    await this.transition({
+      taskId: task.id,
+      workspacePath: task.workspacePath,
+      expectedRevision: task.revision,
+      status: "working",
+      summary: "Task retry started",
+      sessionId: primaryThread.sessionId,
+    });
+
+    if (!this.continuationDispatcher) {
+      await this.failPrimaryTaskRun(
+        primaryThread.sessionId,
+        new Error("Task continuation is unavailable"),
+      );
+      return {
+        task: this.requireTask(task.id, task.workspacePath),
+        retryStatus: "failed",
+      };
+    }
+
+    const retryStatus = await this.continuationDispatcher({
+      sessionId: primaryThread.sessionId,
+      prompt: buildTaskRetryPrompt(task),
+      displayText: `Retry task: ${task.title}`,
+      onFailure: async (error) => {
+        await this.failPrimaryTaskRun(primaryThread.sessionId, error);
+      },
+    });
+    return {
+      task: this.requireTask(task.id, task.workspacePath),
+      retryStatus,
+    };
+  }
+
+  async reconcileFailedRuns(workspacePath?: string | null): Promise<number> {
+    let reconciled = 0;
+    for (const summary of this.list(workspacePath)) {
+      if (summary.status !== "working" && summary.status !== "planning") continue;
+      const task = this.options.sessionDb.getTask(summary.id);
+      const primaryThread = task?.threads[0];
+      if (!task || !primaryThread) continue;
+      const session = this.options.sessionDb.getSessionRecord(primaryThread.sessionId);
+      if (session?.executionState !== "errored") continue;
+
+      const failed = await this.failPrimaryTaskRun(
+        primaryThread.sessionId,
+        new Error("The persisted primary task run ended with an error"),
+      );
+      if (failed?.status === "failed") reconciled += 1;
+    }
+    return reconciled;
+  }
+
+  private async failPrimaryTaskRun(
+    sessionId: string,
+    failure?: unknown,
+  ): Promise<TaskRecord | null> {
+    const task = this.options.sessionDb.getTaskForThread(sessionId);
+    const primaryThread = task?.threads[0];
+    if (!task || primaryThread?.sessionId !== sessionId) return null;
+    if (task.status === "failed") return task;
+    if (task.status !== "working" && task.status !== "planning") return null;
+
+    const detail =
+      failure instanceof Error
+        ? failure.message
+        : failure === undefined
+          ? "The primary task run ended with an error"
+          : String(failure);
+    try {
+      return await this.transition({
+        taskId: task.id,
+        workspacePath: task.workspacePath,
+        expectedRevision: task.revision,
+        status: "failed",
+        summary: "Task run failed",
+        detail,
+        sessionId,
+      });
+    } catch (error) {
+      const current = this.options.sessionDb.getTask(task.id);
+      if (current?.status === "failed") return current;
+      throw error;
+    }
   }
 
   async transition(input: {

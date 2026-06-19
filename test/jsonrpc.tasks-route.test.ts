@@ -65,6 +65,10 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
 function makeHarness(
   overrides: {
     updateBrief?: () => Promise<TaskRecord>;
+    retryTask?: (input: unknown) => Promise<{
+      task: TaskRecord;
+      retryStatus: "queued" | "steered" | "failed";
+    }>;
     resolveQuestions?: (input: unknown) => Promise<{
       task: TaskRecord;
       resumeStatus: "queued" | "steered" | "not_needed" | "failed";
@@ -109,6 +113,12 @@ function makeHarness(
       list: () => [summary],
       get: () => task,
       updateBrief: overrides.updateBrief ?? (async () => task),
+      retryTask:
+        overrides.retryTask ??
+        (async () => ({
+          task: makeTask({ status: "working", revision: 1 }),
+          retryStatus: "queued" as const,
+        })),
       resolveQuestions:
         overrides.resolveQuestions ??
         (async () => ({
@@ -226,6 +236,36 @@ describe("task JSON-RPC routes", () => {
     expect(harness.errors).toEqual([]);
     expect(
       jsonRpcTaskResultSchemas["task/list"].safeParse(harness.results[0]?.result).success,
+    ).toBe(true);
+  });
+
+  test("retries a failed task through the coordinator", async () => {
+    const calls: unknown[] = [];
+    const harness = makeHarness({
+      retryTask: async (input) => {
+        calls.push(input);
+        return {
+          task: makeTask({ status: "working", revision: 3 }),
+          retryStatus: "queued",
+        };
+      },
+    });
+    await invoke(harness.context, "task/retry", {
+      cwd: "C:\\workspace",
+      taskId: "task-1",
+      expectedRevision: 2,
+    });
+
+    expect(harness.errors).toEqual([]);
+    expect(calls).toEqual([
+      {
+        taskId: "task-1",
+        workspacePath: "C:\\workspace",
+        expectedRevision: 2,
+      },
+    ]);
+    expect(
+      jsonRpcTaskResultSchemas["task/retry"].safeParse(harness.results[0]?.result).success,
     ).toBe(true);
   });
 

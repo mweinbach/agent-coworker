@@ -319,7 +319,11 @@ export class SessionRegistry {
       ].join("\n\n");
       void taskRuntime.turns
         .sendUserMessage(kickoff, undefined, `Start task: ${result.task.title}`)
-        .catch(() => undefined);
+        .catch((error) =>
+          this.options.taskCoordinator
+            .handleThreadOutcome(taskRuntime.id, "error", error)
+            .catch(() => undefined),
+        );
       return result;
     } catch (error) {
       const failedBinding = this.sessionBindings.get(taskRuntime.id);

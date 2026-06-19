@@ -228,6 +228,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Repo-Specific Contracts
 
+- **Chat plans vs Task mode**: never present a standard-chat `todoWrite` checklist as durable task state or expand it into a second task system. Label it as a plan/checklist; keep durable IDs, transitions, ownership, blockers, artifacts, and user editing in `TaskCoordinator` and Task mode.
 - **Auth home**: `~/.cowork` is the only auth home. Never derive auth from a workspace `.agent` path. Pin `HOME` in tests that fabricate auth state.
 - **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.
 - **Codex app-server verification**: app-server supports multiple simultaneous instances; parallelize independent app-server checks instead of serializing model/status/title probes by default.

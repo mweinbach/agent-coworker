@@ -14,11 +14,11 @@ import { memo } from "react";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
 import type { ThreadAgentSummary } from "../app/types";
-import { DesktopMarkdown } from "./markdown";
 import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
+import { DesktopMarkdown } from "./markdown";
 
 const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
 

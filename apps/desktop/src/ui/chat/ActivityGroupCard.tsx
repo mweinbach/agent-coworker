@@ -14,7 +14,6 @@ import {
 import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ToolFeedState } from "../../app/types";
-import { DesktopMarkdown } from "../markdown";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader } from "../../components/ui/card";
 import {
@@ -23,6 +22,7 @@ import {
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
 import { cn } from "../../lib/utils";
+import { DesktopMarkdown } from "../markdown";
 import type { ActivityFeedItem, ActivityGroupSummary } from "./activityGroups";
 
 import {

@@ -8,11 +8,7 @@ import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { createPortal } from "react-dom";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import {
-  defaultRehypePlugins,
-  defaultRemarkPlugins,
-  type StreamdownProps,
-} from "streamdown";
+import { defaultRehypePlugins, defaultRemarkPlugins, type StreamdownProps } from "streamdown";
 import type { PluggableList } from "unified";
 
 import {
@@ -21,11 +17,11 @@ import {
   normalizeDisplayCitationMarkers,
 } from "../../../../../src/shared/displayCitationMarkers";
 import { useAppStore } from "../../app/store";
+import { MessageResponse } from "../../components/ai-elements/message";
+import { Button } from "../../components/ui/button";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
 import { cn } from "../../lib/utils";
-import { MessageResponse } from "../../components/ai-elements/message";
-import { Button } from "../../components/ui/button";
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";

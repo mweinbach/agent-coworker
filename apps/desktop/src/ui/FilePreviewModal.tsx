@@ -6,12 +6,6 @@ import { ExternalLinkIcon } from "lucide-react";
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
 import { useAppStore } from "../app/store";
-import {
-  DesktopMessageLink,
-  defaultDesktopRehypePlugins,
-  fileUrlToDesktopPath,
-  remarkRewriteDesktopFileLinks,
-} from "./markdown";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -38,6 +32,12 @@ import {
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
 import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
+import {
+  DesktopMessageLink,
+  defaultDesktopRehypePlugins,
+  fileUrlToDesktopPath,
+  remarkRewriteDesktopFileLinks,
+} from "./markdown";
 import { PptxPreview } from "./PptxPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {

@@ -1,4 +1,5 @@
 type DesktopCommandsModule = typeof import("../../src/lib/desktopCommands");
+type DesktopApi = import("../../src/lib/desktopApi").DesktopApi;
 
 export const DEFAULT_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -211,4 +212,17 @@ export function createDesktopCommandsMock(
     onMobileRelayStateChanged: () => () => {},
     ...overrides,
   };
+}
+
+export function createDesktopApiMock(overrides: Partial<DesktopCommandsModule> = {}): DesktopApi {
+  const commands = createDesktopCommandsMock(overrides);
+  return {
+    ...commands,
+    features: commands.getDesktopFeatureFlags(),
+    isPackaged: commands.isPackagedDesktopApp(),
+    demoMode: commands.isDesktopDemoMode(),
+    resolveDesktopFeatureFlags: commands.getDesktopFeatureFlags,
+    readFile: async (opts) => ({ content: await commands.readFile(opts) }),
+    showContextMenu: async ({ items }) => await commands.showContextMenu(items),
+  } as DesktopApi;
 }

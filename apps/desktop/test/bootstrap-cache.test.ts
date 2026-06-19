@@ -383,6 +383,14 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
   });
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("desktop bootstrap cache", () => {
   beforeEach(() => {
     installWindowMock();
@@ -451,6 +459,22 @@ describe("desktop bootstrap cache", () => {
       cloudSyncEnabled: false,
     });
     expect(seed?.threadRuntimeById?.["thread-cached"]?.hydrating).toBeUndefined();
+  });
+
+  test("buildCachedDesktopStateSeed preserves an explicitly selected task", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      ui: {
+        ...cachedState.ui,
+        view: "task",
+        selectedThreadId: null,
+        selectedTaskId: "task-1",
+      },
+    });
+
+    expect(seed?.view).toBe("task");
+    expect(seed?.selectedTaskId).toBe("task-1");
+    expect(seed?.selectedThreadId).not.toBe("task-1");
   });
 
   test("buildCachedDesktopStateSeed restores normalized privacy telemetry settings", () => {
@@ -896,9 +920,9 @@ describe("desktop bootstrap cache", () => {
 
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 260));
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForCondition(
+      () => useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating === false,
+    );
 
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(false);
   });

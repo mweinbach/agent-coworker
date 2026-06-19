@@ -192,6 +192,9 @@ export class AgentSession {
     deleteWorkspaceBackupCheckpointImpl?: SessionDependencies["deleteWorkspaceBackupCheckpointImpl"];
     deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
+    getTaskContextImpl?: SessionDependencies["getTaskContextImpl"];
+    applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
+    createTaskImpl?: SessionDependencies["createTaskImpl"];
     getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
     buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
     getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
@@ -362,6 +365,9 @@ export class AgentSession {
       deleteWorkspaceBackupCheckpointImpl: opts.deleteWorkspaceBackupCheckpointImpl,
       deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
+      getTaskContextImpl: opts.getTaskContextImpl,
+      applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
+      createTaskImpl: opts.createTaskImpl,
       getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
       buildLegacySessionSnapshotImpl: opts.buildLegacySessionSnapshotImpl,
       getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,

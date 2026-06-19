@@ -2,6 +2,7 @@ import { Reorder } from "framer-motion";
 import {
   BookOpenIcon,
   ChevronDownIcon,
+  ClipboardPlusIcon,
   FolderPlusIcon,
   MoreHorizontalIcon,
   PlusIcon,
@@ -43,6 +44,7 @@ import {
 import { useSidebarPersistence } from "./sidebar/useSidebarPersistence";
 import {
   getVisibleSidebarThreads,
+  groupStandardChatThreadsByWorkspace,
   shouldEmphasizeWorkspaceRow,
   swapSidebarItemsById,
 } from "./sidebarHelpers";
@@ -57,6 +59,8 @@ export const Sidebar = memo(function Sidebar() {
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
   const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const selectedTaskId = useAppStore((s) => s.selectedTaskId);
+  const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
@@ -72,6 +76,8 @@ export const Sidebar = memo(function Sidebar() {
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const newThread = useAppStore((s) => s.newThread);
   const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
+  const openNewTask = useAppStore((s) => s.openNewTask);
+  const selectTask = useAppStore((s) => s.selectTask);
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
   const generateAdvancedMemoryForThread = useAppStore((s) => s.generateAdvancedMemoryForThread);
   const selectThread = useAppStore((s) => s.selectThread);
@@ -144,7 +150,7 @@ export const Sidebar = memo(function Sidebar() {
   )
     ? activeWorkspaceId
     : null;
-  const sidebarSelectedThreadId = effectiveView === "research" ? null : selectedThreadId;
+  const sidebarSelectedThreadId = effectiveView === "chat" ? selectedThreadId : null;
   const visibleProjectWorkspaces = useMemo(() => {
     if (workspacePickerEnabled || projectWorkspaces.length <= 1) {
       return projectWorkspaces;
@@ -204,27 +210,7 @@ export const Sidebar = memo(function Sidebar() {
   }, []);
 
   const threadsByWorkspaceId = useMemo(() => {
-    const grouped = new Map<string, typeof threads>();
-    for (const thread of threads) {
-      if (thread.archived) {
-        continue;
-      }
-      const bucket = grouped.get(thread.workspaceId);
-      if (bucket) {
-        bucket.push(thread);
-      } else {
-        grouped.set(thread.workspaceId, [thread]);
-      }
-    }
-
-    for (const [workspaceId, workspaceThreads] of grouped.entries()) {
-      grouped.set(
-        workspaceId,
-        [...workspaceThreads].sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt)),
-      );
-    }
-
-    return grouped;
+    return groupStandardChatThreadsByWorkspace(threads);
   }, [threads]);
 
   const oneOffChatThreads = useMemo(
@@ -322,6 +308,20 @@ export const Sidebar = memo(function Sidebar() {
     [openNewChatLanding],
   );
 
+  const handleNewWorkspaceTask = useCallback(
+    (workspaceId: string) => {
+      void openNewTask(workspaceId);
+    },
+    [openNewTask],
+  );
+
+  const handleSelectTask = useCallback(
+    (taskId: string) => {
+      void selectTask(taskId);
+    },
+    [selectTask],
+  );
+
   const handleProjectSectionMenu = async (e: MouseEvent<HTMLElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -356,12 +356,15 @@ export const Sidebar = memo(function Sidebar() {
 
     const result = await showContextMenu([
       { id: "new_project_chat", label: "New chat in project" },
+      { id: "new_project_task", label: "New task in project" },
       { id: "select", label: "Select project" },
       ...(workspaceLifecycleEnabled ? [{ id: "remove", label: "Remove project" }] : []),
     ]);
 
     if (result === "new_project_chat") {
       void newThread({ workspaceId: wsId, scope: "project" });
+    } else if (result === "new_project_task") {
+      void openNewTask(wsId);
     } else if (result === "select") {
       void (effectiveView === "skills"
         ? setPluginManagementWorkspace(wsId)
@@ -466,6 +469,7 @@ export const Sidebar = memo(function Sidebar() {
     const active = workspace.id === activeProjectWorkspaceId;
     const expanded = expandedWorkspaceSections[workspace.id] ?? false;
     const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
+    const workspaceTasks = taskSummariesByWorkspaceId[workspace.id] ?? [];
     const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
       active,
       sidebarSelectedThreadId,
@@ -493,6 +497,7 @@ export const Sidebar = memo(function Sidebar() {
         onCommitRename={commitRename}
         onEditingTitleChange={setEditingTitle}
         onNewWorkspaceChat={handleNewWorkspaceChat}
+        onNewWorkspaceTask={handleNewWorkspaceTask}
         onSelectWorkspace={handleSelectWorkspace}
         onStartEditing={startEditing}
         onThreadContextMenu={handleThreadContextMenu}
@@ -501,12 +506,15 @@ export const Sidebar = memo(function Sidebar() {
         onWorkspaceOpenChange={handleWorkspaceOpenChange}
         reorderEnabled={reorderEnabled}
         selectedThreadId={sidebarSelectedThreadId}
+        selectedTaskId={effectiveView === "task" ? selectedTaskId : null}
+        selectTask={handleSelectTask}
         selectThread={handleSelectThread}
         showAllThreads={showAllThreads}
         threadRuntimeById={threadRuntimeById}
         visibleThreads={visibleThreads}
         workspace={workspace}
         workspaceThreads={workspaceThreads}
+        tasks={workspaceTasks}
         canGenerateMemoryForThread={canGenerateMemoryForThread}
         onGenerateMemoryForThread={generateMemoryForThread}
         onDeleteHistoryForThread={(tId, tTitle) => void deleteThreadHistoryWithConfirm(tId, tTitle)}
@@ -722,6 +730,22 @@ export const Sidebar = memo(function Sidebar() {
           New Chat
         </Button>
       ) : null}
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-current={effectiveView === "task" && selectedTaskId === null ? "page" : undefined}
+        className={cn(
+          "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+          "hover:bg-foreground/[0.045] hover:text-foreground",
+          effectiveView === "task" &&
+            selectedTaskId === null &&
+            "bg-foreground/[0.055] text-foreground",
+        )}
+        onClick={() => void openNewTask()}
+      >
+        <ClipboardPlusIcon className="h-4 w-4 text-muted-foreground" />
+        New Task
+      </Button>
       <nav aria-label="Primary" className="grid w-full min-w-0 gap-1.5">
         {googleResearchAvailable ? (
           <Button

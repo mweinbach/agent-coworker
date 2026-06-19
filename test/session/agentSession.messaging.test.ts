@@ -44,6 +44,26 @@ describe("AgentSession", () => {
   });
 
   describe("sendUserMessage", () => {
+    test("locks a source chat while its promoted task is active", async () => {
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => ({ id: "task-1", title: "Managed delivery" }),
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+
+      await session.sendUserMessage("Continue in the source chat");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          message: "Chat is locked by active task task-1: Managed delivery",
+        }),
+      );
+    });
+
     test("rejects if already running (emits error)", async () => {
       const { session, events } = makeSession();
 

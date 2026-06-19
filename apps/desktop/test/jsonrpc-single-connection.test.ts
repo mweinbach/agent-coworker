@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 const oneOffWorkspaceCalls: Array<{ titleHint?: string }> = [];
@@ -312,69 +313,74 @@ class MockJsonRpcSocket {
   close() {}
 }
 
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    appendTranscriptBatch: async () => {},
-    appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {},
-    listDirectory: async () => [],
-    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-    pickWorkspaceDirectory: async () => null,
-    readTranscript: async () => [],
-    saveState: async (state: any) => {
-      savedStates.push(state);
-    },
-    startWorkspaceServer: async (opts: {
-      workspaceId: string;
-      workspacePath: string;
-      yolo: boolean;
-    }) => {
-      startCalls.push(opts);
-      return { url: "ws://jsonrpc-workspace" };
-    },
-    stopWorkspaceServer: async () => {},
-    createOneOffChatWorkspace: async (opts?: { titleHint?: string }) => {
-      oneOffWorkspaceCalls.push(opts ?? {});
-      oneOffWorkspaceCounter += 1;
-      return {
-        name: "New chat",
-        path: `/tmp/cowork-one-off-${oneOffWorkspaceCounter}`,
-      };
-    },
-    showContextMenu: async () => null,
-    windowMinimize: async () => {},
-    windowMaximize: async () => {},
-    windowClose: async () => {},
-    getPlatform: async () => "linux",
-    readFile: async () => "",
-    previewOSFile: async () => {},
-    openPath: async () => {},
-    openExternalUrl: async () => {},
-    revealPath: async () => {},
-    copyPath: async () => {},
-    createDirectory: async () => {},
-    renamePath: async () => {},
-    trashPath: async () => {},
-    confirmAction: async () => true,
-    showNotification: async () => true,
-    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => MOCK_UPDATE_STATE,
-    checkForUpdates: async () => {},
-    quitAndInstallUpdate: async () => {},
-    onSystemAppearanceChanged: () => () => {},
-    onMenuCommand: () => () => {},
-    onUpdateStateChanged: () => () => {},
-  }),
-);
+const desktopApiMock = createDesktopApiMock({
+  appendTranscriptBatch: async () => {},
+  appendTranscriptEvent: async () => {},
+  deleteTranscript: async () => {},
+  listDirectory: async () => [],
+  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+  pickWorkspaceDirectory: async () => null,
+  readTranscript: async () => [],
+  saveState: async (state: any) => {
+    savedStates.push(state);
+  },
+  startWorkspaceServer: async (opts: {
+    workspaceId: string;
+    workspacePath: string;
+    yolo: boolean;
+  }) => {
+    startCalls.push(opts);
+    return { url: "ws://jsonrpc-workspace" };
+  },
+  stopWorkspaceServer: async () => {},
+  createOneOffChatWorkspace: async (opts?: { titleHint?: string }) => {
+    oneOffWorkspaceCalls.push(opts ?? {});
+    oneOffWorkspaceCounter += 1;
+    return {
+      name: "New chat",
+      path: `/tmp/cowork-one-off-${oneOffWorkspaceCounter}`,
+    };
+  },
+  showContextMenu: async () => null,
+  windowMinimize: async () => {},
+  windowMaximize: async () => {},
+  windowClose: async () => {},
+  getPlatform: async () => "linux",
+  readFile: async () => "",
+  previewOSFile: async () => {},
+  openPath: async () => {},
+  openExternalUrl: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
+  confirmAction: async () => true,
+  showNotification: async () => true,
+  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getUpdateState: async () => MOCK_UPDATE_STATE,
+  checkForUpdates: async () => {},
+  quitAndInstallUpdate: async () => {},
+  onSystemAppearanceChanged: () => () => {},
+  onMenuCommand: () => () => {},
+  onUpdateStateChanged: () => () => {},
+});
 
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: MockJsonRpcSocket,
-}));
+function installDesktopApiMock() {
+  (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+}
+
+function clearDesktopApiMock() {
+  delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
+}
 
 const { useAppStore } = await import("../src/app/store");
 const { RUNTIME, defaultThreadRuntime, defaultWorkspaceRuntime } = await import(
   "../src/app/store.helpers/runtimeState"
+);
+const { __internalOneOffWorkspaceRecord } = await import(
+  "../src/app/store.helpers/oneOffWorkspaceRecord"
 );
 
 async function flushAsyncWork() {
@@ -433,6 +439,10 @@ function seedActiveThreadState() {
 
 describe("desktop JSON-RPC single connection path", () => {
   beforeEach(() => {
+    installDesktopApiMock();
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(
+      desktopApiMock.createOneOffChatWorkspace,
+    );
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     startCalls.length = 0;
     oneOffWorkspaceCalls.length = 0;
@@ -494,7 +504,9 @@ describe("desktop JSON-RPC single connection path", () => {
   });
 
   afterEach(() => {
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(null);
     clearJsonRpcSocketOverride();
+    clearDesktopApiMock();
   });
 
   test("global newThread creates a one-off chat workspace and draft thread", async () => {
@@ -689,6 +701,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/skills/list",
       "thread/list",
       "thread/list",
+      "task/list",
       "thread/start",
       "cowork/session/defaults/apply",
       "thread/read",
@@ -1061,6 +1074,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/skills/list",
       "thread/list",
       "thread/list",
+      "task/list",
       "cowork/provider/catalog/read",
       "cowork/memory/list",
       "cowork/backups/workspace/read",
@@ -1091,6 +1105,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/skills/list",
       "thread/list",
       "thread/list",
+      "task/list",
       "cowork/mcp/servers/read",
       "cowork/skills/catalog/read",
       "cowork/skills/list",
@@ -1134,6 +1149,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/skills/list",
       "thread/list",
       "thread/list",
+      "task/list",
       "thread/start",
       "cowork/session/defaults/apply",
       "thread/read",
@@ -1169,6 +1185,7 @@ describe("desktop JSON-RPC single connection path", () => {
 
     expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
       "thread/list",
+      "task/list",
       "thread/start",
       "cowork/session/defaults/apply",
       "thread/read",

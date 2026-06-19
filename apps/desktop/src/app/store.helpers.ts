@@ -1,3 +1,4 @@
+import type { ArtifactDiff, ArtifactPreview } from "../../../../src/server/artifacts/types";
 import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
 import type {
   AgentProfileCopyInput,
@@ -16,6 +17,7 @@ import type {
   SpreadsheetFileVersionResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";
+import type { TaskCreationInput } from "../../../../src/shared/tasks";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import type { NewChatLandingTarget } from "../lib/newChatLanding";
@@ -84,6 +86,11 @@ import type {
   SandboxApprovalPrompt,
   SettingsPageId,
   SidebarSectionKey,
+  TaskArtifactDetail,
+  TaskQuestionAnswerInput,
+  TaskQuestionResumeStatus,
+  TaskRecord,
+  TaskSummary,
   ThreadBusyPolicy,
   ThreadRecord,
   ThreadRuntime,
@@ -182,6 +189,12 @@ export type AppStoreState = {
   pluginManagementWorkspaceId: string | null;
   pluginManagementMode: PluginManagementMode;
   selectedThreadId: string | null;
+  selectedTaskId: string | null;
+  newTaskWorkspaceId: string | null;
+  taskSummariesByWorkspaceId: Record<string, TaskSummary[]>;
+  tasksById: Record<string, TaskRecord>;
+  taskListLoadingByWorkspaceId: Record<string, boolean>;
+  taskError: string | null;
 
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;
   threadRuntimeById: Record<string, ThreadRuntime>;
@@ -344,6 +357,57 @@ export type AppStoreState = {
 
   openSkills: () => Promise<void>;
   openResearch: () => Promise<void>;
+  openNewTask: (workspaceId?: string) => Promise<void>;
+  refreshTasks: (workspaceId?: string) => Promise<void>;
+  startTask: (opts: { workspaceId: string; task: TaskCreationInput }) => Promise<TaskRecord | null>;
+  selectTask: (taskId: string) => Promise<void>;
+  selectTaskThread: (taskId: string, taskThreadId: string) => Promise<void>;
+  createTaskThread: (taskId: string, title: string, workItemId?: string) => Promise<void>;
+  updateTaskBrief: (
+    taskId: string,
+    patch: { title?: string; objective?: string },
+  ) => Promise<boolean>;
+  acceptTask: (taskId: string) => Promise<void>;
+  requestTaskChanges: (taskId: string, feedback: string) => Promise<void>;
+  cancelTask: (taskId: string, reason?: string) => Promise<void>;
+  reopenTask: (taskId: string, reason?: string) => Promise<void>;
+  resolveTaskQuestions: (
+    taskId: string,
+    answers: TaskQuestionAnswerInput[],
+  ) => Promise<TaskQuestionResumeStatus | null>;
+  readTaskArtifact: (taskId: string, artifactId: string) => Promise<TaskArtifactDetail | null>;
+  captureTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    changeSummary?: string,
+  ) => Promise<TaskArtifactDetail | null>;
+  compareTaskArtifactVersions: (
+    taskId: string,
+    artifactId: string,
+    baseVersionId: string,
+    targetVersionId: string,
+  ) => Promise<ArtifactDiff | null>;
+  previewTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    versionId: string,
+  ) => Promise<{ versionId: string; preview: ArtifactPreview } | null>;
+  restoreTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    versionId: string,
+  ) => Promise<TaskArtifactDetail | null>;
+  acceptTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    versionId?: string,
+  ) => Promise<TaskArtifactDetail | null>;
+  startTaskArtifactRevision: (
+    taskId: string,
+    artifactId: string,
+    baseVersionId: string,
+    instruction: string,
+  ) => Promise<TaskArtifactDetail | null>;
   refreshSkillsCatalog: (workspaceId?: string) => Promise<void>;
   refreshAgentProfilesCatalog: (workspaceId?: string) => Promise<void>;
   upsertAgentProfile: (profile: AgentProfileUpsertInput, workspaceId?: string) => Promise<boolean>;

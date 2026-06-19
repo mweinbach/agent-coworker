@@ -237,6 +237,7 @@ export function createWorkspaceActions(
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       void requestWorkspaceSessions(get, set, workspaceId);
+      void get().refreshTasks(workspaceId);
       if (hydrateSelectedThreadPromise) {
         await hydrateSelectedThreadPromise;
       }

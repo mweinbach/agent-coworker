@@ -34,6 +34,7 @@ import {
   parseRequiredIsoTimestamp,
   toJsonString,
 } from "./normalizers";
+import { SessionTaskRepository } from "./tasks";
 
 const messagesJsonSchema = z.array(z.unknown());
 const modelStreamRawFormatSchema = z.enum([
@@ -54,10 +55,26 @@ function hasCompatiblePersistedProvider(row: Record<string, unknown>): boolean {
 }
 
 export class SessionDbRepository {
-  private readonly db: Database;
+  private readonly taskRepository: SessionTaskRepository;
 
-  constructor(db: Database) {
-    this.db = db;
+  constructor(private readonly db: Database) {
+    this.taskRepository = new SessionTaskRepository(db);
+  }
+
+  addTaskModeTables(): void {
+    this.taskRepository.createSchema();
+  }
+
+  addTaskArtifactVersionTables(): void {
+    this.taskRepository.createArtifactVersionSchema();
+  }
+
+  addTaskQuestionTables(): void {
+    this.taskRepository.createQuestionSchema();
+  }
+
+  addTaskCreationColumns(): void {
+    this.taskRepository.addCreationColumns();
   }
 
   listSessions(opts?: { workingDirectory?: string | null }): PersistedSessionSummary[] {

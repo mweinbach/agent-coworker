@@ -108,10 +108,14 @@ const normalizedLastEventSeqSchema = z.preprocess(
 );
 const normalizedViewSchema = z.preprocess(
   (value) =>
-    value === "chat" || value === "skills" || value === "research" || value === "settings"
+    value === "chat" ||
+    value === "task" ||
+    value === "skills" ||
+    value === "research" ||
+    value === "settings"
       ? value
       : "chat",
-  z.enum(["chat", "skills", "research", "settings"]),
+  z.enum(["chat", "task", "skills", "research", "settings"]),
 );
 
 function normalizeSettingsPageId(
@@ -334,6 +338,7 @@ const persistedUiSchema = z
   .object({
     selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
     selectedThreadId: normalizedNullableSelectionSchema.optional(),
+    selectedTaskId: normalizedNullableSelectionSchema.optional(),
     pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
     pluginManagementMode: z.enum(["auto", "global", "workspace"]).optional(),
     view: normalizedViewSchema.optional(),
@@ -349,15 +354,14 @@ const persistedUiSchema = z
     contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
     canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
     messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
-    scrollPositionsByThreadId: z
-      .record(z.string(), z.number().finite().nonnegative())
-      .optional(),
+    scrollPositionsByThreadId: z.record(z.string(), z.number().finite().nonnegative()).optional(),
   })
   .passthrough()
   .transform(
     (ui): CachedDesktopUiState => ({
       selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
       selectedThreadId: ui.selectedThreadId ?? null,
+      selectedTaskId: ui.selectedTaskId ?? null,
       pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
       pluginManagementMode: ui.pluginManagementMode ?? "auto",
       view: ui.view ?? "chat",
@@ -603,6 +607,7 @@ function buildResolvedDesktopUiState(
   return {
     selectedWorkspaceId,
     selectedThreadId,
+    selectedTaskId: normalizedUi.selectedTaskId ?? null,
     pluginManagementWorkspaceId,
     pluginManagementMode,
     view: normalizedUi.view ?? "chat",
@@ -719,6 +724,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       threads: state.threads,
       selectedWorkspaceId: ui.selectedWorkspaceId,
       selectedThreadId: ui.selectedThreadId,
+      selectedTaskId: ui.selectedTaskId,
       pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
       pluginManagementMode: ui.pluginManagementMode,
       providerStatusByName: state.providerState?.statusByName ?? {},
@@ -807,6 +813,7 @@ export function createBootstrapActions(
           {
             selectedWorkspaceId: get().selectedWorkspaceId,
             selectedThreadId: get().selectedThreadId,
+            selectedTaskId: get().selectedTaskId,
             pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
             pluginManagementMode: get().pluginManagementMode,
             view: get().view,
@@ -875,6 +882,7 @@ export function createBootstrapActions(
           threads: finalThreads,
           selectedWorkspaceId: ui.selectedWorkspaceId,
           selectedThreadId: ui.selectedThreadId,
+          selectedTaskId: ui.selectedTaskId,
           pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
           pluginManagementMode: ui.pluginManagementMode,
           providerStatusByName: state.providerState?.statusByName ?? {},
@@ -960,6 +968,24 @@ export function createBootstrapActions(
             ensureWorkspaceRuntime(get, set, startupWorkspaceId);
             void ensureServerRunning(get, set, startupWorkspaceId).then(() => {
               ensureControlSocket(get, set, startupWorkspaceId);
+            });
+          });
+        } else if (ui.selectedWorkspaceId && ui.view === "task") {
+          const startupWorkspaceId = ui.selectedWorkspaceId;
+          runAfterInitialPaint(() => {
+            const current = get();
+            if (current.selectedWorkspaceId !== startupWorkspaceId || current.view !== "task") {
+              return;
+            }
+            void current.refreshTasks(startupWorkspaceId).then(() => {
+              const refreshed = get();
+              if (
+                ui.selectedTaskId &&
+                refreshed.selectedTaskId === ui.selectedTaskId &&
+                refreshed.view === "task"
+              ) {
+                void refreshed.selectTask(ui.selectedTaskId);
+              }
             });
           });
         }

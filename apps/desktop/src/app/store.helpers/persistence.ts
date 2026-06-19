@@ -31,7 +31,7 @@ let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
  * affects persistence, not runtime behavior.
  */
 function buildPersistableThreads(state: AppStoreState) {
-  return state.threads.filter((thread) => thread.draft !== true);
+  return state.threads.filter((thread) => thread.draft !== true && !thread.taskId);
 }
 
 function buildPersistedState(state: AppStoreState): PersistedState {
@@ -78,6 +78,7 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
     ),
     pluginManagementMode: state.pluginManagementMode,
     selectedThreadId,
+    selectedTaskId: state.selectedTaskId,
     view: state.view,
     settingsPage: state.settingsPage,
     lastNonSettingsView: state.lastNonSettingsView,
@@ -96,10 +97,10 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
 
 /** Cap the persisted scroll map to recent, still-persisted threads. */
 function capScrollPositions(
-  positions: Record<string, number>,
+  positions: Record<string, number> | null | undefined,
   persistedThreadIds: Set<string>,
 ): Record<string, number> {
-  const entries = Object.entries(positions).filter(
+  const entries = Object.entries(positions ?? {}).filter(
     ([threadId, offset]) => typeof offset === "number" && persistedThreadIds.has(threadId),
   );
   if (entries.length <= MAX_PERSISTED_SCROLL_POSITIONS) {

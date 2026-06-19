@@ -41,6 +41,7 @@ import {
   syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
+import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
@@ -1068,10 +1069,42 @@ export function createThreadActions(
       const thread = get().threads.find((t) => t.id === activeThreadId);
       if (!thread) return false;
 
+      if (!(thread.workspaceId in get().taskSummariesByWorkspaceId)) {
+        await get().refreshTasks(thread.workspaceId);
+      }
+
       const rt = get().threadRuntimeById[activeThreadId];
       const trimmed = text.trim();
       const hasAttachments = attachments && attachments.length > 0;
       if (!trimmed && !hasAttachments) return false;
+
+      const taskCommand = !hasAttachments ? trimmed.match(/^\/task(?:\s+([\s\S]*))?$/i) : null;
+      if (taskCommand) {
+        try {
+          await ensureServerRunning(get, set, thread.workspaceId);
+          ensureControlSocket(get, set, thread.workspaceId);
+          await requestJsonRpc(get, set, thread.workspaceId, "command/execute", {
+            threadId: activeThreadId,
+            name: "task",
+            arguments: taskCommand[1]?.trim() ?? "",
+            clientMessageId: makeId(),
+          });
+          set({ composerText: "" });
+          return true;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          set((state) => ({
+            notifications: pushNotification(state.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: "Unable to start task mode",
+              detail,
+            }),
+          }));
+          return false;
+        }
+      }
 
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";

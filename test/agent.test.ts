@@ -1098,6 +1098,66 @@ describe("runTurn", () => {
     expect(callArg.stopWhen).toBe("step-count-sentinel");
   });
 
+  test("task input directives stop the legacy loop after the current tool step", async () => {
+    await runTurn(
+      makeParams({
+        taskContext: {
+          id: "task-1",
+          title: "Task",
+          objective: "Wait for a material user decision.",
+          status: "working",
+          revision: 1,
+          requirements: [],
+          workItems: [],
+          decisions: [],
+          questions: [],
+          blockers: [],
+          artifacts: [],
+          activeThreadId: "task-thread-1",
+        },
+        applyTaskDirective: async () => ({
+          task: { id: "task-1" } as never,
+          continuation: "pause_for_input",
+        }),
+      }),
+    );
+
+    const streamInput = mockStreamText.mock.calls[0]?.[0] as {
+      stopWhen: [unknown, () => boolean];
+    };
+    expect(streamInput.stopWhen[0]).toBe("step-count-sentinel");
+    expect(streamInput.stopWhen[1]()).toBe(false);
+
+    const toolContext = mockCreateTools.mock.calls[0]?.[0] as {
+      applyTaskDirective: (directive: unknown) => Promise<unknown>;
+    };
+    await toolContext.applyTaskDirective({ type: "request_input" });
+    expect(streamInput.stopWhen[1]()).toBe(true);
+  });
+
+  test("successful task creation stops the source chat loop after the tool step", async () => {
+    await runTurn(
+      makeParams({
+        createTask: async () => ({
+          task: { id: "task-1" } as never,
+          workspaceDisposition: "existing_project",
+        }),
+      }),
+    );
+
+    const streamInput = mockStreamText.mock.calls[0]?.[0] as {
+      stopWhen: [unknown, () => boolean];
+    };
+    expect(streamInput.stopWhen[0]).toBe("step-count-sentinel");
+    expect(streamInput.stopWhen[1]()).toBe(false);
+
+    const toolContext = mockCreateTools.mock.calls[0]?.[0] as {
+      createTask: (input: unknown) => Promise<unknown>;
+    };
+    await toolContext.createTask({ title: "Managed task" });
+    expect(streamInput.stopWhen[1]()).toBe(true);
+  });
+
   // -------------------------------------------------------------------------
   // Config -> getModel
   // -------------------------------------------------------------------------

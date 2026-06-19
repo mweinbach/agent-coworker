@@ -15,6 +15,21 @@ import type {
 } from "../shared/agents";
 import type { ProviderContinuationState } from "../shared/providerContinuation";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
+import type {
+  TaskActivity,
+  TaskArtifact,
+  TaskArtifactDetail,
+  TaskArtifactRevision,
+  TaskArtifactRevisionStatus,
+  TaskArtifactVersion,
+  TaskBlocker,
+  TaskCheckpoint,
+  TaskDecision,
+  TaskRecord,
+  TaskSummary,
+  TaskThread,
+  WorkItemStatus,
+} from "../shared/tasks";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { ModelStreamRawFormat } from "./modelStream";
 import type { ResearchRecord } from "./research/types";
@@ -27,6 +42,15 @@ import { importLegacySnapshots } from "./sessionDb/legacyImport";
 import { bootstrapSessionDb } from "./sessionDb/migrations";
 import { isCorruptionError } from "./sessionDb/normalizers";
 import { SessionDbRepository } from "./sessionDb/repository";
+import {
+  type CreateTaskInput,
+  type QueueTaskQuestionsInput,
+  type ResolveTaskQuestionsInput,
+  SessionTaskRepository,
+  type StartTaskArtifactRevisionInput,
+  type TaskRequirementInput,
+  type WorkItemInput,
+} from "./sessionDb/tasks";
 import { SessionDbWriteCoordinator } from "./sessionDb/writeCoordinator";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
@@ -175,6 +199,7 @@ export class SessionDb {
   private readonly sessionsDir: string;
   private readonly busyTimeoutMs: number;
   private readonly repository: SessionDbRepository;
+  private readonly taskRepository: SessionTaskRepository;
   private readonly writeCoordinator: SessionDbWriteCoordinator;
 
   private constructor(opts: {
@@ -189,6 +214,7 @@ export class SessionDb {
     this.sessionsDir = opts.sessionsDir;
     this.busyTimeoutMs = opts.busyTimeoutMs;
     this.repository = new SessionDbRepository(this.db);
+    this.taskRepository = new SessionTaskRepository(this.db);
     this.writeCoordinator = opts.writeCoordinator;
   }
 
@@ -356,6 +382,355 @@ export class SessionDb {
         this.repository.upsertResearch(record);
       },
       { researchId: record.id, status: record.status },
+    );
+  }
+
+  listTasks(workspacePath?: string | null): TaskSummary[] {
+    return this.taskRepository.listTasks(workspacePath);
+  }
+
+  getTask(taskId: string): TaskRecord | null {
+    return this.taskRepository.getTask(taskId);
+  }
+
+  getTaskForThread(sessionId: string): TaskRecord | null {
+    return this.taskRepository.getTaskForThread(sessionId);
+  }
+
+  getTaskByCreationKey(
+    idempotencyKey: string,
+    scope?: { sourceSessionId?: string | null; workspacePath?: string },
+  ): TaskRecord | null {
+    return this.taskRepository.getTaskByCreationKey(idempotencyKey, scope);
+  }
+
+  getActiveTaskForSourceSession(sessionId: string): TaskRecord | null {
+    return this.taskRepository.getActiveTaskForSourceSession(sessionId);
+  }
+
+  isTaskThread(sessionId: string): boolean {
+    return this.taskRepository.isTaskThread(sessionId);
+  }
+
+  async createTask(input: CreateTaskInput): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "create_task",
+      async () => this.taskRepository.createTask(input),
+      { taskId: input.id },
+    );
+  }
+
+  async addTaskThread(thread: TaskThread, expectedRevision: number): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "add_task_thread",
+      async () => this.taskRepository.addThread(thread, expectedRevision),
+      { taskId: thread.taskId, threadId: thread.id },
+    );
+  }
+
+  async updateTaskBrief(input: {
+    taskId: string;
+    expectedRevision: number;
+    title?: string;
+    objective?: string;
+    requirements?: TaskRequirementInput[];
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "update_task_brief",
+      async () => this.taskRepository.updateBrief(input),
+      { taskId: input.taskId },
+    );
+  }
+
+  async replaceTaskWorkItems(input: {
+    taskId: string;
+    expectedRevision: number;
+    items: WorkItemInput[];
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "replace_task_work_items",
+      async () => this.taskRepository.replaceWorkItems(input),
+      { taskId: input.taskId },
+    );
+  }
+
+  async updateTaskWorkItem(input: {
+    taskId: string;
+    workItemId: string;
+    expectedRevision: number;
+    status: WorkItemStatus;
+    completionEvidence?: string;
+    updatedAt: string;
+    threadId?: string | null;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "update_task_work_item",
+      async () => this.taskRepository.updateWorkItem(input),
+      { taskId: input.taskId, workItemId: input.workItemId },
+    );
+  }
+
+  async claimTaskWorkItem(input: {
+    taskId: string;
+    workItemId: string;
+    threadId: string;
+    expectedRevision: number;
+    claimedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "claim_task_work_item",
+      async () => this.taskRepository.claimWorkItem(input),
+      { taskId: input.taskId, workItemId: input.workItemId, threadId: input.threadId },
+    );
+  }
+
+  async recordTaskDecision(
+    decision: TaskDecision,
+    expectedRevision: number,
+    updatedAt: string,
+  ): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "record_task_decision",
+      async () => this.taskRepository.recordDecision(decision, expectedRevision, updatedAt),
+      { taskId: decision.taskId },
+    );
+  }
+
+  async queueTaskQuestions(input: QueueTaskQuestionsInput): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "queue_task_questions",
+      async () => this.taskRepository.queueQuestions(input),
+      { taskId: input.taskId, questionCount: input.questions.length },
+    );
+  }
+
+  async resolveTaskQuestions(input: ResolveTaskQuestionsInput): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "resolve_task_questions",
+      async () => this.taskRepository.resolveQuestions(input),
+      { taskId: input.taskId, answerCount: input.resolutions.length },
+    );
+  }
+
+  async defaultPendingTaskQuestions(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "default_pending_task_questions",
+      async () => this.taskRepository.defaultPendingQuestions(input),
+      { taskId: input.taskId },
+    );
+  }
+
+  async registerTaskArtifact(
+    artifact: TaskArtifact,
+    expectedRevision: number,
+    updatedAt: string,
+  ): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "register_task_artifact",
+      async () => this.taskRepository.registerArtifact(artifact, expectedRevision, updatedAt),
+      { taskId: artifact.taskId },
+    );
+  }
+
+  getTaskArtifactDetail(taskId: string, artifactId: string): TaskArtifactDetail | null {
+    return this.taskRepository.getArtifactDetail(taskId, artifactId);
+  }
+
+  getTaskArtifactVersion(
+    taskId: string,
+    artifactId: string,
+    versionId: string,
+  ): TaskArtifactVersion | null {
+    return this.taskRepository.getArtifactVersion(taskId, artifactId, versionId);
+  }
+
+  getActiveTaskArtifactRevisionForSession(sessionId: string): TaskArtifactRevision | null {
+    return this.taskRepository.getActiveArtifactRevisionForSession(sessionId);
+  }
+
+  getTaskArtifactRevision(revisionId: string): TaskArtifactRevision | null {
+    return this.taskRepository.getArtifactRevision(revisionId);
+  }
+
+  async registerTaskArtifactVersioned(input: {
+    artifact: TaskArtifact;
+    version: TaskArtifactVersion;
+    expectedRevision: number;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "register_task_artifact_versioned",
+      async () => this.taskRepository.registerArtifactVersioned(input),
+      { taskId: input.artifact.taskId, artifactId: input.artifact.id },
+    );
+  }
+
+  async registerTaskArtifactBaseline(input: {
+    taskId: string;
+    artifactId: string;
+    version: TaskArtifactVersion;
+    expectedRevision: number;
+    updatedAt: string;
+  }): Promise<TaskArtifactDetail> {
+    return await this.writeCoordinator.runExclusive(
+      "register_task_artifact_baseline",
+      async () => this.taskRepository.registerArtifactBaseline(input),
+      { taskId: input.taskId, artifactId: input.artifactId },
+    );
+  }
+
+  async captureTaskArtifactVersion(input: {
+    taskId: string;
+    artifactId: string;
+    version: TaskArtifactVersion;
+    expectedRevision: number;
+    updatedAt: string;
+    activityKind?: "artifact_version_captured" | "artifact_version_restored";
+  }): Promise<TaskArtifactDetail> {
+    return await this.writeCoordinator.runExclusive(
+      "capture_task_artifact_version",
+      async () => this.taskRepository.captureArtifactVersion(input),
+      { taskId: input.taskId, artifactId: input.artifactId },
+    );
+  }
+
+  async startTaskArtifactRevision(input: StartTaskArtifactRevisionInput): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "start_task_artifact_revision",
+      async () => this.taskRepository.startArtifactRevision(input),
+      { taskId: input.revision.taskId, artifactId: input.revision.artifactId },
+    );
+  }
+
+  async completeTaskArtifactRevision(input: {
+    revisionId: string;
+    version: TaskArtifactVersion;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "complete_task_artifact_revision",
+      async () => this.taskRepository.completeArtifactRevision(input),
+      { revisionId: input.revisionId, artifactId: input.version.artifactId },
+    );
+  }
+
+  async failTaskArtifactRevision(input: {
+    revisionId: string;
+    status: Extract<TaskArtifactRevisionStatus, "cancelled" | "error">;
+    updatedAt: string;
+    detail?: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "fail_task_artifact_revision",
+      async () => this.taskRepository.failArtifactRevision(input),
+      { revisionId: input.revisionId, status: input.status },
+    );
+  }
+
+  async acceptTaskArtifactVersion(input: {
+    taskId: string;
+    artifactId: string;
+    versionId: string;
+    expectedRevision: number;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "accept_task_artifact_version",
+      async () => this.taskRepository.acceptArtifactVersion(input),
+      { taskId: input.taskId, artifactId: input.artifactId },
+    );
+  }
+
+  async acceptAllTaskArtifactVersions(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "accept_all_task_artifact_versions",
+      async () => this.taskRepository.acceptAllArtifactVersions(input),
+      { taskId: input.taskId },
+    );
+  }
+
+  async reportTaskBlocker(
+    blocker: TaskBlocker,
+    expectedRevision: number,
+    updatedAt: string,
+  ): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "report_task_blocker",
+      async () => this.taskRepository.reportBlocker(blocker, expectedRevision, updatedAt),
+      { taskId: blocker.taskId },
+    );
+  }
+
+  async resolveTaskBlocker(input: {
+    taskId: string;
+    blockerId: string;
+    expectedRevision: number;
+    resolvedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "resolve_task_blocker",
+      async () => this.taskRepository.resolveBlocker(input),
+      { taskId: input.taskId, blockerId: input.blockerId },
+    );
+  }
+
+  async setTaskStatus(
+    input: Parameters<SessionTaskRepository["setStatus"]>[0],
+  ): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "set_task_status",
+      async () => this.taskRepository.setStatus(input),
+      { taskId: input.taskId, status: input.status },
+    );
+  }
+
+  async appendTaskActivity(activity: TaskActivity): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "append_task_activity",
+      async () => this.taskRepository.appendActivity(activity),
+      { taskId: activity.taskId, kind: activity.kind },
+    );
+  }
+
+  async createTaskCheckpoint(checkpoint: TaskCheckpoint): Promise<TaskCheckpoint> {
+    return await this.writeCoordinator.runExclusive(
+      "create_task_checkpoint",
+      async () => this.taskRepository.createCheckpoint(checkpoint),
+      { taskId: checkpoint.taskId },
+    );
+  }
+
+  getTaskDirectiveReceipt(taskId: string, idempotencyKey: string): number | null {
+    return this.taskRepository.getDirectiveReceipt(taskId, idempotencyKey);
+  }
+
+  async recordTaskDirectiveReceipt(
+    taskId: string,
+    idempotencyKey: string,
+    resultRevision: number,
+    createdAt: string,
+  ): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "record_task_directive_receipt",
+      async () => {
+        this.taskRepository.recordDirectiveReceipt(
+          taskId,
+          idempotencyKey,
+          resultRevision,
+          createdAt,
+        );
+      },
+      { taskId },
     );
   }
 

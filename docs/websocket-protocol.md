@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.35`
+- Current protocol version: `7.37`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -126,6 +126,16 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `turn/start`
 - `turn/steer`
 - `turn/interrupt`
+- `command/list`
+- `command/execute`
+- `task/create`
+- `task/list`
+- `task/read`
+- `task/questions/resolve`
+- `task/artifact/read`
+- `task/artifact/version/compare`
+- `task/artifact/version/preview`
+- `task/artifact/revision/start`
 - `cowork/workspace/bootstrap`
 - `cowork/workspace/spreadsheet/workbook`
 - `cowork/workspace/spreadsheet/version`
@@ -133,6 +143,8 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/presentation/preview`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
+
+`command/list` takes `{ threadId }` and returns the server-resolved slash command catalog, including enabled skills. `command/execute` takes `{ threadId, name, arguments?, clientMessageId? }`, expands the command or skill in the harness, and starts a normal projected turn. Clients should send `/task ...` through `command/execute` with `name: "task"` rather than treating it as ordinary message text.
 
 #### File attachments in `turn/start` and `turn/steer`
 
@@ -426,6 +438,55 @@ OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-s
 
 Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Codex apps endpoint. Connector execution, connector discovery, and app enablement are delegated to `codex app-server`.
 
+### Task mode JSON-RPC methods
+
+Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace.
+
+Every mutation after creation carries `expectedRevision`. A stale revision fails with a structured conflict containing the current task revision so clients can reload rather than overwrite concurrent work.
+
+Requests:
+
+- `task/create` — params `{ cwd?, idempotencyKey, title, objective, context, requirements, workItems, decisions?, reviewRequired?, provider?, model? }`; creates a validated full plan directly in `working` state and returns `{ task, thread }`. `requirements` must include an `acceptance_criterion`; work-item keys must be unique, dependencies must be acyclic, and at least one work item must declare an expected output.
+- `task/list` — params `{ cwd? }`; result `{ tasks, total }`
+- `task/read` — params `{ cwd?, taskId }`; result `{ task }`
+- `task/updateBrief` — params `{ cwd?, taskId, expectedRevision, title?, objective?, requirements? }`; result `{ task }`
+- `task/updateGraph` — params `{ cwd?, taskId, expectedRevision, workItems }`; replaces the validated dependency graph and returns `{ task }`
+- `task/workItem/claim` — params `{ cwd?, taskId, expectedRevision, workItemId, taskThreadId }`; atomically claims one work item for one task thread
+- `task/workItem/mark` — params `{ cwd?, taskId, expectedRevision, workItemId, status, completionEvidence? }`; result `{ task }`
+- `task/decision/record` — params `{ cwd?, taskId, expectedRevision, question, resolution, source?, scope?, confidence?, supersedes? }`; result `{ task }`
+- `task/questions/resolve` — params `{ cwd?, taskId, expectedRevision, answers }`, where `answers` contains 1–3 `{ questionId, optionId }` or `{ questionId, text }` entries; records the answers atomically and returns `{ task, resumeStatus }`, with `resumeStatus` equal to `queued`, `steered`, `not_needed`, or `failed`
+- `task/blocker/report` — params `{ cwd?, taskId, expectedRevision, description, blocking, workItemId? }`; result `{ task }`
+- `task/blocker/resolve` — params `{ cwd?, taskId, expectedRevision, blockerId }`; result `{ task }`
+- `task/artifact/register` — params `{ cwd?, taskId, expectedRevision, path, title, kind, artifactId?, baseVersionId?, changeSummary?, workItemId?, provenance? }`; captures immutable bytes from a workspace-contained path as a new logical artifact or version and returns `{ task }`
+- `task/artifact/read` — params `{ cwd?, taskId, artifactId }`; lazily captures a baseline for legacy artifacts when necessary and returns `{ detail }`
+- `task/artifact/version/capture` — params `{ cwd?, taskId, artifactId, expectedRevision, changeSummary? }`; explicitly captures externally edited live bytes and returns `{ task, detail }`
+- `task/artifact/version/compare` — params `{ cwd?, taskId, artifactId, baseVersionId, targetVersionId }`; returns `{ comparison }` with bounded text, DOCX, PPTX, XLSX, or binary changes
+- `task/artifact/version/preview` — params `{ cwd?, taskId, artifactId, versionId }`; returns `{ versionId, preview }` from immutable historical bytes
+- `task/artifact/version/restore` — params `{ cwd?, taskId, artifactId, versionId, expectedRevision }`; verifies the live fingerprint, restores the selected bytes as a new draft version, and returns `{ task, detail }`
+- `task/artifact/version/accept` — params `{ cwd?, taskId, artifactId, expectedRevision, versionId? }`; records the accepted version and returns `{ task, detail }`
+- `task/artifact/revision/start` — params `{ cwd?, taskId, artifactId, baseVersionId, expectedRevision, instruction }`; creates one focused revision work item and task thread for the artifact and returns `{ task, detail, revision, thread }`
+- `task/thread/create` — params `{ cwd?, taskId, expectedRevision, title, workItemId?, provider?, model? }`; result `{ task, thread }`
+- `task/proposeCompletion` — params `{ cwd?, taskId, expectedRevision, summary, caveats? }`; validates plan/evidence/artifacts and moves the task to `awaiting_review` when review is required
+- `task/accept` — params `{ cwd?, taskId, expectedRevision }`; bulk-accepts eligible latest artifact drafts and completes an `awaiting_review` task
+- `task/requestChanges` — params `{ cwd?, taskId, expectedRevision, feedback }`; returns a delivered task to working state
+- `task/cancel` — params `{ cwd?, taskId, expectedRevision, reason? }`; cancels the task and interrupts its live task threads
+- `task/reopen` — params `{ cwd?, taskId, expectedRevision, reason? }`; reopens a terminal task
+
+Task records contain the durable brief, requirements, task threads, dependency-aware work items, decisions, queued questions, logical artifacts, blockers, semantic activity, and latest checkpoint. Summaries expose `pendingQuestionCount` and `blockingQuestionCount`; full records expose each question's urgency, options, default, provisional decision, answer, and resolution status. Artifact bytes are immutable, content-addressed objects under `~/.cowork/artifacts`; SQLite stores version lineage, review state, provenance, and active revision ownership. The workspace path remains the live editable copy. The coordinator owns lifecycle transitions; an agent proposes changes through the task directive tool but cannot bypass revision, evidence, dependency, fingerprint, question, or artifact checks.
+
+Task-mode agents request durable input with the `taskUpdate` directive `request_input`; the synchronous chat `AskUserQuestion` tool is not exposed in task threads. One directive may bundle 1–3 related questions. A non-blocking question must include a reversible `defaultAction`; the coordinator records that default as a provisional agent decision and lets the current turn continue. A later user answer supersedes the provisional decision. If delivery is proposed before the user answers, remaining non-blocking questions resolve to their recorded defaults.
+
+A blocking question must use urgency `now`. Persisting it moves an active task to `blocked` and stops the model loop after the directive tool result has been saved. Partial answers remain valid, but the task stays blocked while any blocking question or explicit blocking issue remains. Resolving the final blocking question moves the task to `working` and automatically continues the primary task thread: an active turn is steered, while an idle thread receives a new visible continuation turn. Answers remain saved if continuation fails, and `input_resume_failed` activity records the recovery failure. Cancelling a task dismisses its pending questions; unresolved blocking questions prevent completion.
+
+Artifact comparisons cap detailed changes at 10,000 while preserving aggregate counts. Unsupported or corrupt Office packages return a binary comparison or preview with explicit warnings instead of discarding either version. A live-file fingerprint conflict is returned as structured JSON-RPC error data with category `artifact_conflict`; clients must offer capture/reload rather than silently overwrite external edits.
+
+Notifications:
+
+- `task/created` — params `{ cwd, task, sourceSessionId, takeover, workspaceDisposition }`; `workspaceDisposition` is `existing_project` or `promote_one_off`
+- `task/updated` — params `{ cwd, task }`
+- `task/activity` — params `{ cwd, taskId, activity }`
+- `task/checkpointCreated` — params `{ cwd, taskId, checkpoint }`
+
 ### Research JSON-RPC methods
 
 Research traffic is scoped to the active workspace and separate from chat threads. The desktop `Research` tab reaches the service through that workspace's JSON-RPC connection. Export artifacts and staged uploads live under `~/.cowork/research/*`; canonical metadata rows live in the shared SQLite database with a workspace discriminator.
@@ -654,6 +715,18 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.37`:
+
+- Added the one-shot `createTask` model tool and bundled `/task` skill for chat-to-task promotion with a complete initial plan.
+- Added `command/list` and `command/execute` so thin clients invoke slash commands through the harness.
+- Added `task/created` takeover notifications, source-chat locking, and promotion of one-off chat workspaces into persistent projects.
+
+Changes in `7.36`:
+
+- Added explicit project Task mode with `task/*` lifecycle, brief, work-graph, decision, blocker, artifact, review, and task-thread controls.
+- Task-owned sessions are intentionally excluded from ordinary chat listings and workspace bootstrap thread lists. Standard chats are not auto-promoted or wrapped in task state.
+- Added semantic task notifications and coordinator checkpoints so clients can resume long-running work without replaying chat history.
 
 Changes in `7.35`:
 

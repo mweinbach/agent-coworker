@@ -5,9 +5,16 @@ import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
 import type { loadAgentPrompt as loadAgentPromptFn } from "../../prompt";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { SessionKind } from "../../shared/agents";
+import {
+  type TaskCreationInput,
+  type TaskCreationResult,
+  type TaskQuestionResumeStatus,
+  taskCreationInputSchema,
+} from "../../shared/tasks";
 import type { AgentConfig } from "../../types";
 import { defaultRuntimeNameForProvider } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
+import { isPathInsideOneOffChatsRoot } from "../../utils/oneOffChats";
 import { sameWorkspacePath } from "../../utils/workspacePath";
 import type { AgentControl } from "../agents/AgentControl";
 import { createSessionEventCapture } from "../jsonrpc/sessionEventCapture";
@@ -21,6 +28,7 @@ import type {
 import { SessionRuntime } from "../session/SessionRuntime";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
+import type { TaskCoordinator } from "../tasks/TaskCoordinator";
 import type { WorkspaceBackupService } from "../workspaceBackups";
 import {
   mergeConfigPatch,
@@ -66,6 +74,7 @@ export type SessionRegistryOptions = {
   runTurnImpl?: typeof runTurnFn;
   sessionDb: SessionDb;
   threadJournal: ThreadJournal;
+  taskCoordinator: TaskCoordinator;
   loadAgentPrompt: typeof loadAgentPromptFn;
   setConfig: (config: AgentConfig) => void;
   readSkillCatalogMtimeSnapshot?: (config: AgentConfig) => Promise<string>;
@@ -227,6 +236,101 @@ export class SessionRegistry {
     return binding;
   }
 
+  async dispatchTaskContinuation(input: {
+    sessionId: string;
+    prompt: string;
+    displayText: string;
+    onFailure: (error: unknown) => Promise<void>;
+  }): Promise<Exclude<TaskQuestionResumeStatus, "not_needed">> {
+    const binding = this.loadThreadBinding(input.sessionId);
+    const runtime = binding?.runtime;
+    if (!runtime) {
+      await input.onFailure(new Error("Task continuation thread could not be loaded"));
+      return "failed";
+    }
+    const activeTurnId = runtime.turns.activeTurnId;
+    if (activeTurnId) {
+      try {
+        await runtime.turns.sendSteerMessage(input.prompt, activeTurnId);
+        return "steered";
+      } catch (error) {
+        await input.onFailure(error);
+        return "failed";
+      }
+    }
+    void runtime.turns
+      .sendUserMessage(input.prompt, undefined, input.displayText)
+      .catch((error) => void input.onFailure(error).catch(() => undefined));
+    return "queued";
+  }
+
+  async createTaskFromChat(
+    sourceSessionId: string,
+    rawInput: TaskCreationInput,
+  ): Promise<TaskCreationResult> {
+    const creation = taskCreationInputSchema.parse(rawInput);
+    const sourceBinding = this.loadThreadBinding(sourceSessionId);
+    const sourceRuntime = sourceBinding?.runtime;
+    if (sourceRuntime?.read.sessionKind !== "root") {
+      throw new Error("Tasks can be created only from a root chat");
+    }
+    if (this.options.taskCoordinator.isTaskThread(sourceSessionId)) {
+      throw new Error("Task mode is already active for this thread");
+    }
+    const cwd = sourceRuntime.read.workingDirectory;
+    const existing = this.options.sessionDb.getTaskByCreationKey(creation.idempotencyKey, {
+      sourceSessionId,
+      workspacePath: cwd,
+    });
+    if (existing) {
+      return {
+        task: existing,
+        workspaceDisposition: isPathInsideOneOffChatsRoot(
+          existing.workspacePath,
+          this.options.homedir,
+        )
+          ? "promote_one_off"
+          : "existing_project",
+      };
+    }
+    const active = this.options.sessionDb.getActiveTaskForSourceSession(sourceSessionId);
+    if (active) throw new Error(`This chat is locked by active task ${active.id}`);
+    const workspaceDisposition = isPathInsideOneOffChatsRoot(cwd, this.options.homedir)
+      ? "promote_one_off"
+      : "existing_project";
+    const taskRuntime = this.createJsonRpcThreadSession(
+      cwd,
+      sourceRuntime.read.publicConfig.provider,
+      sourceRuntime.read.publicConfig.model,
+    );
+    await taskRuntime.lifecycle.waitForPersistenceIdle();
+    try {
+      const result = await this.options.taskCoordinator.createPlanned({
+        workspacePath: cwd,
+        sessionId: taskRuntime.id,
+        sourceSessionId,
+        creationOrigin: "chat_tool",
+        workspaceDisposition,
+        creation,
+      });
+      const kickoff = [
+        `Execute the task "${result.task.title}" using the existing task brief and work graph.`,
+        "Start with the first unblocked work item. Maintain task state with taskUpdate and ask only at material decision boundaries.",
+      ].join("\n\n");
+      void taskRuntime.turns
+        .sendUserMessage(kickoff, undefined, `Start task: ${result.task.title}`)
+        .catch(() => undefined);
+      return result;
+    } catch (error) {
+      const failedBinding = this.sessionBindings.get(taskRuntime.id);
+      if (failedBinding) this.disposeBinding(failedBinding, "task creation failed");
+      this.sessionBindings.delete(taskRuntime.id);
+      this.sessionIdleSince.delete(taskRuntime.id);
+      await this.options.sessionDb.deleteSession(taskRuntime.id).catch(() => undefined);
+      throw error;
+    }
+  }
+
   readThreadSnapshot(threadId: string): ReturnType<SessionRuntime["snapshot"]["build"]> | null {
     const liveSnapshot = this.sessionBindings.get(threadId)?.runtime?.snapshot.peek() ?? null;
     if (liveSnapshot) return liveSnapshot;
@@ -336,6 +440,18 @@ export class SessionRegistry {
           // ignore individual sink failures
         }
       }
+      if (evt.type === "session_busy" && evt.busy === false) {
+        const outcome = evt.outcome ?? "completed";
+        void this.options.taskCoordinator
+          .handleThreadOutcome(evt.sessionId, outcome)
+          .catch(() => null)
+          .then(() =>
+            this.options.taskCoordinator.checkpointThread(evt.sessionId, `turn ${outcome}`),
+          )
+          .catch(() => {
+            // Task revision finalization and checkpointing must not affect turn delivery.
+          });
+      }
     };
     const a2uiSessionAdapter = isA2uiExperimentEnabled(this.options.env)
       ? loadA2uiSessionAdapterModule()
@@ -382,6 +498,11 @@ export class SessionRegistry {
           : undefined,
       sessionDb: this.options.sessionDb,
       toolEnv: this.options.env,
+      getTaskContextImpl: (sessionId) =>
+        this.options.taskCoordinator.getContextForThread(sessionId),
+      applyTaskDirectiveImpl: async (sessionId, directive) =>
+        await this.options.taskCoordinator.applyDirective(sessionId, directive),
+      createTaskImpl: async (sessionId, input) => await this.createTaskFromChat(sessionId, input),
       emit,
       createAgentSessionImpl: async (agentOpts) => await this.getAgentControl().spawn(agentOpts),
       listAgentSessionsImpl: async (parentSessionId) =>
@@ -394,6 +515,15 @@ export class SessionRegistry {
       cancelAgentSessionsImpl: (parentSessionId) =>
         this.getAgentControl().cancelAll(parentSessionId),
       deleteSessionImpl: async (opts) => {
+        if (this.options.taskCoordinator.isTaskThread(opts.targetSessionId)) {
+          throw new Error("Task threads must be managed through the task lifecycle");
+        }
+        const activeSourceTask = this.options.sessionDb.getActiveTaskForSourceSession(
+          opts.targetSessionId,
+        );
+        if (activeSourceTask) {
+          throw new Error(`Chat is locked by active task ${activeSourceTask.id}`);
+        }
         const requesterWorkingDirectory =
           this.sessionBindings.get(opts.requesterSessionId)?.runtime?.read.workingDirectory ??
           this.options.sessionDb.getSessionRecord(opts.requesterSessionId)?.workingDirectory ??

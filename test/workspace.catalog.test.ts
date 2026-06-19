@@ -105,7 +105,7 @@ describe("workspace catalog and path rules", () => {
     ]);
   });
 
-  test("listWorkspaceSummaries infers one-off chat workspaces from ~/.cowork/chats paths", async () => {
+  test("listWorkspaceSummaries preserves promoted projects under ~/.cowork/chats", async () => {
     const projectPath = "/tmp/project-a";
     const chatPath = path.join(getOneOffChatsRoot(), "20260524-new-chat");
     const desktopService: WebDesktopServiceLike = {
@@ -158,7 +158,7 @@ describe("workspace catalog and path rules", () => {
     expect(result.workspaces).toEqual([
       expect.objectContaining({
         id: "chat-legacy",
-        workspaceKind: "oneOffChat",
+        workspaceKind: "project",
       }),
     ]);
   });

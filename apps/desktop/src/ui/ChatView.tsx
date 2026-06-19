@@ -1,4 +1,5 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
+import { LockKeyholeIcon } from "lucide-react";
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
@@ -14,6 +15,7 @@ import {
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { ConversationScrollButton } from "../components/ai-elements/conversation";
+import { Button } from "../components/ui/button";
 import {
   buildComposerAttachmentSignature,
   type ComposerAttachmentFile,
@@ -55,6 +57,13 @@ const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
 // Stable empty reference so the sandbox-approvals selector doesn't allocate a new
 // array each render (which would defeat zustand's reference equality check).
 const EMPTY_SANDBOX_APPROVALS: VisibleSandboxApproval[] = [];
+const ACTIVE_TASK_STATUSES = new Set([
+  "draft",
+  "planning",
+  "working",
+  "blocked",
+  "awaiting_review",
+]);
 
 export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
@@ -156,6 +165,24 @@ export function ChatView() {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
   const reconnectThread = useAppStore((s) => s.reconnectThread);
+  const selectTask = useAppStore((s) => s.selectTask);
+  const tasksById = useAppStore((s) => s.tasksById);
+  const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
+  const sourceTask = useMemo(() => {
+    if (!selectedThreadId) return null;
+    const record = Object.values(tasksById).find(
+      (task) => task.sourceSessionId === selectedThreadId && ACTIVE_TASK_STATUSES.has(task.status),
+    );
+    if (record) return { id: record.id, title: record.title };
+    for (const summaries of Object.values(taskSummariesByWorkspaceId)) {
+      const summary = summaries.find(
+        (task) =>
+          task.sourceSessionId === selectedThreadId && ACTIVE_TASK_STATUSES.has(task.status),
+      );
+      if (summary) return { id: summary.id, title: summary.title };
+    }
+    return null;
+  }, [selectedThreadId, taskSummariesByWorkspaceId, tasksById]);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -705,7 +732,8 @@ export function ChatView() {
   }
 
   const busy = rt?.busy === true;
-  const inputDisabled = hasPromptModal || hasFilePreview || preparingAttachments;
+  const inputDisabled =
+    hasPromptModal || hasFilePreview || preparingAttachments || sourceTask !== null;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||
@@ -772,36 +800,51 @@ export function ChatView() {
           </div>
         ) : null}
 
-        <ChatComposer
-          messageBarOverlayRef={messageBarOverlayRef}
-          composerOverlayMinHeight={composerOverlayMinHeight}
-          messageBarHeight={messageBarHeight}
-          inputDisabled={inputDisabled}
-          transcriptOnly={transcriptOnly}
-          ingestAttachmentFiles={ingestAttachmentFiles}
-          isUploading={isUploading}
-          pendingAttachments={pendingAttachments}
-          removeAttachment={removeAttachment}
-          submitComposer={submitComposer}
-          busy={busy}
-          composerHint={composerHint}
-          composerSubmitState={composerSubmitState}
-          attachmentPickerError={attachmentPickerError}
-          composerText={composerText}
-          setComposerText={setComposerText}
-          onComposerKeyDown={onComposerKeyDown}
-          mentionCatalog={mentionCatalog}
-          placeholder={placeholder}
-          textareaRef={textareaRef}
-          fileInputRef={fileInputRef}
-          handleFileSelect={handleFileSelect}
-          threadModelConfig={threadModelConfig}
-          threadDraft={thread.draft === true}
-          selectedThreadId={selectedThreadId}
-          modelDisplayNames={modelDisplayNames}
-          preparingAttachments={preparingAttachments}
-          onStop={selectedThreadId ? handleStop : undefined}
-        />
+        {sourceTask ? (
+          <div className="shrink-0 border-t border-border bg-background px-4 py-3">
+            <div className="mx-auto flex max-w-3xl items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+              <LockKeyholeIcon className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">This chat is locked while its task is active.</p>
+                <p className="truncate text-xs text-muted-foreground">{sourceTask.title}</p>
+              </div>
+              <Button type="button" size="sm" onClick={() => void selectTask(sourceTask.id)}>
+                Open task
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <ChatComposer
+            messageBarOverlayRef={messageBarOverlayRef}
+            composerOverlayMinHeight={composerOverlayMinHeight}
+            messageBarHeight={messageBarHeight}
+            inputDisabled={inputDisabled}
+            transcriptOnly={transcriptOnly}
+            ingestAttachmentFiles={ingestAttachmentFiles}
+            isUploading={isUploading}
+            pendingAttachments={pendingAttachments}
+            removeAttachment={removeAttachment}
+            submitComposer={submitComposer}
+            busy={busy}
+            composerHint={composerHint}
+            composerSubmitState={composerSubmitState}
+            attachmentPickerError={attachmentPickerError}
+            composerText={composerText}
+            setComposerText={setComposerText}
+            onComposerKeyDown={onComposerKeyDown}
+            mentionCatalog={mentionCatalog}
+            placeholder={placeholder}
+            textareaRef={textareaRef}
+            fileInputRef={fileInputRef}
+            handleFileSelect={handleFileSelect}
+            threadModelConfig={threadModelConfig}
+            threadDraft={thread.draft === true}
+            selectedThreadId={selectedThreadId}
+            modelDisplayNames={modelDisplayNames}
+            preparingAttachments={preparingAttachments}
+            onStop={selectedThreadId ? handleStop : undefined}
+          />
+        )}
 
         <CancelSubagentsDialog
           open={cancelScopeDialogOpen}

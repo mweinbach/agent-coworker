@@ -3,12 +3,31 @@ import { describe, expect, test } from "bun:test";
 import {
   applyWorkspaceOrder,
   getVisibleSidebarThreads,
+  groupStandardChatThreadsByWorkspace,
   reorderSidebarItemsById,
   shouldEmphasizeWorkspaceRow,
   swapSidebarItemsById,
 } from "../src/ui/sidebarHelpers";
 
 describe("desktop sidebar helpers", () => {
+  test("keeps task-owned sessions out of standard chat groups", () => {
+    const standard = {
+      id: "chat-1",
+      workspaceId: "ws-1",
+      lastMessageAt: "2026-06-18T12:00:00.000Z",
+    };
+    const taskThread = {
+      id: "task-session-1",
+      workspaceId: "ws-1",
+      lastMessageAt: "2026-06-18T13:00:00.000Z",
+      taskId: "task-1",
+    };
+
+    expect(groupStandardChatThreadsByWorkspace([taskThread, standard]).get("ws-1")).toEqual([
+      standard,
+    ]);
+  });
+
   test("caps visible threads at 10 by default and reports hidden overflow", () => {
     const threads = Array.from({ length: 12 }, (_, index) => ({ id: `thread-${index}` }));
 

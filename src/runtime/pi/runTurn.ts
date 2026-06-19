@@ -197,6 +197,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           }
 
           stepMessages = [...stepMessages, ...toolResultMessages];
+          if (params.shouldStopAfterToolStep?.()) break;
         }
 
         return {

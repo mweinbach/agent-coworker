@@ -101,7 +101,11 @@ describe("presentation preview renderer", () => {
       await fs.mkdir(scriptDir, { recursive: true });
       await fs.writeFile(
         path.join(scriptDir, "render_artifact_slide.mjs"),
-        "throw new Error('the fake bundled node handles this script');",
+        `import fs from "node:fs";
+fs.writeFileSync(process.env.COWORK_TEST_ENV_CAPTURE, Object.entries(process.env).map(([key, value]) => key + "=" + value).join("\\n"));
+const outputIndex = process.argv.indexOf("--output");
+fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
+`,
         "utf8",
       );
 
@@ -112,23 +116,11 @@ describe("presentation preview renderer", () => {
       await fs.mkdir(bundledModulesDir, { recursive: true });
       await fs.writeFile(path.join(bundledRuntime, "runtime.json"), "{}\n", "utf8");
       await fs.writeFile(path.join(bundledModulesDir, "package.json"), "{}\n", "utf8");
-      const fakeNode = path.join(bundledNodeDir, "node");
-      await fs.writeFile(
-        fakeNode,
-        `#!/usr/bin/env bash
-env > "$COWORK_TEST_ENV_CAPTURE"
-output=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output" ]; then
-    shift
-    output="$1"
-  fi
-  shift || true
-done
-printf 'bundled-runtime-png' > "$output"
-`,
-        "utf8",
+      const fakeNode = path.join(
+        bundledNodeDir,
+        process.platform === "win32" ? "node.exe" : "node",
       );
+      await fs.copyFile(process.execPath, fakeNode);
       await fs.chmod(fakeNode, 0o755);
 
       const envCapture = path.join(dir, "render-env.txt");

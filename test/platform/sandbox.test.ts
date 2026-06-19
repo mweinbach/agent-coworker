@@ -367,7 +367,11 @@ describe("resolveSandboxPolicy", () => {
       fs.mkdirSync(path.join(ws, ".git", "hooks"), { recursive: true });
       // `uploads` -> `.git/hooks`: a logical-looking root that really resolves
       // into protected metadata.
-      fs.symlinkSync(path.join(ws, ".git", "hooks"), path.join(ws, "uploads"));
+      fs.symlinkSync(
+        path.join(ws, ".git", "hooks"),
+        path.join(ws, "uploads"),
+        process.platform === "win32" ? "junction" : undefined,
+      );
       const policy = resolveSandboxPolicy({
         config: { mode: "workspace-write", network: true },
         workingDirectory: ws,
@@ -424,7 +428,11 @@ describe("filterTargetPathsToWorkspace", () => {
     try {
       fs.mkdirSync(path.join(ws, "src"));
       // `src/link` -> external dir (escape); `src/ok` is a legit in-workspace dir.
-      fs.symlinkSync(outside, path.join(ws, "src", "link"));
+      fs.symlinkSync(
+        outside,
+        path.join(ws, "src", "link"),
+        process.platform === "win32" ? "junction" : undefined,
+      );
       fs.mkdirSync(path.join(ws, "src", "ok"));
       const roots = filterTargetPathsToWorkspace(ws, ["src/link", "src/ok"]);
       // The escaping symlink is dropped; the legit root is kept (canonicalized).
@@ -441,7 +449,11 @@ describe("filterTargetPathsToWorkspace", () => {
     try {
       fs.mkdirSync(path.join(ws, "src"));
       // `src/link` exists and escapes; `new.ts` below it does NOT exist yet.
-      fs.symlinkSync(outside, path.join(ws, "src", "link"));
+      fs.symlinkSync(
+        outside,
+        path.join(ws, "src", "link"),
+        process.platform === "win32" ? "junction" : undefined,
+      );
       const roots = filterTargetPathsToWorkspace(ws, ["src/link/new.ts", "src/ok.ts"]);
       // The escaping parent is resolved via the existing prefix and dropped.
       expect(roots).toEqual([canonicalizeRoot(path.join(ws, "src", "ok.ts"))]);

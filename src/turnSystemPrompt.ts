@@ -1,6 +1,8 @@
 import path from "node:path";
 import { renderHarnessContextSection } from "./sessionContext/renderHarnessContextSection";
 import { renderReferencedPluginsSection } from "./sessionContext/renderReferencedPluginsSection";
+import { renderTaskContextSection } from "./sessionContext/renderTaskContextSection";
+import type { TaskContextSnapshot } from "./shared/tasks";
 import type { AgentConfig, HarnessContextState, ReferencedPluginContext } from "./types";
 import {
   deriveActiveWorkspaceContext,
@@ -81,6 +83,7 @@ export function buildTurnSystemPrompt(
   mcpToolNames: string[],
   harnessContext?: HarnessContextState | null,
   referencedPlugins?: ReferencedPluginContext[] | null,
+  taskContext?: TaskContextSnapshot | null,
 ): string {
   const sections = [
     rewriteLegacyProjectPathGuidance(stripStaticMcpNamespacingGuidance(system), config),
@@ -109,6 +112,11 @@ export function buildTurnSystemPrompt(
   const referencedPluginsSection = renderReferencedPluginsSection(referencedPlugins);
   if (referencedPluginsSection) {
     sections.push(referencedPluginsSection);
+  }
+
+  const taskSection = renderTaskContextSection(taskContext);
+  if (taskSection) {
+    sections.push(taskSection);
   }
 
   return sections.join("\n\n");

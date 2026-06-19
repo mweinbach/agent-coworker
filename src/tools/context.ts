@@ -10,6 +10,13 @@ import type {
   AgentSpawnContextOptions,
   PersistentAgentSummary,
 } from "../shared/agents";
+import type {
+  TaskContextSnapshot,
+  TaskCreationInput,
+  TaskCreationResult,
+  TaskDirective,
+  TaskDirectiveResult,
+} from "../shared/tasks";
 import type { AgentConfig, ApproveCommandOptions, HarnessContextState, TodoItem } from "../types";
 
 export interface AgentControl {
@@ -67,6 +74,9 @@ export interface ToolContext {
 
   /** Structured run intent for the active session/turn. */
   harnessContext?: HarnessContextState | null;
+  taskContext?: TaskContextSnapshot | null;
+  applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
+  createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
 
   /** Active session id, used for memory provenance and session-scoped tool state. */
   sessionId?: string;

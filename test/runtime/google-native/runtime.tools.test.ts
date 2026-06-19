@@ -199,6 +199,46 @@ describe("google interactions runtime — tools", () => {
     expect(result.text).toBe("Tool result received.");
   });
 
+  test("stops after a tool step when task input requests a pause", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-task-pause-"));
+    let modelSteps = 0;
+    let toolCalls = 0;
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async () => {
+        modelSteps += 1;
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_pause", name: "requestInput", arguments: {} }],
+            usage: { input: 10, output: 5, totalTokens: 15 },
+            stopReason: "tool_calls",
+            timestamp: Date.now(),
+          },
+          interactionId: "interaction_pause",
+        };
+      },
+    });
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 3,
+        shouldStopAfterToolStep: () => true,
+        tools: {
+          requestInput: {
+            execute: async () => {
+              toolCalls += 1;
+              return "Task paused for input";
+            },
+          },
+        },
+      }),
+    );
+
+    expect(modelSteps).toBe(1);
+    expect(toolCalls).toBe(1);
+    expect(result.responseMessages.some((message) => message.role === "tool")).toBe(true);
+  });
+
   test("usage is accumulated across multiple steps", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-usage-"));
     let step = 0;

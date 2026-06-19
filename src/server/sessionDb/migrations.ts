@@ -20,6 +20,10 @@ const RESEARCH_WORKSPACE_COLUMN_MIGRATION = 15;
 const AGENT_PROFILE_METADATA_MIGRATION = 16;
 const LAST_MEMORY_GENERATED_INDEX_MIGRATION = 17;
 const SANDBOX_CONFIG_MIGRATION = 18;
+const TASK_MODE_MIGRATION = 19;
+const TASK_ARTIFACT_VERSIONS_MIGRATION = 20;
+const TASK_QUESTIONS_MIGRATION = 21;
+const TASK_CREATION_MIGRATION = 22;
 
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
@@ -48,6 +52,10 @@ type BootstrapSessionDbOptions = {
     | "addResearchWorkspaceColumn"
     | "addAgentProfileMetadataColumn"
     | "addLastMemoryGeneratedIndexColumn"
+    | "addTaskModeTables"
+    | "addTaskArtifactVersionTables"
+    | "addTaskQuestionTables"
+    | "addTaskCreationColumns"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -152,6 +160,26 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(SANDBOX_CONFIG_MIGRATION)) {
     opts.repository.addSandboxColumn();
     opts.repository.markMigration(SANDBOX_CONFIG_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(TASK_MODE_MIGRATION)) {
+    opts.repository.addTaskModeTables();
+    opts.repository.markMigration(TASK_MODE_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(TASK_ARTIFACT_VERSIONS_MIGRATION)) {
+    opts.repository.addTaskArtifactVersionTables();
+    opts.repository.markMigration(TASK_ARTIFACT_VERSIONS_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(TASK_QUESTIONS_MIGRATION)) {
+    opts.repository.addTaskQuestionTables();
+    opts.repository.markMigration(TASK_QUESTIONS_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(TASK_CREATION_MIGRATION)) {
+    opts.repository.addTaskCreationColumns();
+    opts.repository.markMigration(TASK_CREATION_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

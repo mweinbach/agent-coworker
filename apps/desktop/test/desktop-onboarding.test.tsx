@@ -1,87 +1,17 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
-
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    appendTranscriptBatch: async () => {},
-    appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {},
-    listDirectory: async () => [],
-    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-    pickWorkspaceDirectory: async () => null,
-    readTranscript: async () => [],
-    saveState: async () => {},
-    startWorkspaceServer: async () => ({ url: "ws://mock" }),
-    stopWorkspaceServer: async () => {},
-    showContextMenu: async () => null,
-    windowMinimize: async () => {},
-    windowMaximize: async () => {},
-    windowClose: async () => {},
-    getPlatform: async () => "linux",
-    readFile: async () => "",
-    previewOSFile: async () => {},
-    openPath: async () => {},
-    openExternalUrl: async () => {},
-    revealPath: async () => {},
-    copyPath: async () => {},
-    createDirectory: async () => {},
-    renamePath: async () => {},
-    trashPath: async () => {},
-    confirmAction: async () => true,
-    showNotification: async () => true,
-    getSystemAppearance: async () => ({
-      platform: "linux",
-      themeSource: "system",
-      shouldUseDarkColors: false,
-      shouldUseDarkColorsForSystemIntegratedUI: false,
-      shouldUseHighContrastColors: false,
-      shouldUseInvertedColorScheme: false,
-      prefersReducedTransparency: false,
-      inForcedColorsMode: false,
-    }),
-    setWindowAppearance: async () => ({
-      platform: "linux",
-      themeSource: "system",
-      shouldUseDarkColors: false,
-      shouldUseDarkColorsForSystemIntegratedUI: false,
-      shouldUseHighContrastColors: false,
-      shouldUseInvertedColorScheme: false,
-      prefersReducedTransparency: false,
-      inForcedColorsMode: false,
-    }),
-    getUpdateState: async () => ({
-      phase: "idle",
-      currentVersion: "0.1.0",
-      packaged: false,
-      lastCheckedAt: null,
-      lastCheckStartedAt: null,
-      downloadedAt: null,
-      message: null,
-      error: null,
-      release: null,
-      progress: null,
-    }),
-    checkForUpdates: async () => {},
-    quitAndInstallUpdate: async () => {},
-    onSystemAppearanceChanged: () => () => {},
-    onMenuCommand: () => () => {},
-    onUpdateStateChanged: () => () => {},
-  }),
-);
-
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: NoopJsonRpcSocket,
-}));
 
 const { useAppStore } = await import("../src/app/store");
 const { DesktopOnboarding } = await import("../src/ui/onboarding/DesktopOnboarding");
 const defaultStoreState = useAppStore.getState();
+
+afterAll(() => {
+  useAppStore.setState(defaultStoreState);
+});
 
 function setNativeInputValue(input: HTMLInputElement, value: string) {
   const valueSetter = Object.getOwnPropertyDescriptor(input, "value")?.set;
@@ -102,7 +32,7 @@ function setNativeInputValue(input: HTMLInputElement, value: string) {
 
 describe("desktop onboarding", () => {
   beforeEach(() => {
-    useAppStore.setState(defaultStoreState, true);
+    useAppStore.setState(defaultStoreState);
     useAppStore.setState({
       ready: true,
       bootstrapPending: false,

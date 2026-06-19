@@ -22,6 +22,13 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/ope
 import type { ProviderContinuationState } from "../../shared/providerContinuation";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type {
+  TaskContextSnapshot,
+  TaskCreationInput,
+  TaskCreationResult,
+  TaskDirective,
+  TaskDirectiveResult,
+} from "../../shared/tasks";
+import type {
   AgentConfig,
   ChildModelRoutingMode,
   HarnessContextState,
@@ -219,6 +226,12 @@ export type SessionDependencies = {
   generateSessionTitleImpl: typeof generateSessionTitle;
   sessionDb: SessionDb | null;
   toolEnv?: Record<string, string | undefined>;
+  getTaskContextImpl?: (sessionId: string) => TaskContextSnapshot | null;
+  applyTaskDirectiveImpl?: (
+    sessionId: string,
+    directive: TaskDirective,
+  ) => Promise<TaskDirectiveResult>;
+  createTaskImpl?: (sessionId: string, input: TaskCreationInput) => Promise<TaskCreationResult>;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
   createAgentSessionImpl?: (
     opts: AgentSpawnContextOptions & {

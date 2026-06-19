@@ -234,7 +234,7 @@ describe("desktop persistence state validation", () => {
     }
   });
 
-  test("infers one-off chat kind from chat workspace paths", async () => {
+  test("preserves an explicitly promoted project inside the chat workspace root", async () => {
     const persistence = new PersistenceService();
     const oneOffChat = path.join(
       os.homedir(),
@@ -243,7 +243,7 @@ describe("desktop persistence state validation", () => {
       `persistence-kind-test-${crypto.randomUUID()}`,
     );
     oneOffTestDirs.push(oneOffChat);
-    await fs.rm(oneOffChat, { recursive: true, force: true });
+    await fs.mkdir(oneOffChat, { recursive: true });
 
     await persistence.saveState({
       version: 2,
@@ -265,7 +265,7 @@ describe("desktop persistence state validation", () => {
 
     const loaded = await persistence.loadState();
     expect(loaded.workspaces).toHaveLength(1);
-    expect(loaded.workspaces[0]?.workspaceKind).toBe("oneOffChat");
+    expect(loaded.workspaces[0]?.workspaceKind).toBe("project");
     expect(loaded.workspaces[0]?.path).toBe(await fs.realpath(oneOffChat));
   });
 

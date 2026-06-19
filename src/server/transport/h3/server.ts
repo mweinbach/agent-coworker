@@ -297,6 +297,9 @@ function getRequiredH3Permission(
   ) {
     return "conversations";
   }
+  if (method.startsWith("task/")) {
+    return "conversations";
+  }
   if (method.startsWith("cowork/provider/auth/")) {
     return "providerAuth";
   }

@@ -1284,6 +1284,47 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: "permission denied" }]);
   });
 
+  test("pi runtime stops after a tool step when task input requests a pause", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-task-pause-"));
+    let modelSteps = 0;
+    let toolCalls = 0;
+    const runtime = createPiRuntime({
+      piStreamImpl: (() => ({
+        async *[Symbol.asyncIterator]() {
+          return;
+        },
+        async result() {
+          modelSteps += 1;
+          return {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_pause", name: "requestInput", arguments: {} }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "toolUse",
+          };
+        },
+      })) as never,
+    });
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 3,
+        shouldStopAfterToolStep: () => true,
+        tools: {
+          requestInput: {
+            execute: async () => {
+              toolCalls += 1;
+              return "Task paused for input";
+            },
+          },
+        },
+      }),
+    );
+
+    expect(modelSteps).toBe(1);
+    expect(toolCalls).toBe(1);
+    expect(result.responseMessages.some((message) => message.role === "tool")).toBe(true);
+  });
+
   test("pi runtime injects a reminder message after malformed tool-call format errors", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-format-reminder-"));
     const stepMessages: ModelMessage[][] = [];

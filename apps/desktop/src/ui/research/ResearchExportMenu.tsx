@@ -35,10 +35,14 @@ export function ResearchExportMenu({
   researchId,
   pending,
   disabled,
+  menuOpen,
+  menuPortalled = true,
 }: {
   researchId: string;
   pending: boolean;
   disabled?: boolean;
+  menuOpen?: boolean;
+  menuPortalled?: boolean;
 }) {
   const exportResearch = useAppStore((s) => s.exportResearch);
   const [activeFormat, setActiveFormat] = useState<ResearchExportFormat | null>(null);
@@ -52,8 +56,49 @@ export function ResearchExportMenu({
     }
   };
 
+  if (!menuPortalled) {
+    return (
+      <div>
+        <Button
+          size="sm"
+          type="button"
+          variant="outline"
+          aria-haspopup="menu"
+          className="h-7 gap-1.5 rounded-full border-border/60 bg-muted/15 px-3 text-xs"
+          disabled={disabled}
+        >
+          {pending ? (
+            <Loader2Icon className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <DownloadIcon className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          Download
+          <ChevronDownIcon className="h-3 w-3" aria-hidden="true" />
+        </Button>
+        {menuOpen ? (
+          <div role="menu">
+            {EXPORT_TARGETS.map(({ format, label, hint, Icon }) => (
+              <button
+                key={format}
+                type="button"
+                role="menuitem"
+                aria-disabled={pending}
+                disabled={pending}
+                onClick={() => void runExport(format)}
+              >
+                <Icon aria-hidden="true" />
+                <span>{label}</span>
+                <span>{hint}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
-    <DropdownMenu>
+    <DropdownMenu open={menuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"

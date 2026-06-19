@@ -55,6 +55,9 @@ export type AgentSessionFromPersistedOptions = {
   deleteWorkspaceBackupCheckpointImpl?: SessionDependencies["deleteWorkspaceBackupCheckpointImpl"];
   deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
   getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
+  getTaskContextImpl?: SessionDependencies["getTaskContextImpl"];
+  applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
+  createTaskImpl?: SessionDependencies["createTaskImpl"];
   readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
   createA2uiSurfaceManagerImpl?: SessionDependencies["createA2uiSurfaceManagerImpl"];
   deriveA2uiSurfacesFromSnapshotImpl?: SessionDependencies["deriveA2uiSurfacesFromSnapshotImpl"];
@@ -167,6 +170,9 @@ export function createAgentSessionFromPersisted(
     deleteWorkspaceBackupCheckpointImpl: opts.deleteWorkspaceBackupCheckpointImpl,
     deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
     getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
+    getTaskContextImpl: opts.getTaskContextImpl,
+    applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
+    createTaskImpl: opts.createTaskImpl,
     readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,
     createA2uiSurfaceManagerImpl: opts.createA2uiSurfaceManagerImpl,
     deriveA2uiSurfacesFromSnapshotImpl: opts.deriveA2uiSurfacesFromSnapshotImpl,

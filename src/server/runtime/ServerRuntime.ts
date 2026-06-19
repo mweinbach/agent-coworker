@@ -51,6 +51,7 @@ import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
 import { readSkillCatalogMtimeSnapshot } from "../skillCatalogMtime";
 import { refreshSessionsForSkillMutation } from "../skillMutationRefresh";
 import type { StartServerSocket } from "../startServer/types";
+import { TaskCoordinator } from "../tasks/TaskCoordinator";
 import type { WebDesktopServiceLike } from "../webDesktopService";
 import { isErrorWithCode, isPlainObject, mergeRuntimeProviderOptions } from "./ConfigPatchStore";
 import { SessionRegistry } from "./SessionRegistry";
@@ -58,6 +59,7 @@ import { SkillMutationBus } from "./SkillMutationBus";
 import { SocketSendQueue } from "./SocketSendQueue";
 import { ThreadJournal } from "./ThreadJournal";
 import { WorkspaceControl } from "./WorkspaceControl";
+import { WorkspaceJsonRpcSubscribers } from "./WorkspaceJsonRpcSubscribers";
 
 let observabilityOtelModulePromise: Promise<typeof import("../../observability/otel")> | null =
   null;
@@ -232,6 +234,7 @@ export async function createAgentServerRuntime(
   });
   const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir: opts.homedir });
   const sendQueue = new SocketSendQueue();
+  const taskSubscribers = new WorkspaceJsonRpcSubscribers(sendQueue);
   const jsonRpcConnections = new Set<StartServerSocket>();
   let workspaceListRevision = 0;
   const broadcastJsonRpcNotification = (method: string, params: unknown) => {
@@ -255,6 +258,13 @@ export async function createAgentServerRuntime(
     getConfig: () => config,
     sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
   });
+  const tasks = new TaskCoordinator({
+    sessionDb,
+    notify: ({ method, params }) => {
+      const cwd = typeof params.cwd === "string" ? params.cwd : null;
+      if (cwd) taskSubscribers.notify(cwd, method, params);
+    },
+  });
   const threadJournal = new ThreadJournal(sessionDb);
   let workspaceControl: WorkspaceControl;
   let skillMutationBus: SkillMutationBus;
@@ -269,6 +279,7 @@ export async function createAgentServerRuntime(
     getAiCoworkerPathsImpl,
     runTurnImpl: opts.runTurnImpl,
     sessionDb,
+    taskCoordinator: tasks,
     threadJournal,
     loadAgentPrompt: lazyLoadAgentPrompt,
     setConfig: (nextConfig) => {
@@ -292,6 +303,16 @@ export async function createAgentServerRuntime(
       }
     },
   });
+  tasks.setThreadFactory(async ({ task, provider, model }) => {
+    const runtime = registry.createJsonRpcThreadSession(
+      task.workspacePath,
+      provider as AgentConfig["provider"] | undefined,
+      model,
+    );
+    await runtime.lifecycle.waitForPersistenceIdle();
+    return { sessionId: runtime.id };
+  });
+  tasks.setContinuationDispatcher(async (input) => await registry.dispatchTaskContinuation(input));
 
   const refreshLocalSkillState = async ({
     workingDirectory,
@@ -358,6 +379,7 @@ export async function createAgentServerRuntime(
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
     research,
+    tasks,
     threads: {
       create: ({ cwd, provider, model }) =>
         registry.createJsonRpcThreadSession(cwd, provider, model),
@@ -367,9 +389,11 @@ export async function createAgentServerRuntime(
       listPersisted: ({ cwd } = {}) =>
         sessionDb
           .listSessions({ ...(cwd ? { workingDirectory: cwd } : {}) })
+          .filter((record) => !tasks.isTaskThread(record.sessionId))
           .map((record) => sessionDb.getSessionRecord(record.sessionId))
           .filter((record): record is PersistedSessionRecord => record !== null),
-      listLiveRoot: ({ cwd } = {}) => registry.listLiveRoot({ cwd }),
+      listLiveRoot: ({ cwd } = {}) =>
+        registry.listLiveRoot({ cwd }).filter((runtime) => !tasks.isTaskThread(runtime.id)),
       subscribe: (ws, threadId, subscribeOpts) =>
         jsonRpcTransport.subscribeThread(ws, threadId, subscribeOpts),
       unsubscribe: (ws, threadId) => jsonRpcTransport.unsubscribeThread(ws, threadId),
@@ -427,12 +451,16 @@ export async function createAgentServerRuntime(
 
   const routeJsonRpcRequest = async (ws: StartServerSocket, message: JsonRpcRequest) => {
     const params = isPlainObject(message.params) ? message.params : undefined;
-    if (params) {
+    if (params || message.method.startsWith("task/")) {
       try {
-        workspaceControl.registerSubscriber(
-          ws,
-          requireWorkspacePath(params, message.method, config.workingDirectory, opts.homedir),
+        const cwd = requireWorkspacePath(
+          params ?? {},
+          message.method,
+          config.workingDirectory,
+          opts.homedir,
         );
+        workspaceControl.registerSubscriber(ws, cwd);
+        taskSubscribers.register(ws, cwd);
       } catch {
         // Ignore non-workspace-control requests that do not resolve a cwd.
       }
@@ -474,6 +502,7 @@ export async function createAgentServerRuntime(
     closeConnection: (ws) => {
       jsonRpcConnections.delete(ws);
       workspaceControl.removeSubscriber(ws);
+      taskSubscribers.remove(ws);
       research.unsubscribeAll(ws);
       jsonRpcTransport.closeConnection(ws);
       sendQueue.deleteConnection(ws.data.connectionId);
@@ -492,6 +521,7 @@ export async function createAgentServerRuntime(
       disposeDesktopStateWatcher?.();
       skillMutationBus.stop();
       workspaceControl.clearSubscribers();
+      taskSubscribers.clear();
       await registry.disposeAll("server stopping");
       try {
         sessionDb.close();

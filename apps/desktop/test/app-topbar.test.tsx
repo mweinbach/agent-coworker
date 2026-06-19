@@ -886,6 +886,7 @@ describe("desktop app top bar", () => {
         titleButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
+      expect(titleButton.getAttribute("aria-expanded")).toBe("true");
       expect(harness.dom.window.document.body.textContent).toContain("IntelProDay");
       expect(harness.dom.window.document.body.textContent).toContain("Research Lab");
 

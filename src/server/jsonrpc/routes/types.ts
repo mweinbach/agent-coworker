@@ -5,6 +5,7 @@ import type { ResearchService } from "../../research/ResearchService";
 import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../../startServer/types";
+import type { TaskCoordinator } from "../../tasks/TaskCoordinator";
 import type { WebDesktopServiceLike } from "../../webDesktopService";
 import type { JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteRequest } from "../protocol";
 
@@ -54,6 +55,7 @@ export type JsonRpcRequestHandlerMap = Record<string, JsonRpcRequestHandler>;
 export interface JsonRpcRouteContext {
   getConfig(): AgentConfig;
   research: ResearchService;
+  tasks: TaskCoordinator;
   threads: {
     create(options: {
       cwd: string;

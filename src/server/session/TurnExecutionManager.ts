@@ -87,6 +87,17 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
+    const activeTask = this.context.deps.sessionDb?.getActiveTaskForSourceSession?.(
+      this.context.id,
+    );
+    if (activeTask) {
+      this.context.emitError(
+        "task_locked",
+        "session",
+        `Chat is locked by active task ${activeTask.id}: ${activeTask.title}`,
+      );
+      return;
+    }
     return await this.steerCoordinator.sendSteerMessage(
       text,
       expectedTurnId,
@@ -105,6 +116,17 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
+    const activeTask = this.context.deps.sessionDb?.getActiveTaskForSourceSession?.(
+      this.context.id,
+    );
+    if (activeTask) {
+      this.context.emitError(
+        "task_locked",
+        "session",
+        `Chat is locked by active task ${activeTask.id}: ${activeTask.title}`,
+      );
+      return;
+    }
     return await this.userMessageTurnRunner.sendUserMessage(
       text,
       clientMessageId,

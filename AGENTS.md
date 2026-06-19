@@ -204,6 +204,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Scope & Plan Discipline
 
+- Keep Task mode explicit and separate from standard chat: never auto-promote chats into tasks, auto-wrap chats in task state, or expose task-owned sessions in ordinary chat listings.
 - When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.
 - When the user excludes an artifact type for delivery, remove it from the final output and any PR metadata instead of keeping it as optional context.
 - When the user excludes screenshots or recordings from a PR, keep the PR body text-only and summarize verification in prose.
@@ -246,6 +247,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Bun-compiled sidecars**: never read `package.json` via runtime `__dirname` paths — compiled binaries run from `/$bunfs`. Use bundled imports or build-time injection.
 - **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
 - **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
+- **Chat-to-task promotion**: task mode is a one-shot harness tool and `/task` skill handoff from ordinary chat. Require a complete brief and dependency-aware initial plan before creation, lock the source chat while the task is active, and keep lifecycle/state enforcement in the coordinator rather than the desktop UI.
 
 ### Mobile UI Patterns
 

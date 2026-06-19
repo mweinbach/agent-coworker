@@ -1,0 +1,123 @@
+import { MessageSquarePlusIcon } from "lucide-react";
+import { type FormEvent, useState } from "react";
+
+import { useAppStore } from "../../app/store";
+import { Button } from "../../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../../components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "../../components/ui/field";
+import { Input } from "../../components/ui/input";
+import { cn } from "../../lib/utils";
+import { ChatView } from "../ChatView";
+
+export function TaskConversationSidebar() {
+  const selectedThreadId = useAppStore((state) => state.selectedThreadId);
+  const task = useAppStore((state) =>
+    state.selectedTaskId ? state.tasksById[state.selectedTaskId] : null,
+  );
+  const selectTaskThread = useAppStore((state) => state.selectTaskThread);
+  const createTaskThread = useAppStore((state) => state.createTaskThread);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [threadTitle, setThreadTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  if (!task) return null;
+
+  const submitThread = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const title = threadTitle.trim();
+    if (!title || creating) return;
+    setCreating(true);
+    try {
+      await createTaskThread(task.id, title);
+      setThreadTitle("");
+      setDialogOpen(false);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <aside className="flex h-full min-h-0 w-full flex-col border-l border-border bg-panel">
+      <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-background px-2">
+        <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Conversation
+        </span>
+        {task.threads.map((thread) => {
+          const active = thread.sessionId === selectedThreadId;
+          return (
+            <Button
+              key={thread.id}
+              type="button"
+              size="sm"
+              variant="ghost"
+              className={cn(
+                "h-7 max-w-40 shrink-0 rounded-md px-2.5 text-xs font-medium",
+                active ? "bg-muted text-foreground" : "text-muted-foreground",
+              )}
+              aria-current={active ? "page" : undefined}
+              onClick={() => void selectTaskThread(task.id, thread.id)}
+            >
+              <span className="truncate">{thread.title}</span>
+            </Button>
+          );
+        })}
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="size-7 shrink-0 text-muted-foreground"
+              aria-label="Add focused task thread"
+              title="Add focused task thread"
+            >
+              <MessageSquarePlusIcon />
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <form onSubmit={submitThread}>
+              <DialogHeader>
+                <DialogTitle>Add task thread</DialogTitle>
+                <DialogDescription>
+                  Create a focused conversation inside this task. It shares the task brief and work
+                  graph.
+                </DialogDescription>
+              </DialogHeader>
+              <FieldGroup className="py-5">
+                <Field>
+                  <FieldLabel htmlFor="task-thread-title">Thread name</FieldLabel>
+                  <Input
+                    id="task-thread-title"
+                    autoFocus
+                    placeholder="Research implementation options"
+                    value={threadTitle}
+                    onChange={(event) => setThreadTitle(event.target.value)}
+                  />
+                </Field>
+              </FieldGroup>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={!threadTitle.trim() || creating}>
+                  Create thread
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <div className="min-h-0 flex-1">
+        <ChatView />
+      </div>
+    </aside>
+  );
+}

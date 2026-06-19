@@ -74,6 +74,7 @@ export interface RuntimeRunTurnParams {
   clientMessageId?: string;
   telemetry?: unknown;
   prepareStep?: RuntimePrepareStep;
+  shouldStopAfterToolStep?: () => boolean;
   registerSteerHandler?: RuntimeRegisterSteerHandler;
   askUser?: (question: string, options?: string[]) => Promise<string>;
   approveCommand?: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;

@@ -2,6 +2,17 @@ import type { ResearchRecord, ResearchSettings } from "../../../../src/server/re
 import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
+import type {
+  TaskArtifact,
+  TaskArtifactDetail,
+  TaskArtifactRevision,
+  TaskArtifactVersion,
+  TaskQuestion,
+  TaskQuestionAnswerInput,
+  TaskQuestionResumeStatus,
+  TaskRecord,
+  TaskSummary,
+} from "../../../../src/shared/tasks";
 import {
   type CloudSyncSettings,
   normalizeCloudSyncSettings,
@@ -126,6 +137,8 @@ export type ThreadRecord = {
   draft?: boolean;
   archived?: boolean;
   archivedAt?: string;
+  taskId?: string;
+  taskThreadId?: string;
 };
 
 export type ThreadPendingSteer = {
@@ -281,7 +294,20 @@ export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null
 }
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
-export type ViewId = "chat" | "skills" | "research" | "settings";
+export type ViewId = "chat" | "task" | "skills" | "research" | "settings";
+
+export type {
+  TaskArtifact,
+  TaskArtifactDetail,
+  TaskArtifactRevision,
+  TaskArtifactVersion,
+  TaskQuestion,
+  TaskQuestionAnswerInput,
+  TaskQuestionResumeStatus,
+  TaskRecord,
+  TaskSummary,
+};
+
 type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
   | "models"
@@ -312,6 +338,7 @@ export type CachedDesktopUiState = {
   pluginManagementWorkspaceId?: string | null;
   pluginManagementMode?: PluginManagementMode;
   selectedThreadId?: string | null;
+  selectedTaskId?: string | null;
   view?: ViewId;
   settingsPage?: SettingsPageId;
   lastNonSettingsView?: ViewId;

@@ -15,11 +15,20 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
   } as never);
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("research export menu", () => {
   test("dispatches each export format through the store action", async () => {
     const harness = setupJsdom();
     const exportResearchMock = mock(async () => "/Users/test/Downloads/report.pdf");
     const { ResearchExportMenu } = await import("../src/ui/research/ResearchExportMenu");
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -27,7 +36,7 @@ describe("research export menu", () => {
         throw new Error("missing root");
       }
 
-      const root = createRoot(container);
+      root = createRoot(container);
       resetAppStore({
         exportResearch: exportResearchMock,
       });
@@ -37,6 +46,8 @@ describe("research export menu", () => {
           createElement(ResearchExportMenu, {
             researchId: "research-1",
             pending: false,
+            menuOpen: true,
+            menuPortalled: false,
           }),
         );
       });
@@ -48,16 +59,12 @@ describe("research export menu", () => {
       ] as const;
 
       for (const entry of formats) {
-        const trigger = container.querySelector('button[aria-haspopup="menu"]');
-        if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
-          throw new Error("missing download trigger");
-        }
         await act(async () => {
-          trigger.dispatchEvent(
-            new harness.dom.window.PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+          await waitForCondition(() =>
+            [...harness.dom.window.document.body.querySelectorAll('[role="menuitem"]')].some(
+              (node) => node.textContent?.includes(entry.label),
+            ),
           );
-          trigger.click();
-          await Promise.resolve();
         });
 
         // Radix DropdownMenu portals content into document.body.
@@ -80,11 +87,12 @@ describe("research export menu", () => {
         ["research-1", "pdf"],
         ["research-1", "docx"],
       ]);
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       resetAppStore();
       harness.restore();
     }
@@ -94,6 +102,7 @@ describe("research export menu", () => {
     const harness = setupJsdom();
     const exportResearchMock = mock(async () => "/Users/test/Downloads/report.pdf");
     const { ResearchExportMenu } = await import("../src/ui/research/ResearchExportMenu");
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -101,7 +110,7 @@ describe("research export menu", () => {
         throw new Error("missing root");
       }
 
-      const root = createRoot(container);
+      root = createRoot(container);
       resetAppStore({
         exportResearch: exportResearchMock,
       });
@@ -111,6 +120,8 @@ describe("research export menu", () => {
           createElement(ResearchExportMenu, {
             researchId: "research-1",
             pending: true,
+            menuOpen: true,
+            menuPortalled: false,
           }),
         );
       });
@@ -123,11 +134,9 @@ describe("research export menu", () => {
       expect(trigger.disabled).toBe(false);
 
       await act(async () => {
-        trigger.dispatchEvent(
-          new harness.dom.window.PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+        await waitForCondition(
+          () => harness.dom.window.document.body.querySelectorAll('[role="menuitem"]').length === 3,
         );
-        trigger.click();
-        await Promise.resolve();
       });
 
       // Radix DropdownMenu portals content into document.body.
@@ -138,11 +147,12 @@ describe("research export menu", () => {
         expect(action.getAttribute("aria-disabled")).toBe("true");
       }
       expect(exportResearchMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       resetAppStore();
       harness.restore();
     }

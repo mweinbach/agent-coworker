@@ -295,9 +295,11 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
     const lastOpenedAt = asTimestamp(item.lastOpenedAt);
     const rawWorkspacePath = asNonEmptyString(item.path);
     const workspaceKind: WorkspaceKind =
-      rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath)
-        ? "oneOffChat"
-        : normalizeWorkspaceKind(item.workspaceKind);
+      item.workspaceKind === "project"
+        ? "project"
+        : rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath)
+          ? "oneOffChat"
+          : normalizeWorkspaceKind(item.workspaceKind);
     const workspacePath = await resolveWorkspacePath(item.path, workspaceKind);
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;

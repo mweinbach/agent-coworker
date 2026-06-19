@@ -45,9 +45,11 @@ function toWorkspaceSummary(
   record: Awaited<ReturnType<WebDesktopServiceLike["loadState"]>>["workspaces"][number],
 ): JsonRpcWorkspaceSummary {
   const workspaceKind =
-    record.workspaceKind === "oneOffChat" || isPathInsideOneOffChatsRoot(record.path)
-      ? "oneOffChat"
-      : normalizeWorkspaceKind(record.workspaceKind);
+    record.workspaceKind === "project"
+      ? "project"
+      : record.workspaceKind === "oneOffChat" || isPathInsideOneOffChatsRoot(record.path)
+        ? "oneOffChat"
+        : normalizeWorkspaceKind(record.workspaceKind);
   return {
     id: record.id,
     name: record.name,

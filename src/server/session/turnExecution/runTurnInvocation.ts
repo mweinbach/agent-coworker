@@ -57,6 +57,9 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
 
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
     const harnessContext = context.deps.harnessContextStore.get(context.id);
+    const taskContext = context.deps.getTaskContextImpl?.(context.id) ?? null;
+    const applyTaskDirective = context.deps.applyTaskDirectiveImpl;
+    const createTask = context.deps.createTaskImpl;
     return await context.deps.runTurnImpl({
       config: context.state.config,
       system: context.state.system,
@@ -64,6 +67,15 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       allMessages: context.state.allMessages,
       providerState: providerStateOverride,
       harnessContext,
+      taskContext,
+      applyTaskDirective:
+        taskContext && applyTaskDirective
+          ? async (directive) => await applyTaskDirective(context.id, directive)
+          : undefined,
+      createTask:
+        !taskContext && createTask
+          ? async (input) => await createTask(context.id, input)
+          : undefined,
       referencedPlugins: context.state.turnReferencedPlugins,
       prepareStep: async ({ messages }) => steerCoordinator.drainPendingSteers(messages),
       registerSteerHandler: (handler) => {

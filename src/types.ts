@@ -728,6 +728,7 @@ export const SERVER_ERROR_CODES = [
   "unknown_type",
   "unknown_session",
   "busy",
+  "task_locked",
   "validation_failed",
   "permission_denied",
   "provider_error",

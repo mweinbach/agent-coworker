@@ -30,8 +30,11 @@ import type {
   UpdaterState,
   UploadDiagnosticsBundleOutput,
 } from "./desktopApi";
+import { DESKTOP_API_OVERRIDE_KEY } from "./desktopApiOverride";
 
 function getDesktopApi(): DesktopApi | undefined {
+  const override = (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
+  if (override) return override as DesktopApi;
   return typeof window === "undefined" ? undefined : window.cowork;
 }
 

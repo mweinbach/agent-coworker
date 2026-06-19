@@ -33,6 +33,13 @@ import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTra
 import type { AgentProfileSnapshot } from "./shared/agentProfiles";
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
+import type {
+  TaskContextSnapshot,
+  TaskCreationInput,
+  TaskCreationResult,
+  TaskDirective,
+  TaskDirectiveResult,
+} from "./shared/tasks";
 import type { AgentControl } from "./tools";
 import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
@@ -94,6 +101,9 @@ export interface RunTurnParams {
   allMessages?: ModelMessage[];
   providerState?: ProviderContinuationState | null;
   harnessContext?: HarnessContextState | null;
+  taskContext?: TaskContextSnapshot | null;
+  applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
+  createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
   /** Plugins the user @-mentioned this turn; rendered as a soft-awareness system block. */
   referencedPlugins?: ReferencedPluginContext[];
   agentControl?: AgentControl;
@@ -436,6 +446,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       targetPaths: params.agentTargetPaths,
     });
 
+    let taskPauseRequested = false;
+    let taskModeSwitchRequested = false;
     const toolCtx = {
       config,
       log,
@@ -448,6 +460,23 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       turnUserPrompt: extractTurnUserPrompt(messages),
       getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
       harnessContext: params.harnessContext,
+      taskContext: params.taskContext,
+      applyTaskDirective: params.applyTaskDirective
+        ? async (directive: TaskDirective) => {
+            const directiveResult = await params.applyTaskDirective?.(directive);
+            if (!directiveResult) throw new Error("Task directive handler is unavailable");
+            if (directiveResult.continuation === "pause_for_input") taskPauseRequested = true;
+            return directiveResult;
+          }
+        : undefined,
+      createTask: params.createTask
+        ? async (input: TaskCreationInput) => {
+            const result = await params.createTask?.(input);
+            if (!result) throw new Error("Task creation handler is unavailable");
+            taskModeSwitchRequested = true;
+            return result;
+          }
+        : undefined,
       agentRole: params.agentRole,
       agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
@@ -511,6 +540,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         mcpToolNames,
         params.harnessContext,
         params.referencedPlugins,
+        params.taskContext,
       ),
       turnToolEnv,
     );
@@ -549,6 +579,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           },
         });
         if (useLegacyModelApi && legacyStreamText && legacyStepCountIs) {
+          const stepLimitStop = legacyStepCountIs(params.maxSteps ?? 100);
           const streamTextInput: LegacyStreamTextInput = {
             model: legacyModelResolver(config),
             system: turnSystem,
@@ -556,7 +587,10 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
             tools,
             providerOptions: turnProviderOptions,
             ...(telemetry ? { experimental_telemetry: telemetry } : {}),
-            stopWhen: legacyStepCountIs(params.maxSteps ?? 100),
+            stopWhen:
+              params.applyTaskDirective || params.createTask
+                ? [stepLimitStop, () => taskPauseRequested || taskModeSwitchRequested]
+                : stepLimitStop,
             ...(prepareStep ? { prepareStep } : {}),
             abortSignal,
             ...(typeof config.modelSettings?.maxRetries === "number"
@@ -676,6 +710,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           includeRawChunks: params.includeRawChunks ?? true,
           telemetry,
           ...(prepareStep ? { prepareStep } : {}),
+          shouldStopAfterToolStep: () => taskPauseRequested || taskModeSwitchRequested,
           ...(params.registerSteerHandler
             ? { registerSteerHandler: params.registerSteerHandler }
             : {}),

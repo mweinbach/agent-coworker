@@ -1,5 +1,31 @@
 const MAX_VISIBLE_THREADS = 10;
 
+export function groupStandardChatThreadsByWorkspace<
+  T extends {
+    workspaceId: string;
+    lastMessageAt: string;
+    archived?: boolean;
+    taskId?: string;
+  },
+>(threads: T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const thread of threads) {
+    if (thread.archived || thread.taskId) continue;
+    const bucket = grouped.get(thread.workspaceId);
+    if (bucket) bucket.push(thread);
+    else grouped.set(thread.workspaceId, [thread]);
+  }
+  for (const [workspaceId, workspaceThreads] of grouped) {
+    grouped.set(
+      workspaceId,
+      [...workspaceThreads].sort((left, right) =>
+        right.lastMessageAt.localeCompare(left.lastMessageAt),
+      ),
+    );
+  }
+  return grouped;
+}
+
 export function formatSidebarRelativeAge(iso: string): string {
   const timestamp = Date.parse(iso);
   if (!Number.isFinite(timestamp)) {

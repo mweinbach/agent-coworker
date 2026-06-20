@@ -251,6 +251,14 @@ export function createControlSocketHelpers(
       allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId ??
       selectedWorkspaceId ??
       workspaceId;
+    if (view === "task" && selectedTaskId) {
+      return (
+        nextThreads.find(
+          (thread) =>
+            thread.workspaceId === fallbackWorkspaceId && thread.taskId === selectedTaskId,
+        )?.id ?? null
+      );
+    }
     return (
       nextThreads.find(
         (thread) =>

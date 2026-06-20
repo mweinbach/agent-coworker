@@ -153,6 +153,37 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(RUNTIME.sessionSnapshots.has("task-session-1")).toBe(true);
   });
 
+  test("requestWorkspaceSessions falls back to another thread owned by the selected task", async () => {
+    const workspaceId = "ws-task-thread-fallback";
+    const { state, get, set } = createState(workspaceId, {
+      view: "task",
+      selectedTaskId: "task-1",
+      selectedThreadId: "missing-task-session",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-2", workspaceId),
+          title: "Task fallback lane",
+          taskId: "task-1",
+          taskThreadId: "task-thread-2",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBe("task-session-2");
+  });
+
   test("requestWorkspaceSessions preserves the legacy transcript mapping for runtime-backed local threads", async () => {
     const workspaceId = "ws-legacy-thread";
     const localThreadId = "local-thread-1";

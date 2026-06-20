@@ -783,34 +783,49 @@ export class TaskCoordinator {
       }
       existingById.set(normalizedId, item);
     }
-    const activeRevisionWorkItemIds = new Set<string>();
-    for (const artifactRecord of current.artifacts) {
-      const detail = this.options.sessionDb.getTaskArtifactDetail(current.id, artifactRecord.id);
-      if (detail?.activeRevision)
-        activeRevisionWorkItemIds.add(detail.activeRevision.workItemId.trim());
+    const coordinatorOwnedRevisionWorkItemIds = new Set<string>();
+    const rawCoordinatorOwnedRevisionIds = new Map<string, string>();
+    for (const rawId of this.options.sessionDb.listCoordinatorOwnedTaskArtifactRevisionWorkItemIds(
+      current.id,
+    )) {
+      const normalizedId = rawId.trim();
+      if (!normalizedId) throw new Error("Cannot reconcile an artifact revision with an empty id");
+      const existing = rawCoordinatorOwnedRevisionIds.get(normalizedId);
+      if (existing && existing !== rawId) {
+        throw new Error(
+          `Ambiguous artifact revision work item id after normalization: ${normalizedId}`,
+        );
+      }
+      rawCoordinatorOwnedRevisionIds.set(normalizedId, rawId);
+      coordinatorOwnedRevisionWorkItemIds.add(normalizedId);
     }
+    const seenInputIds = new Set<string>();
     const items: WorkItem[] = inputItems.map((item, position) => {
       const id = item.id?.trim() || crypto.randomUUID();
+      if (seenInputIds.has(id))
+        throw new Error(`Duplicate work item id after normalization: ${id}`);
+      seenInputIds.add(id);
       const existing = existingById.get(id);
-      const activeRevisionItem = existing && activeRevisionWorkItemIds.has(id) ? existing : null;
+      const coordinatorOwnedRevisionItem =
+        existing && coordinatorOwnedRevisionWorkItemIds.has(id) ? existing : null;
       return {
         id,
         taskId: current.id,
         title: nonEmpty(item.title, "Work item title"),
         description: item.description?.trim() ?? "",
-        status: activeRevisionItem?.status ?? item.status ?? existing?.status ?? "queued",
-        dependsOn: activeRevisionItem?.dependsOn ?? [
+        status: coordinatorOwnedRevisionItem?.status ?? item.status ?? existing?.status ?? "queued",
+        dependsOn: coordinatorOwnedRevisionItem?.dependsOn ?? [
           ...new Set((item.dependsOn ?? []).map((dependency) => dependency.trim())),
         ],
         assignedThreadId:
-          activeRevisionItem?.assignedThreadId ?? existing?.assignedThreadId ?? null,
+          coordinatorOwnedRevisionItem?.assignedThreadId ?? existing?.assignedThreadId ?? null,
         claimedByThreadId:
-          activeRevisionItem?.claimedByThreadId ?? existing?.claimedByThreadId ?? null,
+          coordinatorOwnedRevisionItem?.claimedByThreadId ?? existing?.claimedByThreadId ?? null,
         expectedOutputs:
-          activeRevisionItem?.expectedOutputs ??
+          coordinatorOwnedRevisionItem?.expectedOutputs ??
           (item.expectedOutputs ?? []).map((value) => value.trim()).filter(Boolean),
         completionEvidence:
-          activeRevisionItem?.completionEvidence ?? existing?.completionEvidence ?? null,
+          coordinatorOwnedRevisionItem?.completionEvidence ?? existing?.completionEvidence ?? null,
         position,
         createdAt: existing?.createdAt ?? updatedAt,
         updatedAt,
@@ -818,12 +833,13 @@ export class TaskCoordinator {
     });
     validateWorkGraph(items);
     const itemIds = new Set(items.map((item) => item.id));
-    const removedActiveRevision = current.workItems.find(
-      (item) => activeRevisionWorkItemIds.has(item.id.trim()) && !itemIds.has(item.id.trim()),
+    const removedCoordinatorOwnedRevision = current.workItems.find(
+      (item) =>
+        coordinatorOwnedRevisionWorkItemIds.has(item.id.trim()) && !itemIds.has(item.id.trim()),
     );
-    if (removedActiveRevision) {
+    if (removedCoordinatorOwnedRevision) {
       throw new Error(
-        `Cannot remove work item with active artifact revision: ${removedActiveRevision.title}`,
+        `Cannot remove work item with active artifact revision or deferred artifact revision: ${removedCoordinatorOwnedRevision.title}`,
       );
     }
     const removedClaim = current.workItems.find(
@@ -2155,11 +2171,15 @@ export class TaskCoordinator {
   }
 
   private hasCompletedArtifactRevisionAwaitingSettlement(task: TaskRecord): boolean {
-    return task.workItems.some(
-      (item) =>
-        item.status === "review" &&
-        this.options.sessionDb.hasCompletedTaskArtifactRevisionForWorkItem(task.id, item.id),
-    );
+    return this.options.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id);
+  }
+
+  private async settlePendingArtifactRevisionSettlements(task: TaskRecord): Promise<TaskRecord> {
+    if (!this.hasCompletedArtifactRevisionAwaitingSettlement(task)) return task;
+    return await this.options.sessionDb.settlePendingTaskArtifactRevisionSettlements({
+      taskId: task.id,
+      updatedAt: nowIso(),
+    });
   }
 
   private hasBlockingState(task: TaskRecord): boolean {
@@ -2208,6 +2228,9 @@ export class TaskCoordinator {
     if (isTerminalTask(latest)) return latest;
 
     if (input.outcome === "error") {
+      if (!this.hasActiveArtifactRevision(latest)) {
+        latest = await this.settlePendingArtifactRevisionSettlements(latest);
+      }
       if (latest.status === "blocked") {
         this.notifyUpdated(latest);
         return latest;
@@ -2228,7 +2251,13 @@ export class TaskCoordinator {
       return latest;
     }
 
-    if (this.hasBlockingState(latest)) {
+    const hasDeferredCompletedRevision =
+      this.hasCompletedArtifactRevisionAwaitingSettlement(latest);
+
+    if (latest.status === "blocked" || this.hasBlockingState(latest)) {
+      if (hasDeferredCompletedRevision) {
+        latest = await this.settlePendingArtifactRevisionSettlements(latest);
+      }
       return await this.restoreTaskStatusAfterArtifactRevision({
         task: latest,
         status: "blocked",
@@ -2238,29 +2267,13 @@ export class TaskCoordinator {
     }
 
     if (
-      (input.outcome === "completed" || input.outcome === "cancelled") &&
-      (input.priorTaskStatus === "draft" || input.priorTaskStatus === "planning")
-    ) {
-      return await this.restoreTaskStatusAfterArtifactRevision({
-        task: latest,
-        status: input.priorTaskStatus,
-        summary:
-          input.outcome === "completed"
-            ? "Artifact revision completed"
-            : "Artifact revision cancelled",
-        detail: input.detail,
-        sessionId: input.sessionId,
-      });
-    }
-
-    const hasDeferredCompletedRevision =
-      this.hasCompletedArtifactRevisionAwaitingSettlement(latest);
-
-    if (
       input.outcome === "completed" ||
       input.priorTaskStatus === "awaiting_review" ||
       hasDeferredCompletedRevision
     ) {
+      if (hasDeferredCompletedRevision) {
+        latest = await this.settlePendingArtifactRevisionSettlements(latest);
+      }
       try {
         return await this.proposeCompletionLocked({
           taskId: latest.id,
@@ -2271,10 +2284,12 @@ export class TaskCoordinator {
               ? "Artifact revision completed"
               : "Artifact revision cancelled",
           sessionId: input.sessionId,
+          defaultPendingQuestions: false,
         });
       } catch {
         latest = this.options.sessionDb.getTask(latest.id) ?? latest;
-        if (input.priorTaskStatus === "blocked" && this.hasBlockingState(latest)) {
+        if (isTerminalTask(latest)) return latest;
+        if (latest.status === "blocked" || this.hasBlockingState(latest)) {
           return await this.restoreTaskStatusAfterArtifactRevision({
             task: latest,
             status: "blocked",
@@ -2282,9 +2297,31 @@ export class TaskCoordinator {
             sessionId: input.sessionId,
           });
         }
+        if (input.priorTaskStatus === "draft" || input.priorTaskStatus === "planning") {
+          return await this.restoreTaskStatusAfterArtifactRevision({
+            task: latest,
+            status: input.priorTaskStatus,
+            summary:
+              input.outcome === "completed"
+                ? "Artifact revision completed"
+                : "Artifact revision cancelled",
+            detail: input.detail,
+            sessionId: input.sessionId,
+          });
+        }
         this.notifyUpdated(latest);
         return latest;
       }
+    }
+
+    if (input.priorTaskStatus === "draft" || input.priorTaskStatus === "planning") {
+      return await this.restoreTaskStatusAfterArtifactRevision({
+        task: latest,
+        status: input.priorTaskStatus,
+        summary: "Artifact revision cancelled",
+        detail: input.detail,
+        sessionId: input.sessionId,
+      });
     }
 
     this.notifyUpdated(latest);
@@ -2813,6 +2850,7 @@ export class TaskCoordinator {
     summary: string;
     caveats?: string[];
     sessionId?: string;
+    defaultPendingQuestions?: boolean;
   }): Promise<TaskRecord> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
@@ -2821,6 +2859,9 @@ export class TaskCoordinator {
       throw new Error("Task has unresolved blocking questions");
     }
     if (task.questions.some((question) => question.status === "pending")) {
+      if (input.defaultPendingQuestions === false) {
+        throw new Error("Task has unresolved pending questions");
+      }
       task = await this.options.sessionDb.defaultPendingTaskQuestions({
         taskId: task.id,
         expectedRevision: input.expectedRevision,

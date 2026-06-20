@@ -585,6 +585,18 @@ export class SessionDb {
     return this.taskRepository.hasCompletedArtifactRevisionForWorkItem(taskId, workItemId);
   }
 
+  hasPendingTaskArtifactRevisionSettlement(taskId: string): boolean {
+    return this.taskRepository.hasPendingArtifactRevisionSettlement(taskId);
+  }
+
+  hasPendingTaskArtifactRevisionSettlementForWorkItem(taskId: string, workItemId: string): boolean {
+    return this.taskRepository.hasPendingArtifactRevisionSettlementForWorkItem(taskId, workItemId);
+  }
+
+  listCoordinatorOwnedTaskArtifactRevisionWorkItemIds(taskId: string): string[] {
+    return this.taskRepository.listCoordinatorOwnedArtifactRevisionWorkItemIds(taskId);
+  }
+
   hasCancelledTaskArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
     return this.taskRepository.hasCancelledArtifactRevisionForWorkItem(taskId, workItemId);
   }
@@ -661,6 +673,17 @@ export class SessionDb {
       "fail_task_artifact_revision",
       async () => this.taskRepository.failArtifactRevision(input),
       { revisionId: input.revisionId, status: input.status },
+    );
+  }
+
+  async settlePendingTaskArtifactRevisionSettlements(input: {
+    taskId: string;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "settle_pending_task_artifact_revision_settlements",
+      async () => this.taskRepository.settlePendingArtifactRevisionSettlements(input),
+      { taskId: input.taskId },
     );
   }
 

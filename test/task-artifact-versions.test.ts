@@ -14,6 +14,8 @@ const TERMINAL_TASK_STATUSES = [
   "failed",
 ] as const satisfies readonly TaskStatus[];
 
+type EarlyPhaseTaskStatus = Extract<TaskStatus, "draft" | "planning">;
+
 type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -263,6 +265,81 @@ async function createTaskWithTwoArtifacts(
   const notesArtifact = task.artifacts.find((artifact) => artifact.path === canonicalNotesPath);
   if (!reportArtifact || !notesArtifact) throw new Error("Expected registered artifacts");
   return { task, reportArtifact, notesArtifact, reportPath, notesPath };
+}
+
+async function startParallelArtifactRevisionsFromEarlyPhase(
+  harness: Pick<Awaited<ReturnType<typeof createHarness>>, "workspacePath" | "coordinator">,
+  options: {
+    priorStatus: EarlyPhaseTaskStatus;
+    reviewRequired?: boolean;
+    reviewRounds?: number;
+    prepareTask?: (
+      task: TaskRecord,
+      artifacts: Awaited<ReturnType<typeof createTaskWithTwoArtifacts>>,
+    ) => Promise<TaskRecord>;
+  },
+) {
+  const artifacts = await createTaskWithTwoArtifacts(harness, {
+    reviewRequired: options.reviewRequired,
+    reviewRounds: options.reviewRounds,
+  });
+  let task = artifacts.task;
+  task = (await options.prepareTask?.(task, artifacts)) ?? task;
+  if (options.priorStatus === "planning") {
+    task = await harness.coordinator.transition({
+      taskId: task.id,
+      workspacePath: harness.workspacePath,
+      expectedRevision: task.revision,
+      status: "planning",
+      summary: "Keep task in planning before artifact revisions.",
+    });
+  }
+  const reportRevision = await harness.coordinator.startArtifactRevision({
+    taskId: task.id,
+    workspacePath: harness.workspacePath,
+    artifactId: artifacts.reportArtifact.id,
+    expectedRevision: task.revision,
+    instruction: "Revise report from early phase.",
+  });
+  const notesRevision = await harness.coordinator.startArtifactRevision({
+    taskId: task.id,
+    workspacePath: harness.workspacePath,
+    artifactId: artifacts.notesArtifact.id,
+    expectedRevision: reportRevision.task.revision,
+    instruction: "Revise notes from early phase.",
+  });
+  return { ...artifacts, task: notesRevision.task, reportRevision, notesRevision };
+}
+
+function blockingTaskQuestion() {
+  return {
+    header: "Approval",
+    question: "Which approval path should delivery use?",
+    context: "The answer changes the final delivered artifacts.",
+    blocking: true,
+    urgency: "now" as const,
+    options: [
+      { id: "standard", label: "Standard", description: "Use the standard approval path." },
+      { id: "expedite", label: "Expedite", description: "Use the expedited approval path." },
+    ],
+    recommendedOptionId: "standard",
+  };
+}
+
+function nonBlockingTaskQuestion() {
+  return {
+    header: "Packaging",
+    question: "Should the final package include an appendix?",
+    context: "The default is reversible before final delivery.",
+    blocking: false,
+    urgency: "before_delivery" as const,
+    defaultAction: "Proceed without an appendix.",
+    options: [
+      { id: "skip", label: "Skip", description: "Proceed without the appendix." },
+      { id: "include", label: "Include", description: "Include the appendix." },
+    ],
+    recommendedOptionId: "skip",
+  };
 }
 
 async function createTaskWithRestorableArtifactVersion(
@@ -2552,6 +2629,511 @@ describe("task artifact versions", () => {
     }
   });
 
+  for (const scenario of [
+    {
+      priorStatus: "draft",
+      completedCloses: "first",
+      finalOutcome: "cancelled",
+      name: "completed sibling first, cancelled sibling last",
+    },
+    {
+      priorStatus: "draft",
+      completedCloses: "last",
+      finalOutcome: "completed",
+      name: "cancelled sibling first, completed sibling last",
+    },
+    {
+      priorStatus: "draft",
+      completedCloses: "first",
+      finalOutcome: "completed",
+      name: "completed sibling first, completed sibling last",
+    },
+    {
+      priorStatus: "planning",
+      completedCloses: "first",
+      finalOutcome: "cancelled",
+      name: "completed sibling first, cancelled sibling last",
+    },
+    {
+      priorStatus: "planning",
+      completedCloses: "last",
+      finalOutcome: "completed",
+      name: "cancelled sibling first, completed sibling last",
+    },
+    {
+      priorStatus: "planning",
+      completedCloses: "first",
+      finalOutcome: "completed",
+      name: "completed sibling first, completed sibling last",
+    },
+  ] as const) {
+    test(`settles ${scenario.priorStatus}-phase deferred revisions through no-review gates: ${scenario.name}`, async () => {
+      const harness = await createHarness();
+      try {
+        const {
+          task,
+          reportArtifact,
+          notesArtifact,
+          reportPath,
+          notesPath,
+          reportRevision,
+          notesRevision,
+        } = await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: scenario.priorStatus,
+          reviewRequired: false,
+        });
+        expect(task.status).toBe("working");
+
+        let lastClosed: Awaited<ReturnType<TaskCoordinator["handleThreadOutcome"]>>;
+        if (scenario.completedCloses === "first") {
+          await fs.writeFile(reportPath, "report version two from early phase\n");
+          const firstClosed = await harness.coordinator.handleThreadOutcome(
+            reportRevision.revision.sessionId,
+            "completed",
+          );
+          if (!firstClosed) throw new Error("Expected completed report revision");
+          expect(firstClosed.task.status).toBe("working");
+          const reportDetailAfterFirst = harness.coordinator.getArtifactDetail({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: reportArtifact.id,
+          });
+          expect(reportDetailAfterFirst?.versions.at(-1)?.reviewStatus).toBe("draft");
+
+          await fs.writeFile(notesPath, "notes version two from early phase\n");
+          lastClosed = await harness.coordinator.handleThreadOutcome(
+            notesRevision.revision.sessionId,
+            scenario.finalOutcome,
+          );
+        } else {
+          await fs.writeFile(notesPath, "notes version two to discard before report completes\n");
+          const firstClosed = await harness.coordinator.handleThreadOutcome(
+            notesRevision.revision.sessionId,
+            "cancelled",
+          );
+          if (!firstClosed) throw new Error("Expected cancelled notes revision");
+          expect(firstClosed.task.status).toBe("working");
+          expect(await fs.readFile(notesPath, "utf8")).toBe("notes version one\n");
+
+          await fs.writeFile(reportPath, "report version two from early phase\n");
+          lastClosed = await harness.coordinator.handleThreadOutcome(
+            reportRevision.revision.sessionId,
+            "completed",
+          );
+        }
+        if (!lastClosed) throw new Error("Expected final artifact revision outcome");
+
+        expect(lastClosed.revision.status).toBe(scenario.finalOutcome);
+        expect(lastClosed.task.status).toBe("completed");
+        const reportDetail = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: reportArtifact.id,
+        });
+        const notesDetail = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: notesArtifact.id,
+        });
+        expect(reportDetail?.acceptedVersionId).toBe(reportDetail?.latestVersionId);
+        expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("accepted");
+        expect(notesDetail?.acceptedVersionId).toBe(notesDetail?.latestVersionId);
+        expect(notesDetail?.versions.at(-1)?.reviewStatus).toBe("accepted");
+        expect(await fs.readFile(reportPath, "utf8")).toBe("report version two from early phase\n");
+        expect(await fs.readFile(notesPath, "utf8")).toBe(
+          scenario.completedCloses === "first" && scenario.finalOutcome === "completed"
+            ? "notes version two from early phase\n"
+            : "notes version one\n",
+        );
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  for (const priorStatus of ["draft", "planning"] as const) {
+    test(`settles ${priorStatus}-phase deferred revisions to awaiting review when review is required`, async () => {
+      const harness = await createHarness();
+      try {
+        const { task, reportArtifact, reportPath, notesPath, reportRevision, notesRevision } =
+          await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+            priorStatus,
+            reviewRequired: true,
+            reviewRounds: 0,
+          });
+
+        await fs.writeFile(reportPath, "report version two awaiting review from early phase\n");
+        const firstClosed = await harness.coordinator.handleThreadOutcome(
+          reportRevision.revision.sessionId,
+          "completed",
+        );
+        if (!firstClosed) throw new Error("Expected completed report revision");
+        expect(firstClosed.task.status).toBe("working");
+
+        await fs.writeFile(notesPath, "notes version two to discard before review\n");
+        const lastClosed = await harness.coordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!lastClosed) throw new Error("Expected cancelled notes revision");
+        expect(lastClosed.task.status).toBe("awaiting_review");
+        const reportDetail = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: reportArtifact.id,
+        });
+        expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
+        expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("restores planning when deferred settlement still needs fresh review evidence", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, reportArtifact, reportPath, notesPath, reportRevision, notesRevision } =
+        await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: "planning",
+          reviewRounds: 1,
+        });
+
+      await fs.writeFile(reportPath, "report version two before required review\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      expect(firstClosed.task.status).toBe("working");
+
+      await fs.writeFile(notesPath, "notes version two to discard before required review\n");
+      const lastClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!lastClosed) throw new Error("Expected cancelled notes revision");
+      expect(lastClosed.task.status).toBe("planning");
+      await expect(
+        harness.coordinator.proposeCompletion({
+          taskId: lastClosed.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: lastClosed.task.revision,
+          summary: "Cannot complete with stale review.",
+        }),
+      ).rejects.toThrow("fresh passing reviews");
+      const reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("restores draft without accepting deferred revisions when queued work blocks settlement", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, reportArtifact, reportPath, notesPath, reportRevision, notesRevision } =
+        await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: "draft",
+          reviewRequired: false,
+          prepareTask: async (task) =>
+            await harness.coordinator.replaceWorkItems({
+              taskId: task.id,
+              workspacePath: harness.workspacePath,
+              expectedRevision: task.revision,
+              items: [
+                { id: "deliver-report", title: "Deliver report", expectedOutputs: ["report.md"] },
+                { id: "deliver-notes", title: "Deliver notes", expectedOutputs: ["notes.md"] },
+                { id: "follow-up", title: "Follow up", expectedOutputs: [] },
+              ],
+            }),
+        });
+
+      await fs.writeFile(reportPath, "report version two with queued work\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      expect(firstClosed.task.status).toBe("working");
+
+      await fs.writeFile(notesPath, "notes version two to discard with queued work\n");
+      const lastClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!lastClosed) throw new Error("Expected cancelled notes revision");
+      expect(lastClosed.task.status).toBe("draft");
+      expect(lastClosed.task.workItems.find((item) => item.id === "follow-up")?.status).toBe(
+        "queued",
+      );
+      const reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+      expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("restores planning without accepting deferred revisions when required artifact evidence is missing", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, reportArtifact, reportPath, notesPath, reportRevision, notesRevision } =
+        await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: "planning",
+          reviewRequired: false,
+          prepareTask: async (task) =>
+            await harness.coordinator.replaceWorkItems({
+              taskId: task.id,
+              workspacePath: harness.workspacePath,
+              expectedRevision: task.revision,
+              items: [
+                { id: "deliver-report", title: "Deliver report", expectedOutputs: ["report.md"] },
+                { id: "deliver-notes", title: "Deliver notes", expectedOutputs: ["notes.md"] },
+                {
+                  id: "deliver-summary",
+                  title: "Deliver summary",
+                  status: "done",
+                  expectedOutputs: ["summary.md"],
+                  completionEvidence: "Summary was claimed complete.",
+                },
+              ],
+            }),
+        });
+
+      await fs.writeFile(reportPath, "report version two without summary artifact\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      expect(firstClosed.task.status).toBe("working");
+
+      await fs.writeFile(notesPath, "notes version two to discard without summary artifact\n");
+      const lastClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!lastClosed) throw new Error("Expected cancelled notes revision");
+      expect(lastClosed.task.status).toBe("planning");
+      const reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+      expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("keeps blockers and blocking questions ahead of early-phase deferred settlement", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, reportPath, notesPath, reportRevision, notesRevision } =
+        await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: "draft",
+          reviewRequired: false,
+        });
+
+      await fs.writeFile(reportPath, "report version two before blocking question\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      expect(firstClosed.task.status).toBe("working");
+      const requested = await harness.coordinator.requestInput({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: firstClosed.task.revision,
+        sessionId: notesRevision.revision.sessionId,
+        questions: [blockingTaskQuestion()],
+      });
+      expect(requested.task.status).toBe("blocked");
+
+      await fs.writeFile(notesPath, "notes version two to discard while blocked\n");
+      const lastClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!lastClosed) throw new Error("Expected cancelled notes revision");
+      expect(lastClosed.task.status).toBe("blocked");
+      expect(
+        lastClosed.task.questions.some(
+          (question) => question.status === "pending" && question.blocking,
+        ),
+      ).toBe(true);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("keeps terminal early-phase deferred callbacks inert after task cancellation", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, reportPath, notesPath, reportRevision, notesRevision } =
+        await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: "planning",
+          reviewRequired: false,
+        });
+
+      await fs.writeFile(reportPath, "report version two before terminal cancellation\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      const terminal = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: firstClosed.task.revision,
+        status: "cancelled",
+        summary: "User cancelled the task while sibling revision remained active.",
+      });
+      expect(terminal.status).toBe("cancelled");
+
+      await fs.writeFile(notesPath, "late notes edit after terminal cancellation\n");
+      const late = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!late) throw new Error("Expected late cancelled revision callback");
+      expect(late.task.status).toBe("cancelled");
+      expect(late.task.revision).toBe(terminal.revision);
+      expect(await fs.readFile(notesPath, "utf8")).toBe(
+        "late notes edit after terminal cancellation\n",
+      );
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("settles early-phase deferred revisions after restart and replays idempotently", async () => {
+    const harness = await createHarness();
+    let closed = false;
+    try {
+      const { task, reportArtifact, reportPath, notesPath, reportRevision, notesRevision } =
+        await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: "planning",
+          reviewRequired: false,
+        });
+
+      await fs.writeFile(reportPath, "report version two before early-phase restart\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      expect(firstClosed.task.status).toBe("working");
+      await fs.writeFile(notesPath, "notes version two to discard after restart\n");
+
+      harness.sessionDb.close();
+      closed = true;
+      const reopenedDb = await SessionDb.create({
+        paths: {
+          rootDir: harness.rootDir,
+          sessionsDir: path.join(harness.rootDir, "sessions"),
+        },
+      });
+      const reopenedCoordinator = new TaskCoordinator({
+        sessionDb: reopenedDb,
+        artifactStore: new ArtifactVersionStore({
+          rootDir: path.join(harness.rootDir, "artifacts"),
+        }),
+      });
+      try {
+        const lastClosed = await reopenedCoordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!lastClosed) throw new Error("Expected cancelled notes revision");
+        expect(lastClosed.task.status).toBe("completed");
+        const replay = await reopenedCoordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!replay) throw new Error("Expected idempotent replay");
+        expect(replay.task.status).toBe("completed");
+        expect(replay.task.revision).toBe(lastClosed.task.revision);
+        const reportDetail = reopenedCoordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: reportArtifact.id,
+        });
+        expect(reportDetail?.acceptedVersionId).toBe(reportDetail?.latestVersionId);
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      if (!closed) harness.sessionDb.close();
+    }
+  });
+
+  test("serializes concurrent early-phase last-close settlement against stale completion", async () => {
+    const harness = await createPausingHarness();
+    try {
+      const { task, reportPath, notesPath, reportRevision, notesRevision } =
+        await startParallelArtifactRevisionsFromEarlyPhase(harness, {
+          priorStatus: "draft",
+          reviewRequired: false,
+        });
+
+      await fs.writeFile(reportPath, "report version two before concurrent final close\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      expect(firstClosed.task.status).toBe("working");
+
+      await fs.writeFile(notesPath, "notes version two to discard during final close\n");
+      const pause = harness.artifactStore.pauseNext("restore", await fs.realpath(notesPath));
+      const finalClosePromise = harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      await pause.reached;
+
+      const staleCompletionPromise = harness.coordinator.proposeCompletion({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: firstClosed.task.revision,
+        summary: "Stale completion raced with final revision close.",
+      });
+      await flushAsyncWork();
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe("working");
+
+      pause.release();
+      const [finalClose, staleCompletion] = await Promise.all([
+        finalClosePromise,
+        staleCompletionPromise.then(
+          (task) => ({ ok: true as const, task }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
+      ]);
+      if (!finalClose) throw new Error("Expected final cancelled revision");
+      expect(finalClose.task.status).toBe("completed");
+      expect(staleCompletion.ok).toBe(false);
+      if (staleCompletion.ok) throw new Error("Stale completion unexpectedly succeeded");
+      expect(staleCompletion.error).toBeInstanceOf(Error);
+      expect((staleCompletion.error as Error).message).toBe(
+        `Task revision conflict: expected ${firstClosed.task.revision}, current ${finalClose.task.revision}`,
+      );
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("keeps deferred completed revisions working when fresh review gates are unmet", async () => {
     const harness = await createHarness();
     try {
@@ -2856,6 +3438,433 @@ describe("task artifact versions", () => {
       }
     } finally {
       if (!closed) harness.sessionDb.close();
+    }
+  });
+
+  test("preserves deferred completed revision helpers during compatible plan updates", async () => {
+    const harness = await createHarness();
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: false });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start parallel revision settlement preservation.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report before a compatible plan update.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: reportRevision.task.revision,
+        instruction: "Keep notes revision active during the plan update.",
+      });
+
+      await fs.writeFile(reportPath, "report version two before compatible plan update\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      const deferredReportItem = firstClosed.task.workItems.find(
+        (item) => item.id === reportRevision.revision.workItemId,
+      );
+      const activeNotesItem = firstClosed.task.workItems.find(
+        (item) => item.id === notesRevision.revision.workItemId,
+      );
+      if (!deferredReportItem || !activeNotesItem) {
+        throw new Error("Expected revision helper work items");
+      }
+
+      const mutated = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: firstClosed.task.revision,
+        items: [
+          ...firstClosed.task.workItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            status:
+              item.id === reportRevision.revision.workItemId ||
+              item.id === notesRevision.revision.workItemId
+                ? ("done" as const)
+                : item.status,
+            dependsOn:
+              item.id === reportRevision.revision.workItemId ||
+              item.id === notesRevision.revision.workItemId
+                ? ["follow-up"]
+                : item.dependsOn,
+            expectedOutputs:
+              item.id === reportRevision.revision.workItemId ||
+              item.id === notesRevision.revision.workItemId
+                ? []
+                : item.expectedOutputs,
+          })),
+          {
+            id: "follow-up",
+            title: "Follow up",
+            status: "done" as const,
+            expectedOutputs: [],
+          },
+        ],
+      });
+      const preservedReport = mutated.workItems.find(
+        (item) => item.id === reportRevision.revision.workItemId,
+      );
+      const preservedNotes = mutated.workItems.find(
+        (item) => item.id === notesRevision.revision.workItemId,
+      );
+      expect(preservedReport).toMatchObject({
+        status: deferredReportItem.status,
+        dependsOn: deferredReportItem.dependsOn,
+        assignedThreadId: deferredReportItem.assignedThreadId,
+        claimedByThreadId: deferredReportItem.claimedByThreadId,
+        expectedOutputs: deferredReportItem.expectedOutputs,
+        completionEvidence: deferredReportItem.completionEvidence,
+      });
+      expect(preservedNotes).toMatchObject({
+        status: activeNotesItem.status,
+        dependsOn: activeNotesItem.dependsOn,
+        assignedThreadId: activeNotesItem.assignedThreadId,
+        claimedByThreadId: activeNotesItem.claimedByThreadId,
+        expectedOutputs: activeNotesItem.expectedOutputs,
+        completionEvidence: activeNotesItem.completionEvidence,
+      });
+      await expect(
+        harness.coordinator.proposeCompletion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: mutated.revision,
+          summary: "Cannot complete while notes revision still runs.",
+        }),
+      ).rejects.toThrow("unfinished work item");
+
+      await fs.writeFile(notesPath, "notes version two to discard after compatible plan update\n");
+      const lastClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!lastClosed) throw new Error("Expected final cancelled revision");
+      expect(lastClosed.task.status).toBe("completed");
+      const reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.acceptedVersionId).toBe(reportDetail?.latestVersionId);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("rejects removing deferred completed revision helpers without losing revision state", async () => {
+    const harness = await createHarness();
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: false });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start deferred helper removal rejection.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report before removal attempt.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: reportRevision.task.revision,
+        instruction: "Keep sibling active while removal is attempted.",
+      });
+
+      await fs.writeFile(reportPath, "report version two before deferred removal attempt\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      const beforeRemoval = harness.sessionDb.getTaskArtifactRevision(reportRevision.revision.id);
+      await expect(
+        harness.coordinator.replaceWorkItems({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: firstClosed.task.revision,
+          items: firstClosed.task.workItems
+            .filter((item) => item.id !== reportRevision.revision.workItemId)
+            .map((item) => ({
+              id: item.id,
+              title: item.title,
+              status: item.status,
+              dependsOn: item.dependsOn,
+              expectedOutputs: item.expectedOutputs,
+            })),
+        }),
+      ).rejects.toThrow("artifact revision");
+      expect(harness.sessionDb.getTaskArtifactRevision(reportRevision.revision.id)).toEqual(
+        beforeRemoval,
+      );
+
+      await fs.writeFile(notesPath, "notes version two to discard after removal rejection\n");
+      const lastClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!lastClosed) throw new Error("Expected cancelled notes revision");
+      expect(lastClosed.task.status).toBe("completed");
+      const reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.acceptedVersionId).toBe(reportDetail?.latestVersionId);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("does not re-propose an already reviewed revision when an unrelated revision cancels", async () => {
+    const harness = await createHarness();
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: true, reviewRounds: 0 });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start first report revision.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report for review.",
+      });
+
+      await fs.writeFile(reportPath, "report version two already proposed for review\n");
+      const proposed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!proposed) throw new Error("Expected completed report revision");
+      expect(proposed.task.status).toBe("awaiting_review");
+
+      task = await harness.coordinator.requestChanges({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: proposed.task.revision,
+        feedback: "Needs additional edits before delivery.",
+      });
+      expect(task.status).toBe("working");
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Try unrelated notes changes.",
+      });
+
+      await fs.writeFile(notesPath, "notes version two to discard after requested changes\n");
+      const unrelatedCancelled = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!unrelatedCancelled) throw new Error("Expected cancelled notes revision");
+      expect(unrelatedCancelled.task.status).toBe("working");
+      const reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+      expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("does not re-propose an already reviewed revision after restart", async () => {
+    const harness = await createHarness();
+    let closed = false;
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: true, reviewRounds: 0 });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start restart-sensitive reviewed revision.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report for review before restart.",
+      });
+
+      await fs.writeFile(reportPath, "report version two already proposed before restart\n");
+      const proposed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!proposed) throw new Error("Expected completed report revision");
+      task = await harness.coordinator.requestChanges({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: proposed.task.revision,
+        feedback: "Needs changes before restart.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Try unrelated notes changes after restart.",
+      });
+      await fs.writeFile(notesPath, "notes version two to discard after restart\n");
+
+      harness.sessionDb.close();
+      closed = true;
+      const reopenedDb = await SessionDb.create({
+        paths: {
+          rootDir: harness.rootDir,
+          sessionsDir: path.join(harness.rootDir, "sessions"),
+        },
+      });
+      const reopenedCoordinator = new TaskCoordinator({
+        sessionDb: reopenedDb,
+        artifactStore: new ArtifactVersionStore({
+          rootDir: path.join(harness.rootDir, "artifacts"),
+        }),
+      });
+      try {
+        const unrelatedCancelled = await reopenedCoordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!unrelatedCancelled) throw new Error("Expected cancelled notes revision");
+        expect(unrelatedCancelled.task.status).toBe("working");
+        const reportDetail = reopenedCoordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: reportArtifact.id,
+        });
+        expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+        expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      if (!closed) harness.sessionDb.close();
+    }
+  });
+
+  test("preserves pending non-blocking questions when deferred settlement is not ready", async () => {
+    const harness = await createHarness();
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: false });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [
+          { id: "deliver-report", title: "Deliver report", expectedOutputs: ["report.md"] },
+          { id: "deliver-notes", title: "Deliver notes", expectedOutputs: ["notes.md"] },
+          { id: "follow-up", title: "Follow up", expectedOutputs: [] },
+        ],
+      });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start deferred settlement with queued work.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report while queued work remains.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: reportRevision.task.revision,
+        instruction: "Cancel notes after the question remains pending.",
+      });
+
+      await fs.writeFile(reportPath, "report version two with pending input\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      const requested = await harness.coordinator.requestInput({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: firstClosed.task.revision,
+        sessionId: notesRevision.revision.sessionId,
+        questions: [nonBlockingTaskQuestion()],
+      });
+      expect(requested.task.questions.at(-1)).toMatchObject({
+        status: "pending",
+        blocking: false,
+        answer: null,
+        resolutionSource: null,
+      });
+      const defaultedBefore = requested.task.activity.filter(
+        (item) => item.kind === "input_defaulted",
+      ).length;
+
+      await fs.writeFile(notesPath, "notes version two to discard with pending input\n");
+      const lastClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!lastClosed) throw new Error("Expected cancelled notes revision");
+      expect(lastClosed.task.status).toBe("working");
+      expect(lastClosed.task.workItems.find((item) => item.id === "follow-up")?.status).toBe(
+        "queued",
+      );
+      expect(lastClosed.task.questions.at(-1)).toMatchObject({
+        status: "pending",
+        blocking: false,
+        answer: null,
+        resolutionSource: null,
+      });
+      expect(
+        lastClosed.task.activity.filter((item) => item.kind === "input_defaulted"),
+      ).toHaveLength(defaultedBefore);
+      const reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+      expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
+    } finally {
+      harness.sessionDb.close();
     }
   });
 

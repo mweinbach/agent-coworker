@@ -243,6 +243,13 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       if (detail.versions.length === 0) {
         const task = context.tasks.get(params.taskId, workspacePath);
         if (!task) throw new Error(`Unknown task: ${params.taskId}`);
+        if (
+          task.status === "completed" ||
+          task.status === "cancelled" ||
+          task.status === "failed"
+        ) {
+          return { detail };
+        }
         try {
           detail = await context.tasks.ensureArtifactBaseline({
             taskId: params.taskId,

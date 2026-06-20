@@ -23,6 +23,22 @@ describe("workspacePath", () => {
     );
   });
 
+  test("canonicalWorkspacePath preserves Windows current-drive rooted paths", () => {
+    const originalCwd = process.cwd;
+    Object.defineProperty(process, "cwd", {
+      configurable: true,
+      value: () => "D:\\Users\\me",
+    });
+    try {
+      expect(canonicalWorkspacePath("\\repo\\subdir\\.", "win32")).toBe("d:\\repo\\subdir");
+    } finally {
+      Object.defineProperty(process, "cwd", {
+        configurable: true,
+        value: originalCwd,
+      });
+    }
+  });
+
   describe("workspacePathOverlaps", () => {
     test("equal paths overlap", () => {
       expect(workspacePathOverlaps("/tmp/repo", "/tmp/repo", "linux")).toBe(true);

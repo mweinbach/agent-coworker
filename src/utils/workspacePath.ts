@@ -43,6 +43,12 @@ function resolveWindowsPath(value: string): string {
     return segments.length > 0 ? `${root}\\${segments.join("\\")}` : root;
   }
 
+  if (/^\\(?!\\)/.test(normalized)) {
+    const cwdDrive = /^([a-zA-Z]:)\\/.exec(runtimeCwd("win32"))?.[1] ?? "C:";
+    const segments = normalizeSegments(normalized.slice(1).split("\\"));
+    return segments.length > 0 ? `${cwdDrive}\\${segments.join("\\")}` : `${cwdDrive}\\`;
+  }
+
   const driveMatch = /^([a-zA-Z]:)(?:\\(.*))?$/.exec(normalized);
   if (driveMatch) {
     const root = driveMatch[1] ?? "C:";

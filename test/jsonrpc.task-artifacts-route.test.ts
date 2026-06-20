@@ -130,10 +130,15 @@ function makeHarness() {
   const results: Array<{ id: JsonRpcLiteId; result: unknown }> = [];
   const errors: Array<{ id: JsonRpcLiteId | null; error: JsonRpcLiteError }> = [];
   const sentMessages: Array<{ text: string; displayText?: string }> = [];
+  let baselineCalls = 0;
   const context = {
     tasks: {
       get: () => data.task,
       getArtifactDetail: () => data.detail,
+      ensureArtifactBaseline: async () => {
+        baselineCalls += 1;
+        return data.detail;
+      },
       readArtifactVersion: async ({ versionId }: { versionId: string }) => {
         const selected = versionId === data.before.id ? data.before : data.after;
         return {
@@ -188,7 +193,7 @@ function makeHarness() {
         errors.push({ id, error }),
     },
   } as unknown as JsonRpcRouteContext;
-  return { context, results, errors, sentMessages, ...data };
+  return { context, results, errors, sentMessages, getBaselineCalls: () => baselineCalls, ...data };
 }
 
 async function invoke(context: JsonRpcRouteContext, method: string, params: unknown) {
@@ -199,6 +204,31 @@ async function invoke(context: JsonRpcRouteContext, method: string, params: unkn
 }
 
 describe("task artifact JSON-RPC routes", () => {
+  test("reads terminal legacy artifact detail without creating a baseline", async () => {
+    const harness = makeHarness();
+    harness.task.status = "completed";
+    harness.detail.versions = [];
+    harness.detail.latestVersionId = null;
+    harness.detail.acceptedVersionId = null;
+
+    await invoke(harness.context, "task/artifact/read", {
+      cwd: "C:\\workspace",
+      taskId: "task-1",
+      artifactId: "artifact-1",
+    });
+
+    expect(harness.errors).toEqual([]);
+    expect(harness.getBaselineCalls()).toBe(0);
+    expect(harness.results[0]?.result).toEqual({
+      detail: expect.objectContaining({
+        artifact: harness.artifact,
+        versions: [],
+        latestVersionId: null,
+        acceptedVersionId: null,
+      }),
+    });
+  });
+
   test("compares immutable text versions through the harness", async () => {
     const harness = makeHarness();
     await invoke(harness.context, "task/artifact/version/compare", {

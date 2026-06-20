@@ -1141,13 +1141,21 @@ describe("desktop task mode UI", () => {
     async () => {
       const harness = setupJsdom();
       const startRevision = mock(async () => artifactDetail());
+      const captureVersion = mock(async () => artifactDetail());
+      const restoreVersion = mock(async () => artifactDetail());
+      const acceptVersion = mock(async () => artifactDetail());
       try {
         const container = harness.dom.window.document.getElementById("root");
         if (!container) throw new Error("missing root");
         const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
         const root = createRoot(container);
         resetStore(taskRecord({ status: "completed" }));
-        useAppStore.setState({ startTaskArtifactRevision: startRevision } as never);
+        useAppStore.setState({
+          startTaskArtifactRevision: startRevision,
+          captureTaskArtifactVersion: captureVersion,
+          restoreTaskArtifactVersion: restoreVersion,
+          acceptTaskArtifactVersion: acceptVersion,
+        } as never);
 
         await act(async () => root.render(createElement(TaskContextSidebar)));
         await act(async () => {
@@ -1168,6 +1176,14 @@ describe("desktop task mode UI", () => {
         const requestChangesButton = Array.from(
           reviewDialog?.querySelectorAll("button") ?? [],
         ).find((button) => button.textContent?.trim() === "Request changes");
+        const captureCurrentButton = Array.from(
+          reviewDialog?.querySelectorAll("button") ?? [],
+        ).find((button) => button.textContent?.trim() === "Capture current");
+        const acceptButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.trim() === "Accept",
+        );
+        expect(captureCurrentButton?.hasAttribute("disabled")).toBe(true);
+        expect(acceptButton?.hasAttribute("disabled")).toBe(true);
         expect(requestChangesButton?.hasAttribute("disabled")).toBe(true);
         expect(requestChangesButton?.getAttribute("aria-disabled")).toBe("true");
         const descriptionId = requestChangesButton?.getAttribute("aria-describedby");
@@ -1176,12 +1192,35 @@ describe("desktop task mode UI", () => {
           descriptionId
             ? harness.dom.window.document.getElementById(descriptionId)?.textContent
             : "",
-        ).toContain("Reopen the task before requesting artifact changes");
-        await act(async () => requestChangesButton?.click());
+        ).toContain("Reopen the task before changing artifact versions");
+        await act(async () => {
+          captureCurrentButton?.click();
+          acceptButton?.click();
+          requestChangesButton?.click();
+        });
         expect(
           harness.dom.window.document.querySelector("#artifact-revision-artifact-1"),
         ).toBeNull();
+        expect(captureVersion).not.toHaveBeenCalled();
+        expect(acceptVersion).not.toHaveBeenCalled();
         expect(startRevision).not.toHaveBeenCalled();
+
+        const versionOneButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.includes("Version 1"),
+        );
+        await act(async () => {
+          versionOneButton?.click();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        const restoreButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.trim() === "Restore draft",
+        );
+        expect(restoreButton?.hasAttribute("disabled")).toBe(true);
+        await act(async () => restoreButton?.click());
+        expect(harness.dom.window.document.body.textContent).not.toContain(
+          "Restore this version as the draft?",
+        );
+        expect(restoreVersion).not.toHaveBeenCalled();
 
         await act(async () => root.unmount());
       } finally {

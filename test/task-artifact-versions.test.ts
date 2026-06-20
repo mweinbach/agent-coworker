@@ -150,6 +150,86 @@ describe("task artifact versions", () => {
         harness.sessionDb.close();
       }
     });
+
+    test(`rejects artifact version mutations on ${status} tasks before mutation`, async () => {
+      const harness = await createHarness();
+      try {
+        let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
+        task = await harness.coordinator.transition({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          status: "working",
+          summary: "Artifact work started",
+        });
+        await fs.writeFile(artifactPath, "version two\n");
+        const captured = await harness.coordinator.captureArtifactVersion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          expectedRevision: task.revision,
+          changeSummary: "Pre-terminal draft",
+        });
+        task = await harness.coordinator.transition({
+          taskId: captured.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: captured.task.revision,
+          status,
+          summary: `Task is ${status}`,
+        });
+        await fs.writeFile(artifactPath, "late live edit\n");
+        const firstVersion = captured.detail.versions[0];
+        if (!firstVersion) throw new Error("Expected first version");
+        const detailBefore = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+        });
+
+        await expect(
+          harness.coordinator.captureArtifactVersion({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: artifact.id,
+            expectedRevision: task.revision,
+            changeSummary: "Late capture after terminal state",
+          }),
+        ).rejects.toThrow(`Task ${task.id} is ${status}`);
+        await expect(
+          harness.coordinator.restoreArtifactVersion({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: artifact.id,
+            versionId: firstVersion.id,
+            expectedRevision: task.revision,
+          }),
+        ).rejects.toThrow(`Task ${task.id} is ${status}`);
+        await expect(
+          harness.coordinator.acceptArtifactVersion({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: artifact.id,
+            versionId: captured.version.id,
+            expectedRevision: task.revision,
+          }),
+        ).rejects.toThrow(`Task ${task.id} is ${status}`);
+
+        expect(await fs.readFile(artifactPath, "utf8")).toBe("late live edit\n");
+        expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+          status,
+          revision: task.revision,
+        });
+        expect(
+          harness.coordinator.getArtifactDetail({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: artifact.id,
+          }),
+        ).toEqual(detailBefore);
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
   }
 
   test("persists lineage, skips identical captures, and restores as a new version", async () => {

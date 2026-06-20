@@ -773,6 +773,83 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("replays an already-recorded directive idempotently after terminal completion", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const directive = {
+        type: "report_progress" as const,
+        idempotencyKey: "progress-before-completion",
+        summary: "Final evidence recorded",
+      };
+      await harness.coordinator.applyDirective("task-session-1", directive);
+      const completed = await transitionToStatus(harness, created.task.id, "completed");
+
+      const replayed = await harness.coordinator.applyDirective("task-session-1", directive);
+
+      const progress = harness.coordinator
+        .get(completed.id, harness.workspacePath)
+        ?.activity.filter((item) => item.kind === "progress_reported");
+      expect(replayed.task.status).toBe("completed");
+      expect(replayed.continuation).toBe("continue");
+      expect(progress).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of TERMINAL_TASK_STATUSES) {
+    test(`rejects fresh late directives on ${status} tasks without mutation`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const created = await createWorkingTask(harness);
+        const terminal = await transitionToStatus(harness, created.task.id, status);
+        const workItem = terminal.workItems[0];
+        if (!workItem) throw new Error("Expected work item");
+        const activityCount = terminal.activity.length;
+
+        await expect(
+          harness.coordinator.applyDirective("task-session-1", {
+            type: "report_progress",
+            idempotencyKey: `late-progress-${status}`,
+            summary: "Late progress after terminal state",
+          }),
+        ).rejects.toThrow(`Task ${terminal.id} is ${status}`);
+        await expect(
+          harness.coordinator.applyDirective("task-session-1", {
+            type: "mark_work_item",
+            idempotencyKey: `late-mark-${status}`,
+            expectedRevision: terminal.revision,
+            workItemId: workItem.id,
+            status: "done",
+            completionEvidence: "Late evidence after terminal state",
+          }),
+        ).rejects.toThrow(`Task ${terminal.id} is ${status}`);
+
+        const after = harness.coordinator.get(terminal.id, harness.workspacePath);
+        expect(after).toMatchObject({
+          status,
+          revision: terminal.revision,
+        });
+        expect(after?.activity).toHaveLength(activityCount);
+        expect(after?.workItems[0]).toMatchObject({
+          status: workItem.status,
+          completionEvidence: workItem.completionEvidence,
+        });
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(terminal.id, `late-progress-${status}`),
+        ).toBeNull();
+        expect(harness.sessionDb.getTaskDirectiveReceipt(terminal.id, `late-mark-${status}`)).toBe(
+          null,
+        );
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
   test("completes directly when review is explicitly disabled", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });
@@ -929,6 +1006,47 @@ describe("task mode persistence", () => {
         summary: "Changes requested",
         detail: "Tighten the final recommendation.",
       });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/requestChanges reports a stale revision conflict before lifecycle state errors", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const review = await harness.coordinator.transition({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        status: "awaiting_review",
+        summary: "Ready for review",
+      });
+      await harness.coordinator.acceptTask({
+        taskId: review.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: review.revision,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/requestChanges", {
+        cwd: harness.workspacePath,
+        taskId: review.id,
+        expectedRevision: review.revision,
+        feedback: "A stale reviewer wants another change.",
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          data: expect.objectContaining({
+            category: "revision_conflict",
+            expectedRevision: review.revision,
+            currentRevision: review.revision + 1,
+          }),
+        }),
+      ]);
     } finally {
       harness.sessionDb.close();
     }

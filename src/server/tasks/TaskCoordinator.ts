@@ -773,24 +773,35 @@ export class TaskCoordinator {
     }>,
     updatedAt: string,
   ): WorkItem[] {
+    const existingById = new Map<string, WorkItem>();
+    for (const item of current.workItems) {
+      const normalizedId = item.id.trim();
+      if (!normalizedId) throw new Error("Cannot reconcile a work item with an empty id");
+      const existing = existingById.get(normalizedId);
+      if (existing && existing.id !== item.id) {
+        throw new Error(`Ambiguous work item id after normalization: ${normalizedId}`);
+      }
+      existingById.set(normalizedId, item);
+    }
     const activeRevisionWorkItemIds = new Set<string>();
     for (const artifactRecord of current.artifacts) {
       const detail = this.options.sessionDb.getTaskArtifactDetail(current.id, artifactRecord.id);
-      if (detail?.activeRevision) activeRevisionWorkItemIds.add(detail.activeRevision.workItemId);
+      if (detail?.activeRevision)
+        activeRevisionWorkItemIds.add(detail.activeRevision.workItemId.trim());
     }
     const items: WorkItem[] = inputItems.map((item, position) => {
-      const existing = item.id
-        ? current.workItems.find((candidate) => candidate.id === item.id)
-        : undefined;
-      const activeRevisionItem =
-        existing && activeRevisionWorkItemIds.has(existing.id) ? existing : null;
+      const id = item.id?.trim() || crypto.randomUUID();
+      const existing = existingById.get(id);
+      const activeRevisionItem = existing && activeRevisionWorkItemIds.has(id) ? existing : null;
       return {
-        id: item.id?.trim() || crypto.randomUUID(),
+        id,
         taskId: current.id,
         title: nonEmpty(item.title, "Work item title"),
         description: item.description?.trim() ?? "",
         status: activeRevisionItem?.status ?? item.status ?? existing?.status ?? "queued",
-        dependsOn: activeRevisionItem?.dependsOn ?? [...new Set(item.dependsOn ?? [])],
+        dependsOn: activeRevisionItem?.dependsOn ?? [
+          ...new Set((item.dependsOn ?? []).map((dependency) => dependency.trim())),
+        ],
         assignedThreadId:
           activeRevisionItem?.assignedThreadId ?? existing?.assignedThreadId ?? null,
         claimedByThreadId:
@@ -808,7 +819,7 @@ export class TaskCoordinator {
     validateWorkGraph(items);
     const itemIds = new Set(items.map((item) => item.id));
     const removedActiveRevision = current.workItems.find(
-      (item) => activeRevisionWorkItemIds.has(item.id) && !itemIds.has(item.id),
+      (item) => activeRevisionWorkItemIds.has(item.id.trim()) && !itemIds.has(item.id.trim()),
     );
     if (removedActiveRevision) {
       throw new Error(
@@ -816,7 +827,7 @@ export class TaskCoordinator {
       );
     }
     const removedClaim = current.workItems.find(
-      (item) => item.claimedByThreadId && !itemIds.has(item.id),
+      (item) => item.claimedByThreadId && !itemIds.has(item.id.trim()),
     );
     if (removedClaim) {
       throw new Error(`Cannot remove claimed work item: ${removedClaim.title}`);
@@ -2143,6 +2154,14 @@ export class TaskCoordinator {
     });
   }
 
+  private hasCompletedArtifactRevisionAwaitingSettlement(task: TaskRecord): boolean {
+    return task.workItems.some(
+      (item) =>
+        item.status === "review" &&
+        this.options.sessionDb.hasCompletedTaskArtifactRevisionForWorkItem(task.id, item.id),
+    );
+  }
+
   private hasBlockingState(task: TaskRecord): boolean {
     return (
       task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking) ||
@@ -2234,7 +2253,14 @@ export class TaskCoordinator {
       });
     }
 
-    if (input.outcome === "completed" || input.priorTaskStatus === "awaiting_review") {
+    const hasDeferredCompletedRevision =
+      this.hasCompletedArtifactRevisionAwaitingSettlement(latest);
+
+    if (
+      input.outcome === "completed" ||
+      input.priorTaskStatus === "awaiting_review" ||
+      hasDeferredCompletedRevision
+    ) {
       try {
         return await this.proposeCompletionLocked({
           taskId: latest.id,

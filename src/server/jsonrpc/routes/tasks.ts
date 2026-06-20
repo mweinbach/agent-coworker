@@ -450,8 +450,6 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     ),
     "task/cancel": createTaskHandler(context, "task/cancel", async (params) => {
       const workspacePath = resolveCwd(context, params, "task/cancel");
-      const current = context.tasks.get(params.taskId, workspacePath);
-      if (!current) throw new Error(`Unknown task: ${params.taskId}`);
       const task = await context.tasks.transition({
         taskId: params.taskId,
         workspacePath,
@@ -460,9 +458,6 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         summary: "Task cancelled",
         detail: params.reason,
       });
-      for (const thread of current.threads) {
-        context.threads.getLive(thread.sessionId)?.runtime?.turns.cancel();
-      }
       return { task };
     }),
     "task/accept": createTaskHandler(context, "task/accept", async (params) => ({

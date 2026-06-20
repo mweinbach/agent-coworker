@@ -6,9 +6,13 @@ import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
-import type { TaskStatus } from "../src/shared/tasks";
+import type { TaskRecord, TaskStatus } from "../src/shared/tasks";
 
-async function createHarness() {
+async function createHarness(
+  options: {
+    quiesceTaskThreads?: (task: TaskRecord, reason: "completed" | "cancelled" | "failed") => void;
+  } = {},
+) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-mode-test-"));
   const paths = {
     rootDir: path.join(home, ".cowork"),
@@ -20,6 +24,11 @@ async function createHarness() {
   const coordinator = new TaskCoordinator({
     sessionDb,
     notify: (notification) => notifications.push(notification),
+    ...(options.quiesceTaskThreads
+      ? {
+          quiesceTaskThreads: options.quiesceTaskThreads,
+        }
+      : {}),
   });
   let nextThread = 1;
   coordinator.setThreadFactory(async () => ({ sessionId: `session-${++nextThread}` }));
@@ -88,6 +97,49 @@ async function createWorkingTask(harness: Awaited<ReturnType<typeof createHarnes
   });
 }
 
+async function createReviewReadyTask(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  options: { reviewRequired?: boolean } = {},
+) {
+  const created = await harness.coordinator.createPlanned({
+    workspacePath: harness.workspacePath,
+    sessionId: "task-session-1",
+    sourceSessionId: "source-chat-1",
+    creationOrigin: "chat_tool",
+    workspaceDisposition: "existing_project",
+    creation: {
+      idempotencyKey: `review-ready-${crypto.randomUUID()}`,
+      title: "Review ready task",
+      objective: "Exercise accept lifecycle.",
+      context: "The work plan is already complete.",
+      requirements: [
+        { kind: "acceptance_criterion", text: "Accepting the task quiesces live runtimes." },
+      ],
+      workItems: [{ key: "run", title: "Run" }],
+      reviewRequired: options.reviewRequired ?? true,
+      reviewRounds: 0,
+    },
+  });
+  const workItem = created.task.workItems[0];
+  if (!workItem) throw new Error("Expected work item");
+  const done = await harness.coordinator.markWorkItem({
+    taskId: created.task.id,
+    workspacePath: harness.workspacePath,
+    workItemId: workItem.id,
+    expectedRevision: created.task.revision,
+    status: "done",
+    completionEvidence: "All checks passed.",
+    threadId: created.task.threads[0]?.id,
+  });
+  return await harness.coordinator.proposeCompletion({
+    taskId: done.id,
+    workspacePath: harness.workspacePath,
+    expectedRevision: done.revision,
+    summary: "Ready for delivery",
+    sessionId: "task-session-1",
+  });
+}
+
 async function transitionToStatus(
   harness: Awaited<ReturnType<typeof createHarness>>,
   taskId: string,
@@ -109,12 +161,15 @@ async function invokeTaskRoute(
   harness: Awaited<ReturnType<typeof createHarness>>,
   method: string,
   params: Record<string, unknown>,
+  options: {
+    getLive?: (threadId: string) => unknown;
+  } = {},
 ) {
   const errors: unknown[] = [];
   const results: unknown[] = [];
   const handlers = createTaskRouteHandlers({
     tasks: harness.coordinator,
-    threads: { getLive: () => null },
+    threads: { getLive: options.getLive ?? (() => null) },
     jsonrpc: {
       sendResult: (_ws: unknown, _id: unknown, result: unknown) => results.push(result),
       sendError: (_ws: unknown, _id: unknown, error: unknown) => errors.push(error),
@@ -134,6 +189,342 @@ async function invokeTaskRoute(
 }
 
 describe("task mode persistence", () => {
+  test("task/accept quiesces every live task runtime and ignores unrelated sessions", async () => {
+    const cancellations: string[] = [];
+    const disposals: string[] = [];
+    const liveBindings = new Map<string, unknown>();
+    const harness = await createHarness({
+      quiesceTaskThreads: (task, reason) => {
+        if (!task) return;
+        for (const thread of task.threads) {
+          const binding = liveBindings.get(thread.sessionId) as
+            | {
+                runtime?: {
+                  turns?: { cancel?: (opts?: { includeSubagents?: boolean }) => void };
+                  lifecycle?: { dispose?: (reason: string) => void };
+                };
+              }
+            | undefined;
+          try {
+            binding?.runtime?.turns?.cancel?.({ includeSubagents: true });
+          } catch {
+            binding?.runtime?.lifecycle?.dispose?.(`task ${task.id} ${reason}`);
+          }
+        }
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const ready = await createReviewReadyTask(harness);
+      const focusedOne = await harness.coordinator.addThread({
+        taskId: ready.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: ready.revision,
+        title: "Focused one",
+        createdBy: "user",
+      });
+      const focusedTwo = await harness.coordinator.addThread({
+        taskId: focusedOne.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: focusedOne.revision,
+        title: "Focused two",
+        createdBy: "user",
+      });
+      for (const thread of focusedTwo.threads) {
+        liveBindings.set(thread.sessionId, {
+          runtime: {
+            turns: {
+              cancel: (opts?: { includeSubagents?: boolean }) => {
+                expect(opts).toEqual({ includeSubagents: true });
+                cancellations.push(thread.sessionId);
+              },
+            },
+            lifecycle: {
+              dispose: (reason: string) => disposals.push(`${thread.sessionId}:${reason}`),
+            },
+          },
+        });
+      }
+      liveBindings.set("ordinary-chat", {
+        runtime: {
+          turns: { cancel: () => cancellations.push("ordinary-chat") },
+          lifecycle: { dispose: () => disposals.push("ordinary-chat") },
+        },
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/accept", {
+        cwd: harness.workspacePath,
+        taskId: focusedTwo.id,
+        expectedRevision: focusedTwo.revision,
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "completed" }),
+        }),
+      ]);
+      expect(cancellations.sort()).toEqual(
+        focusedTwo.threads.map((thread) => thread.sessionId).sort(),
+      );
+      expect(cancellations).not.toContain("ordinary-chat");
+      expect(disposals).toEqual([]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/accept continues cancelling sibling task runtimes when one cancel throws", async () => {
+    const cancellations: string[] = [];
+    const disposals: string[] = [];
+    const liveBindings = new Map<string, unknown>();
+    const harness = await createHarness({
+      quiesceTaskThreads: (task, reason) => {
+        if (!task) return;
+        for (const thread of task.threads) {
+          const binding = liveBindings.get(thread.sessionId) as
+            | {
+                runtime?: {
+                  turns?: { cancel?: (opts?: { includeSubagents?: boolean }) => void };
+                  lifecycle?: { dispose?: (reason: string) => void };
+                };
+              }
+            | undefined;
+          try {
+            binding?.runtime?.turns?.cancel?.({ includeSubagents: true });
+          } catch {
+            binding?.runtime?.lifecycle?.dispose?.(`task ${task.id} ${reason}`);
+          }
+        }
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const ready = await createReviewReadyTask(harness);
+      const focused = await harness.coordinator.addThread({
+        taskId: ready.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: ready.revision,
+        title: "Focused one",
+        createdBy: "user",
+      });
+      const primarySessionId = focused.threads[0]?.sessionId;
+      const focusedSessionId = focused.threads[1]?.sessionId;
+      if (!primarySessionId || !focusedSessionId) throw new Error("Expected task threads");
+      liveBindings.set(primarySessionId, {
+        runtime: {
+          turns: {
+            cancel: () => {
+              cancellations.push(primarySessionId);
+              throw new Error("cancel failed");
+            },
+          },
+          lifecycle: {
+            dispose: (reason: string) => disposals.push(`${primarySessionId}:${reason}`),
+          },
+        },
+      });
+      liveBindings.set(focusedSessionId, {
+        runtime: {
+          turns: { cancel: () => cancellations.push(focusedSessionId) },
+          lifecycle: {
+            dispose: (reason: string) => disposals.push(`${focusedSessionId}:${reason}`),
+          },
+        },
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/accept", {
+        cwd: harness.workspacePath,
+        taskId: focused.id,
+        expectedRevision: focused.revision,
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "completed" }),
+        }),
+      ]);
+      expect(cancellations.sort()).toEqual([focusedSessionId, primarySessionId].sort());
+      expect(disposals).toEqual([`${primarySessionId}:task ${focused.id} completed`]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("auto-accept quiesces task runtimes after proposal completion", async () => {
+    const cancellations: string[] = [];
+    const liveBindings = new Map<string, unknown>();
+    const harness = await createHarness({
+      quiesceTaskThreads: (task) => {
+        if (!task) return;
+        for (const thread of task.threads) {
+          const binding = liveBindings.get(thread.sessionId) as
+            | {
+                runtime?: { turns?: { cancel?: (opts?: { includeSubagents?: boolean }) => void } };
+              }
+            | undefined;
+          binding?.runtime?.turns?.cancel?.({ includeSubagents: true });
+        }
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "task-session-1",
+        sourceSessionId: "source-chat-1",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: `auto-accept-${crypto.randomUUID()}`,
+          title: "Auto accept task",
+          objective: "Auto-complete after proposal.",
+          context: "No review is required.",
+          requirements: [{ kind: "acceptance_criterion", text: "Auto accept cancels runtimes." }],
+          workItems: [{ key: "run", title: "Run" }],
+          reviewRequired: false,
+          reviewRounds: 0,
+        },
+      });
+      const focused = await harness.coordinator.addThread({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        title: "Focused one",
+        createdBy: "user",
+      });
+      for (const thread of focused.threads) {
+        liveBindings.set(thread.sessionId, {
+          runtime: {
+            turns: { cancel: () => cancellations.push(thread.sessionId) },
+          },
+        });
+      }
+      const workItem = focused.workItems[0];
+      if (!workItem) throw new Error("Expected work item");
+      const done = await harness.coordinator.markWorkItem({
+        taskId: focused.id,
+        workspacePath: harness.workspacePath,
+        workItemId: workItem.id,
+        expectedRevision: focused.revision,
+        status: "done",
+        completionEvidence: "Complete.",
+        threadId: focused.threads[0]?.id,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/proposeCompletion", {
+        cwd: harness.workspacePath,
+        taskId: done.id,
+        expectedRevision: done.revision,
+        summary: "Ready for auto acceptance",
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "completed" }),
+        }),
+      ]);
+      expect(cancellations.sort()).toEqual(done.threads.map((thread) => thread.sessionId).sort());
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/cancel quiesces live task runtimes through the coordinator lifecycle hook", async () => {
+    const cancellations: string[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: (task) => {
+        for (const thread of task.threads) cancellations.push(thread.sessionId);
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const focused = await harness.coordinator.addThread({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        title: "Focused one",
+        createdBy: "user",
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/cancel", {
+        cwd: harness.workspacePath,
+        taskId: focused.id,
+        expectedRevision: focused.revision,
+        reason: "User stopped the task",
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "cancelled" }),
+        }),
+      ]);
+      expect(cancellations.sort()).toEqual(
+        focused.threads.map((thread) => thread.sessionId).sort(),
+      );
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("failed terminal transitions quiesce only the owning task runtimes", async () => {
+    const cancellations: string[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: (task) => {
+        for (const thread of task.threads) cancellations.push(thread.sessionId);
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const first = await createWorkingTask(harness);
+      const firstFocused = await harness.coordinator.addThread({
+        taskId: first.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: first.task.revision,
+        title: "Focused one",
+        createdBy: "user",
+      });
+      const second = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "other-task-session",
+        sourceSessionId: "source-chat-2",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: `other-task-${crypto.randomUUID()}`,
+          title: "Other task",
+          objective: "Stay untouched.",
+          context: "This task should not be quiesced.",
+          requirements: [{ kind: "acceptance_criterion", text: "Do not cancel this task." }],
+          workItems: [{ key: "run", title: "Run" }],
+          reviewRounds: 0,
+        },
+      });
+
+      await harness.coordinator.transition({
+        taskId: firstFocused.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: firstFocused.revision,
+        status: "failed",
+        summary: "Task failed",
+      });
+
+      expect(cancellations.sort()).toEqual(
+        firstFocused.threads.map((thread) => thread.sessionId).sort(),
+      );
+      expect(cancellations).not.toContain("other-task-session");
+      expect(harness.coordinator.get(second.task.id, harness.workspacePath)?.status).toBe(
+        "working",
+      );
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("marks a task failed when its primary thread errors", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

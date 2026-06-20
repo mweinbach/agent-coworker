@@ -56,10 +56,16 @@ type TaskContinuationDispatcher = (input: {
   onFailure: (error: unknown) => Promise<void>;
 }) => Promise<Exclude<TaskQuestionResumeStatus, "not_needed">>;
 
+type TaskThreadQuiescer = (
+  task: TaskRecord,
+  reason: "completed" | "cancelled" | "failed",
+) => Promise<void> | void;
+
 type TaskCoordinatorOptions = {
   sessionDb: SessionDb;
   notify?: (notification: TaskNotification) => void;
   artifactStore?: ArtifactVersionStore;
+  quiesceTaskThreads?: TaskThreadQuiescer;
 };
 
 const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
@@ -315,6 +321,12 @@ export class TaskCoordinator {
         this.taskMutationTails.delete(taskId);
       }
     }
+  }
+
+  private async quiesceTaskThreads(task: TaskRecord): Promise<void> {
+    const reason = task.status;
+    if (reason !== "completed" && reason !== "cancelled" && reason !== "failed") return;
+    await this.options.quiesceTaskThreads?.(task, reason);
   }
 
   list(workspacePath?: string | null): TaskSummary[] {
@@ -1441,6 +1453,16 @@ export class TaskCoordinator {
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(current, input.expectedRevision);
+    return await this.runTaskMutation(input.taskId, async () => await this.acceptTaskLocked(input));
+  }
+
+  private async acceptTaskLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
+    const current = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(current, input.expectedRevision);
     if (current.status !== "awaiting_review") {
       throw new Error("Task must be awaiting review before it can be accepted");
     }
@@ -1449,6 +1471,7 @@ export class TaskCoordinator {
       expectedRevision: input.expectedRevision,
       updatedAt: nowIso(),
     });
+    await this.quiesceTaskThreads(task);
     this.notifyUpdated(task);
     return task;
   }
@@ -1896,7 +1919,7 @@ export class TaskCoordinator {
         expectedRevision = task.revision;
       }
       if (input.status === "completed" && task.status === "awaiting_review") {
-        return await this.acceptTask({
+        return await this.acceptTaskLocked({
           taskId: task.id,
           workspacePath: task.workspacePath,
           expectedRevision,
@@ -1924,6 +1947,7 @@ export class TaskCoordinator {
         updatedAt: nowIso(),
         threadId: thread?.id ?? null,
       });
+      await this.quiesceTaskThreads(updated);
       this.notifyUpdated(updated);
       return updated;
     });

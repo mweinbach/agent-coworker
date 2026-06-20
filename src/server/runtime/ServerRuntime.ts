@@ -258,17 +258,36 @@ export async function createAgentServerRuntime(
     getConfig: () => config,
     sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
   });
+  let registry!: SessionRegistry;
   const tasks = new TaskCoordinator({
     sessionDb,
     notify: ({ method, params }) => {
       const cwd = typeof params.cwd === "string" ? params.cwd : null;
       if (cwd) taskSubscribers.notify(cwd, method, params);
     },
+    quiesceTaskThreads: (task, reason) => {
+      for (const thread of task.threads) {
+        const binding = registry.sessionBindings.get(thread.sessionId);
+        const runtime = binding?.runtime;
+        if (!runtime) continue;
+        try {
+          runtime.turns.cancel({ includeSubagents: true });
+        } catch {
+          try {
+            runtime.lifecycle.dispose(`task ${task.id} ${reason}`, {
+              closeSharedCodexClient: true,
+            });
+          } catch {
+            // Continue quiescing sibling task threads.
+          }
+        }
+      }
+    },
   });
   const threadJournal = new ThreadJournal(sessionDb);
   let workspaceControl: WorkspaceControl;
   let skillMutationBus: SkillMutationBus;
-  const registry = new SessionRegistry({
+  registry = new SessionRegistry({
     config,
     env,
     system,

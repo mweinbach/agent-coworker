@@ -361,7 +361,7 @@ export type AppStoreState = {
   openNewTask: (workspaceId?: string) => Promise<void>;
   refreshTasks: (workspaceId?: string) => Promise<void>;
   startTask: (opts: { workspaceId: string; task: TaskCreationInput }) => Promise<TaskRecord | null>;
-  selectTask: (taskId: string) => Promise<void>;
+  selectTask: (taskId: string, options?: { preserveView?: boolean }) => Promise<void>;
   selectTaskThread: (taskId: string, taskThreadId: string) => Promise<void>;
   createTaskThread: (taskId: string, title: string, workItemId?: string) => Promise<void>;
   updateTaskBrief: (

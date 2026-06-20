@@ -535,7 +535,7 @@ export function createTaskActions(
       }
     },
 
-    selectTask: async (taskId) => {
+    selectTask: async (taskId, options) => {
       const summaryEntry = Object.entries(get().taskSummariesByWorkspaceId).find(([, tasks]) =>
         tasks.some((task) => task.id === taskId),
       );
@@ -560,7 +560,7 @@ export function createTaskActions(
           selectedTaskId: taskId,
           selectedThreadId: mainThread?.sessionId ?? null,
           newTaskWorkspaceId: null,
-          view: "task",
+          ...(options?.preserveView ? {} : { view: "task" }),
           taskError: null,
         });
         if (mainThread) {

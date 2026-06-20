@@ -946,6 +946,8 @@ export function createBootstrapActions(
           syncDesktopStateCacheNow(get);
         }
 
+        const startupSelectionContext = getThreadSelectionContext(ui.view, ui.lastNonSettingsView);
+
         if (ui.selectedThreadId && ui.view === "chat") {
           set((s) => ({
             threadRuntimeById: {
@@ -992,22 +994,40 @@ export function createBootstrapActions(
               ensureControlSocket(get, set, startupWorkspaceId);
             });
           });
-        } else if (ui.selectedWorkspaceId && ui.view === "task") {
+        } else if (ui.selectedWorkspaceId && startupSelectionContext === "task") {
           const startupWorkspaceId = ui.selectedWorkspaceId;
+          const startupTaskId = ui.selectedTaskId;
+          const preserveStartupView = ui.view === "settings";
           runAfterInitialPaint(() => {
             const current = get();
-            if (current.selectedWorkspaceId !== startupWorkspaceId || current.view !== "task") {
+            if (
+              current.selectedWorkspaceId !== startupWorkspaceId ||
+              current.selectedTaskId !== startupTaskId ||
+              getThreadSelectionContext(current.view, current.lastNonSettingsView) !== "task"
+            ) {
               return;
             }
             void current.refreshTasks(startupWorkspaceId).then(() => {
               const refreshed = get();
               if (
-                ui.selectedTaskId &&
-                refreshed.selectedTaskId === ui.selectedTaskId &&
-                refreshed.view === "task"
+                refreshed.selectedWorkspaceId !== startupWorkspaceId ||
+                refreshed.selectedTaskId !== startupTaskId ||
+                getThreadSelectionContext(refreshed.view, refreshed.lastNonSettingsView) !== "task"
               ) {
-                void refreshed.selectTask(ui.selectedTaskId);
+                return;
               }
+              if (!startupTaskId) {
+                return;
+              }
+              const taskExists = (
+                refreshed.taskSummariesByWorkspaceId[startupWorkspaceId] ?? []
+              ).some((task) => task.id === startupTaskId);
+              if (taskExists) {
+                void refreshed.selectTask(startupTaskId, { preserveView: preserveStartupView });
+                return;
+              }
+              set({ selectedTaskId: null, selectedThreadId: null });
+              syncDesktopStateCacheNow(get);
             });
           });
         }

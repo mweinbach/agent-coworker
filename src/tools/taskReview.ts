@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { getPendingTaskReview, getTaskReviewRounds } from "../server/tasks/taskReviewPolicy";
+import {
+  getPendingTaskReviewForContext,
+  getTaskReviewRoundsForContext,
+} from "../server/tasks/taskReviewPolicy";
 import {
   MAX_TASK_REVIEW_ROUNDS,
   type TaskContextSnapshot,
@@ -24,7 +27,7 @@ const taskReviewInputSchema = z.preprocess(
 );
 
 function reviewBriefing(context: TaskContextSnapshot, focus?: string): string {
-  const reviews = getTaskReviewRounds(context.activity ?? []);
+  const reviews = getTaskReviewRoundsForContext(context);
   return [
     `Task: ${context.title}`,
     `Objective: ${context.objective}`,
@@ -98,8 +101,8 @@ export function createTaskReviewTool(ctx: ToolContext) {
       }
       const requiredRounds = context.reviewRounds ?? 0;
       if (requiredRounds === 0) throw new Error("This task does not require independent reviews");
-      const priorRounds = getTaskReviewRounds(context.activity ?? []);
-      const pending = getPendingTaskReview(context.activity ?? []);
+      const priorRounds = getTaskReviewRoundsForContext(context);
+      const pending = getPendingTaskReviewForContext(context);
       if (pending) {
         throw new Error(
           `Review round ${pending.round} feedback must be implemented and addressed first`,
@@ -148,7 +151,7 @@ export function createTaskReviewTool(ctx: ToolContext) {
           verdict,
           feedback,
         });
-        const recorded = getTaskReviewRounds(result.task.activity).at(-1);
+        const recorded = getTaskReviewRoundsForContext({ activity: result.task.activity }).at(-1);
         if (!recorded || recorded.reviewerAgentId !== reviewer.agentId) {
           throw new Error("Recorded review could not be read from the task activity");
         }

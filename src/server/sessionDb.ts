@@ -26,6 +26,7 @@ import type {
   TaskCheckpoint,
   TaskDecision,
   TaskRecord,
+  TaskReviewRecord,
   TaskSummary,
   TaskThread,
   WorkItemStatus,
@@ -397,6 +398,10 @@ export class SessionDb {
     return this.taskRepository.getTaskForThread(sessionId);
   }
 
+  listTaskReviews(taskId: string): TaskReviewRecord[] {
+    return this.taskRepository.listReviews(taskId);
+  }
+
   getTaskByCreationKey(
     idempotencyKey: string,
     scope?: { sourceSessionId?: string | null; workspacePath?: string },
@@ -736,6 +741,33 @@ export class SessionDb {
       "append_task_activity_with_revision",
       async () => this.taskRepository.appendActivityWithRevision(activity, expectedRevision),
       { taskId: activity.taskId, kind: activity.kind },
+    );
+  }
+
+  async recordTaskReview(input: {
+    review: TaskReviewRecord;
+    activity: TaskActivity;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "record_task_review",
+      async () => this.taskRepository.recordReview(input),
+      { taskId: input.review.taskId, reviewId: input.review.id },
+    );
+  }
+
+  async addressTaskReview(input: {
+    taskId: string;
+    reviewId: string;
+    expectedRevision: number;
+    addressedAt: string;
+    implementationSummary: string;
+    activity: TaskActivity;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "address_task_review",
+      async () => this.taskRepository.addressReview(input),
+      { taskId: input.taskId, reviewId: input.reviewId },
     );
   }
 

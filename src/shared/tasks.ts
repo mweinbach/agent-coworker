@@ -514,6 +514,23 @@ export type TaskCheckpoint = z.infer<typeof taskCheckpointSchema>;
 export type TaskSummary = z.infer<typeof taskSummarySchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 
+export type TaskReviewRecord = {
+  id: string;
+  taskId: string;
+  round: number;
+  verdict: TaskReviewVerdict;
+  feedback: string;
+  reviewerAgentId: string;
+  reviewerProvider: string;
+  reviewerModel: string;
+  taskRevision: number;
+  materialFingerprint: string;
+  materialSnapshot: Record<string, unknown>;
+  createdAt: string;
+  addressedAt: string | null;
+  implementationSummary: string | null;
+};
+
 export type TaskContextSnapshot = Pick<
   TaskRecord,
   | "id"
@@ -534,6 +551,7 @@ export type TaskContextSnapshot = Pick<
   reviewRequired?: boolean;
   reviewRounds?: number;
   activity?: TaskActivity[];
+  reviews?: TaskReviewRecord[];
 };
 
 export type TaskDirective =

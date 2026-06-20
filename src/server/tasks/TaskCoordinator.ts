@@ -23,6 +23,7 @@ import {
   type TaskRecord,
   type TaskRequirement,
   type TaskRequirementKind,
+  type TaskReviewRecord,
   type TaskReviewVerdict,
   type TaskStatus,
   type TaskSummary,
@@ -34,7 +35,12 @@ import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import type { SessionDb } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
-import { getPendingTaskReview, getTaskReviewRounds } from "./taskReviewPolicy";
+import {
+  buildTaskReviewMaterialSnapshot,
+  fingerprintTaskReviewMaterial,
+  getPendingTaskReviewFromRecords,
+  getTaskReviewRoundsFromRecords,
+} from "./taskReviewPolicy";
 
 type TaskNotification = {
   method: "task/created" | "task/updated" | "task/activity" | "task/checkpointCreated";
@@ -425,6 +431,7 @@ export class TaskCoordinator {
       reviewRequired: task.reviewRequired,
       reviewRounds: task.reviewRounds ?? 0,
       activity: task.activity,
+      reviews: this.options.sessionDb.listTaskReviews(task.id),
       activeThreadId: thread.id,
     };
   }
@@ -2048,6 +2055,23 @@ export class TaskCoordinator {
     verdict: TaskReviewVerdict;
     feedback: string;
   }): Promise<{ task: TaskRecord; reviewId: string; round: number }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.recordReviewLocked(input),
+    );
+  }
+
+  private async recordReviewLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    expectedRevision: number;
+    reviewerAgentId: string;
+    reviewerProvider: string;
+    reviewerModel: string;
+    verdict: TaskReviewVerdict;
+    feedback: string;
+  }): Promise<{ task: TaskRecord; reviewId: string; round: number }> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -2072,8 +2096,9 @@ export class TaskCoordinator {
       throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
     }
 
-    const rounds = getTaskReviewRounds(task.activity);
-    const pending = getPendingTaskReview(task.activity);
+    const reviews = this.options.sessionDb.listTaskReviews(task.id);
+    const rounds = getTaskReviewRoundsFromRecords(reviews);
+    const pending = getPendingTaskReviewFromRecords(reviews);
     if (pending) {
       throw new Error(
         `Review round ${pending.round} feedback must be addressed before another review`,
@@ -2088,6 +2113,28 @@ export class TaskCoordinator {
     }
 
     const round = rounds.length + 1;
+    const material = this.currentReviewMaterial(task);
+    const reviewId = crypto.randomUUID();
+    const feedback = nonEmpty(input.feedback, "Review feedback");
+    const reviewerProvider = nonEmpty(input.reviewerProvider, "Reviewer provider");
+    const reviewerModel = nonEmpty(input.reviewerModel, "Reviewer model");
+    const createdAt = nowIso();
+    const review: TaskReviewRecord = {
+      id: reviewId,
+      taskId: task.id,
+      round,
+      verdict: input.verdict,
+      feedback,
+      reviewerAgentId,
+      reviewerProvider,
+      reviewerModel,
+      taskRevision: task.revision,
+      materialFingerprint: material.fingerprint,
+      materialSnapshot: material.snapshot,
+      createdAt,
+      addressedAt: null,
+      implementationSummary: null,
+    };
     const reviewActivity = activity({
       taskId: task.id,
       threadId:
@@ -2098,16 +2145,19 @@ export class TaskCoordinator {
       detail: JSON.stringify({
         round,
         verdict: input.verdict,
-        feedback: nonEmpty(input.feedback, "Review feedback"),
+        feedback,
         reviewerAgentId,
-        reviewerProvider: nonEmpty(input.reviewerProvider, "Reviewer provider"),
-        reviewerModel: nonEmpty(input.reviewerModel, "Reviewer model"),
+        reviewerProvider,
+        reviewerModel,
       }),
     });
-    const updated = await this.options.sessionDb.appendTaskActivityWithRevision(
-      reviewActivity,
-      input.expectedRevision,
-    );
+    reviewActivity.id = reviewId;
+    reviewActivity.createdAt = createdAt;
+    const updated = await this.options.sessionDb.recordTaskReview({
+      review,
+      activity: reviewActivity,
+      expectedRevision: input.expectedRevision,
+    });
     this.notifyUpdated(updated);
     this.notifyActivity(updated);
     return { task: updated, reviewId: reviewActivity.id, round };
@@ -2121,14 +2171,35 @@ export class TaskCoordinator {
     reviewId: string;
     implementationSummary: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.addressReviewLocked(input),
+    );
+  }
+
+  private async addressReviewLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    expectedRevision: number;
+    reviewId: string;
+    implementationSummary: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
-    const pending = getPendingTaskReview(task.activity);
+    const pending = getPendingTaskReviewFromRecords(
+      this.options.sessionDb.listTaskReviews(task.id),
+    );
     if (!pending) throw new Error("Task has no unaddressed review feedback");
     if (pending.reviewId !== input.reviewId) {
       throw new Error(`Review ${input.reviewId} is not the pending review`);
     }
+    const implementationSummary = nonEmpty(
+      input.implementationSummary,
+      "Review implementation summary",
+    );
+    const addressedAt = nowIso();
     const addressedActivity = activity({
       taskId: task.id,
       threadId:
@@ -2138,16 +2209,18 @@ export class TaskCoordinator {
       summary: `Independent review round ${pending.round} feedback implemented`,
       detail: JSON.stringify({
         reviewId: pending.reviewId,
-        implementationSummary: nonEmpty(
-          input.implementationSummary,
-          "Review implementation summary",
-        ),
+        implementationSummary,
       }),
     });
-    const updated = await this.options.sessionDb.appendTaskActivityWithRevision(
-      addressedActivity,
-      input.expectedRevision,
-    );
+    addressedActivity.createdAt = addressedAt;
+    const updated = await this.options.sessionDb.addressTaskReview({
+      taskId: task.id,
+      reviewId: pending.reviewId,
+      expectedRevision: input.expectedRevision,
+      addressedAt,
+      implementationSummary,
+      activity: addressedActivity,
+    });
     this.notifyUpdated(updated);
     this.notifyActivity(updated);
     return updated;
@@ -2195,15 +2268,30 @@ export class TaskCoordinator {
     }
     const requiredReviewRounds = task.reviewRounds ?? 0;
     if (requiredReviewRounds > 0) {
-      const reviewRounds = getTaskReviewRounds(task.activity);
-      if (reviewRounds.length < requiredReviewRounds) {
-        throw new Error(
-          `Task requires ${requiredReviewRounds} independent review round(s); ${reviewRounds.length} recorded`,
-        );
-      }
-      const pendingReview = getPendingTaskReview(task.activity);
+      const reviews = this.options.sessionDb.listTaskReviews(task.id);
+      const reviewRounds = getTaskReviewRoundsFromRecords(reviews);
+      const currentMaterial = this.currentReviewMaterial(task);
+      const currentPasses = reviewRounds.filter(
+        (round) =>
+          round.verdict === "pass" && round.materialFingerprint === currentMaterial.fingerprint,
+      );
+      const pendingReview = getPendingTaskReviewFromRecords(reviews);
       if (pendingReview) {
         throw new Error(`Review round ${pendingReview.round} feedback must be addressed`);
+      }
+      if (currentPasses.length < requiredReviewRounds) {
+        throw new Error(
+          `Task requires ${requiredReviewRounds} independent review round(s) with fresh passing reviews for the current delivery state; ${currentPasses.length} recorded`,
+        );
+      }
+      const latestReview = reviewRounds.at(-1);
+      if (
+        latestReview?.verdict !== "pass" ||
+        latestReview.materialFingerprint !== currentMaterial.fingerprint
+      ) {
+        throw new Error(
+          "Task requires a fresh passing review for the current delivery state before completion",
+        );
       }
     }
     const ready = await this.transition({
@@ -2216,7 +2304,7 @@ export class TaskCoordinator {
       sessionId: input.sessionId,
     });
     if (task.reviewRequired) return ready;
-    return await this.acceptTask({
+    return await this.acceptTaskLocked({
       taskId: ready.id,
       workspacePath: ready.workspacePath,
       expectedRevision: ready.revision,
@@ -2512,6 +2600,21 @@ export class TaskCoordinator {
     const detail = this.options.sessionDb.getTaskArtifactDetail(input.taskId, input.artifactId);
     if (!detail) throw new Error(`Unknown task artifact: ${input.artifactId}`);
     return detail;
+  }
+
+  private currentReviewMaterial(task: TaskRecord): {
+    snapshot: ReturnType<typeof buildTaskReviewMaterialSnapshot>;
+    fingerprint: string;
+  } {
+    const artifactDetails = task.artifacts.flatMap((artifactRecord) => {
+      const detail = this.options.sessionDb.getTaskArtifactDetail(task.id, artifactRecord.id);
+      return detail ? [detail] : [];
+    });
+    const snapshot = buildTaskReviewMaterialSnapshot({ task, artifactDetails });
+    return {
+      snapshot,
+      fingerprint: fingerprintTaskReviewMaterial(snapshot),
+    };
   }
 
   private async resolveArtifactPath(task: TaskRecord, artifactPath: string): Promise<string> {

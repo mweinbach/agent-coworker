@@ -70,6 +70,28 @@ export function createWorkspaceActions(
     return workspaceThreads[0]?.id ?? null;
   };
 
+  const preferredTaskThreadId = (taskId: string, currentThreadId: string | null): string | null => {
+    const state = get();
+    const task = state.tasksById[taskId];
+    if (currentThreadId) {
+      const currentThread = state.threads.find((thread) => thread.id === currentThreadId);
+      if (
+        currentThread?.taskId === taskId ||
+        task?.threads.some((thread) => thread.sessionId === currentThreadId)
+      ) {
+        return currentThreadId;
+      }
+    }
+
+    return (
+      task?.threads[0]?.sessionId ??
+      state.threads
+        .filter((thread) => thread.taskId === taskId)
+        .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt))[0]?.id ??
+      null
+    );
+  };
+
   const normalizeWorkspacePath = (value: string) =>
     value.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
 
@@ -241,7 +263,15 @@ export function createWorkspaceActions(
 
     selectWorkspace: async (workspaceId: string) => {
       const wasSelected = get().selectedWorkspaceId === workspaceId;
-      const nextThreadId = preferredThreadIdForWorkspace(workspaceId);
+      const currentState = get();
+      const selectedTaskId =
+        currentState.view === "task" &&
+        taskBelongsToWorkspace(currentState.selectedTaskId, workspaceId)
+          ? currentState.selectedTaskId
+          : null;
+      const nextThreadId = selectedTaskId
+        ? preferredTaskThreadId(selectedTaskId, currentState.selectedThreadId)
+        : preferredThreadIdForWorkspace(workspaceId);
       const hydrateSelectedThreadPromise = nextThreadId
         ? hydrateThreadSelection(get, set, nextThreadId, {
             preserveView: true,
@@ -250,9 +280,6 @@ export function createWorkspaceActions(
           })
         : null;
       set((s) => {
-        const selectedTaskId = taskBelongsToWorkspace(s.selectedTaskId, workspaceId)
-          ? s.selectedTaskId
-          : null;
         const retargetNewTask = selectedTaskId === null && s.view === "task";
         return {
           selectedWorkspaceId: workspaceId,

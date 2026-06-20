@@ -645,6 +645,100 @@ describe("workspace startup flow", () => {
     await selectPromise;
   });
 
+  test("selectWorkspace preserves the selected task thread when reselecting its project", async () => {
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "task-session-1",
+          workspaceId: "ws-1",
+          title: "Task transcript",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastMessageAt: "2026-03-08T01:00:00.000Z",
+          status: "active",
+          sessionId: "task-session-1",
+          messageCount: 3,
+          lastEventSeq: 3,
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+        {
+          id: "chat-session-1",
+          workspaceId: "ws-1",
+          title: "Newer ordinary chat",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastMessageAt: "2026-03-08T02:00:00.000Z",
+          status: "active",
+          sessionId: "chat-session-1",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "task-session-1",
+      selectedTaskId: "task-1",
+      taskSummariesByWorkspaceId: {
+        "ws-1": [
+          {
+            id: "task-1",
+            workspacePath: "/tmp/workspace-one",
+            title: "Task one",
+            objective: "Stay selected.",
+            status: "working",
+            revision: 1,
+            reviewRequired: true,
+            createdAt: "2026-03-08T00:00:00.000Z",
+            updatedAt: "2026-03-08T00:00:00.000Z",
+            threadCount: 1,
+            completedWorkItemCount: 0,
+            totalWorkItemCount: 1,
+            activeBlockerCount: 0,
+            pendingQuestionCount: 0,
+            blockingQuestionCount: 0,
+          },
+        ],
+      },
+      tasksById: {
+        "task-1": {
+          id: "task-1",
+          workspacePath: "/tmp/workspace-one",
+          threads: [
+            {
+              id: "task-thread-1",
+              taskId: "task-1",
+              sessionId: "task-session-1",
+              title: "Task transcript",
+              createdBy: "coordinator",
+              createdAt: "2026-03-08T00:00:00.000Z",
+              updatedAt: "2026-03-08T01:00:00.000Z",
+            },
+          ],
+        } as never,
+      },
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace("ws-1");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().view).toBe("task");
+    expect(useAppStore.getState().selectedTaskId).toBe("task-1");
+    expect(useAppStore.getState().selectedThreadId).toBe("task-session-1");
+
+    startDeferreds[0]?.resolve({ url: "ws://workspace-one" });
+    await selectPromise;
+  });
+
   test("selectWorkspace does not choose task-owned threads for ordinary chat", async () => {
     useAppStore.setState({
       view: "chat",

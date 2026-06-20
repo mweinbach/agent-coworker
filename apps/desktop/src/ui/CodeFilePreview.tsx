@@ -4,8 +4,8 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { useMemo } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
-import { defaultDesktopRehypePlugins } from "./markdown";
 import { getExtensionLower } from "../lib/filePreviewKind";
+import { defaultDesktopRehypePlugins } from "./markdown";
 
 const previewPlugins = { cjk, code, math, mermaid };
 const mdRemarkPlugins = [defaultRemarkPlugins.gfm];

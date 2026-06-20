@@ -1630,6 +1630,54 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("taskUpdate update_plan can complete a dependency and remove the edge in the same replacement", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createDependentWorkTask(harness);
+      const setup = created.setup;
+      const dependent = created.dependent;
+      const task = await harness.coordinator.markWorkItem({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        workItemId: setup.id,
+        status: "blocked",
+        completionEvidence: "Prerequisite evidence is already attached.",
+      });
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+
+      const updated = await harness.coordinator.applyDirective(sessionId, {
+        type: "update_plan",
+        idempotencyKey: "complete-and-remove-dependency",
+        expectedRevision: task.revision,
+        workItems: task.workItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          description: item.description,
+          dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+          expectedOutputs: item.expectedOutputs,
+          status: item.id === setup.id ? "done" : item.status,
+        })),
+      });
+
+      expect(updated.task.workItems.find((item) => item.id === setup.id)).toMatchObject({
+        status: "done",
+        completionEvidence: "Prerequisite evidence is already attached.",
+      });
+      expect(updated.task.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [],
+      });
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "complete-and-remove-dependency"),
+      ).not.toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("taskUpdate update_plan cannot mark work done without completion evidence", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

@@ -293,7 +293,7 @@ function assertWorkItemDependenciesComplete(input: {
 }
 
 function assertNoIncompleteDependencyRemoval(input: {
-  currentItems: WorkItem[];
+  items: WorkItem[];
   existing: WorkItem;
   next: WorkItem;
 }): void {
@@ -301,7 +301,7 @@ function assertNoIncompleteDependencyRemoval(input: {
   const removedIncompleteDependency = input.existing.dependsOn.find(
     (id) =>
       !nextDependencies.has(id) &&
-      input.currentItems.find((candidate) => candidate.id === id)?.status !== "done",
+      input.items.find((candidate) => candidate.id === id)?.status !== "done",
   );
   if (removedIncompleteDependency) {
     throw new Error(`Work item dependency is not complete: ${removedIncompleteDependency}`);
@@ -977,7 +977,7 @@ export class TaskCoordinator {
         assertThreadCanMutateWorkItem({ task: current, item: row.existing ?? row.item, threadId });
         if (row.existing) {
           assertNoIncompleteDependencyRemoval({
-            currentItems: current.workItems,
+            items,
             existing: row.existing,
             next: row.item,
           });

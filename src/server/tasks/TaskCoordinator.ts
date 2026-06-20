@@ -2228,9 +2228,6 @@ export class TaskCoordinator {
     if (isTerminalTask(latest)) return latest;
 
     if (input.outcome === "error") {
-      if (!this.hasActiveArtifactRevision(latest)) {
-        latest = await this.settlePendingArtifactRevisionSettlements(latest);
-      }
       if (latest.status === "blocked") {
         this.notifyUpdated(latest);
         return latest;
@@ -2255,9 +2252,6 @@ export class TaskCoordinator {
       this.hasCompletedArtifactRevisionAwaitingSettlement(latest);
 
     if (latest.status === "blocked" || this.hasBlockingState(latest)) {
-      if (hasDeferredCompletedRevision) {
-        latest = await this.settlePendingArtifactRevisionSettlements(latest);
-      }
       return await this.restoreTaskStatusAfterArtifactRevision({
         task: latest,
         status: "blocked",
@@ -2271,11 +2265,8 @@ export class TaskCoordinator {
       input.priorTaskStatus === "awaiting_review" ||
       hasDeferredCompletedRevision
     ) {
-      if (hasDeferredCompletedRevision) {
-        latest = await this.settlePendingArtifactRevisionSettlements(latest);
-      }
       try {
-        return await this.proposeCompletionLocked({
+        const proposed = await this.proposeCompletionLocked({
           taskId: latest.id,
           workspacePath: latest.workspacePath,
           expectedRevision: latest.revision,
@@ -2286,6 +2277,8 @@ export class TaskCoordinator {
           sessionId: input.sessionId,
           defaultPendingQuestions: false,
         });
+        if (!hasDeferredCompletedRevision) return proposed;
+        return await this.settlePendingArtifactRevisionSettlements(proposed);
       } catch {
         latest = this.options.sessionDb.getTask(latest.id) ?? latest;
         if (isTerminalTask(latest)) return latest;

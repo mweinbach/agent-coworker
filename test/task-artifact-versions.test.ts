@@ -2539,6 +2539,7 @@ describe("task artifact versions", () => {
       if (!lastClosed) throw new Error("Expected cancelled notes revision");
       expect(lastClosed.revision.status).toBe("cancelled");
       expect(lastClosed.task.status).toBe("completed");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(false);
       expect(
         lastClosed.task.workItems.find((item) => item.id === reportRevision.revision.workItemId)
           ?.status,
@@ -2610,6 +2611,7 @@ describe("task artifact versions", () => {
       );
       if (!lastClosed) throw new Error("Expected completed notes revision");
       expect(lastClosed.task.status).toBe("completed");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(false);
       for (const revision of [reportRevision.revision, notesRevision.revision]) {
         expect(
           lastClosed.task.workItems.find((item) => item.id === revision.workItemId)?.status,
@@ -3237,6 +3239,7 @@ describe("task artifact versions", () => {
       );
       if (!lastClosed) throw new Error("Expected cancelled notes revision");
       expect(lastClosed.task.status).toBe("awaiting_review");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(false);
       const reportDetail = harness.coordinator.getArtifactDetail({
         taskId: task.id,
         workspacePath: harness.workspacePath,
@@ -3351,6 +3354,12 @@ describe("task artifact versions", () => {
       );
       if (!firstClosed) throw new Error("Expected completed report revision");
       expect(firstClosed.task.status).toBe("working");
+      expect(
+        harness.sessionDb.hasPendingTaskArtifactRevisionSettlementForWorkItem(
+          task.id,
+          reportRevision.revision.workItemId,
+        ),
+      ).toBe(true);
 
       const failed = await harness.coordinator.handleThreadOutcome(
         notesRevision.revision.sessionId,
@@ -3358,6 +3367,13 @@ describe("task artifact versions", () => {
       );
       if (!failed) throw new Error("Expected failed notes revision");
       expect(failed.task.status).toBe("blocked");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+      expect(
+        harness.sessionDb.hasPendingTaskArtifactRevisionSettlementForWorkItem(
+          task.id,
+          reportRevision.revision.workItemId,
+        ),
+      ).toBe(true);
       const reportDetail = harness.coordinator.getArtifactDetail({
         taskId: task.id,
         workspacePath: harness.workspacePath,

@@ -25,6 +25,7 @@ const TASK_ARTIFACT_VERSIONS_MIGRATION = 20;
 const TASK_QUESTIONS_MIGRATION = 21;
 const TASK_CREATION_MIGRATION = 22;
 const TASK_REVIEW_STATE_MIGRATION = 23;
+const TASK_ARTIFACT_REVISION_SETTLEMENT_MIGRATION = 24;
 
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
@@ -55,6 +56,7 @@ type BootstrapSessionDbOptions = {
     | "addLastMemoryGeneratedIndexColumn"
     | "addTaskModeTables"
     | "addTaskArtifactVersionTables"
+    | "addTaskArtifactRevisionSettlementColumn"
     | "addTaskQuestionTables"
     | "addTaskCreationColumns"
     | "addTaskReviewTables"
@@ -187,6 +189,13 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(TASK_REVIEW_STATE_MIGRATION)) {
     opts.repository.addTaskReviewTables();
     opts.repository.markMigration(TASK_REVIEW_STATE_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(TASK_ARTIFACT_REVISION_SETTLEMENT_MIGRATION)) {
+    opts.db.transaction(() => {
+      opts.repository.addTaskArtifactRevisionSettlementColumn();
+      opts.repository.markMigration(TASK_ARTIFACT_REVISION_SETTLEMENT_MIGRATION);
+    })();
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

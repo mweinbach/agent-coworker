@@ -483,11 +483,24 @@ export class SessionTaskRepository {
         "ALTER TABLE task_artifact_revisions ADD COLUMN prior_task_status TEXT NOT NULL DEFAULT 'working'",
       );
     }
+  }
+
+  ensureArtifactRevisionSettlementStatusColumn(): void {
+    const revisionColumns = this.db
+      .query("PRAGMA table_info(task_artifact_revisions)")
+      .all() as Array<{
+      name: string;
+    }>;
     if (!revisionColumns.some((column) => column.name === "settlement_status")) {
       this.db.exec(
         "ALTER TABLE task_artifact_revisions ADD COLUMN settlement_status TEXT NOT NULL DEFAULT 'none'",
       );
     }
+    this.db
+      .query(
+        "UPDATE task_artifact_revisions SET settlement_status = 'none' WHERE settlement_status IS NULL OR settlement_status = ''",
+      )
+      .run();
   }
 
   createTask(input: CreateTaskInput): TaskRecord {

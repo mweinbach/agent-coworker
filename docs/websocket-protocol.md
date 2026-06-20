@@ -456,7 +456,10 @@ relay mode, an exact desktop-persisted workspace path. In all cases, the resolve
 must have `workspaceKind` `project`. `oneOffChat` workspaces enter Task mode only through the
 ordinary chat-to-task promotion flow, which links and locks the source chat. Task RPCs reject
 outside directories, project-local chat aliases, symlink aliases, drive-relative inputs, and task or
-artifact IDs whose stored workspace does not match the authorized request context.
+artifact IDs whose stored workspace does not match the authorized request context. Workspace-kind
+classification canonicalizes the configured home, global one-off chat root, and requested workspace
+path before applying the `~/.cowork/chats` rule, so filesystem aliases such as symlinked homes do
+not turn hidden one-off chat directories into generic project workspaces.
 
 Every mutation after creation carries `expectedRevision`. A stale revision fails with a structured conflict containing the current task revision so clients can reload rather than overwrite concurrent work.
 
@@ -511,7 +514,11 @@ Notifications:
 Task notifications are fan-out filtered by workspace subscription and task read permission. A
 recipient without conversation access for that workspace receives no task existence, ID, summary,
 question, approval, artifact, thread, checkpoint, or workspace metadata through task
-notifications.
+notifications. A successful authorized request against a project task workspace subscribes that
+connection to task notifications for that workspace; these task subscriptions are additive and
+idempotent across multiple authorized project workspaces on the same connection, and disconnecting
+removes every membership. This is separate from `cowork/control/event`, whose workspace-control
+subscription remains scoped to the latest requested workspace.
 
 ### Research JSON-RPC methods
 

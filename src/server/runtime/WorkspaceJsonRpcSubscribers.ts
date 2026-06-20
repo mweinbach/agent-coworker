@@ -11,11 +11,6 @@ export class WorkspaceJsonRpcSubscribers {
     const connectionId = ws.data.connectionId;
     if (!connectionId) return;
     const workspacePath = canonicalWorkspacePath(cwd);
-    for (const [registeredPath, subscribers] of this.subscribers) {
-      if (registeredPath === workspacePath) continue;
-      subscribers.delete(connectionId);
-      if (subscribers.size === 0) this.subscribers.delete(registeredPath);
-    }
     const subscribers = this.subscribers.get(workspacePath) ?? new Map<string, StartServerSocket>();
     subscribers.set(connectionId, ws);
     this.subscribers.set(workspacePath, subscribers);

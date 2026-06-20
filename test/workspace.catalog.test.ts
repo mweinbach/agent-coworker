@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { requireWorkspacePath } from "../src/server/jsonrpc/routes/shared";
 import { listWorkspaceSummaries } from "../src/server/jsonrpc/workspaceCatalog";
-import type { WebDesktopServiceLike } from "../src/server/webDesktopService";
+import { WebDesktopService, type WebDesktopServiceLike } from "../src/server/webDesktopService";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 
 describe("workspace catalog and path rules", () => {
@@ -194,5 +194,84 @@ describe("workspace catalog and path rules", () => {
         workspaceKind: "project",
       }),
     ]);
+  });
+
+  test("listWorkspaceSummaries classifies legacy missing-kind chat records with configured home", async () => {
+    const cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-catalog-home-"));
+    const realHomeRoot = path.join(cleanupRoot, "home-real");
+    const aliasHome = path.join(cleanupRoot, "home-alias");
+    const userDataDir = path.join(cleanupRoot, "user-data");
+    const legacyChat = path.join(aliasHome, ".cowork", "chats", "legacy-chat");
+    const promotedProject = path.join(aliasHome, ".cowork", "chats", "promoted-project");
+    const ordinaryProject = path.join(cleanupRoot, "ordinary-project");
+    try {
+      await fs.mkdir(realHomeRoot, { recursive: true });
+      await fs.symlink(realHomeRoot, aliasHome, process.platform === "win32" ? "junction" : "dir");
+      await fs.mkdir(legacyChat, { recursive: true });
+      await fs.mkdir(promotedProject, { recursive: true });
+      await fs.mkdir(ordinaryProject, { recursive: true });
+      await fs.mkdir(userDataDir, { recursive: true });
+      const timestamp = "2026-06-20T00:00:00.000Z";
+      await fs.writeFile(
+        path.join(userDataDir, "state.json"),
+        JSON.stringify({
+          version: 2,
+          workspaces: [
+            {
+              id: "legacy-chat",
+              name: "Legacy chat",
+              path: legacyChat,
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+            {
+              id: "promoted-project",
+              name: "Promoted project",
+              path: promotedProject,
+              workspaceKind: "project",
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+            {
+              id: "ordinary-project",
+              name: "Ordinary project",
+              path: ordinaryProject,
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+          ],
+          threads: [],
+        }),
+      );
+
+      const desktopService = new WebDesktopService({ userDataDir, homedir: aliasHome });
+      const result = await listWorkspaceSummaries({
+        workingDirectory: await fs.realpath(legacyChat),
+        desktopService,
+        homedir: aliasHome,
+      });
+
+      expect(result.workspaces).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "legacy-chat",
+            path: await fs.realpath(legacyChat),
+            workspaceKind: "oneOffChat",
+          }),
+          expect.objectContaining({
+            id: "promoted-project",
+            path: await fs.realpath(promotedProject),
+            workspaceKind: "project",
+          }),
+          expect.objectContaining({
+            id: "ordinary-project",
+            path: await fs.realpath(ordinaryProject),
+            workspaceKind: "project",
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(cleanupRoot, { recursive: true, force: true });
+    }
   });
 });

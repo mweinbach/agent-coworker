@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import {
+  getWorkspaceKindSource,
   isPathInsideOneOffChatsRoot,
   normalizeWorkspaceKind,
   type WorkspaceKind,
@@ -45,7 +46,8 @@ export function classifyWorkspaceKind(
   record: { path: string; workspaceKind?: unknown },
   homedir?: string | null,
 ): WorkspaceKind {
-  if (record.workspaceKind === "project") {
+  const kindSource = getWorkspaceKindSource(record);
+  if (record.workspaceKind === "project" && kindSource !== "default") {
     return "project";
   }
   if (

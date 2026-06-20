@@ -22,6 +22,8 @@ import {
   isPathInsideOneOffChatsRoot,
   normalizeWorkspaceKind,
   type WorkspaceKind,
+  type WorkspaceKindSource,
+  withWorkspaceKindSource,
 } from "../utils/oneOffChats";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
@@ -204,6 +206,7 @@ function workspaceBasename(workspacePath: string): string {
 async function resolveWorkspacePath(
   value: unknown,
   workspaceKind: WorkspaceKind = "project",
+  opts: { homedir?: string } = {},
 ): Promise<string | null> {
   const candidate = asNonEmptyString(value);
   if (!candidate) {
@@ -211,11 +214,11 @@ async function resolveWorkspacePath(
   }
   const resolved = path.resolve(candidate);
   if (workspaceKind === "oneOffChat") {
-    if (!isPathInsideOneOffChatsRoot(resolved)) {
+    if (!isPathInsideOneOffChatsRoot(resolved, opts.homedir)) {
       return null;
     }
     try {
-      return await ensureOneOffChatWorkspacePath(resolved);
+      return await ensureOneOffChatWorkspacePath(resolved, { homedir: opts.homedir });
     } catch {
       return null;
     }
@@ -263,21 +266,41 @@ function defaultState(): DesktopPersistedState {
 
 function buildFallbackWorkspace(cwd: string): DesktopWorkspaceRecord {
   const now = new Date().toISOString();
-  return {
-    id: `${FALLBACK_WORKSPACE_ID_PREFIX}-${hashValue(cwd)}`,
-    name: workspaceBasename(cwd),
-    path: cwd,
-    createdAt: now,
-    lastOpenedAt: now,
-    wsProtocol: "jsonrpc",
-    workspaceKind: "project",
-    defaultEnableMcp: true,
-    defaultBackupsEnabled: false,
-    yolo: false,
-  };
+  return withWorkspaceKindSource(
+    {
+      id: `${FALLBACK_WORKSPACE_ID_PREFIX}-${hashValue(cwd)}`,
+      name: workspaceBasename(cwd),
+      path: cwd,
+      createdAt: now,
+      lastOpenedAt: now,
+      wsProtocol: "jsonrpc",
+      workspaceKind: "project",
+      defaultEnableMcp: true,
+      defaultBackupsEnabled: false,
+      yolo: false,
+    },
+    "default",
+  );
 }
 
-async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
+function normalizeWorkspaceKindWithSource(
+  item: Record<string, unknown>,
+  rawWorkspacePath: string | null,
+  homedir?: string,
+): { workspaceKind: WorkspaceKind; source: WorkspaceKindSource } {
+  if (item.workspaceKind === "project" || item.workspaceKind === "oneOffChat") {
+    return { workspaceKind: item.workspaceKind, source: "explicit" };
+  }
+  if (rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath, homedir)) {
+    return { workspaceKind: "oneOffChat", source: "path" };
+  }
+  return { workspaceKind: normalizeWorkspaceKind(item.workspaceKind), source: "default" };
+}
+
+async function normalizeState(
+  raw: unknown,
+  opts: { homedir?: string } = {},
+): Promise<DesktopPersistedState> {
   if (!isRecord(raw)) {
     return defaultState();
   }
@@ -294,30 +317,36 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
     const createdAt = asTimestamp(item.createdAt);
     const lastOpenedAt = asTimestamp(item.lastOpenedAt);
     const rawWorkspacePath = asNonEmptyString(item.path);
-    const workspaceKind: WorkspaceKind =
-      item.workspaceKind === "project"
-        ? "project"
-        : rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath)
-          ? "oneOffChat"
-          : normalizeWorkspaceKind(item.workspaceKind);
-    const workspacePath = await resolveWorkspacePath(item.path, workspaceKind);
+    const { workspaceKind, source: workspaceKindSource } = normalizeWorkspaceKindWithSource(
+      item,
+      rawWorkspacePath,
+      opts.homedir,
+    );
+    const workspacePath = await resolveWorkspacePath(item.path, workspaceKind, {
+      homedir: opts.homedir,
+    });
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;
     }
 
-    workspaces.push({
-      ...item,
-      id,
-      name,
-      path: workspacePath,
-      workspaceKind,
-      createdAt,
-      lastOpenedAt,
-      wsProtocol: "jsonrpc",
-      defaultEnableMcp: asBoolean(item.defaultEnableMcp, true),
-      defaultBackupsEnabled: asBoolean(item.defaultBackupsEnabled, false),
-      yolo: false,
-    });
+    workspaces.push(
+      withWorkspaceKindSource(
+        {
+          ...item,
+          id,
+          name,
+          path: workspacePath,
+          workspaceKind,
+          createdAt,
+          lastOpenedAt,
+          wsProtocol: "jsonrpc",
+          defaultEnableMcp: asBoolean(item.defaultEnableMcp, true),
+          defaultBackupsEnabled: asBoolean(item.defaultBackupsEnabled, false),
+          yolo: false,
+        },
+        workspaceKindSource,
+      ),
+    );
     seenWorkspaceIds.add(id);
   }
 
@@ -773,6 +802,7 @@ async function launchWorkspaceServer(opts: {
 
 export class WebDesktopService implements WebDesktopServiceLike {
   private readonly userDataDir: string;
+  private readonly homedir?: string;
   private readonly serverManagerFactory: () => SourceWorkspaceServerManager;
   private serverManager: SourceWorkspaceServerManager | null;
   private readonly stateChangeListeners = new Set<() => void>();
@@ -789,6 +819,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
     } = {},
   ) {
     this.userDataDir = resolveDesktopUserDataDir(opts.userDataDir, opts.homedir);
+    this.homedir = opts.homedir;
     this.serverManager = opts.serverManager ?? null;
     this.serverManagerFactory =
       opts.serverManagerFactory ?? (() => new SourceWorkspaceServerManager());
@@ -814,7 +845,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
     let state = defaultState();
     try {
       const raw = await fs.readFile(this.stateFilePath, "utf8");
-      state = await normalizeState(JSON.parse(raw));
+      state = await normalizeState(JSON.parse(raw), { homedir: this.homedir });
     } catch (error) {
       const code =
         typeof error === "object" && error !== null && "code" in error
@@ -826,7 +857,9 @@ export class WebDesktopService implements WebDesktopServiceLike {
     }
 
     if (state.workspaces.length === 0 && opts.fallbackCwd) {
-      const fallbackWorkspacePath = await resolveWorkspacePath(opts.fallbackCwd);
+      const fallbackWorkspacePath = await resolveWorkspacePath(opts.fallbackCwd, "project", {
+        homedir: this.homedir,
+      });
       if (fallbackWorkspacePath) {
         state = {
           ...state,
@@ -839,7 +872,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
   }
 
   async saveState(state: unknown): Promise<DesktopPersistedState> {
-    const normalized = await normalizeState(state);
+    const normalized = await normalizeState(state, { homedir: this.homedir });
     await fs.mkdir(this.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
     await writeTextFileAtomic(this.stateFilePath, JSON.stringify(normalized, null, 2), {
       mode: PRIVATE_FILE_MODE,

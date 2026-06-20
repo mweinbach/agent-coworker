@@ -5,7 +5,7 @@ import path from "node:path";
 import { createRunTurn } from "../src/agent";
 import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import type { StartServerSocket } from "../src/server/startServer/types";
-import type { WebDesktopServiceLike } from "../src/server/webDesktopService";
+import { WebDesktopService, type WebDesktopServiceLike } from "../src/server/webDesktopService";
 
 type JsonRpcMessage = {
   id?: string | number;
@@ -780,6 +780,177 @@ describe("task workspace subscription routing", () => {
       await fs.rm(cleanupRoot, { recursive: true, force: true });
     }
   }, 15_000);
+
+  test("rejects legacy persisted desktop one-off records normalized with a configured home", async () => {
+    const { cleanupRoot, aliasHome } = await createAliasedHome("task-legacy-desktop-home-");
+    const userDataDir = path.join(cleanupRoot, "user-data");
+    const activeOneOffWorkspace = path.join(
+      aliasHome,
+      ".cowork",
+      "chats",
+      "20260620-legacy-oneoff",
+    );
+    const promotedProjectWorkspace = path.join(
+      aliasHome,
+      ".cowork",
+      "chats",
+      "20260620-promoted-project",
+    );
+    const ordinaryProjectWorkspace = path.join(cleanupRoot, "ordinary-project");
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
+    try {
+      await fs.mkdir(activeOneOffWorkspace, { recursive: true });
+      await fs.mkdir(promotedProjectWorkspace, { recursive: true });
+      await fs.mkdir(ordinaryProjectWorkspace, { recursive: true });
+      await fs.mkdir(userDataDir, { recursive: true });
+      const activeOneOffPath = await fs.realpath(activeOneOffWorkspace);
+      const promotedProjectPath = await fs.realpath(promotedProjectWorkspace);
+      const ordinaryProjectPath = await fs.realpath(ordinaryProjectWorkspace);
+      const timestamp = "2026-06-20T00:00:00.000Z";
+      await fs.writeFile(
+        path.join(userDataDir, "state.json"),
+        JSON.stringify({
+          version: 2,
+          workspaces: [
+            {
+              id: "legacy-one-off",
+              name: "Legacy one-off chat",
+              path: activeOneOffWorkspace,
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+            {
+              id: "promoted-project",
+              name: "Promoted project",
+              path: promotedProjectWorkspace,
+              workspaceKind: "project",
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+            {
+              id: "ordinary-project",
+              name: "Ordinary project",
+              path: ordinaryProjectWorkspace,
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+          ],
+          threads: [],
+        }),
+      );
+      const desktopService = new WebDesktopService({ userDataDir, homedir: aliasHome });
+      runtime = await createTaskTestRuntime({
+        cwd: activeOneOffPath,
+        homedir: aliasHome,
+        desktopService,
+      });
+
+      const oneOffReader = makeSocket("legacy-one-off-reader");
+      const mutator = makeSocket("legacy-one-off-mutator");
+      const promotedReader = makeSocket("legacy-promoted-reader");
+      const ordinaryReader = makeSocket("legacy-ordinary-reader");
+      await initializeConnection(runtime, oneOffReader);
+      await initializeConnection(runtime, mutator);
+      await initializeConnection(runtime, promotedReader);
+      await initializeConnection(runtime, ordinaryReader);
+
+      const omittedListResponse = await sendRequest(runtime, oneOffReader, "task/list");
+      expect(omittedListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      const exactListResponse = await sendRequest(runtime, oneOffReader, "task/list", {
+        cwd: activeOneOffPath,
+      });
+      expect(exactListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+
+      const { cwd: _omittedCreateCwd, ...omittedCreateParams } = createTaskParams(
+        activeOneOffPath,
+        "legacy-one-off-create-omitted",
+      );
+      const omittedCreateResponse = await sendRequest(
+        runtime,
+        mutator,
+        "task/create",
+        omittedCreateParams,
+      );
+      expect(omittedCreateResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      const exactCreateResponse = await sendRequest(
+        runtime,
+        mutator,
+        "task/create",
+        createTaskParams(activeOneOffPath, "legacy-one-off-create-exact"),
+      );
+      expect(exactCreateResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(oneOffReader, (message) => message.method === "task/created");
+
+      const omittedMutationResponse = await sendRequest(runtime, mutator, "task/updateBrief", {
+        taskId: "task-one-off",
+        expectedRevision: 1,
+        title: "Should stay rejected",
+      });
+      expect(omittedMutationResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      const exactMutationResponse = await sendRequest(runtime, mutator, "task/updateBrief", {
+        cwd: activeOneOffPath,
+        taskId: "task-one-off",
+        expectedRevision: 1,
+        title: "Should stay rejected",
+      });
+      expect(exactMutationResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(oneOffReader, (message) => message.method === "task/updated");
+
+      const promotedListResponse = await sendRequest(runtime, promotedReader, "task/list", {
+        cwd: promotedProjectPath,
+      });
+      expect(promotedListResponse.error).toBeUndefined();
+      expect(promotedListResponse.result).toEqual({ tasks: [], total: 0 });
+      const promotedTask = requireCreatedTask(
+        await sendRequest(
+          runtime,
+          mutator,
+          "task/create",
+          createTaskParams(promotedProjectPath, "legacy-promoted-project-create"),
+        ),
+      );
+      await waitForMessage(
+        promotedReader,
+        taskNotificationPredicate("task/created", promotedTask.id, promotedProjectPath),
+        "task/created for legacy promoted project workspace",
+      );
+
+      const ordinaryListResponse = await sendRequest(runtime, ordinaryReader, "task/list", {
+        cwd: ordinaryProjectPath,
+      });
+      expect(ordinaryListResponse.error).toBeUndefined();
+      expect(ordinaryListResponse.result).toEqual({ tasks: [], total: 0 });
+      const ordinaryTask = requireCreatedTask(
+        await sendRequest(
+          runtime,
+          mutator,
+          "task/create",
+          createTaskParams(ordinaryProjectPath, "legacy-ordinary-project-create"),
+        ),
+      );
+      await waitForMessage(
+        ordinaryReader,
+        taskNotificationPredicate("task/created", ordinaryTask.id, ordinaryProjectPath),
+        "task/created for legacy ordinary project workspace",
+      );
+      await expectNoMessage(oneOffReader, (message) => message.method === "task/created");
+    } finally {
+      await runtime?.stop();
+      await fs.rm(cleanupRoot, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   test("rejects generic task RPCs when the active desktop workspace is a one-off chat", async () => {
     const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "task-active-oneoff-")));

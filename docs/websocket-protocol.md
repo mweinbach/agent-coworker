@@ -459,7 +459,10 @@ outside directories, project-local chat aliases, symlink aliases, drive-relative
 artifact IDs whose stored workspace does not match the authorized request context. Workspace-kind
 classification canonicalizes the configured home, global one-off chat root, and requested workspace
 path before applying the `~/.cowork/chats` rule, so filesystem aliases such as symlinked homes do
-not turn hidden one-off chat directories into generic project workspaces.
+not turn hidden one-off chat directories into generic project workspaces. Legacy desktop records
+whose `project` kind was defaulted from an omitted `workspaceKind` are still classified by path;
+only an explicitly persisted `workspaceKind: "project"` preserves an intentional promoted project
+under the one-off chat root.
 
 Every mutation after creation carries `expectedRevision`. A stale revision fails with a structured conflict containing the current task revision so clients can reload rather than overwrite concurrent work.
 

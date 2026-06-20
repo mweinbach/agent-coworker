@@ -18,7 +18,12 @@ type ScreenProps = PropsWithChildren<{
   contentStyle?: StyleProp<ViewStyle>;
 }>;
 
-export function Screen({ children, scroll = false, avoidKeyboard = false, contentStyle }: ScreenProps) {
+export function Screen({
+  children,
+  scroll = false,
+  avoidKeyboard = false,
+  contentStyle,
+}: ScreenProps) {
   const insets = useSafeAreaInsets();
   const theme = useAppTheme();
 

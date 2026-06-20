@@ -44,12 +44,12 @@ import { createBeforeQuitHandler } from "./services/shutdown";
 import { resolveTrayIconPath } from "./services/trayIcon";
 import { DesktopUpdaterService } from "./services/updater";
 import { revealAndActivateWindow } from "./services/windowActivation";
-import { loadMainWindowBounds, trackMainWindowBounds } from "./services/windowState";
 import {
   applyPlatformWindowCreated,
   getPlatformBrowserWindowOptions,
   shouldUseMacosNativeGlass,
 } from "./services/windowEnhancements";
+import { loadMainWindowBounds, trackMainWindowBounds } from "./services/windowState";
 
 const require = createRequire(import.meta.url);
 const { app, BrowserWindow, Menu, Notification, screen, shell } =

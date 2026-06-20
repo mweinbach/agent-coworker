@@ -56,13 +56,7 @@ export class CrashReportingErrorBoundary extends Component<
  * `UnknownComponent` fallback so a localized crash reads as part of the UI
  * rather than a window-level fault.
  */
-function DefaultInlineFallback({
-  label,
-  onRetry,
-}: {
-  label: string;
-  onRetry: () => void;
-}) {
+function DefaultInlineFallback({ label, onRetry }: { label: string; onRetry: () => void }) {
   return (
     <div
       role="alert"

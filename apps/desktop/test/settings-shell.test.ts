@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DesktopPlatformInfo } from "../src/lib/desktopPlatform";
-import { getSettingsDragZoneStyle, getSettingsGroups, SETTINGS_PAGE_ALIASES } from "../src/ui/settings/SettingsShell";
+import {
+  getSettingsDragZoneStyle,
+  getSettingsGroups,
+  SETTINGS_PAGE_ALIASES,
+} from "../src/ui/settings/SettingsShell";
 
 function makePlatformInfo(overrides: Partial<DesktopPlatformInfo> = {}): DesktopPlatformInfo {
   return {

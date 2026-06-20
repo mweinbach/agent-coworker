@@ -766,13 +766,20 @@ export function WorkspaceUserProfileCard({
       }`,
     [workspace],
   );
+  const savedProfileDraftRef = useRef(buildUserProfileDraft(workspace));
+  const savedProfileKeyRef = useRef(savedProfileKey);
+  if (savedProfileKeyRef.current !== savedProfileKey) {
+    savedProfileKeyRef.current = savedProfileKey;
+    savedProfileDraftRef.current = buildUserProfileDraft(workspace);
+  }
 
   useEffect(() => {
     // Only re-seed the draft when the saved profile content (or workspace id)
     // actually changes. Unrelated workspace object-identity churn (provider
     // status refreshes, remote defaults updates) must not wipe in-progress
     // typing. If the user has unsaved edits, those always win.
-    const next = buildUserProfileDraft(workspace);
+    const profileKey = savedProfileKey;
+    const next = savedProfileDraftRef.current;
     const current = draftRef.current;
     const isDirty =
       current.userName !== next.userName ||
@@ -780,9 +787,9 @@ export function WorkspaceUserProfileCard({
       current.work !== next.work ||
       current.details !== next.details;
     if (isDirty) return;
+    savedProfileKeyRef.current = profileKey;
     setDraft(next);
     setSaveSuccess(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedProfileKey]);
 
   const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);

@@ -543,7 +543,8 @@ export function McpServersPage() {
                           const confirmed = await confirmAction({
                             title: "Delete server",
                             message: `Delete the "${server.name}" MCP server?`,
-                            detail: "This server will be removed from your workspace configuration.",
+                            detail:
+                              "This server will be removed from your workspace configuration.",
                             confirmLabel: "Delete",
                             cancelLabel: "Cancel",
                             kind: "warning",

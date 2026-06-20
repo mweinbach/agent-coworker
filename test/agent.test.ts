@@ -915,6 +915,44 @@ describe("runTurn", () => {
     expect(toolCtx.sandboxPolicy.kind).toBe("no-project-write");
   });
 
+  test("passes sandbox network allowance to provider-owned runtimes", async () => {
+    const runtimeRunTurn = mock(async () => ({
+      text: "ok",
+      responseMessages: [{ role: "assistant", content: "ok" }],
+    }));
+    const createRuntimeForTurn = mock((_config: AgentConfig) => ({
+      name: "pi" as const,
+      runTurn: runtimeRunTurn,
+    }));
+    const createToolsForTurn = mock((_ctx: unknown) => ({
+      bash: { type: "builtin" },
+    }));
+    const runTurnForRuntime = createRunTurn({
+      createRuntime: createRuntimeForTurn,
+      createTools: createToolsForTurn,
+      loadMCPServers: mockLoadMCPServers,
+      loadMCPTools: mockLoadMCPTools,
+    });
+
+    await runTurnForRuntime(makeParams());
+    await runTurnForRuntime(
+      makeParams({
+        config: makeConfig({
+          sandbox: { mode: "workspace-write", network: false },
+        }),
+      }),
+    );
+
+    const allowedRuntimeParams = runtimeRunTurn.mock.calls[0]?.[0] as
+      | { networkAllowed?: boolean }
+      | undefined;
+    const blockedRuntimeParams = runtimeRunTurn.mock.calls[1]?.[0] as
+      | { networkAllowed?: boolean }
+      | undefined;
+    expect(allowedRuntimeParams?.networkAllowed).toBe(true);
+    expect(blockedRuntimeParams?.networkAllowed).toBe(false);
+  });
+
   // -------------------------------------------------------------------------
   // maxSteps
   // -------------------------------------------------------------------------

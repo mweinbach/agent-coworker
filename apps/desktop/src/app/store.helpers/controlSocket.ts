@@ -220,7 +220,7 @@ export function createControlSocketHelpers(
     return removedSessionIds;
   }
 
-  function reconcileSelectedThreadId(
+  function reconcileSelectedThreadSelection(
     allThreads: ThreadRecord[],
     nextThreads: ThreadRecord[],
     workspaceId: string,
@@ -228,15 +228,25 @@ export function createControlSocketHelpers(
     selectedThreadId: string | null,
     selectedTaskId: string | null,
     view: ReturnType<StoreGet>["view"],
-  ): string | null {
+  ): { selectedThreadId: string | null; selectedTaskId: string | null } {
     if (!selectedThreadId) {
-      return null;
+      return {
+        selectedThreadId: null,
+        selectedTaskId: view === "chat" ? null : selectedTaskId,
+      };
     }
     const selectable = (thread: ThreadRecord): boolean =>
-      isStandardChatThread(thread, { includeDrafts: true }) ||
-      (view === "task" && typeof selectedTaskId === "string" && thread.taskId === selectedTaskId);
+      view === "task"
+        ? typeof selectedTaskId === "string" && thread.taskId === selectedTaskId
+        : isStandardChatThread(thread, { includeDrafts: true });
+    const selectionFor = (threadId: string | null) => {
+      if (view === "task") {
+        return { selectedThreadId: threadId, selectedTaskId };
+      }
+      return { selectedThreadId: threadId, selectedTaskId: null };
+    };
     if (nextThreads.some((thread) => thread.id === selectedThreadId && selectable(thread))) {
-      return selectedThreadId;
+      return selectionFor(selectedThreadId);
     }
 
     const migratedThreadId =
@@ -244,7 +254,7 @@ export function createControlSocketHelpers(
         (thread) => thread.legacyTranscriptId === selectedThreadId && selectable(thread),
       )?.id ?? null;
     if (migratedThreadId) {
-      return migratedThreadId;
+      return selectionFor(migratedThreadId);
     }
 
     const fallbackWorkspaceId =
@@ -252,19 +262,19 @@ export function createControlSocketHelpers(
       selectedWorkspaceId ??
       workspaceId;
     if (view === "task" && selectedTaskId) {
-      return (
+      return selectionFor(
         nextThreads.find(
           (thread) =>
             thread.workspaceId === fallbackWorkspaceId && thread.taskId === selectedTaskId,
-        )?.id ?? null
+        )?.id ?? null,
       );
     }
-    return (
+    return selectionFor(
       nextThreads.find(
         (thread) =>
           thread.workspaceId === fallbackWorkspaceId &&
           isStandardChatThread(thread, { includeDrafts: true }),
-      )?.id ?? null
+      )?.id ?? null,
     );
   }
 
@@ -645,7 +655,7 @@ export function createControlSocketHelpers(
           workspaceId,
           sessions,
         );
-        const selectedThreadId = reconcileSelectedThreadId(
+        const selection = reconcileSelectedThreadSelection(
           s.threads,
           nextThreads,
           workspaceId,
@@ -656,7 +666,8 @@ export function createControlSocketHelpers(
         );
         return {
           threads: nextThreads,
-          selectedThreadId,
+          selectedThreadId: selection.selectedThreadId,
+          selectedTaskId: selection.selectedTaskId,
         };
       });
       for (const sessionId of removedSessionSnapshotIds) {

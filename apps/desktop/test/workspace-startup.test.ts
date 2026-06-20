@@ -915,6 +915,124 @@ describe("workspace startup flow", () => {
     expect(state.selectedThreadId).toBe("thread-ws-1");
   });
 
+  test("selectThread clears stale task context when opening an ordinary chat", async () => {
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-ws-1",
+          workspaceId: "ws-1",
+          title: "Ordinary chat",
+          titleSource: "manual",
+          createdAt: "2026-03-08T09:00:00.000Z",
+          lastMessageAt: "2026-03-08T10:00:00.000Z",
+          status: "active",
+          sessionId: "session-ws-1",
+          messageCount: 1,
+          lastEventSeq: 1,
+          draft: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-ws-1",
+      selectedTaskId: "task-1",
+      threadRuntimeById: {
+        "thread-ws-1": {
+          ...useAppStore.getState().threadRuntimeById["thread-ws-1"],
+          connected: true,
+          sessionId: "session-ws-1",
+        },
+      },
+    });
+
+    await useAppStore.getState().selectThread("thread-ws-1");
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.selectedThreadId).toBe("thread-ws-1");
+    expect(state.selectedTaskId).toBeNull();
+  });
+
+  test("openNewChatLanding clears stale task context", async () => {
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "task-session-1",
+      selectedTaskId: "task-1",
+    });
+
+    await useAppStore.getState().openNewChatLanding();
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.selectedTaskId).toBeNull();
+  });
+
+  test("newThread clears stale task context when selecting an ordinary draft", async () => {
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "draft-ws-1",
+          workspaceId: "ws-1",
+          title: "Draft chat",
+          titleSource: "default",
+          createdAt: "2026-03-08T09:00:00.000Z",
+          lastMessageAt: "2026-03-08T10:00:00.000Z",
+          status: "active",
+          sessionId: null,
+          messageCount: 0,
+          lastEventSeq: 0,
+          draft: true,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "task-session-1",
+      selectedTaskId: "task-1",
+    });
+
+    await expect(useAppStore.getState().newThread({ workspaceId: "ws-1" })).resolves.toBe(true);
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.selectedThreadId).toBe("draft-ws-1");
+    expect(state.selectedTaskId).toBeNull();
+  });
+
   test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {
     const workspaceId = "ws-provider";
     MockJsonRpcSocket.autoOpen = false;

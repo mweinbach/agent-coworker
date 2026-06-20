@@ -41,6 +41,7 @@ import {
   fingerprintTaskReviewMaterial,
   getPendingTaskReviewFromRecords,
   getTaskReviewRoundsFromRecords,
+  stableStringify,
   type TaskReviewArtifactFileSnapshot,
 } from "./taskReviewPolicy";
 
@@ -110,6 +111,52 @@ type TaskReviewMaterial = {
   snapshot: ReturnType<typeof buildTaskReviewMaterialSnapshot>;
   fingerprint: string;
 };
+
+type TaskReviewLiveArtifactEvidence = Array<{
+  id: string;
+  path: string;
+  liveFile: TaskReviewArtifactFileSnapshot | null;
+}>;
+
+function liveArtifactEvidence(material: TaskReviewMaterial): TaskReviewLiveArtifactEvidence {
+  return material.snapshot.artifacts.map((artifact) => ({
+    id: stringSnapshotField(artifact, "id"),
+    path: stringSnapshotField(artifact, "path"),
+    liveFile: liveFileSnapshotField(artifact.liveFile),
+  }));
+}
+
+function stringSnapshotField(record: Record<string, unknown>, field: string): string {
+  const value = record[field];
+  if (typeof value !== "string") throw new Error(`Invalid review material artifact ${field}`);
+  return value;
+}
+
+function liveFileSnapshotField(value: unknown): TaskReviewArtifactFileSnapshot | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid review material live file evidence");
+  }
+  const record = value as Record<string, unknown>;
+  const artifactId = stringSnapshotField(record, "artifactId");
+  const filePath = stringSnapshotField(record, "path");
+  const canonicalWorkspaceRelativePath = stringSnapshotField(
+    record,
+    "canonicalWorkspaceRelativePath",
+  );
+  const sha256 = stringSnapshotField(record, "sha256");
+  const sizeBytes = record.sizeBytes;
+  if (typeof sizeBytes !== "number" || !Number.isFinite(sizeBytes)) {
+    throw new Error("Invalid review material live file size");
+  }
+  return {
+    artifactId,
+    path: filePath,
+    canonicalWorkspaceRelativePath,
+    sha256,
+    sizeBytes,
+  };
+}
 
 type StartArtifactRevisionRequest = {
   taskId: string;
@@ -1608,8 +1655,12 @@ export class TaskCoordinator {
     if (current.status !== "awaiting_review") {
       throw new Error("Task must be awaiting review before it can be accepted");
     }
+    let reviewedMaterial: TaskReviewMaterial | null;
     try {
-      await this.requireCompletionReviewEligibility(current);
+      reviewedMaterial = await this.requireCompletionReviewEligibility(current);
+      if (reviewedMaterial) {
+        await this.assertLiveArtifactEvidenceUnchanged(current, reviewedMaterial);
+      }
     } catch (error) {
       await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
       throw error;
@@ -1619,6 +1670,14 @@ export class TaskCoordinator {
       expectedRevision: input.expectedRevision,
       updatedAt: nowIso(),
     });
+    if (reviewedMaterial) {
+      try {
+        await this.assertLiveArtifactEvidenceUnchanged(task, reviewedMaterial);
+      } catch (error) {
+        await this.returnAcceptedTaskToWorkingAfterStaleAcceptance(task, error);
+        throw error;
+      }
+    }
     await this.quiesceTaskThreads(task);
     this.notifyUpdated(task);
     return task;
@@ -2414,6 +2473,39 @@ export class TaskCoordinator {
     } catch {
       // Keep the original acceptance failure. Some blocking-state changes may
       // intentionally prevent an automatic return to working.
+    }
+  }
+
+  private async returnAcceptedTaskToWorkingAfterStaleAcceptance(
+    task: TaskRecord,
+    error: unknown,
+  ): Promise<void> {
+    const latest = this.options.sessionDb.getTask(task.id);
+    if (latest?.status !== "completed") return;
+    try {
+      await this.recoverTerminalTask({
+        task: latest,
+        expectedRevision: latest.revision,
+        summary: "Task review material changed before acceptance",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // Keep the original stale-material failure.
+    }
+  }
+
+  private async assertLiveArtifactEvidenceUnchanged(
+    task: TaskRecord,
+    reviewedMaterial: TaskReviewMaterial,
+  ): Promise<void> {
+    const currentMaterial = await this.currentReviewMaterial(task);
+    if (
+      stableStringify(liveArtifactEvidence(currentMaterial)) !==
+      stableStringify(liveArtifactEvidence(reviewedMaterial))
+    ) {
+      throw new Error(
+        "Task requires a fresh passing review for the current delivery state before completion",
+      );
     }
   }
 

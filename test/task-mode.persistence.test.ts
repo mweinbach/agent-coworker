@@ -1861,6 +1861,80 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("task accept rejects artifact bytes changed during final acceptance", async () => {
+    const harness = await createHarness();
+    const originalAcceptAll = harness.sessionDb.acceptAllTaskArtifactVersions.bind(
+      harness.sessionDb,
+    );
+    try {
+      let { task, artifactPath } = await createIndependentlyReviewedTask(harness);
+      task = (await recordPass(harness, task, "reviewer-1")).task;
+      task = await harness.coordinator.proposeCompletion({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        summary: "Ready before accept-time finalization race",
+      });
+
+      let mutated = false;
+      harness.sessionDb.acceptAllTaskArtifactVersions = (async (input) => {
+        if (!mutated && input.taskId === task.id) {
+          mutated = true;
+          await fs.writeFile(artifactPath, "# Report\n\nChanged during final accept.\n");
+        }
+        return await originalAcceptAll(input);
+      }) as SessionDb["acceptAllTaskArtifactVersions"];
+
+      await expect(
+        harness.coordinator.acceptTask({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+        }),
+      ).rejects.toThrow("fresh passing review");
+      expect(mutated).toBe(true);
+      const working = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(working?.status).toBe("working");
+      expect(
+        harness.notifications.some(
+          (notification) =>
+            (notification.params.task as TaskRecord | undefined)?.id === task.id &&
+            (notification.params.task as TaskRecord | undefined)?.status === "completed",
+        ),
+      ).toBe(false);
+      if (!working) throw new Error("Expected task after final accept race rejection");
+
+      harness.sessionDb.acceptAllTaskArtifactVersions =
+        originalAcceptAll as SessionDb["acceptAllTaskArtifactVersions"];
+      task = await harness.coordinator.registerArtifact({
+        taskId: working.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: working.revision,
+        path: artifactPath,
+        title: "Report",
+        kind: "markdown",
+        sessionId: "task-session-1",
+      });
+      task = (await recordPass(harness, task, "reviewer-2")).task;
+      task = await harness.coordinator.proposeCompletion({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        summary: "Ready after finalization-race bytes were reviewed",
+      });
+      task = await harness.coordinator.acceptTask({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+      });
+      expect(task.status).toBe("completed");
+    } finally {
+      harness.sessionDb.acceptAllTaskArtifactVersions =
+        originalAcceptAll as SessionDb["acceptAllTaskArtifactVersions"];
+      harness.sessionDb.close();
+    }
+  });
+
   test("task accept rejects missing and swapped artifacts while awaiting review", async () => {
     const harness = await createHarness();
     try {

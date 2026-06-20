@@ -14,6 +14,75 @@ const TERMINAL_TASK_STATUSES = [
   "failed",
 ] as const satisfies readonly TaskStatus[];
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+class PausingArtifactVersionStore extends ArtifactVersionStore {
+  readonly captureCalls: string[] = [];
+  readonly restoreCalls: string[] = [];
+  private pause: {
+    kind: "capture" | "restore";
+    filePath: string;
+    reached: Deferred<void>;
+    release: Deferred<void>;
+  } | null = null;
+
+  pauseNext(
+    kind: "capture" | "restore",
+    filePath: string,
+  ): {
+    reached: Promise<void>;
+    release: () => void;
+  } {
+    const reached = createDeferred<void>();
+    const release = createDeferred<void>();
+    this.pause = { kind, filePath, reached, release };
+    return {
+      reached: reached.promise,
+      release: () => release.resolve(),
+    };
+  }
+
+  override async captureFile(filePath: string) {
+    await this.maybePause("capture", filePath);
+    this.captureCalls.push(filePath);
+    return await super.captureFile(filePath);
+  }
+
+  override async restoreFile(input: Parameters<ArtifactVersionStore["restoreFile"]>[0]) {
+    await this.maybePause("restore", input.filePath);
+    this.restoreCalls.push(input.filePath);
+    return await super.restoreFile(input);
+  }
+
+  private async maybePause(kind: "capture" | "restore", filePath: string): Promise<void> {
+    const pause = this.pause;
+    if (!pause || pause.kind !== kind || pause.filePath !== filePath) return;
+    this.pause = null;
+    pause.reached.resolve();
+    await pause.release.promise;
+  }
+}
+
 async function createHarness() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-artifact-version-test-"));
   const rootDir = path.join(home, ".cowork");
@@ -43,11 +112,38 @@ async function createHarness() {
   };
 }
 
+async function createPausingHarness() {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-artifact-version-test-"));
+  const rootDir = path.join(home, ".cowork");
+  const sessionsDir = path.join(rootDir, "sessions");
+  const workspacePath = path.join(home, "project");
+  await Promise.all([
+    fs.mkdir(sessionsDir, { recursive: true }),
+    fs.mkdir(workspacePath, { recursive: true }),
+  ]);
+  const sessionDb = await SessionDb.create({ paths: { rootDir, sessionsDir } });
+  const artifactStore = new PausingArtifactVersionStore({
+    rootDir: path.join(rootDir, "artifacts"),
+  });
+  const coordinator = new TaskCoordinator({ sessionDb, artifactStore });
+  let threadIndex = 1;
+  coordinator.setThreadFactory(async () => ({ sessionId: `revision-session-${threadIndex++}` }));
+  return {
+    home,
+    rootDir,
+    workspacePath,
+    sessionDb,
+    artifactStore,
+    coordinator,
+  };
+}
+
 async function createTaskWithArtifact(
-  harness: Awaited<ReturnType<typeof createHarness>>,
-  options: { reviewRequired?: boolean } = {},
+  harness: Pick<Awaited<ReturnType<typeof createHarness>>, "workspacePath" | "coordinator">,
+  options: { reviewRequired?: boolean; workItemId?: string; artifactFilename?: string } = {},
 ) {
-  const artifactPath = path.join(harness.workspacePath, "report.md");
+  const workItemId = options.workItemId ?? "deliver-report";
+  const artifactPath = path.join(harness.workspacePath, options.artifactFilename ?? "report.md");
   await fs.writeFile(artifactPath, "version one\n");
   let task = await harness.coordinator.create({
     workspacePath: harness.workspacePath,
@@ -60,7 +156,13 @@ async function createTaskWithArtifact(
     taskId: task.id,
     workspacePath: harness.workspacePath,
     expectedRevision: task.revision,
-    items: [{ id: "deliver-report", title: "Deliver report", expectedOutputs: ["report.md"] }],
+    items: [
+      {
+        id: workItemId,
+        title: "Deliver report",
+        expectedOutputs: [path.basename(artifactPath)],
+      },
+    ],
   });
   task = await harness.coordinator.registerArtifact({
     taskId: task.id,
@@ -69,7 +171,7 @@ async function createTaskWithArtifact(
     path: artifactPath,
     title: "Report",
     kind: "markdown",
-    workItemId: "deliver-report",
+    workItemId,
   });
   const artifact = task.artifacts[0];
   if (!artifact) throw new Error("Expected registered artifact");
@@ -753,6 +855,261 @@ describe("task artifact versions", () => {
       }
     });
   }
+
+  test("serializes same-task revision cancellation restore before terminal transition commits", async () => {
+    const harness = await createPausingHarness();
+    try {
+      let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Working",
+      });
+      const started = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: artifact.id,
+        expectedRevision: task.revision,
+        instruction: "Try a cancellable edit.",
+      });
+      await fs.writeFile(artifactPath, "unwanted edit\n");
+
+      const pause = harness.artifactStore.pauseNext("restore", await fs.realpath(artifactPath));
+      const outcomePromise = harness.coordinator.handleThreadOutcome(
+        started.revision.sessionId,
+        "cancelled",
+      );
+      await pause.reached;
+
+      const terminalPromise = harness.coordinator.transition({
+        taskId: started.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: started.task.revision,
+        status: "cancelled",
+        summary: "User cancelled task",
+      });
+      await flushAsyncWork();
+
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe("working");
+
+      pause.release();
+      const [outcome, terminal] = await Promise.all([outcomePromise, terminalPromise]);
+      if (!outcome) throw new Error("Expected cancelled revision outcome");
+
+      expect(outcome.revision.status).toBe("cancelled");
+      expect(outcome.task.status).toBe("working");
+      expect(terminal.status).toBe("cancelled");
+      expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+        status: "cancelled",
+        revision: terminal.revision,
+      });
+      expect(await fs.readFile(artifactPath, "utf8")).toBe("version one\n");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("serializes same-task revision completion capture before terminal transition commits", async () => {
+    const harness = await createPausingHarness();
+    try {
+      let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Working",
+      });
+      const started = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: artifact.id,
+        expectedRevision: task.revision,
+        instruction: "Complete a revised draft.",
+      });
+      await fs.writeFile(artifactPath, "completed edit\n");
+
+      const pause = harness.artifactStore.pauseNext("capture", await fs.realpath(artifactPath));
+      const outcomePromise = harness.coordinator.handleThreadOutcome(
+        started.revision.sessionId,
+        "completed",
+      );
+      await pause.reached;
+
+      const terminalPromise = harness.coordinator.transition({
+        taskId: started.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: started.task.revision,
+        status: "failed",
+        summary: "Task failed after revision completion",
+      });
+      await flushAsyncWork();
+
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe("working");
+
+      pause.release();
+      const [outcome, terminal] = await Promise.all([outcomePromise, terminalPromise]);
+      if (!outcome) throw new Error("Expected completed revision outcome");
+
+      expect(outcome.revision.status).toBe("completed");
+      expect(outcome.detail.versions.at(-1)?.changeSummary).toBe("Complete a revised draft.");
+      expect(terminal.status).toBe("failed");
+      expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+        status: "failed",
+        revision: terminal.revision,
+      });
+      expect(await fs.readFile(artifactPath, "utf8")).toBe("completed edit\n");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("keeps terminal-first late revision outcomes inert without restore side effects", async () => {
+    const harness = await createPausingHarness();
+    try {
+      let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Working",
+      });
+      const started = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: artifact.id,
+        expectedRevision: task.revision,
+        instruction: "Try an edit that loses to terminal transition.",
+      });
+      await fs.writeFile(artifactPath, "late edit after terminal\n");
+      const terminal = await harness.coordinator.transition({
+        taskId: started.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: started.task.revision,
+        status: "failed",
+        summary: "Task failed",
+      });
+
+      const outcome = await harness.coordinator.handleThreadOutcome(
+        started.revision.sessionId,
+        "cancelled",
+      );
+      if (!outcome) throw new Error("Expected closed revision snapshot");
+
+      expect(outcome.task).toMatchObject({ status: "failed", revision: terminal.revision });
+      expect(outcome.revision.status).toBe("cancelled");
+      expect(harness.artifactStore.restoreCalls).toHaveLength(0);
+      expect(await fs.readFile(artifactPath, "utf8")).toBe("late edit after terminal\n");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("does not serialize terminal transitions for unrelated task artifact outcomes", async () => {
+    const harness = await createPausingHarness();
+    try {
+      const first = await createTaskWithArtifact(harness);
+      const second = await createTaskWithArtifact(harness, {
+        workItemId: "deliver-second-report",
+        artifactFilename: "second-report.md",
+      });
+      first.task = await harness.coordinator.transition({
+        taskId: first.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: first.task.revision,
+        status: "working",
+        summary: "First working",
+      });
+      second.task = await harness.coordinator.transition({
+        taskId: second.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: second.task.revision,
+        status: "working",
+        summary: "Second working",
+      });
+      const startedFirst = await harness.coordinator.startArtifactRevision({
+        taskId: first.task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: first.artifact.id,
+        expectedRevision: first.task.revision,
+        instruction: "Pause first revision cancellation.",
+      });
+      await fs.writeFile(first.artifactPath, "first unwanted edit\n");
+
+      const pause = harness.artifactStore.pauseNext(
+        "restore",
+        await fs.realpath(first.artifactPath),
+      );
+      const outcomePromise = harness.coordinator.handleThreadOutcome(
+        startedFirst.revision.sessionId,
+        "cancelled",
+      );
+      await pause.reached;
+
+      const secondTerminal = await harness.coordinator.transition({
+        taskId: second.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: second.task.revision,
+        status: "cancelled",
+        summary: "Second task cancelled independently",
+      });
+      expect(secondTerminal.status).toBe("cancelled");
+
+      pause.release();
+      await outcomePromise;
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("releases the task outcome critical section when restore fails", async () => {
+    const harness = await createPausingHarness();
+    try {
+      let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Working",
+      });
+      const started = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: artifact.id,
+        expectedRevision: task.revision,
+        instruction: "Trigger restore failure.",
+      });
+      await fs.writeFile(artifactPath, "unwanted edit\n");
+      const originalRestore = harness.artifactStore.restoreFile.bind(harness.artifactStore);
+      let failedOnce = false;
+      harness.artifactStore.restoreFile = async (input) => {
+        if (!failedOnce) {
+          failedOnce = true;
+          throw new Error("restore exploded");
+        }
+        return await originalRestore(input);
+      };
+
+      await expect(
+        harness.coordinator.handleThreadOutcome(started.revision.sessionId, "cancelled"),
+      ).rejects.toThrow("restore exploded");
+
+      const terminal = await harness.coordinator.transition({
+        taskId: started.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: started.task.revision,
+        status: "cancelled",
+        summary: "Task cancellation after restore failure",
+      });
+      expect(terminal.status).toBe("cancelled");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
 
   test("keeps parallel revisions working until the final cancellation restores prior status", async () => {
     const harness = await createHarness();

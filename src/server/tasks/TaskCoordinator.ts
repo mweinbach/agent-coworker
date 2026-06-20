@@ -276,6 +276,7 @@ export class TaskCoordinator {
   private threadFactory: TaskThreadFactory | null = null;
   private continuationDispatcher: TaskContinuationDispatcher | null = null;
   private readonly artifactStore: ArtifactVersionStore;
+  private readonly taskMutationTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: TaskCoordinatorOptions) {
     this.artifactStore =
@@ -291,6 +292,29 @@ export class TaskCoordinator {
 
   setContinuationDispatcher(dispatcher: TaskContinuationDispatcher): void {
     this.continuationDispatcher = dispatcher;
+  }
+
+  private async runTaskMutation<T>(
+    taskId: string,
+    callback: (context: { queued: boolean }) => Promise<T> | T,
+  ): Promise<T> {
+    const previous = this.taskMutationTails.get(taskId);
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const nextTail = (previous ?? Promise.resolve()).catch(() => {}).then(() => current);
+    this.taskMutationTails.set(taskId, nextTail);
+
+    if (previous) await previous.catch(() => {});
+    try {
+      return await callback({ queued: Boolean(previous) });
+    } finally {
+      releaseCurrent();
+      if (this.taskMutationTails.get(taskId) === nextTail) {
+        this.taskMutationTails.delete(taskId);
+      }
+    }
   }
 
   list(workspacePath?: string | null): TaskSummary[] {
@@ -1607,6 +1631,28 @@ export class TaskCoordinator {
     detail: TaskArtifactDetail;
     revision: TaskArtifactRevision;
   } | null> {
+    const knownRevision =
+      this.options.sessionDb.getActiveTaskArtifactRevisionForSession(sessionId) ??
+      this.options.sessionDb.getTaskArtifactRevisionForSession(sessionId);
+    if (!knownRevision) {
+      if (outcome === "error") await this.failPrimaryTaskRun(sessionId, failure);
+      return null;
+    }
+    return await this.runTaskMutation(
+      knownRevision.taskId,
+      async () => await this.handleThreadOutcomeLocked(sessionId, outcome, failure),
+    );
+  }
+
+  private async handleThreadOutcomeLocked(
+    sessionId: string,
+    outcome: "completed" | "cancelled" | "error",
+    _failure?: unknown,
+  ): Promise<{
+    task: TaskRecord;
+    detail: TaskArtifactDetail;
+    revision: TaskArtifactRevision;
+  } | null> {
     const revision = this.options.sessionDb.getActiveTaskArtifactRevisionForSession(sessionId);
     if (!revision) {
       const closedRevision = this.options.sessionDb.getTaskArtifactRevisionForSession(sessionId);
@@ -1619,7 +1665,6 @@ export class TaskCoordinator {
         if (!closedTask || !closedDetail) return null;
         return { task: closedTask, detail: closedDetail, revision: closedRevision };
       }
-      if (outcome === "error") await this.failPrimaryTaskRun(sessionId, failure);
       return null;
     }
     const task = this.options.sessionDb.getTask(revision.taskId);
@@ -1839,39 +1884,49 @@ export class TaskCoordinator {
     detail?: string;
     sessionId?: string;
   }): Promise<TaskRecord> {
-    const task = this.requireTask(input.taskId, input.workspacePath);
-    assertExpectedTaskRevision(task, input.expectedRevision);
-    if (input.status === "completed" && task.status === "awaiting_review") {
-      return await this.acceptTask({
+    const initial = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(initial, input.expectedRevision);
+    return await this.runTaskMutation(input.taskId, async ({ queued }) => {
+      const task = this.requireTask(input.taskId, input.workspacePath);
+      let expectedRevision = input.expectedRevision;
+      if (task.revision !== input.expectedRevision) {
+        if (!queued || !TERMINAL_TASK_STATUSES.has(input.status)) {
+          assertExpectedTaskRevision(task, input.expectedRevision);
+        }
+        expectedRevision = task.revision;
+      }
+      if (input.status === "completed" && task.status === "awaiting_review") {
+        return await this.acceptTask({
+          taskId: task.id,
+          workspacePath: task.workspacePath,
+          expectedRevision,
+        });
+      }
+      if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
+        throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
+      }
+      if (
+        input.status === "working" &&
+        (task.questions.some((question) => question.status === "pending" && question.blocking) ||
+          task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
+      ) {
+        throw new Error("Task cannot return to working while blocking input or issues remain");
+      }
+      const thread = input.sessionId
+        ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
+        : null;
+      const updated = await this.options.sessionDb.setTaskStatus({
         taskId: task.id,
-        workspacePath: task.workspacePath,
-        expectedRevision: input.expectedRevision,
+        expectedRevision,
+        status: input.status,
+        summary: nonEmpty(input.summary, "Status summary"),
+        detail: input.detail?.trim() || null,
+        updatedAt: nowIso(),
+        threadId: thread?.id ?? null,
       });
-    }
-    if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
-      throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
-    }
-    if (
-      input.status === "working" &&
-      (task.questions.some((question) => question.status === "pending" && question.blocking) ||
-        task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
-    ) {
-      throw new Error("Task cannot return to working while blocking input or issues remain");
-    }
-    const thread = input.sessionId
-      ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
-      : null;
-    const updated = await this.options.sessionDb.setTaskStatus({
-      taskId: task.id,
-      expectedRevision: input.expectedRevision,
-      status: input.status,
-      summary: nonEmpty(input.summary, "Status summary"),
-      detail: input.detail?.trim() || null,
-      updatedAt: nowIso(),
-      threadId: thread?.id ?? null,
+      this.notifyUpdated(updated);
+      return updated;
     });
-    this.notifyUpdated(updated);
-    return updated;
   }
 
   private async recoverTerminalTask(input: {

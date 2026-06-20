@@ -64,6 +64,41 @@ describe("workspace catalog and path rules", () => {
     }
   });
 
+  test("listWorkspaceSummaries classifies no-desktop fallback one-off cwd with configured home", async () => {
+    const homedir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-home-"));
+    try {
+      const chatDir = path.join(getOneOffChatsRoot(homedir), "20260620-chat");
+      const projectDir = path.join(homedir, "project");
+      await fs.mkdir(chatDir, { recursive: true });
+      await fs.mkdir(projectDir, { recursive: true });
+
+      const chatResult = await listWorkspaceSummaries({
+        workingDirectory: await fs.realpath(chatDir),
+        homedir,
+      });
+      expect(chatResult.workspaces).toEqual([
+        expect.objectContaining({
+          path: await fs.realpath(chatDir),
+          workspaceKind: "oneOffChat",
+        }),
+      ]);
+      expect(chatResult.activeWorkspaceId).toBe(chatResult.workspaces[0]?.id);
+
+      const projectResult = await listWorkspaceSummaries({
+        workingDirectory: await fs.realpath(projectDir),
+        homedir,
+      });
+      expect(projectResult.workspaces).toEqual([
+        expect.objectContaining({
+          path: await fs.realpath(projectDir),
+          workspaceKind: "project",
+        }),
+      ]);
+    } finally {
+      await fs.rm(homedir, { recursive: true, force: true });
+    }
+  });
+
   test("listWorkspaceSummaries returns desktop workspaces with workspaceKind", async () => {
     const projectPath = "/tmp/project-a";
     const chatPath = "/tmp/chats/chat-1";

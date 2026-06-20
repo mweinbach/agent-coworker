@@ -30,13 +30,16 @@ function hashWorkspaceId(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function buildFallbackWorkspaceSummary(cwd: string): JsonRpcWorkspaceSummary {
+function buildFallbackWorkspaceSummary(
+  cwd: string,
+  homedir?: string | null,
+): JsonRpcWorkspaceSummary {
   const now = new Date().toISOString();
   return {
     id: `server-${hashWorkspaceId(cwd)}`,
     name: path.basename(cwd) || cwd,
     path: cwd,
-    workspaceKind: "project",
+    workspaceKind: classifyWorkspaceKind({ path: cwd }, homedir),
     createdAt: now,
     lastOpenedAt: now,
   };
@@ -100,7 +103,7 @@ export async function listWorkspaceSummaries(opts: {
   homedir?: string | null;
 }): Promise<{ workspaces: JsonRpcWorkspaceSummary[]; activeWorkspaceId: string | null }> {
   if (!opts.desktopService) {
-    const fallback = buildFallbackWorkspaceSummary(opts.workingDirectory);
+    const fallback = buildFallbackWorkspaceSummary(opts.workingDirectory, opts.homedir);
     return {
       workspaces: [fallback],
       activeWorkspaceId: fallback.id,

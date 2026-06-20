@@ -166,13 +166,73 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
+const { isSandboxApprovalThreadVisible } = await import("../src/app/sandboxApprovalVisibility");
 const { RUNTIME } = await import("../src/app/store.helpers");
+const { hydrateThreadSelection } = await import("../src/app/store.actions/thread");
 
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
   requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
   refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
 };
+
+function cachedThreadSnapshot(sessionId: string, text: string) {
+  return {
+    sessionId,
+    title: `Snapshot ${sessionId}`,
+    titleSource: "model",
+    titleModel: "gpt-5.4",
+    provider: "codex-cli",
+    model: "gpt-5.4",
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: 0,
+    nickname: null,
+    taskType: null,
+    targetPaths: null,
+    profile: null,
+    requestedModel: "gpt-5.4",
+    effectiveModel: "gpt-5.4",
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: text,
+    createdAt: "2026-03-08T09:00:00.000Z",
+    updatedAt: "2026-03-08T10:00:00.000Z",
+    messageCount: 2,
+    lastEventSeq: 4,
+    feed: [
+      {
+        id: `${sessionId}-assistant`,
+        kind: "message",
+        role: "assistant",
+        ts: "2026-03-08T10:00:00.000Z",
+        text,
+      },
+    ],
+    agents: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: null,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+  };
+}
+
+function seedCachedSnapshot(sessionId: string, text: string) {
+  const snapshot = cachedThreadSnapshot(sessionId, text);
+  RUNTIME.sessionSnapshots.set(sessionId, {
+    fingerprint: {
+      updatedAt: snapshot.updatedAt,
+      messageCount: snapshot.messageCount,
+      lastEventSeq: snapshot.lastEventSeq,
+    },
+    snapshot: snapshot as never,
+  });
+  return snapshot;
+}
 
 describe("workspace startup flow", () => {
   beforeEach(() => {
@@ -962,6 +1022,194 @@ describe("workspace startup flow", () => {
     expect(state.view).toBe("chat");
     expect(state.selectedThreadId).toBe("thread-ws-1");
     expect(state.selectedTaskId).toBeNull();
+  });
+
+  for (const initialSelectedTaskId of [null, "task-2"] as const) {
+    test(`hydrateThreadSelection synchronizes a task-owned thread from ${
+      initialSelectedTaskId === null ? "no selected task" : "another selected task"
+    }`, async () => {
+      const snapshot = seedCachedSnapshot("task-session-1", "Task one transcript");
+      useAppStore.setState({
+        view: "task",
+        workspaces: [
+          {
+            id: "ws-1",
+            name: "Workspace One",
+            path: "/tmp/workspace-one",
+            createdAt: "2026-03-08T00:00:00.000Z",
+            lastOpenedAt: "2026-03-08T00:00:00.000Z",
+            defaultEnableMcp: true,
+            yolo: false,
+          },
+        ],
+        threads: [
+          {
+            id: "task-session-1",
+            workspaceId: "ws-1",
+            title: "Task one thread",
+            titleSource: "manual",
+            createdAt: snapshot.createdAt,
+            lastMessageAt: snapshot.updatedAt,
+            status: "active",
+            sessionId: "task-session-1",
+            messageCount: snapshot.messageCount,
+            lastEventSeq: snapshot.lastEventSeq,
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+          {
+            id: "task-session-2",
+            workspaceId: "ws-1",
+            title: "Task two thread",
+            titleSource: "manual",
+            createdAt: "2026-03-08T09:00:00.000Z",
+            lastMessageAt: "2026-03-08T09:30:00.000Z",
+            status: "active",
+            sessionId: "task-session-2",
+            messageCount: 1,
+            lastEventSeq: 1,
+            taskId: "task-2",
+            taskThreadId: "task-thread-2",
+          },
+        ],
+        selectedWorkspaceId: "ws-1",
+        selectedThreadId: "task-session-2",
+        selectedTaskId: initialSelectedTaskId,
+        tasksById: {
+          "task-1": {
+            id: "task-1",
+            status: "working",
+            threads: [
+              {
+                id: "task-thread-1",
+                taskId: "task-1",
+                sessionId: "task-session-1",
+              },
+            ],
+          },
+          "task-2": {
+            id: "task-2",
+            status: "working",
+            threads: [
+              {
+                id: "task-thread-2",
+                taskId: "task-2",
+                sessionId: "task-session-2",
+              },
+            ],
+          },
+        } as never,
+        threadRuntimeById: {
+          "task-session-1": {
+            ...useAppStore.getState().threadRuntimeById["task-session-1"],
+            sessionId: "task-session-1",
+            feed: [
+              {
+                id: "stale-task-feed",
+                kind: "message",
+                role: "assistant",
+                ts: "2026-03-08T09:30:00.000Z",
+                text: "Stale task transcript",
+              },
+            ],
+          },
+        },
+      });
+
+      await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, "task-session-1", {
+        preserveView: true,
+      });
+
+      const state = useAppStore.getState();
+      expect(state.view).toBe("task");
+      expect(state.selectedWorkspaceId).toBe("ws-1");
+      expect(state.selectedThreadId).toBe("task-session-1");
+      expect(state.selectedTaskId).toBe("task-1");
+      expect(state.tasksById["task-1"]?.threads[0]?.sessionId).toBe("task-session-1");
+      expect(state.threadRuntimeById["task-session-1"]?.feed?.[0]).toEqual(
+        expect.objectContaining({ text: "Task one transcript" }),
+      );
+      expect(isSandboxApprovalThreadVisible(state, "task-session-1")).toBe(true);
+      expect(isSandboxApprovalThreadVisible(state, "task-session-2")).toBe(false);
+      expect(startCalls).toHaveLength(0);
+    });
+  }
+
+  test("hydrateThreadSelection treats missing task ownership as ordinary chat", async () => {
+    const snapshot = seedCachedSnapshot("orphan-task-thread", "Ordinary orphan transcript");
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "orphan-task-thread",
+          workspaceId: "ws-1",
+          title: "Malformed ownership thread",
+          titleSource: "manual",
+          createdAt: snapshot.createdAt,
+          lastMessageAt: snapshot.updatedAt,
+          status: "active",
+          sessionId: "orphan-task-thread",
+          messageCount: snapshot.messageCount,
+          lastEventSeq: snapshot.lastEventSeq,
+          taskThreadId: "task-thread-orphan",
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "task-session-1",
+      selectedTaskId: "task-1",
+      tasksById: {
+        "task-1": {
+          id: "task-1",
+          status: "working",
+          threads: [
+            {
+              id: "task-thread-1",
+              taskId: "task-1",
+              sessionId: "task-session-1",
+            },
+          ],
+        },
+      } as never,
+      threadRuntimeById: {
+        "orphan-task-thread": {
+          ...useAppStore.getState().threadRuntimeById["orphan-task-thread"],
+          sessionId: "orphan-task-thread",
+          feed: [
+            {
+              id: "stale-orphan-feed",
+              kind: "message",
+              role: "assistant",
+              ts: "2026-03-08T09:30:00.000Z",
+              text: "Stale orphan transcript",
+            },
+          ],
+        },
+      },
+    });
+
+    await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, "orphan-task-thread");
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.selectedWorkspaceId).toBe("ws-1");
+    expect(state.selectedThreadId).toBe("orphan-task-thread");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.threadRuntimeById["orphan-task-thread"]?.feed?.[0]).toEqual(
+      expect.objectContaining({ text: "Ordinary orphan transcript" }),
+    );
+    expect(isSandboxApprovalThreadVisible(state, "orphan-task-thread")).toBe(true);
+    expect(startCalls).toHaveLength(0);
   });
 
   test("openNewChatLanding clears stale task context", async () => {

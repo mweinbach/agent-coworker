@@ -130,6 +130,12 @@ export async function hydrateThreadSelection(
 
   const thread = get().threads.find((candidate) => candidate.id === threadId);
   if (!thread) return;
+  const selectedTaskIdForThread = (candidate: ThreadRecord): string | null => {
+    if (isStandardChatThread(candidate, { includeDrafts: true })) return null;
+    return typeof candidate.taskId === "string" && candidate.taskId.trim().length > 0
+      ? candidate.taskId
+      : null;
+  };
 
   const threadFingerprint = (candidate: ThreadRecord): SessionSnapshotFingerprint => ({
     updatedAt: candidate.lastMessageAt,
@@ -280,9 +286,7 @@ export async function hydrateThreadSelection(
 
   ensureThreadRuntime(get, set, threadId);
   if (thread.draft) {
-    const selectedTaskId = isStandardChatThread(thread, { includeDrafts: true })
-      ? null
-      : get().selectedTaskId;
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedThreadId: threadId,
       selectedWorkspaceId: thread.workspaceId,
@@ -303,9 +307,7 @@ export async function hydrateThreadSelection(
 
   const rt = get().threadRuntimeById[threadId];
   if (get().selectedThreadId === threadId && RUNTIME.threadSelectionRequests.has(threadId)) {
-    const selectedTaskId = isStandardChatThread(thread, { includeDrafts: true })
-      ? null
-      : get().selectedTaskId;
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
       selectedTaskId,
@@ -315,9 +317,7 @@ export async function hydrateThreadSelection(
     return;
   }
   if (get().selectedThreadId === threadId && rt?.connected) {
-    const selectedTaskId = isStandardChatThread(thread, { includeDrafts: true })
-      ? null
-      : get().selectedTaskId;
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
       selectedTaskId,
@@ -361,9 +361,7 @@ export async function hydrateThreadSelection(
     (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
 
   const requestId = beginThreadSelectionRequest(threadId);
-  const selectedTaskId = isStandardChatThread(thread, { includeDrafts: true })
-    ? null
-    : get().selectedTaskId;
+  const selectedTaskId = selectedTaskIdForThread(thread);
   set((state) => ({
     selectedThreadId: threadId,
     selectedWorkspaceId: thread.workspaceId,

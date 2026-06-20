@@ -645,6 +645,78 @@ describe("workspace startup flow", () => {
     await selectPromise;
   });
 
+  test("selectWorkspace keeps POSIX workspace paths case-sensitive for selected tasks", async () => {
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-upper",
+          name: "Uppercase project",
+          path: "/tmp/Project",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+        {
+          id: "ws-lower",
+          name: "Lowercase project",
+          path: "/tmp/project",
+          createdAt: "2026-03-09T00:00:00.000Z",
+          lastOpenedAt: "2026-03-09T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "task-session-upper",
+          workspaceId: "ws-upper",
+          title: "Uppercase project task",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastMessageAt: "2026-03-08T01:00:00.000Z",
+          status: "active",
+          sessionId: "task-session-upper",
+          messageCount: 1,
+          lastEventSeq: 1,
+          taskId: "task-upper",
+          taskThreadId: "task-thread-upper",
+        },
+      ],
+      selectedWorkspaceId: "ws-upper",
+      selectedThreadId: "task-session-upper",
+      selectedTaskId: "task-upper",
+      taskSummariesByWorkspaceId: {},
+      tasksById: {
+        "task-upper": {
+          id: "task-upper",
+          workspacePath: "/tmp/Project",
+          threads: [
+            {
+              id: "task-thread-upper",
+              taskId: "task-upper",
+              sessionId: "task-session-upper",
+              title: "Uppercase project task",
+              createdBy: "coordinator",
+              createdAt: "2026-03-08T00:00:00.000Z",
+              updatedAt: "2026-03-08T01:00:00.000Z",
+            },
+          ],
+        } as never,
+      },
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace("ws-lower");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-lower");
+    expect(useAppStore.getState().selectedTaskId).toBeNull();
+    expect(useAppStore.getState().selectedThreadId).toBeNull();
+
+    startDeferreds[0]?.resolve({ url: "ws://lowercase-project" });
+    await selectPromise;
+  });
+
   test("selectWorkspace preserves the selected task thread when reselecting its project", async () => {
     useAppStore.setState({
       view: "task",

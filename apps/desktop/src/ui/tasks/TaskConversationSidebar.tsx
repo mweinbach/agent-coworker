@@ -61,6 +61,8 @@ export function TaskConversationSidebar() {
 
   if (!task) return null;
 
+  const terminalNoticeId = `task-terminal-lock-${task.id}`;
+
   const submitThread = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const title = threadTitle.trim();
@@ -100,15 +102,24 @@ export function TaskConversationSidebar() {
             </Button>
           );
         })}
-        <Dialog open={dialogOpen} onOpenChange={terminal ? undefined : setDialogOpen}>
+        <Dialog
+          open={dialogOpen}
+          onOpenChange={(open) => {
+            if (!terminal) setDialogOpen(open);
+          }}
+        >
           <DialogTrigger asChild>
             <Button
               type="button"
               size="icon-sm"
               variant="ghost"
               className="size-7 shrink-0 text-muted-foreground"
-              disabled={terminal}
               aria-label="Add focused task thread"
+              aria-disabled={terminal || undefined}
+              aria-describedby={terminal ? terminalNoticeId : undefined}
+              onClick={(event) => {
+                if (terminal) event.preventDefault();
+              }}
               title={
                 terminal
                   ? (terminalCopy?.detail ?? "Reopen the task to continue this conversation.")
@@ -152,7 +163,9 @@ export function TaskConversationSidebar() {
         </Dialog>
       </div>
       <div className="min-h-0 flex-1">
-        <ChatView readOnlyNotice={terminalCopy ?? undefined} />
+        <ChatView
+          readOnlyNotice={terminalCopy ? { ...terminalCopy, id: terminalNoticeId } : undefined}
+        />
       </div>
     </aside>
   );

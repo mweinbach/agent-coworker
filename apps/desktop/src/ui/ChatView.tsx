@@ -12,6 +12,10 @@ import {
   buildAttachmentSignature,
   getAttachmentPickerValidationMessage,
 } from "../app/attachmentInputs";
+import {
+  isSandboxApprovalThreadVisible,
+  resolveSandboxApprovalThreadTarget,
+} from "../app/sandboxApprovalVisibility";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { ConversationScrollButton } from "../components/ai-elements/conversation";
@@ -85,6 +89,7 @@ export {
 export { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 
 type ChatViewReadOnlyNotice = {
+  id?: string;
   title: string;
   detail: string;
 };
@@ -115,30 +120,66 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [workspaceSkills, workspacePluginsCatalog],
   );
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
+  const view = useAppStore((s) => s.view);
+  const selectedTaskId = useAppStore((s) => s.selectedTaskId);
+  const allThreads = useAppStore((s) => s.threads);
+  const tasksById = useAppStore((s) => s.tasksById);
   const sandboxApprovalsByThread = useAppStore((s) => s.sandboxApprovalsByThread);
   const sandboxApprovals = useMemo(() => {
     const entries = Object.entries(sandboxApprovalsByThread);
     if (entries.length === 0) return EMPTY_SANDBOX_APPROVALS;
 
+    const visibilityContext = {
+      view,
+      selectedTaskId,
+      selectedThreadId,
+      threads: allThreads,
+      tasksById,
+    };
+
     const visible: VisibleSandboxApproval[] = [];
-    if (selectedThreadId) {
+    if (selectedThreadId && isSandboxApprovalThreadVisible(visibilityContext, selectedThreadId)) {
       const selectedPrompts = sandboxApprovalsByThread[selectedThreadId] ?? [];
       for (const prompt of selectedPrompts) {
         visible.push({ threadId: selectedThreadId, prompt });
       }
     }
     for (const [threadId, prompts] of entries) {
-      if (threadId === selectedThreadId) continue;
+      if (
+        threadId === selectedThreadId ||
+        !isSandboxApprovalThreadVisible(visibilityContext, threadId)
+      ) {
+        continue;
+      }
       for (const prompt of prompts) {
         visible.push({ threadId, prompt });
       }
     }
 
     return visible.length > 0 ? visible : EMPTY_SANDBOX_APPROVALS;
-  }, [sandboxApprovalsByThread, selectedThreadId]);
+  }, [allThreads, sandboxApprovalsByThread, selectedTaskId, selectedThreadId, tasksById, view]);
   const answerApproval = useAppStore((s) => s.answerApproval);
   const selectThread = useAppStore((s) => s.selectThread);
-  const allThreads = useAppStore((s) => s.threads);
+  const selectTask = useAppStore((s) => s.selectTask);
+  const selectTaskThread = useAppStore((s) => s.selectTaskThread);
+  const selectApprovalThread = useCallback(
+    (threadId: string) => {
+      const target = resolveSandboxApprovalThreadTarget(
+        { selectedThreadId, threads: allThreads, tasksById },
+        threadId,
+      );
+      if (target?.kind === "task") {
+        if (target.taskThreadId) {
+          void selectTaskThread(target.taskId, target.taskThreadId);
+        } else {
+          void selectTask(target.taskId);
+        }
+        return;
+      }
+      if (target?.kind === "chat") void selectThread(threadId);
+    },
+    [allThreads, selectTask, selectTaskThread, selectThread, selectedThreadId, tasksById],
+  );
   const threadTitleById = useMemo(() => {
     const onlyOtherThreads = sandboxApprovals.some((a) => a.threadId !== selectedThreadId);
     if (!onlyOtherThreads) return undefined;
@@ -174,8 +215,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
   const reconnectThread = useAppStore((s) => s.reconnectThread);
-  const selectTask = useAppStore((s) => s.selectTask);
-  const tasksById = useAppStore((s) => s.tasksById);
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
   const sourceTask = useMemo(() => {
     if (!selectedThreadId) return null;
@@ -196,7 +235,12 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const messageBarOverlayRef = useRef<HTMLDivElement | null>(null);
+  const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const messageBarOverlayRef = useCallback((element: HTMLDivElement | null) => {
+    setMessageBarOverlayElement(element);
+  }, []);
   const lastCountRef = useRef<number>(0);
   const autoScrolledThreadIdRef = useRef<string | null>(null);
   const userScrolledAwayRef = useRef(false);
@@ -230,7 +274,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }, [pendingAttachments]);
 
   useLayoutEffect(() => {
-    const el = messageBarOverlayRef.current;
+    const el = messageBarOverlayElement;
     if (!el) {
       setComposerOverlayHeight(composerOverlayMinHeight);
       return;
@@ -250,7 +294,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     const observer = new ResizeObserverCtor(updateHeight);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [composerOverlayMinHeight]);
+  }, [composerOverlayMinHeight, messageBarOverlayElement]);
 
   useEffect(() => {
     return () => {
@@ -799,7 +843,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           onAnswerApproval={answerApproval}
           selectedThreadId={selectedThreadId}
           threadTitleById={threadTitleById}
-          onSelectThread={(id) => void selectThread(id)}
+          onSelectThread={selectApprovalThread}
         />
         <ConversationScrollButton
           bottomOffset={scrollButtonBottomOffset}
@@ -816,6 +860,10 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         {readOnlyNotice ? (
           <div
             ref={messageBarOverlayRef}
+            id={readOnlyNotice.id}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
             data-slot="message-bar-overlay"
             className="absolute inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
             style={{ minHeight: composerOverlayMinHeight }}

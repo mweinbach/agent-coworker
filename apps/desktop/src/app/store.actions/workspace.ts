@@ -1,7 +1,9 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
+import { sameWorkspacePath } from "@cowork/utils/workspacePath";
 
 import { captureProductEvent } from "../../lib/analytics";
 import { pickWorkspaceDirectory, stopWorkspaceServer } from "../../lib/desktopCommands";
+import { getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
 import {
   type AppStoreActions,
@@ -92,9 +94,6 @@ export function createWorkspaceActions(
     );
   };
 
-  const normalizeWorkspacePath = (value: string) =>
-    value.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
-
   const taskBelongsToWorkspace = (taskId: string | null, workspaceId: string): boolean => {
     if (!taskId) return false;
     const state = get();
@@ -104,7 +103,11 @@ export function createWorkspaceActions(
     const task = state.tasksById[taskId];
     const workspace = state.workspaces.find((item) => item.id === workspaceId);
     if (!task || !workspace) return false;
-    return normalizeWorkspacePath(task.workspacePath) === normalizeWorkspacePath(workspace.path);
+    return sameWorkspacePath(
+      task.workspacePath,
+      workspace.path,
+      getDesktopPlatformInfo().rawPlatform as NodeJS.Platform,
+    );
   };
 
   const isWorkspaceLifecycleEnabled = () => get().desktopFeatureFlags.workspaceLifecycle !== false;

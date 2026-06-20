@@ -17,6 +17,7 @@ import type {
   TaskArtifact,
   TaskArtifactDetail,
   TaskArtifactVersion,
+  TaskStatus,
 } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
@@ -47,6 +48,7 @@ import { cn } from "../../lib/utils";
 type ArtifactReviewCardProps = {
   taskId: string;
   taskRevision: number;
+  taskStatus: TaskStatus;
   artifact: TaskArtifact;
   onOpenFile: (path: string) => void;
 };
@@ -238,6 +240,7 @@ function ReviewStatus({ detail }: { detail: TaskArtifactDetail | null }) {
 export function ArtifactReviewCard({
   taskId,
   taskRevision,
+  taskStatus,
   artifact,
   onOpenFile,
 }: ArtifactReviewCardProps) {
@@ -261,6 +264,17 @@ export function ArtifactReviewCard({
   const [instruction, setInstruction] = useState("");
   const loadedDetailKeyRef = useRef<string | null>(null);
   const detailRequestKey = `${taskId}:${artifact.id}:${taskRevision}`;
+  const terminal =
+    taskStatus === "completed" || taskStatus === "cancelled" || taskStatus === "failed";
+  const terminalRevisionNoticeId = `artifact-revision-lock-${taskId}-${artifact.id}`;
+  const terminalRevisionCopy =
+    taskStatus === "failed"
+      ? "Retry the task before requesting artifact changes."
+      : "Reopen the task before requesting artifact changes.";
+
+  useEffect(() => {
+    if (terminal && revisionOpen) setRevisionOpen(false);
+  }, [revisionOpen, terminal]);
 
   const loadDetail = useCallback(async () => {
     setLoadingDetail(true);
@@ -374,7 +388,7 @@ export function ArtifactReviewCard({
 
   const submitRevision = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selectedVersion || !instruction.trim()) return;
+    if (terminal || !selectedVersion || !instruction.trim()) return;
     const next = await runDetailMutation("revision", () =>
       startRevision(taskId, artifact.id, selectedVersion.id, instruction),
     );
@@ -430,7 +444,7 @@ export function ArtifactReviewCard({
                   }}
                 >
                   <HistoryIcon data-icon="inline-start" />
-                  Revise this
+                  {terminal ? "Review versions" : "Revise this"}
                 </Button>
               </DialogTrigger>
             </div>
@@ -620,11 +634,24 @@ export function ArtifactReviewCard({
               <Button
                 type="button"
                 disabled={!selectedVersion || pendingAction !== null}
-                onClick={() => setRevisionOpen(true)}
+                aria-disabled={terminal || undefined}
+                aria-describedby={terminal ? terminalRevisionNoticeId : undefined}
+                onClick={() => {
+                  if (!terminal) setRevisionOpen(true);
+                }}
               >
                 <SendIcon data-icon="inline-start" />
                 Request changes
               </Button>
+              {terminal ? (
+                <p
+                  id={terminalRevisionNoticeId}
+                  role="status"
+                  className="basis-full text-xs text-muted-foreground"
+                >
+                  {terminalRevisionCopy}
+                </p>
+              ) : null}
             </DialogFooter>
           </DialogContent>
         ) : null}
@@ -662,7 +689,12 @@ export function ArtifactReviewCard({
         ) : null}
       </Dialog>
 
-      <Dialog open={revisionOpen} onOpenChange={setRevisionOpen}>
+      <Dialog
+        open={revisionOpen}
+        onOpenChange={(open) => {
+          if (!terminal) setRevisionOpen(open);
+        }}
+      >
         {revisionOpen ? (
           <DialogContent>
             <form onSubmit={submitRevision}>

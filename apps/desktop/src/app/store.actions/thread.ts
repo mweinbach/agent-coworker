@@ -6,6 +6,7 @@ import {
 import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
 import { seedDockFromFeed } from "../a2uiDockReducer";
+import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
   type AppStoreActions,
   type AppStoreState,
@@ -69,12 +70,17 @@ function findLatestSandboxApprovalPrompt(
   const selectedPrompt = selectedThreadId
     ? state.sandboxApprovalsByThread[selectedThreadId]?.at(-1)
     : undefined;
-  if (selectedThreadId && selectedPrompt) {
+  if (
+    selectedThreadId &&
+    selectedPrompt &&
+    isSandboxApprovalThreadVisible(state, selectedThreadId)
+  ) {
     return { threadId: selectedThreadId, prompt: selectedPrompt };
   }
 
   let latest: { threadId: string; prompt: SandboxApprovalPrompt } | null = null;
   for (const [threadId, prompts] of Object.entries(state.sandboxApprovalsByThread)) {
+    if (!isSandboxApprovalThreadVisible(state, threadId)) continue;
     for (const prompt of prompts) {
       if (!latest) {
         latest = { threadId, prompt };

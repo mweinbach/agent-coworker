@@ -3,6 +3,7 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { TaskArtifactDetail, TaskQuestion, TaskRecord } from "../../../src/shared/tasks";
+import type { SandboxApprovalPrompt } from "../src/app/types";
 import { setupJsdom } from "./jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
@@ -165,6 +166,16 @@ function artifactDetail(): TaskArtifactDetail {
     latestVersionId: "version-2",
     acceptedVersionId: "version-1",
     activeRevision: null,
+  };
+}
+
+function sandboxApproval(requestId: string, command: string): SandboxApprovalPrompt {
+  return {
+    requestId,
+    command,
+    reason: "The command needs access outside the workspace sandbox.",
+    category: "filesystem",
+    receivedSequence: 1,
   };
 }
 
@@ -772,12 +783,203 @@ describe("desktop task mode UI", () => {
       expect(container.textContent).toContain("Reopen the task to continue this conversation.");
       expect(container.textContent).toContain("Preserved terminal transcript audit line.");
       expect(container.querySelector('[aria-label="Message input"]')).toBeNull();
+      const addThreadButton = container.querySelector(
+        '[aria-label="Add focused task thread"]',
+      ) as HTMLButtonElement | null;
+      expect(addThreadButton?.disabled).toBe(false);
+      expect(addThreadButton?.getAttribute("aria-disabled")).toBe("true");
+      const descriptionId = addThreadButton?.getAttribute("aria-describedby");
+      expect(descriptionId).toBeTruthy();
+      const lockNotice = descriptionId
+        ? harness.dom.window.document.getElementById(descriptionId)
+        : null;
+      expect(lockNotice?.textContent).toContain("Reopen the task to continue this conversation.");
+      expect(lockNotice?.getAttribute("role")).toBe("status");
+      expect(lockNotice?.getAttribute("aria-live")).toBe("polite");
+      addThreadButton?.focus();
+      expect(harness.dom.window.document.activeElement).toBe(addThreadButton);
+      await act(async () => addThreadButton?.click());
+      expect(harness.dom.window.document.body.textContent).not.toContain("Add task thread");
 
       await act(async () => root.unmount());
     } finally {
       harness.restore();
     }
   });
+
+  test.serial("rebinds the message overlay observer when a task becomes read-only", async () => {
+    const observedElements: Element[] = [];
+    let disconnectCount = 0;
+    class TrackingResizeObserver {
+      observe(element: Element) {
+        observedElements.push(element);
+      }
+      disconnect() {
+        disconnectCount += 1;
+      }
+      unobserve() {}
+    }
+    const harness = setupJsdom({ extraGlobals: { ResizeObserver: TrackingResizeObserver } });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      const workingTask = taskRecord({ status: "working" });
+      resetStore(workingTask);
+      useAppStore.setState({
+        threads: [
+          {
+            id: "task-session-1",
+            workspaceId: "ws-1",
+            title: "Main",
+            createdAt: NOW,
+            lastMessageAt: NOW,
+            status: "active",
+            sessionId: "task-session-1",
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+        ],
+        threadRuntimeById: {},
+      } as never);
+
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
+      const firstOverlay = observedElements.find(
+        (element) => element.getAttribute("data-slot") === "message-bar-overlay",
+      );
+      expect(firstOverlay).toBeTruthy();
+
+      await act(async () => {
+        useAppStore.setState({
+          tasksById: { "task-1": taskRecord({ status: "completed", revision: 5 }) },
+        } as never);
+        await Promise.resolve();
+      });
+
+      const observedOverlays = observedElements.filter(
+        (element) => element.getAttribute("data-slot") === "message-bar-overlay",
+      );
+      expect(observedOverlays).toHaveLength(2);
+      expect(observedOverlays[0]).not.toBe(observedOverlays[1]);
+      expect(observedOverlays[1]?.isConnected).toBe(true);
+      expect(disconnectCount).toBeGreaterThanOrEqual(1);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial(
+    "isolates sandbox approvals by ordinary-chat and selected-task ownership",
+    async () => {
+      const harness = setupJsdom();
+      const selectTaskThread = mock(async () => {});
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { ChatView } = await import("../src/ui/ChatView");
+        const root = createRoot(container);
+        const task = taskRecord({
+          status: "working",
+          threads: [
+            ...taskRecord().threads,
+            {
+              id: "task-thread-2",
+              taskId: "task-1",
+              sessionId: "task-session-2",
+              title: "Task approval lane",
+              createdBy: "coordinator",
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+          threadCount: 2,
+        });
+        resetStore(task);
+        useAppStore.setState({
+          view: "chat",
+          selectedTaskId: null,
+          selectedThreadId: "chat-session-1",
+          selectTaskThread,
+          threads: [
+            {
+              id: "chat-session-1",
+              workspaceId: "ws-1",
+              title: "Ordinary chat",
+              createdAt: NOW,
+              lastMessageAt: NOW,
+              status: "active",
+              sessionId: "chat-session-1",
+              messageCount: 0,
+              lastEventSeq: 0,
+              draft: false,
+            },
+            {
+              id: "task-session-1",
+              workspaceId: "ws-1",
+              title: "Task main",
+              createdAt: NOW,
+              lastMessageAt: NOW,
+              status: "active",
+              sessionId: "task-session-1",
+              messageCount: 0,
+              lastEventSeq: 0,
+              draft: false,
+              taskId: "task-1",
+              taskThreadId: "task-thread-1",
+            },
+            {
+              id: "task-session-2",
+              workspaceId: "ws-1",
+              title: "Task approval lane",
+              createdAt: NOW,
+              lastMessageAt: NOW,
+              status: "active",
+              sessionId: "task-session-2",
+              messageCount: 0,
+              lastEventSeq: 0,
+              draft: false,
+              taskId: "task-1",
+              taskThreadId: "task-thread-2",
+            },
+          ],
+          sandboxApprovalsByThread: {
+            "chat-session-1": [sandboxApproval("chat-approval", "echo ordinary-chat")],
+            "task-session-2": [sandboxApproval("task-approval", "echo task-only")],
+          },
+        } as never);
+
+        await act(async () => root.render(createElement(ChatView)));
+        expect(container.textContent).toContain("echo ordinary-chat");
+        expect(container.textContent).not.toContain("echo task-only");
+
+        await act(async () => {
+          useAppStore.setState({
+            view: "task",
+            selectedTaskId: "task-1",
+            selectedThreadId: "task-session-1",
+          } as never);
+          await Promise.resolve();
+        });
+        expect(container.textContent).toContain("echo task-only");
+        expect(container.textContent).not.toContain("echo ordinary-chat");
+        const openButton = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Open",
+        );
+        await act(async () => openButton?.click());
+        expect(selectTaskThread).toHaveBeenCalledWith("task-1", "task-thread-2");
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("bundles pending task questions and submits partial answers", async () => {
     const harness = setupJsdom();
@@ -925,6 +1127,59 @@ describe("desktop task mode UI", () => {
       harness.restore();
     }
   });
+
+  test.serial(
+    "keeps terminal artifact history readable while disabling revision starts",
+    async () => {
+      const harness = setupJsdom();
+      const startRevision = mock(async () => artifactDetail());
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+        const root = createRoot(container);
+        resetStore(taskRecord({ status: "completed" }));
+        useAppStore.setState({ startTaskArtifactRevision: startRevision } as never);
+
+        await act(async () => root.render(createElement(TaskContextSidebar)));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        const reviewButton = Array.from(container.querySelectorAll("button")).find((button) =>
+          ["Revise this", "Review versions"].includes(button.textContent?.trim() ?? ""),
+        );
+        await act(async () => {
+          reviewButton?.click();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(harness.dom.window.document.body.textContent).toContain("Version history");
+        const reviewDialog = Array.from(
+          harness.dom.window.document.body.querySelectorAll('[data-slot="dialog-content"]'),
+        ).find((dialog) => dialog.textContent?.includes("Version history"));
+        const requestChangesButton = Array.from(
+          reviewDialog?.querySelectorAll("button") ?? [],
+        ).find((button) => button.textContent?.trim() === "Request changes");
+        expect(requestChangesButton?.getAttribute("aria-disabled")).toBe("true");
+        const descriptionId = requestChangesButton?.getAttribute("aria-describedby");
+        expect(descriptionId).toBeTruthy();
+        expect(
+          descriptionId
+            ? harness.dom.window.document.getElementById(descriptionId)?.textContent
+            : "",
+        ).toContain("Reopen the task before requesting artifact changes");
+        await act(async () => requestChangesButton?.click());
+        expect(
+          harness.dom.window.document.querySelector("#artifact-revision-artifact-1"),
+        ).toBeNull();
+        expect(startRevision).not.toHaveBeenCalled();
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("reviews artifact history and gates restore and revision actions", async () => {
     const harness = setupJsdom();

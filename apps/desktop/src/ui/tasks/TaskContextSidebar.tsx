@@ -337,6 +337,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                     key={artifact.id}
                     taskId={task.id}
                     taskRevision={task.revision}
+                    taskStatus={task.status}
                     artifact={artifact}
                     onOpenFile={(path) => openFilePreview({ path })}
                   />

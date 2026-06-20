@@ -22,6 +22,8 @@ import type {
   WorkItemStatus,
 } from "../../shared/tasks";
 
+const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
+
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
 }
@@ -1610,11 +1612,14 @@ export class SessionTaskRepository {
     return this.requireTask(input.taskId);
   }
 
-  appendActivity(activity: TaskActivity): TaskRecord {
-    this.insertActivity(activity);
-    this.db
-      .query("UPDATE tasks SET updated_at = ? WHERE task_id = ?")
-      .run(activity.createdAt, activity.taskId);
+  appendActivity(activity: TaskActivity, options?: { rejectTerminal?: boolean }): TaskRecord {
+    this.db.transaction(() => {
+      if (options?.rejectTerminal) this.assertTaskAcceptsMutation(activity.taskId);
+      this.insertActivity(activity);
+      this.db
+        .query("UPDATE tasks SET updated_at = ? WHERE task_id = ?")
+        .run(activity.createdAt, activity.taskId);
+    })();
     return this.requireTask(activity.taskId);
   }
 
@@ -1626,23 +1631,29 @@ export class SessionTaskRepository {
     return this.requireTask(activity.taskId);
   }
 
-  createCheckpoint(checkpoint: TaskCheckpoint): TaskCheckpoint {
-    this.db
-      .query(
-        "INSERT INTO task_checkpoints(checkpoint_id, task_id, thread_id, task_revision, reason, agent_summary, context_digest, task_snapshot_json, artifact_manifest_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        checkpoint.id,
-        checkpoint.taskId,
-        checkpoint.threadId,
-        checkpoint.taskRevision,
-        checkpoint.reason,
-        checkpoint.agentSummary,
-        checkpoint.contextDigest,
-        JSON.stringify(checkpoint.taskSnapshot),
-        JSON.stringify(checkpoint.artifactManifest),
-        checkpoint.createdAt,
-      );
+  createCheckpoint(
+    checkpoint: TaskCheckpoint,
+    options?: { rejectTerminal?: boolean },
+  ): TaskCheckpoint {
+    this.db.transaction(() => {
+      if (options?.rejectTerminal) this.assertTaskAcceptsMutation(checkpoint.taskId);
+      this.db
+        .query(
+          "INSERT INTO task_checkpoints(checkpoint_id, task_id, thread_id, task_revision, reason, agent_summary, context_digest, task_snapshot_json, artifact_manifest_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          checkpoint.id,
+          checkpoint.taskId,
+          checkpoint.threadId,
+          checkpoint.taskRevision,
+          checkpoint.reason,
+          checkpoint.agentSummary,
+          checkpoint.contextDigest,
+          JSON.stringify(checkpoint.taskSnapshot),
+          JSON.stringify(checkpoint.artifactManifest),
+          checkpoint.createdAt,
+        );
+    })();
     return checkpoint;
   }
 
@@ -1683,6 +1694,17 @@ export class SessionTaskRepository {
         `Task revision conflict: expected ${expectedRevision}, current ${current.revision}`,
       );
     }
+  }
+
+  private assertTaskAcceptsMutation(taskId: string): void {
+    const row = this.db.query("SELECT status FROM tasks WHERE task_id = ?").get(taskId) as {
+      status: TaskStatus;
+    } | null;
+    if (!row) throw new Error(`Unknown task: ${taskId}`);
+    if (!TERMINAL_TASK_STATUSES.has(row.status)) return;
+    throw new Error(
+      `Task ${taskId} is ${row.status} and cannot be changed until it is reopened or retried.`,
+    );
   }
 
   private insertDecision(decision: TaskDecision): void {

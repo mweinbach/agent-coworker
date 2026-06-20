@@ -38,6 +38,20 @@ const TERMINAL_TASK_STATUSES = [
   "failed",
 ] as const satisfies readonly TaskStatus[];
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: () => {
+      if (!resolvePromise) throw new Error("Deferred promise was not initialized");
+      resolvePromise();
+    },
+  };
+}
+
 async function createWorkingTask(harness: Awaited<ReturnType<typeof createHarness>>) {
   return await harness.coordinator.createPlanned({
     workspacePath: harness.workspacePath,
@@ -794,6 +808,97 @@ describe("task mode persistence", () => {
       expect(replayed.task.status).toBe("completed");
       expect(replayed.continuation).toBe("continue");
       expect(progress).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("serializes revisionless progress directives against terminal transitions", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    const appendStarted = deferred();
+    const releaseAppend = deferred();
+    const terminalAttempted = deferred();
+    const originalAppendTaskActivity = harness.sessionDb.appendTaskActivity.bind(harness.sessionDb);
+    const originalSetTaskStatus = harness.sessionDb.setTaskStatus.bind(harness.sessionDb);
+    try {
+      const created = await createWorkingTask(harness);
+      const idempotencyKey = "progress-terminal-race";
+      harness.sessionDb.appendTaskActivity = async (taskActivity) => {
+        if (taskActivity.taskId === created.task.id && taskActivity.kind === "progress_reported") {
+          appendStarted.resolve();
+          await releaseAppend.promise;
+        }
+        return await originalAppendTaskActivity(taskActivity);
+      };
+      harness.sessionDb.setTaskStatus = async (input) => {
+        if (input.taskId === created.task.id && input.status === "completed") {
+          terminalAttempted.resolve();
+        }
+        return await originalSetTaskStatus(input);
+      };
+
+      const directivePromise = harness.coordinator.applyDirective("task-session-1", {
+        type: "report_progress",
+        idempotencyKey,
+        summary: "Progress raced with terminal completion",
+      });
+      await appendStarted.promise;
+      const terminalPromise = transitionToStatus(harness, created.task.id, "completed");
+      await terminalAttempted.promise;
+      releaseAppend.resolve();
+
+      const [directiveResult] = await Promise.all([directivePromise, terminalPromise]);
+      const final = harness.coordinator.get(created.task.id, harness.workspacePath);
+      if (!final) throw new Error("Expected task");
+      const progress = final.activity.find(
+        (item) =>
+          item.kind === "progress_reported" &&
+          item.summary === "Progress raced with terminal completion",
+      );
+      const completed = final.activity.find(
+        (item) => item.kind === "status_changed" && item.summary === "Task is completed",
+      );
+      const receiptRevision = harness.sessionDb.getTaskDirectiveReceipt(
+        created.task.id,
+        idempotencyKey,
+      );
+
+      expect(directiveResult.task.status).toBe("working");
+      expect(final.status).toBe("completed");
+      expect(progress).toBeDefined();
+      expect(completed).toBeDefined();
+      if (!progress || !completed) throw new Error("Expected progress and terminal activities");
+      expect(progress.seq).toBeLessThan(completed.seq);
+      expect(receiptRevision).not.toBeNull();
+      if (receiptRevision === null) throw new Error("Expected directive receipt");
+      expect(receiptRevision).toBeLessThan(final.revision);
+      expect(final.latestCheckpoint?.reason).toBe("directive report_progress");
+      expect(final.latestCheckpoint?.taskSnapshot.status).toBe("working");
+    } finally {
+      harness.sessionDb.appendTaskActivity = originalAppendTaskActivity;
+      harness.sessionDb.setTaskStatus = originalSetTaskStatus;
+      harness.sessionDb.close();
+    }
+  });
+
+  test("skips terminal task checkpoints without mutation", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const terminal = await transitionToStatus(harness, created.task.id, "completed");
+      expect(terminal.latestCheckpoint).toBeNull();
+
+      const checkpointed = await harness.coordinator.checkpointThread(
+        "task-session-1",
+        "turn completed",
+        "Late turn summary",
+      );
+
+      const after = harness.coordinator.get(created.task.id, harness.workspacePath);
+      expect(checkpointed?.status).toBe("completed");
+      expect(after?.latestCheckpoint).toBeNull();
     } finally {
       harness.sessionDb.close();
     }

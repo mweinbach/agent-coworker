@@ -694,10 +694,21 @@ export class SessionDb {
     );
   }
 
-  async appendTaskActivity(activity: TaskActivity): Promise<TaskRecord> {
+  async runTaskMutationExclusive<T>(
+    operation: string,
+    taskId: string,
+    callback: () => Promise<T> | T,
+  ): Promise<T> {
+    return await this.writeCoordinator.runExclusive(operation, callback, { taskId });
+  }
+
+  async appendTaskActivity(
+    activity: TaskActivity,
+    options?: { rejectTerminal?: boolean },
+  ): Promise<TaskRecord> {
     return await this.writeCoordinator.runExclusive(
       "append_task_activity",
-      async () => this.taskRepository.appendActivity(activity),
+      async () => this.taskRepository.appendActivity(activity, options),
       { taskId: activity.taskId, kind: activity.kind },
     );
   }
@@ -713,10 +724,13 @@ export class SessionDb {
     );
   }
 
-  async createTaskCheckpoint(checkpoint: TaskCheckpoint): Promise<TaskCheckpoint> {
+  async createTaskCheckpoint(
+    checkpoint: TaskCheckpoint,
+    options?: { rejectTerminal?: boolean },
+  ): Promise<TaskCheckpoint> {
     return await this.writeCoordinator.runExclusive(
       "create_task_checkpoint",
-      async () => this.taskRepository.createCheckpoint(checkpoint),
+      async () => this.taskRepository.createCheckpoint(checkpoint, options),
       { taskId: checkpoint.taskId },
     );
   }

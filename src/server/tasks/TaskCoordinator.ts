@@ -10,6 +10,7 @@ import {
   type TaskArtifactRevision,
   type TaskArtifactVersion,
   type TaskBlocker,
+  type TaskCheckpoint,
   type TaskContextSnapshot,
   type TaskCreationInput,
   type TaskCreationResult,
@@ -95,6 +96,18 @@ function assertTaskAcceptsMutation(task: TaskRecord): void {
   if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot be changed until it is reopened or retried.`,
+  );
+}
+
+function isTerminalTask(task: Pick<TaskRecord, "status">): boolean {
+  return TERMINAL_TASK_STATUSES.has(task.status);
+}
+
+function isTerminalTaskMutationError(taskId: string, error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.startsWith(`Task ${taskId} is `) &&
+    error.message.includes("cannot be changed until it is reopened or retried")
   );
 }
 
@@ -944,16 +957,25 @@ export class TaskCoordinator {
   }
 
   private async recordInputResumeFailure(task: TaskRecord, error: unknown): Promise<void> {
-    const failed = await this.options.sessionDb.appendTaskActivity(
-      activity({
-        taskId: task.id,
-        threadId: task.threads[0]?.id ?? null,
-        workItemId: null,
-        kind: "input_resume_failed",
-        summary: "Task answers were saved, but automatic resume failed",
-        detail: error instanceof Error ? error.message : String(error),
-      }),
-    );
+    const current = this.options.sessionDb.getTask(task.id);
+    if (!current || isTerminalTask(current)) return;
+    let failed: TaskRecord;
+    try {
+      failed = await this.options.sessionDb.appendTaskActivity(
+        activity({
+          taskId: task.id,
+          threadId: task.threads[0]?.id ?? null,
+          workItemId: null,
+          kind: "input_resume_failed",
+          summary: "Task answers were saved, but automatic resume failed",
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+        { rejectTerminal: true },
+      );
+    } catch (appendError) {
+      if (isTerminalTaskMutationError(task.id, appendError)) return;
+      throw appendError;
+    }
     this.notifyActivity(failed);
   }
 
@@ -982,6 +1004,7 @@ export class TaskCoordinator {
         summary: nonEmpty(input.summary, "Progress summary"),
         detail: input.detail?.trim() || null,
       }),
+      { rejectTerminal: true },
     );
     this.notifyActivity(updated);
     return updated;
@@ -2049,44 +2072,56 @@ export class TaskCoordinator {
     sessionId: string,
     reason: string,
     agentSummary = "",
+    options?: { allowTerminal?: boolean },
   ): Promise<TaskRecord | null> {
     const task = this.getForThread(sessionId);
     if (!task) return null;
+    if (!options?.allowTerminal && isTerminalTask(task)) return task;
     const thread = task.threads.find((candidate) => candidate.sessionId === sessionId) ?? null;
-    const checkpoint = await this.options.sessionDb.createTaskCheckpoint({
-      id: crypto.randomUUID(),
-      taskId: task.id,
-      threadId: thread?.id ?? null,
-      taskRevision: task.revision,
-      reason: nonEmpty(reason, "Checkpoint reason"),
-      agentSummary,
-      contextDigest: JSON.stringify({
-        objective: task.objective,
-        status: task.status,
-        workItems: task.workItems.map((item) => ({
-          id: item.id,
-          title: item.title,
-          status: item.status,
-        })),
-        decisions: task.decisions
-          .filter((item) => item.status === "active")
-          .map((item) => ({ question: item.question, resolution: item.resolution })),
-        questions: task.questions
-          .filter((item) => item.status === "pending")
-          .map((item) => ({ question: item.question, blocking: item.blocking })),
-        blockers: task.blockers
-          .filter((item) => item.status === "active")
-          .map((item) => item.description),
-      }),
-      taskSnapshot: taskSnapshot(task),
-      artifactManifest: task.artifacts.map((item) => ({
-        id: item.id,
-        path: item.path,
-        title: item.title,
-        kind: item.kind,
-      })),
-      createdAt: nowIso(),
-    });
+    let checkpoint: TaskCheckpoint;
+    try {
+      checkpoint = await this.options.sessionDb.createTaskCheckpoint(
+        {
+          id: crypto.randomUUID(),
+          taskId: task.id,
+          threadId: thread?.id ?? null,
+          taskRevision: task.revision,
+          reason: nonEmpty(reason, "Checkpoint reason"),
+          agentSummary,
+          contextDigest: JSON.stringify({
+            objective: task.objective,
+            status: task.status,
+            workItems: task.workItems.map((item) => ({
+              id: item.id,
+              title: item.title,
+              status: item.status,
+            })),
+            decisions: task.decisions
+              .filter((item) => item.status === "active")
+              .map((item) => ({ question: item.question, resolution: item.resolution })),
+            questions: task.questions
+              .filter((item) => item.status === "pending")
+              .map((item) => ({ question: item.question, blocking: item.blocking })),
+            blockers: task.blockers
+              .filter((item) => item.status === "active")
+              .map((item) => item.description),
+          }),
+          taskSnapshot: taskSnapshot(task),
+          artifactManifest: task.artifacts.map((item) => ({
+            id: item.id,
+            path: item.path,
+            title: item.title,
+            kind: item.kind,
+          })),
+          createdAt: nowIso(),
+        },
+        { rejectTerminal: options?.allowTerminal !== true },
+      );
+    } catch (error) {
+      if (isTerminalTaskMutationError(task.id, error))
+        return this.options.sessionDb.getTask(task.id);
+      throw error;
+    }
     this.options.notify?.({
       method: "task/checkpointCreated",
       params: { cwd: task.workspacePath, taskId: task.id, checkpoint },
@@ -2095,6 +2130,19 @@ export class TaskCoordinator {
   }
 
   async applyDirective(sessionId: string, directive: TaskDirective): Promise<TaskDirectiveResult> {
+    const task = this.getForThread(sessionId);
+    if (!task) throw new Error("Task directives are available only in task threads");
+    return await this.options.sessionDb.runTaskMutationExclusive(
+      "apply_task_directive",
+      task.id,
+      async () => await this.applyDirectiveLocked(sessionId, directive),
+    );
+  }
+
+  private async applyDirectiveLocked(
+    sessionId: string,
+    directive: TaskDirective,
+  ): Promise<TaskDirectiveResult> {
     const current = this.getForThread(sessionId);
     if (!current) throw new Error("Task directives are available only in task threads");
     const receipt = this.options.sessionDb.getTaskDirectiveReceipt(
@@ -2287,7 +2335,9 @@ export class TaskCoordinator {
       updated.revision,
       nowIso(),
     );
-    await this.checkpointThread(sessionId, `directive ${directive.type}`);
+    await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
+      allowTerminal: true,
+    });
     return { task: updated, continuation };
   }
 

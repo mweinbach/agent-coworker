@@ -170,6 +170,15 @@ type StartArtifactRevisionRequest = {
   model?: string;
 };
 
+type ReplacementWorkItemInput = {
+  id?: string;
+  title: string;
+  description?: string;
+  status?: WorkItemStatus;
+  dependsOn?: string[];
+  expectedOutputs?: string[];
+};
+
 const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ["planning", "working", "cancelled", "failed"],
   planning: ["working", "blocked", "cancelled", "failed"],
@@ -234,6 +243,70 @@ const DEPENDENCY_GATED_WORK_ITEM_STATUSES = new Set<WorkItemStatus>([
   "done",
 ]);
 
+const TERMINAL_WORK_ITEM_STATUSES = new Set<WorkItemStatus>(["blocked", "done", "abandoned"]);
+
+function assertTaskThreadMember(task: TaskRecord, threadId: string): void {
+  if (task.threads.some((thread) => thread.id === threadId)) return;
+  throw new Error(`Unknown task thread: ${threadId}`);
+}
+
+function assertNoConflictingWorkItemOwner(item: WorkItem, threadId: string): void {
+  const conflictingOwner = [item.assignedThreadId, item.claimedByThreadId].find(
+    (ownerThreadId) => ownerThreadId !== null && ownerThreadId !== threadId,
+  );
+  if (conflictingOwner) {
+    throw new Error(`Work item is owned by another task thread: ${item.id}`);
+  }
+}
+
+function assertThreadCanMutateWorkItem(input: {
+  task: TaskRecord;
+  item: WorkItem;
+  threadId: string;
+}): void {
+  assertTaskThreadMember(input.task, input.threadId);
+  assertNoConflictingWorkItemOwner(input.item, input.threadId);
+
+  const ownsWorkItem =
+    input.item.assignedThreadId === input.threadId ||
+    input.item.claimedByThreadId === input.threadId;
+  const primaryThreadId = input.task.threads[0]?.id ?? null;
+  if (!ownsWorkItem && input.threadId !== primaryThreadId) {
+    throw new Error(
+      `Work item must be claimed before this task thread can mark it: ${input.item.id}`,
+    );
+  }
+}
+
+function assertWorkItemDependenciesComplete(input: {
+  items: WorkItem[];
+  item: WorkItem;
+  status: WorkItemStatus;
+}): void {
+  if (!DEPENDENCY_GATED_WORK_ITEM_STATUSES.has(input.status)) return;
+  const incompleteDependency = input.item.dependsOn.find(
+    (id) => input.items.find((candidate) => candidate.id === id)?.status !== "done",
+  );
+  if (incompleteDependency) {
+    throw new Error(`Work item dependency is not complete: ${incompleteDependency}`);
+  }
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function replacementChangesWorkItem(existing: WorkItem | undefined, next: WorkItem): boolean {
+  if (!existing) return true;
+  return (
+    existing.title !== next.title ||
+    existing.description !== next.description ||
+    existing.status !== next.status ||
+    !arraysEqual(existing.dependsOn, next.dependsOn) ||
+    !arraysEqual(existing.expectedOutputs, next.expectedOutputs)
+  );
+}
+
 function assertThreadCanMarkWorkItem(input: {
   task: TaskRecord;
   item: WorkItem;
@@ -241,34 +314,16 @@ function assertThreadCanMarkWorkItem(input: {
   threadId?: string | null;
 }): void {
   if (input.threadId === null || input.threadId === undefined) return;
-  const threadId = input.threadId;
-  if (!input.task.threads.some((thread) => thread.id === threadId)) {
-    throw new Error(`Unknown task thread: ${threadId}`);
-  }
-
-  const conflictingOwner = [input.item.assignedThreadId, input.item.claimedByThreadId].find(
-    (ownerThreadId) => ownerThreadId !== null && ownerThreadId !== threadId,
-  );
-  if (conflictingOwner) {
-    throw new Error(`Work item is owned by another task thread: ${input.item.id}`);
-  }
-
-  const ownsWorkItem =
-    input.item.assignedThreadId === threadId || input.item.claimedByThreadId === threadId;
-  const primaryThreadId = input.task.threads[0]?.id ?? null;
-  if (!ownsWorkItem && threadId !== primaryThreadId) {
-    throw new Error(
-      `Work item must be claimed before this task thread can mark it: ${input.item.id}`,
-    );
-  }
-
-  if (!DEPENDENCY_GATED_WORK_ITEM_STATUSES.has(input.status)) return;
-  const incompleteDependency = input.item.dependsOn.find(
-    (id) => input.task.workItems.find((candidate) => candidate.id === id)?.status !== "done",
-  );
-  if (incompleteDependency) {
-    throw new Error(`Work item dependency is not complete: ${incompleteDependency}`);
-  }
+  assertThreadCanMutateWorkItem({
+    task: input.task,
+    item: input.item,
+    threadId: input.threadId,
+  });
+  assertWorkItemDependenciesComplete({
+    items: input.task.workItems,
+    item: input.item,
+    status: input.status,
+  });
 }
 
 function assertThreadCanClaimWorkItem(input: {
@@ -277,23 +332,13 @@ function assertThreadCanClaimWorkItem(input: {
   threadId: string;
 }): void {
   const threadId = input.threadId;
-  if (!input.task.threads.some((thread) => thread.id === threadId)) {
-    throw new Error(`Unknown task thread: ${threadId}`);
-  }
-
-  const conflictingOwner = [input.item.assignedThreadId, input.item.claimedByThreadId].find(
-    (ownerThreadId) => ownerThreadId !== null && ownerThreadId !== threadId,
-  );
-  if (conflictingOwner) {
-    throw new Error(`Work item is owned by another task thread: ${input.item.id}`);
-  }
-
-  const incompleteDependency = input.item.dependsOn.find(
-    (id) => input.task.workItems.find((candidate) => candidate.id === id)?.status !== "done",
-  );
-  if (incompleteDependency) {
-    throw new Error(`Work item dependency is not complete: ${incompleteDependency}`);
-  }
+  assertTaskThreadMember(input.task, threadId);
+  assertNoConflictingWorkItemOwner(input.item, threadId);
+  assertWorkItemDependenciesComplete({
+    items: input.task.workItems,
+    item: input.item,
+    status: "in_progress",
+  });
 }
 
 function activity(input: Omit<TaskActivity, "id" | "seq" | "createdAt">): TaskActivity {
@@ -812,14 +857,7 @@ export class TaskCoordinator {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
-    items: Array<{
-      id?: string;
-      title: string;
-      description?: string;
-      status?: WorkItemStatus;
-      dependsOn?: string[];
-      expectedOutputs?: string[];
-    }>;
+    items: ReplacementWorkItemInput[];
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(current, input.expectedRevision);
@@ -838,15 +876,9 @@ export class TaskCoordinator {
 
   private prepareReplacementWorkItems(
     current: TaskRecord,
-    inputItems: Array<{
-      id?: string;
-      title: string;
-      description?: string;
-      status?: WorkItemStatus;
-      dependsOn?: string[];
-      expectedOutputs?: string[];
-    }>,
+    inputItems: ReplacementWorkItemInput[],
     updatedAt: string,
+    options: { threadId?: string | null } = {},
   ): WorkItem[] {
     const existingById = new Map<string, WorkItem>();
     for (const item of current.workItems) {
@@ -875,6 +907,12 @@ export class TaskCoordinator {
       coordinatorOwnedRevisionWorkItemIds.add(normalizedId);
     }
     const seenInputIds = new Set<string>();
+    const preparedRows: Array<{
+      input: ReplacementWorkItemInput;
+      item: WorkItem;
+      existing?: WorkItem;
+      coordinatorOwnedRevisionItem: WorkItem | null;
+    }> = [];
     const items: WorkItem[] = inputItems.map((item, position) => {
       const id = item.id?.trim() || crypto.randomUUID();
       if (seenInputIds.has(id))
@@ -883,19 +921,24 @@ export class TaskCoordinator {
       const existing = existingById.get(id);
       const coordinatorOwnedRevisionItem =
         existing && coordinatorOwnedRevisionWorkItemIds.has(id) ? existing : null;
-      return {
+      const status =
+        coordinatorOwnedRevisionItem?.status ?? item.status ?? existing?.status ?? "queued";
+      const next: WorkItem = {
         id,
         taskId: current.id,
         title: nonEmpty(item.title, "Work item title"),
         description: item.description?.trim() ?? "",
-        status: coordinatorOwnedRevisionItem?.status ?? item.status ?? existing?.status ?? "queued",
+        status,
         dependsOn: coordinatorOwnedRevisionItem?.dependsOn ?? [
           ...new Set((item.dependsOn ?? []).map((dependency) => dependency.trim())),
         ],
         assignedThreadId:
           coordinatorOwnedRevisionItem?.assignedThreadId ?? existing?.assignedThreadId ?? null,
-        claimedByThreadId:
-          coordinatorOwnedRevisionItem?.claimedByThreadId ?? existing?.claimedByThreadId ?? null,
+        claimedByThreadId: TERMINAL_WORK_ITEM_STATUSES.has(status)
+          ? null
+          : (coordinatorOwnedRevisionItem?.claimedByThreadId ??
+            existing?.claimedByThreadId ??
+            null),
         expectedOutputs:
           coordinatorOwnedRevisionItem?.expectedOutputs ??
           (item.expectedOutputs ?? []).map((value) => value.trim()).filter(Boolean),
@@ -905,8 +948,27 @@ export class TaskCoordinator {
         createdAt: existing?.createdAt ?? updatedAt,
         updatedAt,
       };
+      preparedRows.push({ input: item, item: next, existing, coordinatorOwnedRevisionItem });
+      return next;
     });
     validateWorkGraph(items);
+    const threadId = options.threadId ?? null;
+    if (threadId !== null) {
+      assertTaskThreadMember(current, threadId);
+      for (const row of preparedRows) {
+        if (row.coordinatorOwnedRevisionItem) continue;
+        if (!replacementChangesWorkItem(row.existing, row.item)) continue;
+        assertThreadCanMutateWorkItem({ task: current, item: row.existing ?? row.item, threadId });
+        assertWorkItemDependenciesComplete({
+          items,
+          item: row.item,
+          status: row.item.status,
+        });
+        if (row.input.status === "done" && !row.item.completionEvidence) {
+          throw new Error("Completion evidence is required before marking a work item done");
+        }
+      }
+    }
     const itemIds = new Set(items.map((item) => item.id));
     const removedCoordinatorOwnedRevision = current.workItems.find(
       (item) =>
@@ -961,20 +1023,16 @@ export class TaskCoordinator {
       text: string;
       permanence?: "fixed" | "temporary";
     }>;
-    items: Array<{
-      id?: string;
-      title: string;
-      description?: string;
-      status?: WorkItemStatus;
-      dependsOn?: string[];
-      expectedOutputs?: string[];
-    }>;
+    items: ReplacementWorkItemInput[];
+    threadId?: string | null;
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(current, input.expectedRevision);
     assertTaskAcceptsMutation(current);
     const now = nowIso();
-    const items = this.prepareReplacementWorkItems(current, input.items, now);
+    const items = this.prepareReplacementWorkItems(current, input.items, now, {
+      threadId: input.threadId ?? null,
+    });
     const task = await this.options.sessionDb.updateTaskPlan({
       taskId: current.id,
       expectedRevision: input.expectedRevision,
@@ -3322,6 +3380,7 @@ export class TaskCoordinator {
           ...(directive.objective !== undefined ? { objective: directive.objective } : {}),
           ...(directive.requirements ? { requirements: directive.requirements } : {}),
           items: directive.workItems,
+          threadId: requireDirectiveThread().id,
         });
         if (updated.status === "draft") {
           updated = await this.transitionLocked({

@@ -1448,6 +1448,104 @@ describe("task mode persistence", () => {
     });
   }
 
+  for (const status of ["in_progress", "review", "done"] as const) {
+    test(`taskUpdate update_plan cannot move dependent work to ${status} before prerequisites finish`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const created = await createDependentWorkTask(harness);
+        let task = created.task;
+        let dependent = created.dependent;
+        if (status === "done") {
+          task = await harness.coordinator.markWorkItem({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            workItemId: dependent.id,
+            status: "blocked",
+            completionEvidence: "Dependent evidence exists but the prerequisite is not done.",
+          });
+          dependent = task.workItems.find((item) => item.id === dependent.id) ?? dependent;
+        }
+        const sessionId = task.threads[0]?.sessionId;
+        if (!sessionId) throw new Error("Expected primary task session");
+        const beforeActivityCount = task.activity.length;
+
+        await expect(
+          harness.coordinator.applyDirective(sessionId, {
+            type: "update_plan",
+            idempotencyKey: `dependent-plan-${status}`,
+            expectedRevision: task.revision,
+            workItems: task.workItems.map((item) => ({
+              id: item.id,
+              title: item.title,
+              description: item.description,
+              dependsOn: item.dependsOn,
+              expectedOutputs: item.expectedOutputs,
+              status: item.id === dependent.id ? status : item.status,
+            })),
+          }),
+        ).rejects.toThrow("Work item dependency is not complete");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: task.revision });
+        expect(after?.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+          status: dependent.status,
+          completionEvidence: dependent.completionEvidence,
+        });
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(task.id, `dependent-plan-${status}`),
+        ).toBeNull();
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("taskUpdate update_plan cannot mark work done without completion evidence", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task } = await createWorkingTask(harness);
+      const workItem = task.workItems[0];
+      const sessionId = task.threads[0]?.sessionId;
+      if (!workItem || !sessionId) throw new Error("Expected primary work item");
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(sessionId, {
+          type: "update_plan",
+          idempotencyKey: "plan-done-without-evidence",
+          expectedRevision: task.revision,
+          workItems: [
+            {
+              id: workItem.id,
+              title: workItem.title,
+              description: workItem.description,
+              status: "done",
+              dependsOn: workItem.dependsOn,
+              expectedOutputs: workItem.expectedOutputs,
+            },
+          ],
+        }),
+      ).rejects.toThrow("Completion evidence is required");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems[0]).toMatchObject({
+        status: workItem.status,
+        completionEvidence: null,
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "plan-done-without-evidence"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("trusted JSON-RPC work-item marks remain explicit unthreaded overrides", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });
@@ -1483,7 +1581,91 @@ describe("task mode persistence", () => {
     }
   });
 
-  for (const status of ["queued", "in_progress", "abandoned", "done"] as const) {
+  for (const status of ["blocked", "done", "abandoned"] as const) {
+    test(`trusted direct graph replacement clears stale claims for ${status} overrides`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+
+        const updated = await harness.coordinator.replaceWorkItems({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          items: [
+            {
+              id: workItem.id,
+              title: workItem.title,
+              description: workItem.description,
+              status,
+              dependsOn: workItem.dependsOn,
+              expectedOutputs: workItem.expectedOutputs,
+            },
+          ],
+        });
+
+        expect(updated.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+          status,
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: null,
+        });
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("trusted JSON-RPC updateGraph overrides status but clears terminal claims", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/updateGraph", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: task.revision,
+        workItems: [
+          {
+            id: workItem.id,
+            title: workItem.title,
+            description: workItem.description,
+            status: "done",
+            dependsOn: workItem.dependsOn,
+            expectedOutputs: workItem.expectedOutputs,
+          },
+        ],
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({
+            revision: task.revision + 1,
+            workItems: [
+              expect.objectContaining({
+                id: workItem.id,
+                status: "done",
+                assignedThreadId: ownerThread.id,
+                claimedByThreadId: null,
+              }),
+            ],
+          }),
+        }),
+      ]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of [
+    "queued",
+    "in_progress",
+    "blocked",
+    "review",
+    "abandoned",
+    "done",
+  ] as const) {
     test(`task thread cannot mark work owned by another thread as ${status}`, async () => {
       const harness = await createHarness();
       await fs.mkdir(harness.workspacePath, { recursive: true });
@@ -1514,6 +1696,50 @@ describe("task mode persistence", () => {
           completionEvidence: workItem.completionEvidence,
         });
         expect(after?.activity).toHaveLength(beforeActivityCount);
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  for (const status of ["queued", "blocked", "review", "abandoned", "done"] as const) {
+    test(`taskUpdate update_plan cannot mark work owned by another thread as ${status}`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+        const beforeActivityCount = task.activity.length;
+
+        await expect(
+          harness.coordinator.applyDirective(otherThread.sessionId, {
+            type: "update_plan",
+            idempotencyKey: `wrong-owner-plan-${status}`,
+            expectedRevision: task.revision,
+            workItems: [
+              {
+                id: workItem.id,
+                title: workItem.title,
+                description: workItem.description,
+                status,
+                dependsOn: workItem.dependsOn,
+                expectedOutputs: workItem.expectedOutputs,
+              },
+            ],
+          }),
+        ).rejects.toThrow("Work item is owned by another task thread");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: task.revision });
+        expect(after?.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: ownerThread.id,
+          status: workItem.status,
+          completionEvidence: null,
+        });
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(task.id, `wrong-owner-plan-${status}`),
+        ).toBeNull();
       } finally {
         harness.sessionDb.close();
       }
@@ -1872,6 +2098,61 @@ describe("task mode persistence", () => {
         completionEvidence: null,
       });
       expect(after?.activity).toHaveLength(beforeActivityCount);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("JSON-RPC stale updateGraph reports conflicts without disturbing claimed work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      let task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Route graph race",
+        objective: "Expose stale graph route conflicts.",
+        sessionId: "session-1",
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [{ id: "route", title: "Route work", expectedOutputs: ["Result"] }],
+      });
+      const ownerThread = task.threads[0];
+      if (!ownerThread) throw new Error("Expected task thread");
+      const claimed = await harness.coordinator.claimWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: "route",
+        threadId: ownerThread.id,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/updateGraph", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: task.revision,
+        workItems: [{ id: "route", title: "Route work", status: "done" }],
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          data: expect.objectContaining({
+            category: "revision_conflict",
+            expectedRevision: task.revision,
+            currentRevision: claimed.revision,
+          }),
+        }),
+      ]);
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.workItems[0]).toMatchObject({
+        status: "in_progress",
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: ownerThread.id,
+        completionEvidence: null,
+      });
     } finally {
       harness.sessionDb.close();
     }

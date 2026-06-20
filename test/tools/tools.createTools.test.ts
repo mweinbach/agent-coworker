@@ -108,6 +108,7 @@ describe("createTools", () => {
           id: "research",
           title: "Research",
           description: null,
+          status: "review",
           dependsOn: null,
           expectedOutputs: null,
         },
@@ -120,7 +121,7 @@ describe("createTools", () => {
       type: "update_plan",
       idempotencyKey: "normalize-null-optionals",
       expectedRevision: 2,
-      workItems: [{ id: "research", title: "Research" }],
+      workItems: [{ id: "research", title: "Research", status: "review" }],
     });
   });
 

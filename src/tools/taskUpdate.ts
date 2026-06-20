@@ -44,6 +44,7 @@ const taskDirectiveSchema = z.discriminatedUnion("type", [
             id: z.string().trim().min(1).optional(),
             title: z.string().trim().min(1),
             description: z.string().optional(),
+            status: z.enum(WORK_ITEM_STATUSES).optional(),
             dependsOn: z.array(z.string().trim().min(1)).optional(),
             expectedOutputs: z.array(z.string().trim().min(1)).optional(),
           })

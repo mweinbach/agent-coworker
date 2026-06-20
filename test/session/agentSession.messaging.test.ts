@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { TaskStatus } from "../../src/shared/tasks";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -33,6 +34,25 @@ import {
   withEnv,
 } from "./agentSession.harness";
 
+const TERMINAL_TASK_STATUSES = [
+  "completed",
+  "cancelled",
+  "failed",
+] as const satisfies readonly TaskStatus[];
+
+function terminalTaskSessionDb(status: (typeof TERMINAL_TASK_STATUSES)[number]) {
+  return {
+    getActiveTaskForSourceSession: () => null,
+    getTaskForThread: () => ({
+      id: `task-${status}`,
+      title: `${status} delivery`,
+      status,
+    }),
+    persistSessionMutation: async () => 0,
+    persistSessionSnapshot: async () => {},
+  };
+}
+
 describe("AgentSession", () => {
   beforeEach(async () => {
     await resetAgentSessionMocks();
@@ -63,6 +83,44 @@ describe("AgentSession", () => {
         }),
       );
     });
+
+    for (const status of TERMINAL_TASK_STATUSES) {
+      test(`locks ${status} task threads against new user turns`, async () => {
+        const { session, events } = makeSession({
+          sessionDb: terminalTaskSessionDb(status) as never,
+        });
+
+        await session.sendUserMessage("Keep working after terminal state");
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+            message: `Task task-${status} is ${status} and cannot accept new turns until it is reopened or retried.`,
+          }),
+        );
+      });
+    }
+
+    for (const status of TERMINAL_TASK_STATUSES) {
+      test(`locks ${status} task threads against new steers`, async () => {
+        const { session, events } = makeSession({
+          sessionDb: terminalTaskSessionDb(status) as never,
+        });
+
+        await session.sendSteerMessage("Keep steering after terminal state", "turn-1", "steer-1");
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+            message: `Task task-${status} is ${status} and cannot accept new turns until it is reopened or retried.`,
+          }),
+        );
+        expect(events.some((event) => event.type === "steer_accepted")).toBe(false);
+      });
+    }
 
     test("rejects if already running (emits error)", async () => {
       const { session, events } = makeSession();

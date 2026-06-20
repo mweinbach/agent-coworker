@@ -16,7 +16,7 @@ import {
   WrenchIcon,
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
-
+import { isSandboxApprovalThreadVisible } from "../../app/sandboxApprovalVisibility";
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
@@ -377,6 +377,12 @@ export function SettingsShell() {
       if (event.defaultPrevented) return;
       const openOverlay = document.querySelector('[role="dialog"][data-state="open"]');
       if (openOverlay) return;
+      const state = useAppStore.getState();
+      const hasVisibleSandboxApproval = Object.entries(state.sandboxApprovalsByThread).some(
+        ([threadId, pending]) =>
+          pending.length > 0 && isSandboxApprovalThreadVisible(state, threadId),
+      );
+      if (hasVisibleSandboxApproval) return;
       closeSettings();
     }
     window.addEventListener("keydown", handleKeyDown);

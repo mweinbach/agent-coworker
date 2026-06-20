@@ -31,6 +31,7 @@ const initialState: AppStoreDataState = {
   selectedThreadId: null,
   selectedTaskId: null,
   newTaskWorkspaceId: null,
+  newTaskWorkspaceRequestId: 0,
   taskSummariesByWorkspaceId: {},
   tasksById: {},
   taskListLoadingByWorkspaceId: {},

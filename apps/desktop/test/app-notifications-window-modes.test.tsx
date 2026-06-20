@@ -46,6 +46,88 @@ function seedReadyState() {
   });
 }
 
+function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
+  const now = "2026-04-30T00:00:00.000Z";
+  useAppStore.setState({
+    ...useAppStore.getState(),
+    ready: true,
+    bootstrapPending: false,
+    startupError: null,
+    view: "task",
+    workspaces: [
+      {
+        id: "ws-1",
+        name: "Project",
+        path: "/tmp/workspace",
+        createdAt: now,
+        lastOpenedAt: now,
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    selectedWorkspaceId: "ws-1",
+    selectedThreadId: "task-session-1",
+    selectedTaskId: "task-1",
+    threads: [
+      {
+        id: "task-session-1",
+        workspaceId: "ws-1",
+        title: "Terminal task",
+        createdAt: now,
+        lastMessageAt: now,
+        status: "active",
+        sessionId: "task-session-1",
+        messageCount: 0,
+        lastEventSeq: 0,
+        draft: false,
+        taskId: "task-1",
+        taskThreadId: "task-thread-1",
+      },
+    ],
+    tasksById: {
+      "task-1": {
+        id: "task-1",
+        workspacePath: "/tmp/workspace",
+        title: "Terminal task",
+        objective: "Verify pending approvals are not stranded.",
+        status: "completed",
+        revision: 1,
+        reviewRequired: false,
+        createdAt: now,
+        updatedAt: now,
+        threadCount: 1,
+        completedWorkItemCount: 0,
+        totalWorkItemCount: 0,
+        activeBlockerCount: 0,
+        pendingQuestionCount: 0,
+        blockingQuestionCount: 0,
+        requirements: [],
+        threads: [{ id: "task-thread-1", taskId: "task-1", sessionId: "task-session-1" }],
+        workItems: [],
+        decisions: [],
+        questions: [],
+        artifacts: [],
+        blockers: [],
+        activity: [],
+        latestCheckpoint: null,
+      },
+    } as never,
+    sandboxApprovalsByThread: {
+      "task-session-1": [
+        {
+          requestId: "approval-1",
+          command: "curl https://example.com",
+          reason: "The OS sandbox blocked network access for this command.",
+          category: "network",
+          receivedSequence: 1,
+        },
+      ],
+    },
+    dismissPrompt,
+  } as never);
+}
+
 describe("app window-mode notification routing", () => {
   beforeEach(() => {
     showNotification.mockClear();
@@ -105,6 +187,131 @@ describe("app window-mode notification routing", () => {
         root.unmount();
       });
     } finally {
+      harness.restore();
+    }
+  });
+
+  test("Escape dismisses pending sandbox approvals for terminal task threads", async () => {
+    const harness = setupJsdom();
+    const dismissPrompt = mock(() => {});
+
+    try {
+      seedTerminalTaskApprovalState(dismissPrompt);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+
+      expect(dismissPrompt).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("Escape dismisses pending sandbox approvals while settings overlays task", async () => {
+    const harness = setupJsdom();
+    const dismissPrompt = mock(() => {});
+    const closeSettings = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedTerminalTaskApprovalState(dismissPrompt);
+      useAppStore.setState({
+        view: "settings",
+        lastNonSettingsView: "task",
+        closeSettings,
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+
+      expect(dismissPrompt).toHaveBeenCalledTimes(1);
+      expect(closeSettings).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("Escape closes settings-over-chat without dismissing hidden task approvals", async () => {
+    const harness = setupJsdom();
+    const dismissPrompt = mock(() => {});
+    const closeSettings = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedTerminalTaskApprovalState(dismissPrompt);
+      useAppStore.setState((state) => ({
+        view: "settings",
+        lastNonSettingsView: "chat",
+        selectedTaskId: null,
+        selectedThreadId: "chat-session-1",
+        threads: [
+          ...state.threads,
+          {
+            id: "chat-session-1",
+            workspaceId: "ws-1",
+            title: "Ordinary chat",
+            createdAt: "2026-04-30T00:00:00.000Z",
+            lastMessageAt: "2026-04-30T00:00:00.000Z",
+            status: "active",
+            sessionId: "chat-session-1",
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+          },
+        ],
+        closeSettings,
+      }));
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+
+      expect(dismissPrompt).not.toHaveBeenCalled();
+      expect(closeSettings).toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       harness.restore();
     }
   });

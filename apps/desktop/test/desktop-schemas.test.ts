@@ -65,6 +65,60 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.wsProtocol).toBe("jsonrpc");
   });
 
+  test("preserves valid task thread ownership and drops malformed persisted IDs", () => {
+    const parsed = persistedStateInputSchema.parse({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_1",
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: TS,
+          lastOpenedAt: TS,
+        },
+      ],
+      threads: [
+        {
+          id: "task_session_1",
+          workspaceId: "ws_1",
+          title: "Task thread",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "task_session_1",
+          messageCount: 4,
+          lastEventSeq: 9,
+          taskId: "task_1",
+          taskThreadId: "task_thread_1",
+        },
+        {
+          id: "malformed_task_session",
+          workspaceId: "ws_1",
+          title: "Malformed task thread",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "malformed_task_session",
+          taskId: "../task",
+          taskThreadId: "task_thread_2",
+        },
+      ],
+    });
+
+    expect(parsed.threads[0]).toEqual(
+      expect.objectContaining({
+        taskId: "task_1",
+        taskThreadId: "task_thread_1",
+      }),
+    );
+    expect(parsed.threads[1]).toEqual(
+      expect.not.objectContaining({
+        taskId: expect.any(String),
+        taskThreadId: expect.any(String),
+      }),
+    );
+  });
+
   test("keeps explicit workspace booleans and yolo off", () => {
     const parsed = persistedStateInputSchema.parse({
       version: 2,

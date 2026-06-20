@@ -10,6 +10,7 @@ import {
   type TaskArtifactRevision,
   type TaskArtifactVersion,
   type TaskBlocker,
+  type TaskCheckpoint,
   type TaskContextSnapshot,
   type TaskCreationInput,
   type TaskCreationResult,
@@ -55,10 +56,58 @@ type TaskContinuationDispatcher = (input: {
   onFailure: (error: unknown) => Promise<void>;
 }) => Promise<Exclude<TaskQuestionResumeStatus, "not_needed">>;
 
+type TaskThreadQuiescer = (
+  task: TaskRecord,
+  reason: "completed" | "cancelled" | "failed",
+) => Promise<void> | void;
+
 type TaskCoordinatorOptions = {
   sessionDb: SessionDb;
   notify?: (notification: TaskNotification) => void;
   artifactStore?: ArtifactVersionStore;
+  quiesceTaskThreads?: TaskThreadQuiescer;
+};
+
+type CaptureArtifactVersionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  expectedRevision: number;
+  expectedSha256?: string;
+  changeSummary?: string;
+  createdBy?: string;
+  provenance?: Record<string, unknown>;
+};
+
+type RestoreArtifactVersionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  versionId: string;
+  expectedRevision: number;
+  expectedSha256?: string;
+  createdBy?: string;
+  changeSummary?: string;
+};
+
+type AcceptArtifactVersionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  versionId?: string;
+  expectedRevision: number;
+};
+
+type StartArtifactRevisionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  expectedRevision: number;
+  instruction: string;
+  baseVersionId?: string;
+  title?: string;
+  provider?: string;
+  model?: string;
 };
 
 const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
@@ -67,10 +116,12 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   working: ["blocked", "awaiting_review", "completed", "cancelled", "failed"],
   blocked: ["working", "cancelled", "failed"],
   awaiting_review: ["working", "completed", "cancelled", "failed"],
-  completed: ["working"],
-  failed: ["working"],
-  cancelled: ["working"],
+  completed: [],
+  failed: [],
+  cancelled: [],
 };
+
+const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -80,6 +131,41 @@ function nonEmpty(value: string, name: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error(`${name} is required`);
   return normalized;
+}
+
+function assertTaskAcceptsNewThreads(task: TaskRecord): void {
+  if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+  throw new Error(
+    `Task ${task.id} is ${task.status} and cannot create new focused threads until it is reopened or retried.`,
+  );
+}
+
+function assertTaskAcceptsMutation(task: TaskRecord): void {
+  if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+  throw new Error(
+    `Task ${task.id} is ${task.status} and cannot be changed until it is reopened or retried.`,
+  );
+}
+
+function isTerminalTask(task: Pick<TaskRecord, "status">): boolean {
+  return TERMINAL_TASK_STATUSES.has(task.status);
+}
+
+function isTerminalTaskMutationError(taskId: string, error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.startsWith(`Task ${taskId} is `) &&
+    error.message.includes("cannot be changed until it is reopened or retried")
+  );
+}
+
+function taskRevisionConflictMessage(task: TaskRecord, expectedRevision: number): string {
+  return `Task revision conflict: expected ${expectedRevision}, current ${task.revision}`;
+}
+
+function assertExpectedTaskRevision(task: TaskRecord, expectedRevision: number): void {
+  if (task.revision === expectedRevision) return;
+  throw new Error(taskRevisionConflictMessage(task, expectedRevision));
 }
 
 function activity(input: Omit<TaskActivity, "id" | "seq" | "createdAt">): TaskActivity {
@@ -238,6 +324,7 @@ export class TaskCoordinator {
   private threadFactory: TaskThreadFactory | null = null;
   private continuationDispatcher: TaskContinuationDispatcher | null = null;
   private readonly artifactStore: ArtifactVersionStore;
+  private readonly taskMutationTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: TaskCoordinatorOptions) {
     this.artifactStore =
@@ -253,6 +340,35 @@ export class TaskCoordinator {
 
   setContinuationDispatcher(dispatcher: TaskContinuationDispatcher): void {
     this.continuationDispatcher = dispatcher;
+  }
+
+  private async runTaskMutation<T>(
+    taskId: string,
+    callback: (context: { queued: boolean }) => Promise<T> | T,
+  ): Promise<T> {
+    const previous = this.taskMutationTails.get(taskId);
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const nextTail = (previous ?? Promise.resolve()).catch(() => {}).then(() => current);
+    this.taskMutationTails.set(taskId, nextTail);
+
+    if (previous) await previous.catch(() => {});
+    try {
+      return await callback({ queued: Boolean(previous) });
+    } finally {
+      releaseCurrent();
+      if (this.taskMutationTails.get(taskId) === nextTail) {
+        this.taskMutationTails.delete(taskId);
+      }
+    }
+  }
+
+  private async quiesceTaskThreads(task: TaskRecord): Promise<void> {
+    const reason = task.status;
+    if (reason !== "completed" && reason !== "cancelled" && reason !== "failed") return;
+    await this.options.quiesceTaskThreads?.(task, reason);
   }
 
   list(workspacePath?: string | null): TaskSummary[] {
@@ -457,6 +573,8 @@ export class TaskCoordinator {
     model?: string;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsNewThreads(task);
     const workItemId = input.workItemId ?? null;
     if (workItemId && !task.workItems.some((item) => item.id === workItemId)) {
       throw new Error(`Unknown work item: ${workItemId}`);
@@ -506,7 +624,9 @@ export class TaskCoordinator {
       source?: "user" | "agent" | "policy";
     }>;
   }): Promise<TaskRecord> {
-    this.requireTask(input.taskId, input.workspacePath);
+    const current = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(current, input.expectedRevision);
+    assertTaskAcceptsMutation(current);
     const task = await this.options.sessionDb.updateTaskBrief({
       taskId: input.taskId,
       expectedRevision: input.expectedRevision,
@@ -537,6 +657,8 @@ export class TaskCoordinator {
     }>;
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(current, input.expectedRevision);
+    assertTaskAcceptsMutation(current);
     const now = nowIso();
     const items: WorkItem[] = input.items.map((item, position) => {
       const existing = item.id
@@ -583,6 +705,8 @@ export class TaskCoordinator {
     expectedRevision: number;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     const item = task.workItems.find((candidate) => candidate.id === input.workItemId);
     if (!item) throw new Error(`Unknown work item: ${input.workItemId}`);
     if (!task.threads.some((thread) => thread.id === input.threadId)) {
@@ -615,6 +739,8 @@ export class TaskCoordinator {
     threadId?: string | null;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     const item = task.workItems.find((candidate) => candidate.id === input.workItemId);
     if (!item) throw new Error(`Unknown work item: ${input.workItemId}`);
     if (input.status === "done" && !input.completionEvidence?.trim() && !item.completionEvidence) {
@@ -647,6 +773,8 @@ export class TaskCoordinator {
     supersedes?: string;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (input.supersedes && !task.decisions.some((item) => item.id === input.supersedes)) {
       throw new Error(`Unknown superseded decision: ${input.supersedes}`);
     }
@@ -680,6 +808,8 @@ export class TaskCoordinator {
     questions: Extract<TaskDirective, { type: "request_input" }>["questions"];
   }): Promise<TaskDirectiveResult> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (["awaiting_review", "completed", "failed", "cancelled"].includes(task.status)) {
       throw new Error(`Task cannot request input while ${task.status.replaceAll("_", " ")}`);
     }
@@ -810,6 +940,8 @@ export class TaskCoordinator {
     answers: TaskQuestionAnswerInput[];
   }): Promise<{ task: TaskRecord; resumeStatus: TaskQuestionResumeStatus }> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (input.answers.length < 1 || input.answers.length > 3) {
       throw new Error("Resolve questions must contain between 1 and 3 answers");
     }
@@ -903,16 +1035,25 @@ export class TaskCoordinator {
   }
 
   private async recordInputResumeFailure(task: TaskRecord, error: unknown): Promise<void> {
-    const failed = await this.options.sessionDb.appendTaskActivity(
-      activity({
-        taskId: task.id,
-        threadId: task.threads[0]?.id ?? null,
-        workItemId: null,
-        kind: "input_resume_failed",
-        summary: "Task answers were saved, but automatic resume failed",
-        detail: error instanceof Error ? error.message : String(error),
-      }),
-    );
+    const current = this.options.sessionDb.getTask(task.id);
+    if (!current || isTerminalTask(current)) return;
+    let failed: TaskRecord;
+    try {
+      failed = await this.options.sessionDb.appendTaskActivity(
+        activity({
+          taskId: task.id,
+          threadId: task.threads[0]?.id ?? null,
+          workItemId: null,
+          kind: "input_resume_failed",
+          summary: "Task answers were saved, but automatic resume failed",
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+        { rejectTerminal: true },
+      );
+    } catch (appendError) {
+      if (isTerminalTaskMutationError(task.id, appendError)) return;
+      throw appendError;
+    }
     this.notifyActivity(failed);
   }
 
@@ -925,6 +1066,7 @@ export class TaskCoordinator {
     workItemId?: string;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertTaskAcceptsMutation(task);
     if (input.workItemId && !task.workItems.some((item) => item.id === input.workItemId)) {
       throw new Error(`Unknown work item: ${input.workItemId}`);
     }
@@ -940,6 +1082,7 @@ export class TaskCoordinator {
         summary: nonEmpty(input.summary, "Progress summary"),
         detail: input.detail?.trim() || null,
       }),
+      { rejectTerminal: true },
     );
     this.notifyActivity(updated);
     return updated;
@@ -954,6 +1097,8 @@ export class TaskCoordinator {
     workItemId?: string;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (input.workItemId && !task.workItems.some((item) => item.id === input.workItemId)) {
       throw new Error(`Unknown work item: ${input.workItemId}`);
     }
@@ -995,6 +1140,8 @@ export class TaskCoordinator {
     expectedRevision: number;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (!task.blockers.some((item) => item.id === input.blockerId)) {
       throw new Error(`Unknown blocker: ${input.blockerId}`);
     }
@@ -1036,6 +1183,8 @@ export class TaskCoordinator {
     provenance?: Record<string, unknown>;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (input.workItemId && !task.workItems.some((item) => item.id === input.workItemId)) {
       throw new Error(`Unknown work item: ${input.workItemId}`);
     }
@@ -1161,12 +1310,12 @@ export class TaskCoordinator {
     expectedSha256?: string;
     createdBy?: string;
   }): Promise<TaskArtifactDetail> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
     const detail = this.requireArtifactDetail(input);
     if (detail.versions.length > 0) return detail;
-    const resolvedPath = await this.resolveArtifactPath(
-      this.requireTask(input.taskId, input.workspacePath),
-      detail.artifact.path,
-    );
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
+    const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
     const stored = await this.artifactStore.captureFile(resolvedPath);
     this.assertExpectedFingerprint(detail.artifact.id, input.expectedSha256, stored.sha256);
     const createdAt = nowIso();
@@ -1189,22 +1338,26 @@ export class TaskCoordinator {
       expectedRevision: input.expectedRevision,
       updatedAt: createdAt,
     });
-    const task = this.options.sessionDb.getTask(input.taskId);
-    if (task) this.notifyUpdated(task);
+    const refreshedTask = this.options.sessionDb.getTask(input.taskId);
+    if (refreshedTask) this.notifyUpdated(refreshedTask);
     return baseline;
   }
 
-  async captureArtifactVersion(input: {
-    taskId: string;
-    workspacePath: string;
-    artifactId: string;
-    expectedRevision: number;
-    expectedSha256?: string;
-    changeSummary?: string;
-    createdBy?: string;
-    provenance?: Record<string, unknown>;
-  }): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+  async captureArtifactVersion(
+    input: CaptureArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.captureArtifactVersionLocked(input),
+    );
+  }
+
+  private async captureArtifactVersionLocked(
+    input: CaptureArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
     let task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
       detail = await this.ensureArtifactBaseline({
@@ -1247,17 +1400,21 @@ export class TaskCoordinator {
     return { task, detail: updatedDetail, version };
   }
 
-  async restoreArtifactVersion(input: {
-    taskId: string;
-    workspacePath: string;
-    artifactId: string;
-    versionId: string;
-    expectedRevision: number;
-    expectedSha256?: string;
-    createdBy?: string;
-    changeSummary?: string;
-  }): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+  async restoreArtifactVersion(
+    input: RestoreArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.restoreArtifactVersionLocked(input),
+    );
+  }
+
+  private async restoreArtifactVersionLocked(
+    input: RestoreArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
     let task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     const detail = this.requireArtifactDetail(input);
     const target = detail.versions.find((version) => version.id === input.versionId);
     if (!target) throw new Error(`Unknown artifact version: ${input.versionId}`);
@@ -1310,13 +1467,21 @@ export class TaskCoordinator {
     }
   }
 
-  async acceptArtifactVersion(input: {
-    taskId: string;
-    workspacePath: string;
-    artifactId: string;
-    versionId?: string;
-    expectedRevision: number;
-  }): Promise<{ task: TaskRecord; detail: TaskArtifactDetail }> {
+  async acceptArtifactVersion(
+    input: AcceptArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.acceptArtifactVersionLocked(input),
+    );
+  }
+
+  private async acceptArtifactVersionLocked(
+    input: AcceptArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail }> {
+    const current = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(current, input.expectedRevision);
+    assertTaskAcceptsMutation(current);
     const detail = this.requireArtifactDetail(input);
     const versionId = input.versionId ?? detail.latestVersionId;
     if (!versionId) throw new Error("Artifact has no version to accept");
@@ -1338,6 +1503,17 @@ export class TaskCoordinator {
     expectedRevision: number;
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(current, input.expectedRevision);
+    return await this.runTaskMutation(input.taskId, async () => await this.acceptTaskLocked(input));
+  }
+
+  private async acceptTaskLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
+    const current = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(current, input.expectedRevision);
     if (current.status !== "awaiting_review") {
       throw new Error("Task must be awaiting review before it can be accepted");
     }
@@ -1346,26 +1522,70 @@ export class TaskCoordinator {
       expectedRevision: input.expectedRevision,
       updatedAt: nowIso(),
     });
+    await this.quiesceTaskThreads(task);
     this.notifyUpdated(task);
     return task;
   }
 
-  async startArtifactRevision(input: {
+  async requestChanges(input: {
     taskId: string;
     workspacePath: string;
-    artifactId: string;
     expectedRevision: number;
-    instruction: string;
-    baseVersionId?: string;
-    title?: string;
-    provider?: string;
-    model?: string;
-  }): Promise<{
+    feedback: string;
+  }): Promise<TaskRecord> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    if (task.status !== "awaiting_review") {
+      throw new Error("Task must be awaiting review before changes can be requested");
+    }
+    return await this.transition({
+      taskId: task.id,
+      workspacePath: task.workspacePath,
+      expectedRevision: input.expectedRevision,
+      status: "working",
+      summary: "Changes requested",
+      detail: input.feedback,
+    });
+  }
+
+  async reopenTask(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    reason?: string;
+  }): Promise<TaskRecord> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    if (task.status !== "completed" && task.status !== "cancelled") {
+      throw new Error("Only completed or cancelled tasks can be reopened");
+    }
+    return await this.recoverTerminalTask({
+      task,
+      expectedRevision: input.expectedRevision,
+      summary: "Task reopened",
+      detail: input.reason,
+    });
+  }
+
+  async startArtifactRevision(input: StartArtifactRevisionRequest): Promise<{
+    task: TaskRecord;
+    detail: TaskArtifactDetail;
+    revision: TaskArtifactRevision;
+  }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.startArtifactRevisionLocked(input),
+    );
+  }
+
+  private async startArtifactRevisionLocked(input: StartArtifactRevisionRequest): Promise<{
     task: TaskRecord;
     detail: TaskArtifactDetail;
     revision: TaskArtifactRevision;
   }> {
     let task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsNewThreads(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
       detail = await this.ensureArtifactBaseline({
@@ -1376,10 +1596,7 @@ export class TaskCoordinator {
         createdBy: "system",
       });
       task = this.requireTask(input.taskId, input.workspacePath);
-    } else if (task.revision !== input.expectedRevision) {
-      throw new Error(
-        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
-      );
+      assertTaskAcceptsNewThreads(task);
     }
     if (detail.activeRevision) throw new Error("Artifact already has an active revision");
     const prior = detail.versions.at(-1);
@@ -1489,9 +1706,40 @@ export class TaskCoordinator {
     detail: TaskArtifactDetail;
     revision: TaskArtifactRevision;
   } | null> {
+    const knownRevision =
+      this.options.sessionDb.getActiveTaskArtifactRevisionForSession(sessionId) ??
+      this.options.sessionDb.getTaskArtifactRevisionForSession(sessionId);
+    if (!knownRevision) {
+      if (outcome === "error") await this.failPrimaryTaskRun(sessionId, failure);
+      return null;
+    }
+    return await this.runTaskMutation(
+      knownRevision.taskId,
+      async () => await this.handleThreadOutcomeLocked(sessionId, outcome, failure),
+    );
+  }
+
+  private async handleThreadOutcomeLocked(
+    sessionId: string,
+    outcome: "completed" | "cancelled" | "error",
+    _failure?: unknown,
+  ): Promise<{
+    task: TaskRecord;
+    detail: TaskArtifactDetail;
+    revision: TaskArtifactRevision;
+  } | null> {
     const revision = this.options.sessionDb.getActiveTaskArtifactRevisionForSession(sessionId);
     if (!revision) {
-      if (outcome === "error") await this.failPrimaryTaskRun(sessionId, failure);
+      const closedRevision = this.options.sessionDb.getTaskArtifactRevisionForSession(sessionId);
+      if (closedRevision) {
+        const closedTask = this.options.sessionDb.getTask(closedRevision.taskId);
+        const closedDetail = this.options.sessionDb.getTaskArtifactDetail(
+          closedRevision.taskId,
+          closedRevision.artifactId,
+        );
+        if (!closedTask || !closedDetail) return null;
+        return { task: closedTask, detail: closedDetail, revision: closedRevision };
+      }
       return null;
     }
     const task = this.options.sessionDb.getTask(revision.taskId);
@@ -1500,6 +1748,20 @@ export class TaskCoordinator {
     if (!detail) throw new Error(`Unknown task artifact: ${revision.artifactId}`);
     const prior = detail.versions.find((version) => version.id === revision.priorVersionId);
     if (!prior) throw new Error(`Unknown prior artifact version: ${revision.priorVersionId}`);
+    if (isTerminalTask(task)) {
+      const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
+        revisionId: revision.id,
+        updatedAt: nowIso(),
+      });
+      const updatedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+      const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(
+        task.id,
+        revision.artifactId,
+      );
+      if (!updatedRevision || !updatedDetail) throw new Error("Artifact revision did not close");
+      this.notifyUpdated(updatedTask);
+      return { task: updatedTask, detail: updatedDetail, revision: updatedRevision };
+    }
     const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
 
     if (outcome === "completed") {
@@ -1597,14 +1859,19 @@ export class TaskCoordinator {
     const primaryThread = task.threads[0];
     if (!primaryThread) throw new Error("Task has no primary thread to retry");
 
-    await this.transition({
-      taskId: task.id,
-      workspacePath: task.workspacePath,
+    const recovered = await this.recoverTerminalTask({
+      task,
       expectedRevision: task.revision,
-      status: "working",
       summary: "Task retry started",
       sessionId: primaryThread.sessionId,
     });
+
+    if (recovered.status !== "working") {
+      return {
+        task: recovered,
+        retryStatus: "failed",
+      };
+    }
 
     if (!this.continuationDispatcher) {
       await this.failPrimaryTaskRun(
@@ -1692,31 +1959,75 @@ export class TaskCoordinator {
     detail?: string;
     sessionId?: string;
   }): Promise<TaskRecord> {
-    const task = this.requireTask(input.taskId, input.workspacePath);
-    if (input.status === "completed" && task.status === "awaiting_review") {
-      return await this.acceptTask({
+    const initial = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(initial, input.expectedRevision);
+    return await this.runTaskMutation(input.taskId, async () => {
+      const task = this.requireTask(input.taskId, input.workspacePath);
+      assertExpectedTaskRevision(task, input.expectedRevision);
+      const expectedRevision = input.expectedRevision;
+      if (input.status === "completed" && task.status === "awaiting_review") {
+        return await this.acceptTaskLocked({
+          taskId: task.id,
+          workspacePath: task.workspacePath,
+          expectedRevision,
+        });
+      }
+      if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
+        throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
+      }
+      if (
+        input.status === "working" &&
+        (task.questions.some((question) => question.status === "pending" && question.blocking) ||
+          task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
+      ) {
+        throw new Error("Task cannot return to working while blocking input or issues remain");
+      }
+      const thread = input.sessionId
+        ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
+        : null;
+      const updated = await this.options.sessionDb.setTaskStatus({
         taskId: task.id,
-        workspacePath: task.workspacePath,
-        expectedRevision: input.expectedRevision,
+        expectedRevision,
+        status: input.status,
+        summary: nonEmpty(input.summary, "Status summary"),
+        detail: input.detail?.trim() || null,
+        updatedAt: nowIso(),
+        threadId: thread?.id ?? null,
       });
+      await this.quiesceTaskThreads(updated);
+      this.notifyUpdated(updated);
+      return updated;
+    });
+  }
+
+  private async recoverTerminalTask(input: {
+    task: TaskRecord;
+    expectedRevision: number;
+    summary: string;
+    detail?: string;
+    sessionId?: string;
+  }): Promise<TaskRecord> {
+    const { task } = input;
+    if (!TERMINAL_TASK_STATUSES.has(task.status)) {
+      throw new Error(`Task ${task.id} is not terminal`);
     }
-    if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
-      throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
+    if (task.revision !== input.expectedRevision) {
+      throw new Error(
+        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
+      );
     }
-    if (
-      input.status === "working" &&
-      (task.questions.some((question) => question.status === "pending" && question.blocking) ||
-        task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
-    ) {
-      throw new Error("Task cannot return to working while blocking input or issues remain");
-    }
+    const recoveryStatus: TaskStatus =
+      task.questions.some((question) => question.status === "pending" && question.blocking) ||
+      task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking)
+        ? "blocked"
+        : "working";
     const thread = input.sessionId
       ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
       : null;
     const updated = await this.options.sessionDb.setTaskStatus({
       taskId: task.id,
       expectedRevision: input.expectedRevision,
-      status: input.status,
+      status: recoveryStatus,
       summary: nonEmpty(input.summary, "Status summary"),
       detail: input.detail?.trim() || null,
       updatedAt: nowIso(),
@@ -1738,11 +2049,8 @@ export class TaskCoordinator {
     feedback: string;
   }): Promise<{ task: TaskRecord; reviewId: string; round: number }> {
     const task = this.requireTask(input.taskId, input.workspacePath);
-    if (task.revision !== input.expectedRevision) {
-      throw new Error(
-        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
-      );
-    }
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (task.status !== "working") {
       throw new Error("Independent reviews can run only while a task is working");
     }
@@ -1814,11 +2122,8 @@ export class TaskCoordinator {
     implementationSummary: string;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
-    if (task.revision !== input.expectedRevision) {
-      throw new Error(
-        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
-      );
-    }
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     const pending = getPendingTaskReview(task.activity);
     if (!pending) throw new Error("Task has no unaddressed review feedback");
     if (pending.reviewId !== input.reviewId) {
@@ -1857,6 +2162,8 @@ export class TaskCoordinator {
     sessionId?: string;
   }): Promise<TaskRecord> {
     let task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    assertTaskAcceptsMutation(task);
     if (task.questions.some((question) => question.status === "pending" && question.blocking)) {
       throw new Error("Task has unresolved blocking questions");
     }
@@ -1920,44 +2227,56 @@ export class TaskCoordinator {
     sessionId: string,
     reason: string,
     agentSummary = "",
+    options?: { allowTerminal?: boolean },
   ): Promise<TaskRecord | null> {
     const task = this.getForThread(sessionId);
     if (!task) return null;
+    if (!options?.allowTerminal && isTerminalTask(task)) return task;
     const thread = task.threads.find((candidate) => candidate.sessionId === sessionId) ?? null;
-    const checkpoint = await this.options.sessionDb.createTaskCheckpoint({
-      id: crypto.randomUUID(),
-      taskId: task.id,
-      threadId: thread?.id ?? null,
-      taskRevision: task.revision,
-      reason: nonEmpty(reason, "Checkpoint reason"),
-      agentSummary,
-      contextDigest: JSON.stringify({
-        objective: task.objective,
-        status: task.status,
-        workItems: task.workItems.map((item) => ({
-          id: item.id,
-          title: item.title,
-          status: item.status,
-        })),
-        decisions: task.decisions
-          .filter((item) => item.status === "active")
-          .map((item) => ({ question: item.question, resolution: item.resolution })),
-        questions: task.questions
-          .filter((item) => item.status === "pending")
-          .map((item) => ({ question: item.question, blocking: item.blocking })),
-        blockers: task.blockers
-          .filter((item) => item.status === "active")
-          .map((item) => item.description),
-      }),
-      taskSnapshot: taskSnapshot(task),
-      artifactManifest: task.artifacts.map((item) => ({
-        id: item.id,
-        path: item.path,
-        title: item.title,
-        kind: item.kind,
-      })),
-      createdAt: nowIso(),
-    });
+    let checkpoint: TaskCheckpoint;
+    try {
+      checkpoint = await this.options.sessionDb.createTaskCheckpoint(
+        {
+          id: crypto.randomUUID(),
+          taskId: task.id,
+          threadId: thread?.id ?? null,
+          taskRevision: task.revision,
+          reason: nonEmpty(reason, "Checkpoint reason"),
+          agentSummary,
+          contextDigest: JSON.stringify({
+            objective: task.objective,
+            status: task.status,
+            workItems: task.workItems.map((item) => ({
+              id: item.id,
+              title: item.title,
+              status: item.status,
+            })),
+            decisions: task.decisions
+              .filter((item) => item.status === "active")
+              .map((item) => ({ question: item.question, resolution: item.resolution })),
+            questions: task.questions
+              .filter((item) => item.status === "pending")
+              .map((item) => ({ question: item.question, blocking: item.blocking })),
+            blockers: task.blockers
+              .filter((item) => item.status === "active")
+              .map((item) => item.description),
+          }),
+          taskSnapshot: taskSnapshot(task),
+          artifactManifest: task.artifacts.map((item) => ({
+            id: item.id,
+            path: item.path,
+            title: item.title,
+            kind: item.kind,
+          })),
+          createdAt: nowIso(),
+        },
+        { rejectTerminal: options?.allowTerminal !== true },
+      );
+    } catch (error) {
+      if (isTerminalTaskMutationError(task.id, error))
+        return this.options.sessionDb.getTask(task.id);
+      throw error;
+    }
     this.options.notify?.({
       method: "task/checkpointCreated",
       params: { cwd: task.workspacePath, taskId: task.id, checkpoint },
@@ -1966,6 +2285,19 @@ export class TaskCoordinator {
   }
 
   async applyDirective(sessionId: string, directive: TaskDirective): Promise<TaskDirectiveResult> {
+    const task = this.getForThread(sessionId);
+    if (!task) throw new Error("Task directives are available only in task threads");
+    return await this.options.sessionDb.runTaskMutationExclusive(
+      "apply_task_directive",
+      task.id,
+      async () => await this.applyDirectiveLocked(sessionId, directive),
+    );
+  }
+
+  private async applyDirectiveLocked(
+    sessionId: string,
+    directive: TaskDirective,
+  ): Promise<TaskDirectiveResult> {
     const current = this.getForThread(sessionId);
     if (!current) throw new Error("Task directives are available only in task threads");
     const receipt = this.options.sessionDb.getTaskDirectiveReceipt(
@@ -1982,6 +2314,7 @@ export class TaskCoordinator {
           : "continue",
       };
     }
+    assertTaskAcceptsMutation(current);
 
     const thread = current.threads.find((candidate) => candidate.sessionId === sessionId);
     let updated: TaskRecord;
@@ -2157,7 +2490,9 @@ export class TaskCoordinator {
       updated.revision,
       nowIso(),
     );
-    await this.checkpointThread(sessionId, `directive ${directive.type}`);
+    await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
+      allowTerminal: true,
+    });
     return { task: updated, continuation };
   }
 
@@ -2185,7 +2520,21 @@ export class TaskCoordinator {
     try {
       resolved = await resolvePathInsideRootForBoundaryCheck(task.workspacePath, candidate);
     } catch {
-      throw new Error("Artifact path is outside the task workspace");
+      try {
+        const [canonicalWorkspacePath, canonicalCandidatePath] = await Promise.all([
+          fs.realpath(task.workspacePath),
+          fs.realpath(candidate).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return candidate;
+            throw error;
+          }),
+        ]);
+        resolved = await resolvePathInsideRootForBoundaryCheck(
+          canonicalWorkspacePath,
+          canonicalCandidatePath,
+        );
+      } catch {
+        throw new Error("Artifact path is outside the task workspace");
+      }
     }
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {

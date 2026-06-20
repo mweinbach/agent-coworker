@@ -64,6 +64,404 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(persistCalls).toBe(1);
   });
 
+  test("requestWorkspaceSessions preserves task-owned records without selecting them as ordinary chat", async () => {
+    const workspaceId = "ws-task-thread-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+      selectedThreadId: "task-session-1",
+      selectedTaskId: "task-1",
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    RUNTIME.sessionSnapshots.set("chat-keep", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "chat-keep" },
+    } as never);
+    RUNTIME.sessionSnapshots.set("task-session-1", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "task-session-1" },
+    } as never);
+
+    const helpers = createControlSocketHelpers(deps);
+    const sessions = await helpers.requestWorkspaceSessions(
+      get as never,
+      set as never,
+      workspaceId,
+    );
+
+    expect(sessions?.map((session) => session.sessionId)).toEqual(["chat-keep"]);
+    expect(state.threads.map((thread: { id: string }) => thread.id).sort()).toEqual([
+      "chat-keep",
+      "task-session-1",
+    ]);
+    expect(state.threads.find((thread: { id: string }) => thread.id === "task-session-1")).toEqual(
+      expect.objectContaining({
+        taskId: "task-1",
+        taskThreadId: "task-thread-1",
+      }),
+    );
+    expect(state.selectedThreadId).toBe("chat-keep");
+    expect(state.selectedTaskId).toBeNull();
+    expect(RUNTIME.sessionSnapshots.has("task-session-1")).toBe(true);
+  });
+
+  test("requestWorkspaceSessions clears stale task context when ordinary draft chat becomes selected", async () => {
+    const workspaceId = "ws-task-draft-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+        {
+          ...makeThread("draft-chat-1", workspaceId),
+          title: "Draft chat",
+          sessionId: null,
+          messageCount: 0,
+          lastEventSeq: 0,
+          draft: true,
+        },
+      ],
+      selectedThreadId: "task-session-1",
+      selectedTaskId: "task-1",
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return { threads: [] };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.selectedThreadId).toBe("draft-chat-1");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.threads.find((thread: { id: string }) => thread.id === "task-session-1")).toEqual(
+      expect.objectContaining({ taskId: "task-1" }),
+    );
+  });
+
+  test("requestWorkspaceSessions keeps selected task-owned threads while viewing that task", async () => {
+    const workspaceId = "ws-task-thread-selected";
+    const { state, get, set } = createState(workspaceId, {
+      view: "task",
+      selectedTaskId: "task-1",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+      selectedThreadId: "task-session-1",
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    RUNTIME.sessionSnapshots.set("task-session-1", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "task-session-1" },
+    } as never);
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.selectedThreadId).toBe("task-session-1");
+    expect(RUNTIME.sessionSnapshots.has("task-session-1")).toBe(true);
+  });
+
+  test("requestWorkspaceSessions preserves task context while settings overlays task view", async () => {
+    const workspaceId = "ws-settings-task-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      view: "settings",
+      lastNonSettingsView: "task",
+      selectedTaskId: "task-1",
+      selectedThreadId: "task-session-1",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    RUNTIME.sessionSnapshots.set("task-session-1", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "task-session-1" },
+    } as never);
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("task");
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBe("task-session-1");
+    expect(state.selectedWorkspaceId).toBe(workspaceId);
+
+    state.view = state.lastNonSettingsView === "settings" ? "chat" : state.lastNonSettingsView;
+    expect(state.view).toBe("task");
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBe("task-session-1");
+  });
+
+  test("requestWorkspaceSessions treats settings over chat as ordinary chat selection", async () => {
+    const workspaceId = "ws-settings-chat-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      view: "settings",
+      lastNonSettingsView: "chat",
+      selectedTaskId: "task-1",
+      selectedThreadId: "task-session-1",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("chat");
+    expect(state.selectedThreadId).toBe("chat-keep");
+    expect(state.selectedTaskId).toBeNull();
+  });
+
+  test("requestWorkspaceSessions does not select chat fallback for task view without a selected task", async () => {
+    const workspaceId = "ws-task-new-task-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      view: "task",
+      selectedTaskId: null,
+      selectedThreadId: "missing-thread",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Other task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    RUNTIME.sessionSnapshots.set("chat-keep", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "chat-keep" },
+    } as never);
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.view).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.threads.find((thread: { id: string }) => thread.id === "task-session-1")).toEqual(
+      expect.objectContaining({ taskId: "task-1" }),
+    );
+    expect(RUNTIME.sessionSnapshots.has("chat-keep")).toBe(true);
+  });
+
+  test("requestWorkspaceSessions does not select chat fallback for settings over task without a selected task", async () => {
+    const workspaceId = "ws-settings-task-new-task-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      view: "settings",
+      lastNonSettingsView: "task",
+      selectedTaskId: null,
+      selectedThreadId: "missing-thread",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Other task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+
+    state.view = state.lastNonSettingsView === "settings" ? "chat" : state.lastNonSettingsView;
+    expect(state.view).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+  });
+
+  test("requestWorkspaceSessions falls back to another thread owned by the selected task", async () => {
+    const workspaceId = "ws-task-thread-fallback";
+    const { state, get, set } = createState(workspaceId, {
+      view: "task",
+      selectedTaskId: "task-1",
+      selectedThreadId: "missing-task-session",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-2", workspaceId),
+          title: "Task fallback lane",
+          taskId: "task-1",
+          taskThreadId: "task-thread-2",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBe("task-session-2");
+  });
+
+  test("requestWorkspaceSessions does not keep a cross-task thread while viewing a task", async () => {
+    const workspaceId = "ws-task-thread-cross-task";
+    const { state, get, set } = createState(workspaceId, {
+      view: "task",
+      selectedTaskId: "task-1",
+      selectedThreadId: "task-session-2",
+      threads: [
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Task one lane",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+        {
+          ...makeThread("task-session-2", workspaceId),
+          title: "Task two lane",
+          taskId: "task-2",
+          taskThreadId: "task-thread-2",
+        },
+        makeThread("chat-keep", workspaceId),
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBe("task-session-1");
+  });
+
+  test("requestWorkspaceSessions does not leak wrong-workspace task threads through settings task context", async () => {
+    const workspaceId = "ws-settings-task-wrong-workspace";
+    const { state, get, set } = createState(workspaceId, {
+      view: "settings",
+      lastNonSettingsView: "task",
+      selectedTaskId: "task-1",
+      selectedThreadId: "task-session-other-workspace",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-other-workspace", "ws-other"),
+          title: "Task from another workspace",
+          taskId: "task-1",
+          taskThreadId: "task-thread-other",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBeNull();
+    const ordinaryChat = state.threads.find((thread: { id: string }) => thread.id === "chat-keep");
+    expect(ordinaryChat?.taskId).toBeUndefined();
+    expect(
+      state.threads.find((thread: { id: string }) => thread.id === "task-session-other-workspace"),
+    ).toEqual(
+      expect.objectContaining({
+        workspaceId: "ws-other",
+        taskId: "task-1",
+      }),
+    );
+  });
+
   test("requestWorkspaceSessions preserves the legacy transcript mapping for runtime-backed local threads", async () => {
     const workspaceId = "ws-legacy-thread";
     const localThreadId = "local-thread-1";

@@ -4,6 +4,7 @@ import type {
   CSSProperties,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
+  Ref,
   RefObject,
 } from "react";
 import {
@@ -31,7 +32,7 @@ import { DraftThreadModelSelector } from "./DraftThreadModelSelector";
 import { ThreadModelIndicator } from "./ThreadModelIndicator";
 
 export function ChatComposer(props: {
-  messageBarOverlayRef: RefObject<HTMLDivElement | null>;
+  messageBarOverlayRef: Ref<HTMLDivElement>;
   composerOverlayMinHeight: number;
   messageBarHeight: number;
   inputDisabled: boolean;

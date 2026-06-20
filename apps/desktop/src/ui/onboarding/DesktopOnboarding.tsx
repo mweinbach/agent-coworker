@@ -1052,9 +1052,7 @@ export function DesktopOnboarding() {
         }
       } catch {
         // Thread creation threw — leave onboarding open with an inline error.
-        setCompletionError(
-          "Couldn't create the thread. Check your workspace and try again.",
-        );
+        setCompletionError("Couldn't create the thread. Check your workspace and try again.");
         return;
       }
       // newThread silently returns early on some failure paths (e.g.
@@ -1064,9 +1062,7 @@ export function DesktopOnboarding() {
       if (threadsAfter > threadsBefore) {
         complete();
       } else {
-        setCompletionError(
-          "Couldn't create the thread. Check your workspace and try again.",
-        );
+        setCompletionError("Couldn't create the thread. Check your workspace and try again.");
       }
     },
     [complete, newThread],

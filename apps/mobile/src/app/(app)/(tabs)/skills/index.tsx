@@ -245,194 +245,187 @@ export default function SkillsScreen() {
           title="Installations"
           footer={`${installations.length} managed skill installs`}
         >
-            {installations.map((installation, index) => {
-              const updateCheck = updateChecksByInstallationId[installation.installationId];
-              const content = installationContentById[installation.installationId];
-              const copyScope = installation.scope === "global" ? "project" : "global";
-              const isLast = index === installations.length - 1;
-              return (
+          {installations.map((installation, index) => {
+            const updateCheck = updateChecksByInstallationId[installation.installationId];
+            const content = installationContentById[installation.installationId];
+            const copyScope = installation.scope === "global" ? "project" : "global";
+            const isLast = index === installations.length - 1;
+            return (
+              <View
+                key={installation.installationId}
+                style={{
+                  gap: 8,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                  borderBottomColor: theme.borderMuted,
+                }}
+              >
                 <View
-                  key={installation.installationId}
                   style={{
-                    gap: 8,
-                    paddingHorizontal: 14,
-                    paddingVertical: 12,
-                    borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
-                    borderBottomColor: theme.borderMuted,
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
                   }}
                 >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
-                        {installation.name}
-                      </Text>
-                      {installation.description ? (
-                        <Text
-                          numberOfLines={2}
-                          style={{ color: theme.textSecondary, fontSize: 13 }}
-                        >
-                          {installation.description}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <StatusPill
-                      label={installation.state}
-                      tone={installation.effective ? "success" : "neutral"}
-                    />
-                  </View>
-                  <View
-                    style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}
-                  >
-                    <StatusPill label={installation.scope} tone="neutral" />
-                    {installation.effective ? (
-                      <StatusPill label="effective" tone="primary" />
-                    ) : null}
-                    <Pressable
-                      onPress={() => {
-                        void (installation.enabled
-                          ? disableInstallation(installation.installationId)
-                          : enableInstallation(installation.installationId));
-                      }}
-                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                      style={({ pressed }) => ({
-                        borderRadius: 999,
-                        borderWidth: 1,
-                        borderColor: theme.border,
-                        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                      })}
-                    >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
-                        {installation.enabled ? "Disable" : "Enable"}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => {
-                        void readInstallation(installation.installationId);
-                      }}
-                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                      style={({ pressed }) => ({
-                        borderRadius: 999,
-                        borderWidth: 1,
-                        borderColor: theme.border,
-                        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                      })}
-                    >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
-                        Inspect
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => {
-                        void checkInstallationUpdate(installation.installationId);
-                      }}
-                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                      style={({ pressed }) => ({
-                        borderRadius: 999,
-                        borderWidth: 1,
-                        borderColor: theme.border,
-                        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                      })}
-                    >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
-                        Check update
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => {
-                        void copyInstallation(installation.installationId, copyScope);
-                      }}
-                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                      style={({ pressed }) => ({
-                        borderRadius: 999,
-                        borderWidth: 1,
-                        borderColor: theme.border,
-                        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                      })}
-                    >
-                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
-                        Copy to {copyScope === "project" ? "workspace" : "user"}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => {
-                        void deleteInstallation(installation.installationId);
-                      }}
-                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                      style={({ pressed }) => ({
-                        borderRadius: 999,
-                        borderWidth: 1,
-                        borderColor: theme.danger,
-                        backgroundColor: pressed ? theme.dangerMuted : "transparent",
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                      })}
-                    >
-                      <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
-                        Delete
-                      </Text>
-                    </Pressable>
-                  </View>
-                  {updateCheck ? (
-                    <View style={{ gap: 4 }}>
-                      <Text
-                        style={{
-                          color: updateCheck.canUpdate ? theme.success : theme.textSecondary,
-                          fontSize: 12,
-                          fontWeight: "600",
-                        }}
-                      >
-                        {updateCheck.canUpdate
-                          ? "Update available"
-                          : (updateCheck.reason ?? "Up to date")}
-                      </Text>
-                      {updateCheck.canUpdate ? (
-                        <Pressable
-                          onPress={() => {
-                            void updateInstallation(installation.installationId);
-                          }}
-                          style={({ pressed }) => ({
-                            alignSelf: "flex-start",
-                            borderRadius: 999,
-                            backgroundColor: pressed ? theme.accent : theme.primary,
-                            paddingHorizontal: 10,
-                            paddingVertical: 5,
-                          })}
-                        >
-                          <Text
-                            style={{ color: theme.primaryText, fontSize: 12, fontWeight: "700" }}
-                          >
-                            Update now
-                          </Text>
-                        </Pressable>
-                      ) : null}
-                    </View>
-                  ) : null}
-                  {content ? (
-                    <Text
-                      selectable
-                      numberOfLines={10}
-                      style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 18 }}
-                    >
-                      {content}
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+                      {installation.name}
                     </Text>
-                  ) : null}
+                    {installation.description ? (
+                      <Text numberOfLines={2} style={{ color: theme.textSecondary, fontSize: 13 }}>
+                        {installation.description}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <StatusPill
+                    label={installation.state}
+                    tone={installation.effective ? "success" : "neutral"}
+                  />
                 </View>
-              );
-            })}
+                <View
+                  style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}
+                >
+                  <StatusPill label={installation.scope} tone="neutral" />
+                  {installation.effective ? <StatusPill label="effective" tone="primary" /> : null}
+                  <Pressable
+                    onPress={() => {
+                      void (installation.enabled
+                        ? disableInstallation(installation.installationId)
+                        : enableInstallation(installation.installationId));
+                    }}
+                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                    style={({ pressed }) => ({
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: theme.border,
+                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                    })}
+                  >
+                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                      {installation.enabled ? "Disable" : "Enable"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      void readInstallation(installation.installationId);
+                    }}
+                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                    style={({ pressed }) => ({
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: theme.border,
+                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                    })}
+                  >
+                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                      Inspect
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      void checkInstallationUpdate(installation.installationId);
+                    }}
+                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                    style={({ pressed }) => ({
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: theme.border,
+                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                    })}
+                  >
+                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                      Check update
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      void copyInstallation(installation.installationId, copyScope);
+                    }}
+                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                    style={({ pressed }) => ({
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: theme.border,
+                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                    })}
+                  >
+                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                      Copy to {copyScope === "project" ? "workspace" : "user"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      void deleteInstallation(installation.installationId);
+                    }}
+                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                    style={({ pressed }) => ({
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: theme.danger,
+                      backgroundColor: pressed ? theme.dangerMuted : "transparent",
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                    })}
+                  >
+                    <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
+                      Delete
+                    </Text>
+                  </Pressable>
+                </View>
+                {updateCheck ? (
+                  <View style={{ gap: 4 }}>
+                    <Text
+                      style={{
+                        color: updateCheck.canUpdate ? theme.success : theme.textSecondary,
+                        fontSize: 12,
+                        fontWeight: "600",
+                      }}
+                    >
+                      {updateCheck.canUpdate
+                        ? "Update available"
+                        : (updateCheck.reason ?? "Up to date")}
+                    </Text>
+                    {updateCheck.canUpdate ? (
+                      <Pressable
+                        onPress={() => {
+                          void updateInstallation(installation.installationId);
+                        }}
+                        style={({ pressed }) => ({
+                          alignSelf: "flex-start",
+                          borderRadius: 999,
+                          backgroundColor: pressed ? theme.accent : theme.primary,
+                          paddingHorizontal: 10,
+                          paddingVertical: 5,
+                        })}
+                      >
+                        <Text style={{ color: theme.primaryText, fontSize: 12, fontWeight: "700" }}>
+                          Update now
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
+                {content ? (
+                  <Text
+                    selectable
+                    numberOfLines={10}
+                    style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 18 }}
+                  >
+                    {content}
+                  </Text>
+                ) : null}
+              </View>
+            );
+          })}
         </GroupedSection>
       ) : !loading ? (
         <SectionCard
@@ -446,56 +439,56 @@ export default function SkillsScreen() {
           title="Effective skills"
           footer={`${effectiveInstallations.length} active skills currently shape the workspace prompt.`}
         >
-            {effectiveInstallations.map((installation, index) => {
-              const isLast = index === effectiveInstallations.length - 1;
-              return (
-                <View
-                  key={`effective:${installation.installationId}`}
-                  style={{
-                    gap: 4,
-                    paddingHorizontal: 14,
-                    paddingVertical: 10,
-                    borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
-                    borderBottomColor: theme.borderMuted,
-                  }}
-                >
-                  <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
-                    {installation.name}
-                  </Text>
-                  <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
-                    {installation.description}
-                  </Text>
-                </View>
-              );
-            })}
+          {effectiveInstallations.map((installation, index) => {
+            const isLast = index === effectiveInstallations.length - 1;
+            return (
+              <View
+                key={`effective:${installation.installationId}`}
+                style={{
+                  gap: 4,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                  borderBottomColor: theme.borderMuted,
+                }}
+              >
+                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
+                  {installation.name}
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                  {installation.description}
+                </Text>
+              </View>
+            );
+          })}
         </GroupedSection>
       ) : skills.length > 0 ? (
         <GroupedSection
           title="Effective skills"
           footer={`${skills.length} skills resolved in the current workspace.`}
         >
-            {skills.map((skill, index) => {
-              const isLast = index === skills.length - 1;
-              return (
-                <View
-                  key={skill.name}
-                  style={{
-                    gap: 4,
-                    paddingHorizontal: 14,
-                    paddingVertical: 10,
-                    borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
-                    borderBottomColor: theme.borderMuted,
-                  }}
-                >
-                  <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
-                    {skill.name}
-                  </Text>
-                  <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
-                    {skill.description}
-                  </Text>
-                </View>
-              );
-            })}
+          {skills.map((skill, index) => {
+            const isLast = index === skills.length - 1;
+            return (
+              <View
+                key={skill.name}
+                style={{
+                  gap: 4,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                  borderBottomColor: theme.borderMuted,
+                }}
+              >
+                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
+                  {skill.name}
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                  {skill.description}
+                </Text>
+              </View>
+            );
+          })}
         </GroupedSection>
       ) : null}
     </Screen>

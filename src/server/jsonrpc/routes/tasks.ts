@@ -243,6 +243,13 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       if (detail.versions.length === 0) {
         const task = context.tasks.get(params.taskId, workspacePath);
         if (!task) throw new Error(`Unknown task: ${params.taskId}`);
+        if (
+          task.status === "completed" ||
+          task.status === "cancelled" ||
+          task.status === "failed"
+        ) {
+          return { detail };
+        }
         try {
           detail = await context.tasks.ensureArtifactBaseline({
             taskId: params.taskId,
@@ -443,8 +450,6 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     ),
     "task/cancel": createTaskHandler(context, "task/cancel", async (params) => {
       const workspacePath = resolveCwd(context, params, "task/cancel");
-      const current = context.tasks.get(params.taskId, workspacePath);
-      if (!current) throw new Error(`Unknown task: ${params.taskId}`);
       const task = await context.tasks.transition({
         taskId: params.taskId,
         workspacePath,
@@ -453,9 +458,6 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         summary: "Task cancelled",
         detail: params.reason,
       });
-      for (const thread of current.threads) {
-        context.threads.getLive(thread.sessionId)?.runtime?.turns.cancel();
-      }
       return { task };
     }),
     "task/accept": createTaskHandler(context, "task/accept", async (params) => ({
@@ -466,23 +468,19 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       }),
     })),
     "task/requestChanges": createTaskHandler(context, "task/requestChanges", async (params) => ({
-      task: await context.tasks.transition({
+      task: await context.tasks.requestChanges({
         taskId: params.taskId,
         workspacePath: resolveCwd(context, params, "task/requestChanges"),
         expectedRevision: params.expectedRevision,
-        status: "working",
-        summary: "Changes requested",
-        detail: params.feedback,
+        feedback: params.feedback,
       }),
     })),
     "task/reopen": createTaskHandler(context, "task/reopen", async (params) => ({
-      task: await context.tasks.transition({
+      task: await context.tasks.reopenTask({
         taskId: params.taskId,
         workspacePath: resolveCwd(context, params, "task/reopen"),
         expectedRevision: params.expectedRevision,
-        status: "working",
-        summary: "Task reopened",
-        detail: params.reason,
+        reason: params.reason,
       }),
     })),
     "task/retry": createTaskHandler(

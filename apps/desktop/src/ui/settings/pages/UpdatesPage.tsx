@@ -1,7 +1,6 @@
 import { DownloadIcon, LoaderCircleIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useAppStore } from "../../../app/store";
-import { DesktopMarkdown } from "../../markdown";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -12,6 +11,7 @@ import {
   CardTitle,
 } from "../../../components/ui/card";
 import type { UpdaterState } from "../../../lib/desktopApi";
+import { DesktopMarkdown } from "../../markdown";
 
 function formatTimestamp(value: string | null): string {
   if (!value) {

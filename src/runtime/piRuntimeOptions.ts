@@ -423,11 +423,7 @@ function collapseGoogleTopLevelObjectUnion(schema: ToolJsonSchema): ToolJsonSche
   const root = asRecord(schema);
   if (!root) return schema;
 
-  const unionKey = Array.isArray(root.oneOf)
-    ? "oneOf"
-    : Array.isArray(root.anyOf)
-      ? "anyOf"
-      : null;
+  const unionKey = Array.isArray(root.oneOf) ? "oneOf" : Array.isArray(root.anyOf) ? "anyOf" : null;
   if (!unionKey) return schema;
 
   const branches = (root[unionKey] as unknown[]).map((branch) => asRecord(branch));
@@ -461,9 +457,7 @@ function collapseGoogleTopLevelObjectUnion(schema: ToolJsonSchema): ToolJsonSche
     ? branches[0].required.filter((entry): entry is string => typeof entry === "string")
     : [];
   const required = firstRequired.filter((name) =>
-    branches.every(
-      (branch) => Array.isArray(branch?.required) && branch.required.includes(name),
-    ),
+    branches.every((branch) => Array.isArray(branch?.required) && branch.required.includes(name)),
   );
   const { oneOf: _oneOf, anyOf: _anyOf, ...rootMetadata } = root;
 

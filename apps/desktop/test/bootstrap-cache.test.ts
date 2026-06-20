@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import type { TaskRecord, TaskSummary } from "../../../src/shared/tasks";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
@@ -21,15 +22,25 @@ const localStorageMock = {
 };
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
 function installWindowMock(overrides: Record<string, unknown> = {}) {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: localStorageMock,
+  });
   Object.defineProperty(globalThis, "window", {
     configurable: true,
-    value: { localStorage: localStorageMock, ...overrides },
+    value: { location: { search: "" }, localStorage: localStorageMock, ...overrides },
   });
 }
 
 function restoreWindowMock() {
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
+  } else {
+    delete (globalThis as Record<string, unknown>).localStorage;
+  }
   if (originalWindowDescriptor) {
     Object.defineProperty(globalThis, "window", originalWindowDescriptor);
     return;
@@ -171,6 +182,88 @@ function makeCachedSessionSnapshot(sessionId: string, overrides: Record<string, 
   };
 }
 
+const NOW = "2026-03-20T00:00:00.000Z";
+
+function taskRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
+  return {
+    id: "task-1",
+    workspacePath: "/tmp/workspace-live",
+    title: "Cached task",
+    objective: "Restore task state from the harness.",
+    status: "working",
+    revision: 2,
+    reviewRequired: true,
+    createdAt: NOW,
+    updatedAt: NOW,
+    threadCount: 1,
+    completedWorkItemCount: 0,
+    totalWorkItemCount: 1,
+    activeBlockerCount: 0,
+    pendingQuestionCount: 0,
+    blockingQuestionCount: 0,
+    requirements: [],
+    threads: [
+      {
+        id: "task-thread-1",
+        taskId: "task-1",
+        sessionId: "task-session-1",
+        title: "Main",
+        createdBy: "coordinator",
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ],
+    workItems: [
+      {
+        id: "work-1",
+        taskId: "task-1",
+        title: "Restore context",
+        description: "",
+        status: "in_progress",
+        dependsOn: [],
+        assignedThreadId: null,
+        claimedByThreadId: null,
+        expectedOutputs: [],
+        completionEvidence: null,
+        position: 0,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ],
+    decisions: [],
+    questions: [],
+    artifacts: [],
+    blockers: [],
+    activity: [],
+    latestCheckpoint: null,
+    ...overrides,
+  };
+}
+
+function taskSummary(task: TaskRecord): TaskSummary {
+  return {
+    id: task.id,
+    workspacePath: task.workspacePath,
+    title: task.title,
+    objective: task.objective,
+    status: task.status,
+    revision: task.revision,
+    reviewRequired: task.reviewRequired,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    threadCount: task.threadCount,
+    completedWorkItemCount: task.completedWorkItemCount,
+    totalWorkItemCount: task.totalWorkItemCount,
+    activeBlockerCount: task.activeBlockerCount,
+    pendingQuestionCount: task.pendingQuestionCount,
+    blockingQuestionCount: task.blockingQuestionCount,
+    ...(task.context ? { context: task.context } : {}),
+    ...(task.sourceSessionId !== undefined ? { sourceSessionId: task.sourceSessionId } : {}),
+    ...(task.creationOrigin ? { creationOrigin: task.creationOrigin } : {}),
+    ...(task.reviewRounds !== undefined ? { reviewRounds: task.reviewRounds } : {}),
+  };
+}
+
 let loadedState: any = {
   workspaces: [
     {
@@ -204,6 +297,9 @@ let loadedState: any = {
   perWorkspaceSettings: true,
 };
 let loadStateError: Error | null = null;
+let taskListResponse: TaskSummary[] = [];
+let taskReadResponse: TaskRecord | null = null;
+const socketRequests: string[] = [];
 let remoteAccessEnabled = true;
 let packagedApp = false;
 
@@ -299,6 +395,13 @@ mock.module("../src/lib/agentSocket", () => ({
 
     connect() {}
     async request(method: string) {
+      socketRequests.push(method);
+      if (method === "task/list") {
+        return { tasks: taskListResponse };
+      }
+      if (method === "task/read") {
+        return taskReadResponse ? { task: taskReadResponse } : {};
+      }
       if (method === "thread/list") {
         return { threads: [] };
       }
@@ -328,9 +431,12 @@ mock.module("../src/lib/agentSocket", () => ({
 localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(cachedState));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers");
+const { RUNTIME, syncDesktopStateCacheNow } = await import("../src/app/store.helpers");
 const { buildCachedDesktopStateSeed } = await import("../src/app/store.actions/bootstrap");
+const { defaultThreadRuntime } = await import("../src/app/store.helpers/runtimeState");
 const { createDefaultUpdaterState } = await import("../src/lib/desktopApi");
+
+type AppStoreState = ReturnType<typeof useAppStore.getState>;
 
 function resetStoreToCachedSeed(value: unknown = cachedState) {
   const cachedSeed = buildCachedDesktopStateSeed(value);
@@ -348,6 +454,13 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
     threads: [],
     selectedWorkspaceId: null,
     selectedThreadId: null,
+    selectedTaskId: null,
+    newTaskWorkspaceId: null,
+    newTaskWorkspaceRequestId: 0,
+    taskSummariesByWorkspaceId: {},
+    tasksById: {},
+    taskListLoadingByWorkspaceId: {},
+    taskError: null,
     pluginManagementWorkspaceId: null,
     workspaceRuntimeById: {},
     threadRuntimeById: {},
@@ -383,6 +496,64 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
   });
 }
 
+function installTaskHydrationStub() {
+  useAppStore.setState({
+    refreshTasks: async (workspaceId?: string) => {
+      socketRequests.push("task/list");
+      const targetWorkspaceId = workspaceId ?? useAppStore.getState().selectedWorkspaceId;
+      if (!targetWorkspaceId) {
+        return;
+      }
+      useAppStore.setState((state: AppStoreState) => ({
+        taskSummariesByWorkspaceId: {
+          ...state.taskSummariesByWorkspaceId,
+          [targetWorkspaceId]: taskListResponse,
+        },
+      }));
+    },
+    selectTask: async (taskId: string, options?: { preserveView?: boolean }) => {
+      socketRequests.push("task/read");
+      const task = taskReadResponse;
+      if (!task || task.id !== taskId) {
+        return;
+      }
+      const workspaceId = useAppStore.getState().selectedWorkspaceId;
+      const mainThread = task.threads[0] ?? null;
+      useAppStore.setState((state: AppStoreState) => ({
+        tasksById: { ...state.tasksById, [task.id]: task },
+        threads: mainThread
+          ? [
+              ...state.threads.filter((thread) => thread.id !== mainThread.sessionId),
+              {
+                id: mainThread.sessionId,
+                workspaceId,
+                sessionId: mainThread.sessionId,
+                title: mainThread.title,
+                titleSource: "manual",
+                createdAt: mainThread.createdAt,
+                lastMessageAt: mainThread.updatedAt,
+                status: "active",
+                messageCount: 0,
+                lastEventSeq: 0,
+                taskId: task.id,
+                taskThreadId: mainThread.id,
+              },
+            ]
+          : state.threads,
+        threadRuntimeById: mainThread
+          ? { ...state.threadRuntimeById, [mainThread.sessionId]: defaultThreadRuntime() }
+          : state.threadRuntimeById,
+        selectedWorkspaceId: workspaceId,
+        selectedTaskId: task.id,
+        selectedThreadId: mainThread?.sessionId ?? null,
+        newTaskWorkspaceId: null,
+        ...(options?.preserveView ? {} : { view: "task" as const }),
+        taskError: null,
+      }));
+    },
+  });
+}
+
 async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -395,9 +566,13 @@ describe("desktop bootstrap cache", () => {
   beforeEach(() => {
     installWindowMock();
     loadStateError = null;
+    taskListResponse = [];
+    taskReadResponse = null;
+    socketRequests.length = 0;
     remoteAccessEnabled = true;
     packagedApp = false;
     RUNTIME.sessionSnapshots.clear();
+    RUNTIME.jsonRpcSockets.clear();
     loadedState = {
       ...loadedState,
       workspaces: [
@@ -475,6 +650,158 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.view).toBe("task");
     expect(seed?.selectedTaskId).toBe("task-1");
     expect(seed?.selectedThreadId).not.toBe("task-1");
+  });
+
+  test("buildCachedDesktopStateSeed does not select chat fallback for task view without a selected task", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "task",
+        selectedThreadId: null,
+        selectedTaskId: null,
+      },
+    });
+
+    expect(seed?.view).toBe("task");
+    expect(seed?.selectedTaskId).toBeNull();
+    expect(seed?.selectedThreadId).toBeNull();
+  });
+
+  test("buildCachedDesktopStateSeed preserves task thread ownership metadata", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "task-session-1",
+            sessionId: "task-session-1",
+            title: "Task thread",
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+        ],
+      },
+    });
+
+    expect(seed?.threads).toEqual([
+      expect.objectContaining({
+        id: "task-session-1",
+        sessionId: "task-session-1",
+        taskId: "task-1",
+        taskThreadId: "task-thread-1",
+      }),
+    ]);
+  });
+
+  test("buildCachedDesktopStateSeed preserves task id when settings overlays task view without a persisted task thread", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        lastNonSettingsView: "task",
+        selectedThreadId: null,
+        selectedTaskId: "task-1",
+      },
+    });
+
+    expect(seed?.view).toBe("settings");
+    expect(seed?.lastNonSettingsView).toBe("task");
+    expect(seed?.selectedThreadId).toBeNull();
+    expect(seed?.selectedTaskId).toBe("task-1");
+  });
+
+  test("buildCachedDesktopStateSeed does not select chat fallback for settings over task without a selected task", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        lastNonSettingsView: "task",
+        selectedThreadId: null,
+        selectedTaskId: null,
+      },
+    });
+
+    expect(seed?.view).toBe("settings");
+    expect(seed?.lastNonSettingsView).toBe("task");
+    expect(seed?.selectedTaskId).toBeNull();
+    expect(seed?.selectedThreadId).toBeNull();
+  });
+
+  test("buildCachedDesktopStateSeed clears stale task context when chat startup falls back to ordinary chat", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "task-session-1",
+            sessionId: "task-session-1",
+            title: "Task thread",
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "chat",
+        selectedThreadId: "task-session-1",
+        selectedTaskId: "task-1",
+      },
+    });
+
+    expect(seed?.view).toBe("chat");
+    expect(seed?.selectedThreadId).toBe("chat-session-1");
+    expect(seed?.selectedTaskId).toBeNull();
   });
 
   test("buildCachedDesktopStateSeed restores normalized privacy telemetry settings", () => {
@@ -785,6 +1112,182 @@ describe("desktop bootstrap cache", () => {
     expect(state.pluginManagementWorkspaceId).toBeNull();
     expect(state.view).toBe("skills");
     expect(state.sidebarCollapsed).toBe(true);
+  });
+
+  test("init hydrates a settings-over-task cache written without the task-owned thread", async () => {
+    const task = taskRecord();
+    const taskThread = {
+      ...cachedState.persistedState.threads[0],
+      id: "task-session-1",
+      workspaceId: "ws-live",
+      sessionId: "task-session-1",
+      title: "Task main",
+      taskId: "task-1",
+      taskThreadId: "task-thread-1",
+    };
+    const ordinaryThread = {
+      ...cachedState.persistedState.threads[0],
+      id: "thread-live",
+      workspaceId: "ws-live",
+      sessionId: null,
+      title: "Live Thread",
+    };
+
+    useAppStore.setState({
+      ready: true,
+      bootstrapPending: false,
+      workspaces: loadedState.workspaces,
+      threads: [ordinaryThread, taskThread],
+      selectedWorkspaceId: "ws-live",
+      selectedThreadId: "task-session-1",
+      selectedTaskId: "task-1",
+      taskSummariesByWorkspaceId: { "ws-live": [taskSummary(task)] },
+      tasksById: { "task-1": task },
+      view: "settings",
+      lastNonSettingsView: "task",
+    });
+    localStorageMock.clear();
+    syncDesktopStateCacheNow(() => useAppStore.getState());
+
+    const actualCache = JSON.parse([...storage.values()][0] ?? "null");
+    expect(actualCache.ui.selectedThreadId).toBeNull();
+    expect(actualCache.ui.selectedTaskId).toBe("task-1");
+    expect(actualCache.ui.view).toBe("settings");
+    expect(actualCache.ui.lastNonSettingsView).toBe("task");
+    expect(actualCache.persistedState.threads.map((thread: { id: string }) => thread.id)).toEqual([
+      "thread-live",
+    ]);
+
+    loadedState = actualCache.persistedState;
+    taskListResponse = [taskSummary(task)];
+    taskReadResponse = task;
+    resetStoreToCachedSeed(actualCache);
+    installTaskHydrationStub();
+
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().selectedTaskId).toBe("task-1");
+    expect(useAppStore.getState().selectedThreadId).toBeNull();
+
+    await useAppStore.getState().init();
+    await waitForCondition(
+      () =>
+        useAppStore.getState().view === "settings" &&
+        useAppStore.getState().selectedThreadId === "task-session-1" &&
+        useAppStore.getState().tasksById["task-1"] !== undefined,
+    );
+
+    let state = useAppStore.getState();
+    expect(socketRequests).toContain("task/list");
+    expect(socketRequests).toContain("task/read");
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("task");
+    expect(state.selectedWorkspaceId).toBe("ws-live");
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBe("task-session-1");
+    expect(state.tasksById["task-1"]?.title).toBe("Cached task");
+    expect(state.threads.find((thread) => thread.id === "task-session-1")).toEqual(
+      expect.objectContaining({
+        workspaceId: "ws-live",
+        taskId: "task-1",
+        taskThreadId: "task-thread-1",
+      }),
+    );
+    expect(state.threadRuntimeById["task-session-1"]).toBeDefined();
+
+    state.closeSettings();
+    state = useAppStore.getState();
+    expect(state.view).toBe("task");
+    expect(state.selectedTaskId).toBe("task-1");
+    expect(state.selectedThreadId).toBe("task-session-1");
+  });
+
+  test("init keeps settings-over-chat scoped to ordinary chat", async () => {
+    const settingsChatCache = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: loadedState.workspaces,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "thread-live",
+            workspaceId: "ws-live",
+            title: "Live Thread",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        lastNonSettingsView: "chat",
+        selectedWorkspaceId: "ws-live",
+        selectedThreadId: "thread-live",
+        selectedTaskId: "task-1",
+      },
+    };
+    loadedState = settingsChatCache.persistedState;
+    resetStoreToCachedSeed(settingsChatCache);
+    installTaskHydrationStub();
+
+    await useAppStore.getState().init();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const state = useAppStore.getState();
+    expect(socketRequests).not.toContain("task/list");
+    expect(socketRequests).not.toContain("task/read");
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("chat");
+    expect(state.selectedThreadId).toBe("thread-live");
+    expect(state.selectedTaskId).toBeNull();
+  });
+
+  test("init clears deleted settings-over-task selection without exposing chat fallback", async () => {
+    const deletedTaskCache = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: loadedState.workspaces,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "thread-live",
+            workspaceId: "ws-live",
+            title: "Live Thread",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        lastNonSettingsView: "task",
+        selectedWorkspaceId: "ws-live",
+        selectedThreadId: null,
+        selectedTaskId: "task-deleted",
+      },
+    };
+    loadedState = deletedTaskCache.persistedState;
+    taskListResponse = [];
+    resetStoreToCachedSeed(deletedTaskCache);
+    installTaskHydrationStub();
+
+    await useAppStore.getState().init();
+    await waitForCondition(
+      () => socketRequests.includes("task/list") && useAppStore.getState().selectedTaskId === null,
+    );
+
+    let state = useAppStore.getState();
+    expect(socketRequests).toContain("task/list");
+    expect(socketRequests).not.toContain("task/read");
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+
+    state.closeSettings();
+    state = useAppStore.getState();
+    expect(state.view).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
   });
 
   test("init restores plugin management workspace selection from cached state", async () => {

@@ -119,9 +119,7 @@ describe("CommandPalette", () => {
       ],
     });
     act(() => {
-      root.render(
-        createElement(CommandPalette, { open: true, onOpenChange: () => {} }),
-      );
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
     });
     const body = harness.dom.window.document.body;
     const items = Array.from(body.querySelectorAll("[data-slot='command-item']")).map((n) =>
@@ -176,9 +174,7 @@ describe("CommandPalette", () => {
       workspaces: [],
     });
     act(() => {
-      root.render(
-        createElement(CommandPalette, { open: true, onOpenChange: () => {} }),
-      );
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
     });
     const body = harness.dom.window.document.body;
     const items = Array.from(body.querySelectorAll("[data-slot='command-item']")).map((n) =>
@@ -189,12 +185,51 @@ describe("CommandPalette", () => {
     expect(items.some((t) => t?.includes("Archived thread"))).toBe(false);
   });
 
+  test("excludes task-owned threads from recent chat commands", () => {
+    resetAppStore({
+      threads: [
+        {
+          id: "task-session-1",
+          workspaceId: "ws-1",
+          title: "Hidden task transcript",
+          createdAt: "2026-03-24T09:00:00.000Z",
+          lastMessageAt: "2026-03-24T11:00:00.000Z",
+          status: "active",
+          sessionId: "task-session-1",
+          messageCount: 2,
+          lastEventSeq: 2,
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+        {
+          id: "chat-thread-1",
+          workspaceId: "ws-1",
+          title: "Visible chat transcript",
+          createdAt: "2026-03-24T09:00:00.000Z",
+          lastMessageAt: "2026-03-24T10:00:00.000Z",
+          status: "active",
+          sessionId: "chat-session-1",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+      workspaces: [],
+    });
+    act(() => {
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
+    });
+    const body = harness.dom.window.document.body;
+    const items = Array.from(body.querySelectorAll("[data-slot='command-item']")).map((n) =>
+      n.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(items.some((t) => t?.includes("Visible chat transcript"))).toBe(true);
+    expect(items.some((t) => t?.includes("Hidden task transcript"))).toBe(false);
+  });
+
   test("lists settings pages derived from getSettingsGroups", () => {
     resetAppStore({ workspaces: [], threads: [] });
     act(() => {
-      root.render(
-        createElement(CommandPalette, { open: true, onOpenChange: () => {} }),
-      );
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
     });
     const body = harness.dom.window.document.body;
     const items = Array.from(body.querySelectorAll("[data-slot='command-item']")).map((n) =>
@@ -207,9 +242,7 @@ describe("CommandPalette", () => {
   test("closing the palette does not crash", () => {
     resetAppStore({});
     act(() => {
-      root.render(
-        createElement(CommandPalette, { open: false, onOpenChange: () => {} }),
-      );
+      root.render(createElement(CommandPalette, { open: false, onOpenChange: () => {} }));
     });
     const body = harness.dom.window.document.body;
     // When closed, no command input should be present.

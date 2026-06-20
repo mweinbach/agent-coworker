@@ -59,6 +59,7 @@ export function NewTaskLanding() {
   const workspaces = useAppStore((state) => state.workspaces);
   const selectedWorkspaceId = useAppStore((state) => state.selectedWorkspaceId);
   const newTaskWorkspaceId = useAppStore((state) => state.newTaskWorkspaceId);
+  const newTaskWorkspaceRequestId = useAppStore((state) => state.newTaskWorkspaceRequestId);
   const taskSummariesByWorkspaceId = useAppStore((state) => state.taskSummariesByWorkspaceId);
   const taskListLoadingByWorkspaceId = useAppStore((state) => state.taskListLoadingByWorkspaceId);
   const taskError = useAppStore((state) => state.taskError);
@@ -89,12 +90,22 @@ export function NewTaskLanding() {
   const nextWorkItemNumber = useRef(2);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const previousNewTaskWorkspaceId = useRef(newTaskWorkspaceId);
+  const previousNewTaskWorkspaceRequestId = useRef(newTaskWorkspaceRequestId);
 
   useEffect(() => {
-    if (defaultWorkspaceId && !projects.some((workspace) => workspace.id === workspaceId)) {
+    const projectIds = new Set(projects.map((workspace) => workspace.id));
+    const targetChanged =
+      newTaskWorkspaceId !== previousNewTaskWorkspaceId.current ||
+      newTaskWorkspaceRequestId !== previousNewTaskWorkspaceRequestId.current;
+    if (newTaskWorkspaceId && targetChanged && projectIds.has(newTaskWorkspaceId)) {
+      setWorkspaceId(newTaskWorkspaceId);
+    } else if (defaultWorkspaceId && !projectIds.has(workspaceId)) {
       setWorkspaceId(defaultWorkspaceId);
     }
-  }, [defaultWorkspaceId, projects, workspaceId]);
+    previousNewTaskWorkspaceId.current = newTaskWorkspaceId;
+    previousNewTaskWorkspaceRequestId.current = newTaskWorkspaceRequestId;
+  }, [defaultWorkspaceId, newTaskWorkspaceId, newTaskWorkspaceRequestId, projects, workspaceId]);
 
   useEffect(() => {
     if (workspaceId) void refreshTasks(workspaceId);

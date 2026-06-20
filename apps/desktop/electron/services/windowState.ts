@@ -42,7 +42,7 @@ async function readWindowState(app: Electron.App): Promise<WindowBounds | null> 
       };
     }
     return null;
-  } catch (error) {
+  } catch {
     // Missing or corrupt file on first run / after hand-editing — not an error.
     return null;
   }

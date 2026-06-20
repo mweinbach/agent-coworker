@@ -1,3 +1,5 @@
+import { isStandardChatThread } from "../app/threadFilters";
+
 const MAX_VISIBLE_THREADS = 10;
 
 export function groupStandardChatThreadsByWorkspace<
@@ -10,7 +12,7 @@ export function groupStandardChatThreadsByWorkspace<
 >(threads: T[]): Map<string, T[]> {
   const grouped = new Map<string, T[]>();
   for (const thread of threads) {
-    if (thread.archived || thread.taskId) continue;
+    if (!isStandardChatThread(thread, { includeDrafts: true })) continue;
     const bucket = grouped.get(thread.workspaceId);
     if (bucket) bucket.push(thread);
     else grouped.set(thread.workspaceId, [thread]);

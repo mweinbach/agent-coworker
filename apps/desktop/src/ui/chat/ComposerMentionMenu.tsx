@@ -24,7 +24,7 @@ export function ComposerMentionMenu(props: {
   useEffect(() => {
     const el = itemRefs.current[activeIndex];
     if (el) el.scrollIntoView({ block: "nearest" });
-  }, [activeIndex, items]);
+  }, [activeIndex]);
 
   if (items.length === 0) {
     const trimmed = (query ?? "").trim();

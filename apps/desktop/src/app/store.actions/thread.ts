@@ -6,6 +6,7 @@ import {
 import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
 import { seedDockFromFeed } from "../a2uiDockReducer";
+import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
   type AppStoreActions,
   type AppStoreState,
@@ -44,6 +45,7 @@ import {
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
   createDefaultA2uiDock,
@@ -69,12 +71,17 @@ function findLatestSandboxApprovalPrompt(
   const selectedPrompt = selectedThreadId
     ? state.sandboxApprovalsByThread[selectedThreadId]?.at(-1)
     : undefined;
-  if (selectedThreadId && selectedPrompt) {
+  if (
+    selectedThreadId &&
+    selectedPrompt &&
+    isSandboxApprovalThreadVisible(state, selectedThreadId)
+  ) {
     return { threadId: selectedThreadId, prompt: selectedPrompt };
   }
 
   let latest: { threadId: string; prompt: SandboxApprovalPrompt } | null = null;
   for (const [threadId, prompts] of Object.entries(state.sandboxApprovalsByThread)) {
+    if (!isSandboxApprovalThreadVisible(state, threadId)) continue;
     for (const prompt of prompts) {
       if (!latest) {
         latest = { threadId, prompt };
@@ -123,6 +130,12 @@ export async function hydrateThreadSelection(
 
   const thread = get().threads.find((candidate) => candidate.id === threadId);
   if (!thread) return;
+  const selectedTaskIdForThread = (candidate: ThreadRecord): string | null => {
+    if (isStandardChatThread(candidate, { includeDrafts: true })) return null;
+    return typeof candidate.taskId === "string" && candidate.taskId.trim().length > 0
+      ? candidate.taskId
+      : null;
+  };
 
   const threadFingerprint = (candidate: ThreadRecord): SessionSnapshotFingerprint => ({
     updatedAt: candidate.lastMessageAt,
@@ -273,9 +286,11 @@ export async function hydrateThreadSelection(
 
   ensureThreadRuntime(get, set, threadId);
   if (thread.draft) {
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedThreadId: threadId,
       selectedWorkspaceId: thread.workspaceId,
+      selectedTaskId,
       view: options.preserveView ? state.view : "chat",
       threadRuntimeById: {
         ...state.threadRuntimeById,
@@ -292,16 +307,20 @@ export async function hydrateThreadSelection(
 
   const rt = get().threadRuntimeById[threadId];
   if (get().selectedThreadId === threadId && RUNTIME.threadSelectionRequests.has(threadId)) {
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
+      selectedTaskId,
       view: options.preserveView ? state.view : "chat",
     }));
     syncDesktopStateCache(get);
     return;
   }
   if (get().selectedThreadId === threadId && rt?.connected) {
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
+      selectedTaskId,
       view: options.preserveView ? state.view : "chat",
     }));
     syncDesktopStateCache(get);
@@ -342,9 +361,11 @@ export async function hydrateThreadSelection(
     (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
 
   const requestId = beginThreadSelectionRequest(threadId);
+  const selectedTaskId = selectedTaskIdForThread(thread);
   set((state) => ({
     selectedThreadId: threadId,
     selectedWorkspaceId: thread.workspaceId,
+    selectedTaskId,
     view: options.preserveView ? state.view : "chat",
     threadRuntimeById: {
       ...state.threadRuntimeById,
@@ -842,6 +863,7 @@ export function createThreadActions(
           if (existingDraft) {
             set({
               selectedThreadId: existingDraft.id,
+              selectedTaskId: null,
               view: "chat",
               newChatLandingTarget: null,
             });
@@ -896,6 +918,7 @@ export function createThreadActions(
       set((s) => ({
         threads: [thread, ...s.threads],
         selectedThreadId: threadId,
+        selectedTaskId: null,
         view: "chat",
         composerText: "",
         newChatLandingTarget: null,
@@ -965,6 +988,7 @@ export function createThreadActions(
           : resolveDefaultNewChatTarget(state.workspaces, state.selectedWorkspaceId));
       set({
         selectedThreadId: null,
+        selectedTaskId: null,
         view: "chat",
         composerText: "",
         newChatLandingTarget: landingTarget,

@@ -28,6 +28,32 @@ describe("desktop sidebar helpers", () => {
     ]);
   });
 
+  test("keeps ordinary draft chats in standard chat groups while excluding task-owned drafts", () => {
+    const activeChat = {
+      id: "chat-1",
+      workspaceId: "ws-1",
+      lastMessageAt: "2026-06-18T12:00:00.000Z",
+      draft: false,
+    };
+    const draftChat = {
+      id: "draft-chat-1",
+      workspaceId: "ws-1",
+      lastMessageAt: "2026-06-18T13:00:00.000Z",
+      draft: true,
+    };
+    const taskOwnedDraft = {
+      id: "task-draft-1",
+      workspaceId: "ws-1",
+      lastMessageAt: "2026-06-18T14:00:00.000Z",
+      draft: true,
+      taskId: "task-1",
+    };
+
+    expect(
+      groupStandardChatThreadsByWorkspace([activeChat, draftChat, taskOwnedDraft]).get("ws-1"),
+    ).toEqual([draftChat, activeChat]);
+  });
+
   test("caps visible threads at 10 by default and reports hidden overflow", () => {
     const threads = Array.from({ length: 12 }, (_, index) => ({ id: `thread-${index}` }));
 

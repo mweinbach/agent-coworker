@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
+import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility";
 import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
@@ -437,10 +438,13 @@ export default function App() {
           }
           return;
         }
-        const hasPendingSandboxApproval = Object.values(state.sandboxApprovalsByThread).some(
-          (pending) => pending.length > 0,
+        const hasPendingSandboxApproval = Object.entries(state.sandboxApprovalsByThread).some(
+          ([threadId, pending]) =>
+            pending.length > 0 && isSandboxApprovalThreadVisible(state, threadId),
         );
         if (hasPendingSandboxApproval) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
           state.dismissPrompt();
           return;
         }

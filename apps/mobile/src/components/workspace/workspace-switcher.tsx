@@ -93,7 +93,9 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={{ flex: 1, backgroundColor: theme.background, paddingTop: Math.max(insets.top, 8) }}>
+      <View
+        style={{ flex: 1, backgroundColor: theme.background, paddingTop: Math.max(insets.top, 8) }}
+      >
         <View
           style={{
             flexDirection: "row",

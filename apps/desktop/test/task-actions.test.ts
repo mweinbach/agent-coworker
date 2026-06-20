@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import type {
   TaskArtifactDetail,
@@ -137,14 +137,32 @@ function taskQuestion(overrides: Partial<TaskQuestion> = {}): TaskQuestion {
   };
 }
 
-function createHarness() {
+function setRendererPlatform(platform: NodeJS.Platform | null) {
+  if (platform === null) {
+    Reflect.deleteProperty(globalThis, "document");
+    return;
+  }
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      documentElement: {
+        dataset: {
+          platform,
+        },
+      },
+    },
+  });
+}
+
+function createHarness(options: { workspacePath?: string } = {}) {
   const reconnectThread = mock(async () => {});
+  const workspacePath = options.workspacePath ?? "C:\\Users\\Max\\Projects\\Demo\\";
   const state = {
     workspaces: [
       {
         id: "ws-1",
         name: "Demo",
-        path: "C:\\Users\\Max\\Projects\\Demo\\",
+        path: workspacePath,
         workspaceKind: "project",
       },
     ],
@@ -165,6 +183,7 @@ function createHarness() {
     selectedThreadId: "chat-1",
     selectedTaskId: null as string | null,
     newTaskWorkspaceId: null as string | null,
+    newTaskWorkspaceRequestId: 0,
     view: "chat",
     taskSummariesByWorkspaceId: {},
     tasksById: {} as Record<string, TaskRecord>,
@@ -217,8 +236,13 @@ describe("desktop task actions", () => {
 
   beforeEach(() => {
     __internalTaskActions.reset();
+    setRendererPlatform("win32");
     notificationRouter = null;
     requestJsonRpc.mockClear();
+  });
+
+  afterEach(() => {
+    setRendererPlatform(null);
   });
 
   test("creates an explicit task thread without replacing standard chat", async () => {
@@ -332,6 +356,103 @@ describe("desktop task actions", () => {
 
     expect(harness.state.tasksById["task-1"]?.title).toBe("Updated task");
     expect(harness.state.threads.some((thread) => thread.id === "task-session-1")).toBe(true);
+  });
+
+  test("accepts drive-relative task notifications for the same Windows workspace", async () => {
+    setRendererPlatform("win32");
+    const harness = createHarness({ workspacePath: "C:\\repo" });
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    await actions.refreshTasks("ws-1");
+
+    notificationRouter?.({
+      kind: "notification",
+      method: "task/updated",
+      params: {
+        cwd: "C:repo",
+        task: taskRecord({
+          workspacePath: "C:repo",
+          title: "Drive-relative task",
+          revision: 3,
+        }),
+      },
+    });
+
+    expect(harness.state.tasksById["task-1"]?.title).toBe("Drive-relative task");
+    expect(harness.state.taskSummariesByWorkspaceId["ws-1"]?.[0]?.title).toBe(
+      "Drive-relative task",
+    );
+  });
+
+  test("filters drive-relative task notifications for a different Windows drive", async () => {
+    setRendererPlatform("win32");
+    const harness = createHarness({ workspacePath: "C:\\repo" });
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    await actions.refreshTasks("ws-1");
+
+    notificationRouter?.({
+      kind: "notification",
+      method: "task/updated",
+      params: {
+        cwd: "D:repo",
+        task: taskRecord({
+          workspacePath: "D:repo",
+          title: "Wrong drive task",
+          revision: 3,
+        }),
+      },
+    });
+
+    expect(harness.state.tasksById["task-1"]).toBeUndefined();
+    expect(harness.state.taskSummariesByWorkspaceId["ws-1"]).toEqual([]);
+  });
+
+  test("accepts current-drive-rooted and mixed-case Windows task notifications", async () => {
+    setRendererPlatform("win32");
+    const harness = createHarness({ workspacePath: "C:\\Repo" });
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    await actions.refreshTasks("ws-1");
+
+    notificationRouter?.({
+      kind: "notification",
+      method: "task/updated",
+      params: {
+        cwd: "\\repo\\.\\",
+        task: taskRecord({
+          workspacePath: "c:/REPO",
+          title: "Current drive task",
+          revision: 3,
+        }),
+      },
+    });
+
+    expect(harness.state.tasksById["task-1"]?.title).toBe("Current drive task");
+  });
+
+  test("keeps POSIX task notification workspace matching case-sensitive", async () => {
+    setRendererPlatform("linux");
+    const harness = createHarness({ workspacePath: "/tmp/Repo" });
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    await actions.refreshTasks("ws-1");
+
+    notificationRouter?.({
+      kind: "notification",
+      method: "task/updated",
+      params: {
+        cwd: "/tmp/repo",
+        task: taskRecord({
+          workspacePath: "/tmp/repo",
+          title: "Wrong POSIX case",
+          revision: 3,
+        }),
+      },
+    });
+
+    expect(harness.state.tasksById["task-1"]).toBeUndefined();
+    expect(harness.state.taskSummariesByWorkspaceId["ws-1"]).toEqual([]);
   });
 
   test("resolves task questions through JSON-RPC and stores the returned task", async () => {

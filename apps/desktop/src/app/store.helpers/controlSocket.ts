@@ -4,6 +4,8 @@ import {
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
+import { isStandardChatThread, isTaskOwnedThread } from "../threadFilters";
+import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
@@ -126,7 +128,9 @@ export function createControlSocketHelpers(
         }
       }
     }
-    const localOnlyThreads = workspaceThreads.filter((thread) => !thread.sessionId);
+    const clientOwnedThreads = workspaceThreads.filter(
+      (thread) => !thread.sessionId || isTaskOwnedThread(thread),
+    );
     const nextServerThreads = sessions.map((session) => {
       const existing = serverBackedBySessionId.get(session.sessionId);
       const threadId = existing?.id ?? session.sessionId;
@@ -149,6 +153,8 @@ export function createControlSocketHelpers(
         archived: existing?.archived ?? false,
         archivedAt: existing?.archivedAt,
         legacyTranscriptId,
+        ...(existing?.taskId ? { taskId: existing.taskId } : {}),
+        ...(existing?.taskThreadId ? { taskThreadId: existing.taskThreadId } : {}),
       } satisfies ThreadRecord;
     });
     const claimedLegacyThreadIds = new Set(
@@ -165,7 +171,7 @@ export function createControlSocketHelpers(
       ...nextServerThreads.sort((left, right) =>
         right.lastMessageAt.localeCompare(left.lastMessageAt),
       ),
-      ...localOnlyThreads
+      ...clientOwnedThreads
         .filter(
           (thread) =>
             thread.draft === true ||
@@ -183,6 +189,7 @@ export function createControlSocketHelpers(
     const sessionIds = new Set<string>();
     for (const thread of allThreads) {
       if (thread.workspaceId !== workspaceId) continue;
+      if (isTaskOwnedThread(thread)) continue;
       const runtimeSessionId = threadRuntimeById[thread.id]?.sessionId;
       for (const candidateSessionId of [thread.sessionId, runtimeSessionId, thread.id]) {
         if (typeof candidateSessionId !== "string" || candidateSessionId.trim().length === 0) {
@@ -214,35 +221,65 @@ export function createControlSocketHelpers(
     return removedSessionIds;
   }
 
-  function reconcileSelectedThreadId(
-    allThreads: ThreadRecord[],
+  function reconcileSelectedThreadSelection(
     nextThreads: ThreadRecord[],
     workspaceId: string,
     selectedWorkspaceId: string | null,
     selectedThreadId: string | null,
-  ): string | null {
+    selectedTaskId: string | null,
+    view: ReturnType<StoreGet>["view"],
+    lastNonSettingsView: ReturnType<StoreGet>["lastNonSettingsView"],
+  ): { selectedThreadId: string | null; selectedTaskId: string | null } {
+    const selectionIntent = getThreadSelectionIntent(view, lastNonSettingsView, selectedTaskId);
+    const selectionWorkspaceId = selectedWorkspaceId ?? workspaceId;
     if (!selectedThreadId) {
-      return null;
+      return {
+        selectedThreadId: null,
+        selectedTaskId: selectionIntent.selectedTaskId,
+      };
     }
-    if (nextThreads.some((thread) => thread.id === selectedThreadId && !thread.archived)) {
-      return selectedThreadId;
+    const selectable = (thread: ThreadRecord): boolean =>
+      thread.workspaceId === selectionWorkspaceId &&
+      (selectionIntent.context === "task"
+        ? Boolean(
+            selectionIntent.selectedTaskId && thread.taskId === selectionIntent.selectedTaskId,
+          )
+        : isStandardChatThread(thread, { includeDrafts: true }));
+    const selectionFor = (threadId: string | null) => {
+      if (selectionIntent.context === "task") {
+        return { selectedThreadId: threadId, selectedTaskId: selectionIntent.selectedTaskId };
+      }
+      return { selectedThreadId: threadId, selectedTaskId: null };
+    };
+    if (nextThreads.some((thread) => thread.id === selectedThreadId && selectable(thread))) {
+      return selectionFor(selectedThreadId);
     }
 
     const migratedThreadId =
       nextThreads.find(
-        (thread) => thread.legacyTranscriptId === selectedThreadId && !thread.archived,
+        (thread) => thread.legacyTranscriptId === selectedThreadId && selectable(thread),
       )?.id ?? null;
     if (migratedThreadId) {
-      return migratedThreadId;
+      return selectionFor(migratedThreadId);
     }
 
-    const fallbackWorkspaceId =
-      allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId ??
-      selectedWorkspaceId ??
-      workspaceId;
-    return (
-      nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId && !thread.archived)
-        ?.id ?? null
+    if (selectionIntent.context === "task") {
+      return selectionFor(
+        selectionIntent.selectedTaskId
+          ? (nextThreads.find(
+              (thread) =>
+                thread.workspaceId === selectionWorkspaceId &&
+                thread.taskId === selectionIntent.selectedTaskId,
+            )?.id ?? null)
+          : null,
+      );
+    }
+    return selectionFor(
+      nextThreads.find(
+        (thread) =>
+          thread.workspaceId === selectionWorkspaceId &&
+          isStandardChatThread(thread, { includeDrafts: true }),
+      )?.id ?? null,
     );
   }
 
@@ -623,16 +660,19 @@ export function createControlSocketHelpers(
           workspaceId,
           sessions,
         );
-        const selectedThreadId = reconcileSelectedThreadId(
-          s.threads,
+        const selection = reconcileSelectedThreadSelection(
           nextThreads,
           workspaceId,
           s.selectedWorkspaceId,
           s.selectedThreadId,
+          s.selectedTaskId,
+          s.view,
+          s.lastNonSettingsView,
         );
         return {
           threads: nextThreads,
-          selectedThreadId,
+          selectedThreadId: selection.selectedThreadId,
+          selectedTaskId: selection.selectedTaskId,
         };
       });
       for (const sessionId of removedSessionSnapshotIds) {

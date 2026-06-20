@@ -22,6 +22,8 @@ import type {
   WorkItemStatus,
 } from "../../shared/tasks";
 
+const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
+
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
 }
@@ -1096,6 +1098,15 @@ export class SessionTaskRepository {
     return row ? this.mapArtifactRevision(row) : null;
   }
 
+  getArtifactRevisionForSession(sessionId: string): TaskArtifactRevision | null {
+    const row = this.db
+      .query(
+        "SELECT * FROM task_artifact_revisions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(sessionId) as Record<string, unknown> | null;
+    return row ? this.mapArtifactRevision(row) : null;
+  }
+
   getArtifactRevision(revisionId: string): TaskArtifactRevision | null {
     const row = this.db
       .query("SELECT * FROM task_artifact_revisions WHERE revision_id = ?")
@@ -1407,6 +1418,33 @@ export class SessionTaskRepository {
     return this.requireTask(taskId);
   }
 
+  abandonArtifactRevisionForTerminalTask(input: {
+    revisionId: string;
+    updatedAt: string;
+  }): TaskRecord {
+    const revisionRow = this.requireArtifactRevisionRow(input.revisionId);
+    const taskId = String(revisionRow.task_id);
+    this.db.transaction(() => {
+      const taskRow = this.db.query("SELECT status FROM tasks WHERE task_id = ?").get(taskId) as {
+        status: TaskStatus;
+      } | null;
+      if (!taskRow) throw new Error(`Unknown task: ${taskId}`);
+      if (!TERMINAL_TASK_STATUSES.has(taskRow.status)) return;
+      const result = this.db
+        .query(
+          "UPDATE task_artifact_revisions SET status = 'cancelled', updated_at = ?, completed_at = ? WHERE revision_id = ? AND status = 'active'",
+        )
+        .run(input.updatedAt, input.updatedAt, input.revisionId);
+      if (result.changes === 0) return;
+      this.abandonRevisionWorkItem(
+        taskId,
+        typeof revisionRow.work_item_id === "string" ? revisionRow.work_item_id : null,
+        input.updatedAt,
+      );
+    })();
+    return this.requireTask(taskId);
+  }
+
   acceptArtifactVersion(input: {
     taskId: string;
     artifactId: string;
@@ -1583,6 +1621,9 @@ export class SessionTaskRepository {
       this.db
         .query("UPDATE tasks SET status = ? WHERE task_id = ?")
         .run(input.status, input.taskId);
+      if (TERMINAL_TASK_STATUSES.has(input.status)) {
+        this.abandonActiveArtifactRevisionsForTerminalTask(input.taskId, input.updatedAt);
+      }
       if (input.status === "cancelled") {
         this.db
           .query(
@@ -1610,11 +1651,14 @@ export class SessionTaskRepository {
     return this.requireTask(input.taskId);
   }
 
-  appendActivity(activity: TaskActivity): TaskRecord {
-    this.insertActivity(activity);
-    this.db
-      .query("UPDATE tasks SET updated_at = ? WHERE task_id = ?")
-      .run(activity.createdAt, activity.taskId);
+  appendActivity(activity: TaskActivity, options?: { rejectTerminal?: boolean }): TaskRecord {
+    this.db.transaction(() => {
+      if (options?.rejectTerminal) this.assertTaskAcceptsMutation(activity.taskId);
+      this.insertActivity(activity);
+      this.db
+        .query("UPDATE tasks SET updated_at = ? WHERE task_id = ?")
+        .run(activity.createdAt, activity.taskId);
+    })();
     return this.requireTask(activity.taskId);
   }
 
@@ -1626,23 +1670,29 @@ export class SessionTaskRepository {
     return this.requireTask(activity.taskId);
   }
 
-  createCheckpoint(checkpoint: TaskCheckpoint): TaskCheckpoint {
-    this.db
-      .query(
-        "INSERT INTO task_checkpoints(checkpoint_id, task_id, thread_id, task_revision, reason, agent_summary, context_digest, task_snapshot_json, artifact_manifest_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        checkpoint.id,
-        checkpoint.taskId,
-        checkpoint.threadId,
-        checkpoint.taskRevision,
-        checkpoint.reason,
-        checkpoint.agentSummary,
-        checkpoint.contextDigest,
-        JSON.stringify(checkpoint.taskSnapshot),
-        JSON.stringify(checkpoint.artifactManifest),
-        checkpoint.createdAt,
-      );
+  createCheckpoint(
+    checkpoint: TaskCheckpoint,
+    options?: { rejectTerminal?: boolean },
+  ): TaskCheckpoint {
+    this.db.transaction(() => {
+      if (options?.rejectTerminal) this.assertTaskAcceptsMutation(checkpoint.taskId);
+      this.db
+        .query(
+          "INSERT INTO task_checkpoints(checkpoint_id, task_id, thread_id, task_revision, reason, agent_summary, context_digest, task_snapshot_json, artifact_manifest_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          checkpoint.id,
+          checkpoint.taskId,
+          checkpoint.threadId,
+          checkpoint.taskRevision,
+          checkpoint.reason,
+          checkpoint.agentSummary,
+          checkpoint.contextDigest,
+          JSON.stringify(checkpoint.taskSnapshot),
+          JSON.stringify(checkpoint.artifactManifest),
+          checkpoint.createdAt,
+        );
+    })();
     return checkpoint;
   }
 
@@ -1683,6 +1733,17 @@ export class SessionTaskRepository {
         `Task revision conflict: expected ${expectedRevision}, current ${current.revision}`,
       );
     }
+  }
+
+  private assertTaskAcceptsMutation(taskId: string): void {
+    const row = this.db.query("SELECT status FROM tasks WHERE task_id = ?").get(taskId) as {
+      status: TaskStatus;
+    } | null;
+    if (!row) throw new Error(`Unknown task: ${taskId}`);
+    if (!TERMINAL_TASK_STATUSES.has(row.status)) return;
+    throw new Error(
+      `Task ${taskId} is ${row.status} and cannot be changed until it is reopened or retried.`,
+    );
   }
 
   private insertDecision(decision: TaskDecision): void {
@@ -1782,6 +1843,36 @@ export class SessionTaskRepository {
         "UPDATE task_artifact_versions SET review_status = 'superseded' WHERE artifact_id = ? AND review_status = 'draft'",
       )
       .run(artifactId);
+  }
+
+  private abandonActiveArtifactRevisionsForTerminalTask(taskId: string, updatedAt: string): void {
+    const rows = this.db
+      .query(
+        "SELECT work_item_id FROM task_artifact_revisions WHERE task_id = ? AND status = 'active'",
+      )
+      .all(taskId) as Array<{ work_item_id: string | null }>;
+    this.db
+      .query(
+        "UPDATE task_artifact_revisions SET status = 'cancelled', updated_at = ?, completed_at = ? WHERE task_id = ? AND status = 'active'",
+      )
+      .run(updatedAt, updatedAt, taskId);
+    for (const row of rows) {
+      this.abandonRevisionWorkItem(taskId, row.work_item_id, updatedAt);
+    }
+  }
+
+  private abandonRevisionWorkItem(
+    taskId: string,
+    workItemId: string | null,
+    updatedAt: string,
+  ): void {
+    if (!workItemId) return;
+    this.db
+      .query(
+        "UPDATE task_work_items SET status = 'abandoned', completion_evidence = COALESCE(completion_evidence, 'Artifact revision abandoned because the task is terminal'), updated_at = ? WHERE task_id = ? AND work_item_id = ? AND status NOT IN ('done', 'abandoned')",
+      )
+      .run(updatedAt, taskId, workItemId);
+    this.db.query("DELETE FROM task_work_item_claims WHERE work_item_id = ?").run(workItemId);
   }
 
   private moveArtifactWorkItemToReview(

@@ -1,7 +1,9 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
+import { sameWorkspacePath } from "@cowork/utils/workspacePath";
 
 import { captureProductEvent } from "../../lib/analytics";
 import { pickWorkspaceDirectory, stopWorkspaceServer } from "../../lib/desktopCommands";
+import { getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
 import {
   type AppStoreActions,
@@ -25,6 +27,8 @@ import {
   sendThread,
 } from "../store.helpers";
 import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
+import { isStandardChatThread } from "../threadFilters";
+import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { WorkspaceRecord } from "../types";
 import { hydrateThreadSelection } from "./thread";
 
@@ -51,15 +55,60 @@ export function createWorkspaceActions(
       ? (state.threads.find((thread) => thread.id === currentThreadId) ?? null)
       : null;
 
-    if (currentThread?.workspaceId === workspaceId && !currentThread.archived) {
+    if (
+      currentThread?.workspaceId === workspaceId &&
+      isStandardChatThread(currentThread, { includeDrafts: true })
+    ) {
       return currentThread.id;
     }
 
     const workspaceThreads = state.threads
-      .filter((thread) => thread.workspaceId === workspaceId && !thread.archived)
+      .filter(
+        (thread) =>
+          thread.workspaceId === workspaceId &&
+          isStandardChatThread(thread, { includeDrafts: true }),
+      )
       .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt));
 
     return workspaceThreads[0]?.id ?? null;
+  };
+
+  const preferredTaskThreadId = (taskId: string, currentThreadId: string | null): string | null => {
+    const state = get();
+    const task = state.tasksById[taskId];
+    if (currentThreadId) {
+      const currentThread = state.threads.find((thread) => thread.id === currentThreadId);
+      if (
+        currentThread?.taskId === taskId ||
+        task?.threads.some((thread) => thread.sessionId === currentThreadId)
+      ) {
+        return currentThreadId;
+      }
+    }
+
+    return (
+      task?.threads[0]?.sessionId ??
+      state.threads
+        .filter((thread) => thread.taskId === taskId)
+        .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt))[0]?.id ??
+      null
+    );
+  };
+
+  const taskBelongsToWorkspace = (taskId: string | null, workspaceId: string): boolean => {
+    if (!taskId) return false;
+    const state = get();
+    if ((state.taskSummariesByWorkspaceId[workspaceId] ?? []).some((task) => task.id === taskId)) {
+      return true;
+    }
+    const task = state.tasksById[taskId];
+    const workspace = state.workspaces.find((item) => item.id === workspaceId);
+    if (!task || !workspace) return false;
+    return sameWorkspacePath(
+      task.workspacePath,
+      workspace.path,
+      getDesktopPlatformInfo().rawPlatform as NodeJS.Platform,
+    );
   };
 
   const isWorkspaceLifecycleEnabled = () => get().desktopFeatureFlags.workspaceLifecycle !== false;
@@ -184,10 +233,34 @@ export function createWorkspaceActions(
           s.pluginManagementWorkspaceId === workspaceId && s.pluginManagementMode === "workspace"
             ? "auto"
             : s.pluginManagementMode;
-        const selectedThreadId =
-          s.selectedThreadId && remainingThreads.some((t) => t.id === s.selectedThreadId)
-            ? s.selectedThreadId
+        const selectedTaskId =
+          selectedWorkspaceId && taskBelongsToWorkspace(s.selectedTaskId, selectedWorkspaceId)
+            ? s.selectedTaskId
             : null;
+        const threadSelectionIntent = getThreadSelectionIntent(
+          s.view,
+          s.lastNonSettingsView,
+          selectedTaskId,
+        );
+        const selectedThread = s.selectedThreadId
+          ? (remainingThreads.find((t) => t.id === s.selectedThreadId) ?? null)
+          : null;
+        let selectedThreadId: string | null = null;
+        if (selectedWorkspaceId && selectedThread?.workspaceId === selectedWorkspaceId) {
+          if (threadSelectionIntent.context === "task" && threadSelectionIntent.selectedTaskId) {
+            const selectedTask = s.tasksById[threadSelectionIntent.selectedTaskId];
+            const selectedThreadBelongsToTask =
+              selectedThread.taskId === threadSelectionIntent.selectedTaskId ||
+              selectedTask?.threads.some((thread) => thread.sessionId === selectedThread.id) ===
+                true;
+            selectedThreadId = selectedThreadBelongsToTask ? selectedThread.id : null;
+          } else if (
+            threadSelectionIntent.context === "chat" &&
+            isStandardChatThread(selectedThread, { includeDrafts: true })
+          ) {
+            selectedThreadId = selectedThread.id;
+          }
+        }
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
@@ -195,6 +268,8 @@ export function createWorkspaceActions(
           pluginManagementMode,
           selectedWorkspaceId,
           selectedThreadId,
+          selectedTaskId,
+          newTaskWorkspaceId: s.newTaskWorkspaceId === workspaceId ? null : s.newTaskWorkspaceId,
         };
       });
       clearWorkspaceStartState(workspaceId);
@@ -207,7 +282,24 @@ export function createWorkspaceActions(
 
     selectWorkspace: async (workspaceId: string) => {
       const wasSelected = get().selectedWorkspaceId === workspaceId;
-      const nextThreadId = preferredThreadIdForWorkspace(workspaceId);
+      const currentState = get();
+      const threadSelectionIntent = getThreadSelectionIntent(
+        currentState.view,
+        currentState.lastNonSettingsView,
+        currentState.selectedTaskId,
+      );
+      const selectedTaskId =
+        threadSelectionIntent.context === "task" &&
+        threadSelectionIntent.selectedTaskId &&
+        taskBelongsToWorkspace(threadSelectionIntent.selectedTaskId, workspaceId)
+          ? threadSelectionIntent.selectedTaskId
+          : null;
+      const nextThreadId =
+        threadSelectionIntent.context === "task"
+          ? selectedTaskId
+            ? preferredTaskThreadId(selectedTaskId, currentState.selectedThreadId)
+            : null
+          : preferredThreadIdForWorkspace(workspaceId);
       const hydrateSelectedThreadPromise = nextThreadId
         ? hydrateThreadSelection(get, set, nextThreadId, {
             preserveView: true,
@@ -215,11 +307,21 @@ export function createWorkspaceActions(
             skipWorkspaceSelectOnReconnect: true,
           })
         : null;
-      set((s) => ({
-        selectedWorkspaceId: workspaceId,
-        selectedThreadId: nextThreadId,
-        view: s.view === "settings" ? "settings" : s.view,
-      }));
+      set((s) => {
+        const retargetNewTask =
+          getThreadSelectionIntent(s.view, s.lastNonSettingsView, selectedTaskId).context ===
+            "task" && selectedTaskId === null;
+        return {
+          selectedWorkspaceId: workspaceId,
+          selectedThreadId: nextThreadId,
+          selectedTaskId,
+          newTaskWorkspaceId: retargetNewTask ? workspaceId : null,
+          newTaskWorkspaceRequestId: retargetNewTask
+            ? s.newTaskWorkspaceRequestId + 1
+            : s.newTaskWorkspaceRequestId,
+          view: s.view === "settings" ? "settings" : s.view,
+        };
+      });
       ensureWorkspaceRuntime(get, set, workspaceId);
 
       const ws = get().workspaces.find((w) => w.id === workspaceId);

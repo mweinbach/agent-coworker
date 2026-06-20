@@ -544,11 +544,11 @@ samp {
  * them in one place so the whole app respects the OS preference.
  */
 @media (prefers-reduced-motion: reduce) {
-  .animate-pulse,
-  .animate-spin,
-  .animate-bounce,
-  .animate-ping {
-    animation: none !important;
+  .animate-pulse.animate-pulse,
+  .animate-spin.animate-spin,
+  .animate-bounce.animate-bounce,
+  .animate-ping.animate-ping {
+    animation: none;
   }
 }
 

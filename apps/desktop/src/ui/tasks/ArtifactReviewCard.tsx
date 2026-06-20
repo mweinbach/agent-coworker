@@ -17,6 +17,7 @@ import type {
   TaskArtifact,
   TaskArtifactDetail,
   TaskArtifactVersion,
+  TaskStatus,
 } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
@@ -47,6 +48,7 @@ import { cn } from "../../lib/utils";
 type ArtifactReviewCardProps = {
   taskId: string;
   taskRevision: number;
+  taskStatus: TaskStatus;
   artifact: TaskArtifact;
   onOpenFile: (path: string) => void;
 };
@@ -238,6 +240,7 @@ function ReviewStatus({ detail }: { detail: TaskArtifactDetail | null }) {
 export function ArtifactReviewCard({
   taskId,
   taskRevision,
+  taskStatus,
   artifact,
   onOpenFile,
 }: ArtifactReviewCardProps) {
@@ -261,6 +264,21 @@ export function ArtifactReviewCard({
   const [instruction, setInstruction] = useState("");
   const loadedDetailKeyRef = useRef<string | null>(null);
   const detailRequestKey = `${taskId}:${artifact.id}:${taskRevision}`;
+  const terminal =
+    taskStatus === "completed" || taskStatus === "cancelled" || taskStatus === "failed";
+  const terminalRevisionNoticeId = `artifact-revision-lock-${taskId}-${artifact.id}`;
+  const terminalRevisionCopy =
+    taskStatus === "failed"
+      ? "Retry the task before changing artifact versions."
+      : "Reopen the task before changing artifact versions.";
+
+  useEffect(() => {
+    if (terminal && revisionOpen) setRevisionOpen(false);
+  }, [revisionOpen, terminal]);
+
+  useEffect(() => {
+    if (terminal && restoreConfirmOpen) setRestoreConfirmOpen(false);
+  }, [restoreConfirmOpen, terminal]);
 
   const loadDetail = useCallback(async () => {
     setLoadingDetail(true);
@@ -354,18 +372,19 @@ export function ArtifactReviewCard({
   };
 
   const captureCurrent = async () => {
+    if (terminal) return;
     await runDetailMutation("capture", () =>
       captureVersion(taskId, artifact.id, "Captured from artifact review"),
     );
   };
 
   const acceptSelected = async () => {
-    if (!selectedVersion) return;
+    if (terminal || !selectedVersion) return;
     await runDetailMutation("accept", () => acceptVersion(taskId, artifact.id, selectedVersion.id));
   };
 
   const restoreSelected = async () => {
-    if (!selectedVersion) return;
+    if (terminal || !selectedVersion) return;
     const next = await runDetailMutation("restore", () =>
       restoreVersion(taskId, artifact.id, selectedVersion.id),
     );
@@ -374,7 +393,7 @@ export function ArtifactReviewCard({
 
   const submitRevision = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selectedVersion || !instruction.trim()) return;
+    if (terminal || !selectedVersion || !instruction.trim()) return;
     const next = await runDetailMutation("revision", () =>
       startRevision(taskId, artifact.id, selectedVersion.id, instruction),
     );
@@ -430,7 +449,7 @@ export function ArtifactReviewCard({
                   }}
                 >
                   <HistoryIcon data-icon="inline-start" />
-                  Revise this
+                  {terminal ? "Review versions" : "Revise this"}
                 </Button>
               </DialogTrigger>
             </div>
@@ -581,7 +600,7 @@ export function ArtifactReviewCard({
               <Button
                 type="button"
                 variant="outline"
-                disabled={pendingAction !== null}
+                disabled={terminal || pendingAction !== null}
                 onClick={() => void captureCurrent()}
               >
                 {pendingAction === "capture" ? (
@@ -595,8 +614,10 @@ export function ArtifactReviewCard({
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={pendingAction !== null}
-                  onClick={() => setRestoreConfirmOpen(true)}
+                  disabled={terminal || pendingAction !== null}
+                  onClick={() => {
+                    if (!terminal) setRestoreConfirmOpen(true);
+                  }}
                 >
                   <RotateCcwIcon data-icon="inline-start" />
                   Restore draft
@@ -606,7 +627,7 @@ export function ArtifactReviewCard({
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={pendingAction !== null}
+                  disabled={terminal || pendingAction !== null}
                   onClick={() => void acceptSelected()}
                 >
                   {pendingAction === "accept" ? (
@@ -619,18 +640,36 @@ export function ArtifactReviewCard({
               ) : null}
               <Button
                 type="button"
-                disabled={!selectedVersion || pendingAction !== null}
-                onClick={() => setRevisionOpen(true)}
+                disabled={terminal || !selectedVersion || pendingAction !== null}
+                aria-disabled={terminal || undefined}
+                aria-describedby={terminal ? terminalRevisionNoticeId : undefined}
+                onClick={() => {
+                  if (!terminal) setRevisionOpen(true);
+                }}
               >
                 <SendIcon data-icon="inline-start" />
                 Request changes
               </Button>
+              {terminal ? (
+                <p
+                  id={terminalRevisionNoticeId}
+                  role="status"
+                  className="basis-full text-xs text-muted-foreground"
+                >
+                  {terminalRevisionCopy}
+                </p>
+              ) : null}
             </DialogFooter>
           </DialogContent>
         ) : null}
       </Dialog>
 
-      <Dialog open={restoreConfirmOpen} onOpenChange={setRestoreConfirmOpen}>
+      <Dialog
+        open={restoreConfirmOpen}
+        onOpenChange={(open) => {
+          if (!terminal) setRestoreConfirmOpen(open);
+        }}
+      >
         {restoreConfirmOpen ? (
           <DialogContent>
             <DialogHeader>
@@ -647,7 +686,7 @@ export function ArtifactReviewCard({
               </Button>
               <Button
                 type="button"
-                disabled={!selectedVersion || pendingAction !== null}
+                disabled={terminal || !selectedVersion || pendingAction !== null}
                 onClick={() => void restoreSelected()}
               >
                 {pendingAction === "restore" ? (
@@ -662,7 +701,12 @@ export function ArtifactReviewCard({
         ) : null}
       </Dialog>
 
-      <Dialog open={revisionOpen} onOpenChange={setRevisionOpen}>
+      <Dialog
+        open={revisionOpen}
+        onOpenChange={(open) => {
+          if (!terminal) setRevisionOpen(open);
+        }}
+      >
         {revisionOpen ? (
           <DialogContent>
             <form onSubmit={submitRevision}>

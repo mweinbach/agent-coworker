@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -38,6 +39,8 @@ type LockHandle = {
   staleRecoveries: number;
   release: () => Promise<void>;
 };
+
+const activeWriteLocks = new AsyncLocalStorage<ReadonlySet<string>>();
 
 function defaultProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -111,11 +114,18 @@ export class SessionDbWriteCoordinator {
     callback: () => Promise<T> | T,
     attributes?: Record<string, string | number | boolean>,
   ): Promise<T> {
+    const activeLocks = activeWriteLocks.getStore();
+    if (activeLocks?.has(this.lockDir)) {
+      return await callback();
+    }
+
     const startedAt = this.now();
     let handle: LockHandle | null = null;
     try {
       handle = await this.acquire(operation, attributes);
-      const result = await callback();
+      const nextActiveLocks = new Set(activeLocks ?? []);
+      nextActiveLocks.add(this.lockDir);
+      const result = await activeWriteLocks.run(nextActiveLocks, async () => await callback());
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

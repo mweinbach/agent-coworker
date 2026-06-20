@@ -9,7 +9,7 @@ import {
   Undo2Icon,
   XCircleIcon,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { WorkItem } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
@@ -76,9 +76,24 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const [retrying, setRetrying] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const draftTaskId = useRef(task?.id ?? null);
 
   useEffect(() => {
-    if (!task || briefDirty) return;
+    if (!task) {
+      draftTaskId.current = null;
+      setTitle("");
+      setObjective("");
+      setBriefDirty(false);
+      return;
+    }
+    if (draftTaskId.current !== task.id) {
+      draftTaskId.current = task.id;
+      setTitle(task.title);
+      setObjective(task.objective);
+      setBriefDirty(false);
+      return;
+    }
+    if (briefDirty) return;
     setTitle(task.title);
     setObjective(task.objective);
   }, [briefDirty, task]);
@@ -322,6 +337,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                     key={artifact.id}
                     taskId={task.id}
                     taskRevision={task.revision}
+                    taskStatus={task.status}
                     artifact={artifact}
                     onOpenFile={(path) => openFilePreview({ path })}
                   />

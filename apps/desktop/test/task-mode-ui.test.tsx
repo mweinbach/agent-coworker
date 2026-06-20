@@ -1,13 +1,19 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { TaskArtifactDetail, TaskQuestion, TaskRecord } from "../../../src/shared/tasks";
+import type { SandboxApprovalPrompt } from "../src/app/types";
 import { setupJsdom } from "./jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
+const realOpenFilePreview = useAppStore.getState().openFilePreview;
 
 const NOW = "2026-06-18T12:00:00.000Z";
+
+afterEach(() => {
+  useAppStore.setState({ openFilePreview: realOpenFilePreview });
+});
 
 function taskRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -163,6 +169,16 @@ function artifactDetail(): TaskArtifactDetail {
   };
 }
 
+function sandboxApproval(requestId: string, command: string): SandboxApprovalPrompt {
+  return {
+    requestId,
+    command,
+    reason: "The command needs access outside the workspace sandbox.",
+    category: "filesystem",
+    receivedSequence: 1,
+  };
+}
+
 function resetStore(task: TaskRecord | null) {
   const current = useAppStore.getState();
   useAppStore.setState({
@@ -263,6 +279,82 @@ function resetStore(task: TaskRecord | null) {
   } as never);
 }
 
+function setNativeValue(
+  element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  value: string,
+) {
+  const prototype =
+    element instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : element instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLSelectElement.prototype;
+  const valueSetter = Object.getOwnPropertyDescriptor(element, "value")?.set;
+  const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+    prototypeValueSetter.call(element, value);
+    return;
+  }
+  if (valueSetter) {
+    valueSetter.call(element, value);
+    return;
+  }
+  element.value = value;
+}
+
+type ValueElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+type ValueChangeEvent = {
+  target: ValueElement;
+  currentTarget: ValueElement;
+};
+type SubmitEventStub = {
+  preventDefault: () => void;
+  target: HTMLFormElement;
+  currentTarget: HTMLFormElement;
+};
+type ReactDomProps = {
+  onChange?: (event: ValueChangeEvent) => void;
+  onInput?: (event: ValueChangeEvent) => void;
+  onSubmit?: (event: SubmitEventStub) => void;
+};
+
+function reactDomProps(element: Element): ReactDomProps {
+  // The Bun preload imports React before jsdom exists, so direct DOM events alone
+  // do not reliably drive controlled fields in this file.
+  const propsKey = Object.keys(element).find((key) => key.startsWith("__reactProps$"));
+  if (!propsKey) return {};
+  const value = (element as unknown as Record<string, unknown>)[propsKey];
+  return typeof value === "object" && value !== null ? (value as ReactDomProps) : {};
+}
+
+function changeValue(
+  harness: ReturnType<typeof setupJsdom>,
+  element: ValueElement | null,
+  value: string,
+) {
+  if (!element) throw new Error("missing form element");
+  setNativeValue(element, value);
+  const props = reactDomProps(element);
+  props.onInput?.({ target: element, currentTarget: element });
+  props.onChange?.({ target: element, currentTarget: element });
+  element.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+  element.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+}
+
+function submitForm(harness: ReturnType<typeof setupJsdom>, form: HTMLFormElement | null) {
+  if (!form) throw new Error("missing form");
+  const props = reactDomProps(form);
+  if (props.onSubmit) {
+    props.onSubmit({
+      preventDefault: () => {},
+      target: form,
+      currentTarget: form,
+    });
+    return;
+  }
+  form.dispatchEvent(new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }));
+}
+
 describe("desktop task mode UI", () => {
   test.serial("renders an explicit task landing instead of a chat composer", async () => {
     const harness = setupJsdom();
@@ -284,6 +376,181 @@ describe("desktop task mode UI", () => {
       expect(container.textContent).toContain("Existing task");
       expect(container.querySelector("#new-task-objective")).not.toBeNull();
       expect(container.querySelector("#new-task-context")).not.toBeNull();
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial(
+    "retargets a mounted new-task form to the project chosen from the sidebar",
+    async () => {
+      const harness = setupJsdom();
+      const startTask = mock(async () => null);
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+        const root = createRoot(container);
+        resetStore(null);
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Project One",
+              path: "/workspace-one",
+              workspaceKind: "project",
+              createdAt: NOW,
+              lastOpenedAt: NOW,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: false,
+              yolo: false,
+            },
+            {
+              id: "ws-2",
+              name: "Project Two",
+              path: "/workspace-two",
+              workspaceKind: "project",
+              createdAt: NOW,
+              lastOpenedAt: NOW,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: false,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          newTaskWorkspaceId: "ws-1",
+          startTask,
+        } as never);
+
+        await act(async () => root.render(createElement(NewTaskLanding)));
+        const projectSelect = container.querySelector(
+          "#new-task-project",
+        ) as HTMLSelectElement | null;
+        expect(projectSelect?.value).toBe("ws-1");
+
+        await act(async () => {
+          useAppStore.setState({
+            selectedWorkspaceId: "ws-2",
+            newTaskWorkspaceId: "ws-2",
+          } as never);
+          await Promise.resolve();
+        });
+        expect(projectSelect?.value).toBe("ws-2");
+
+        await act(async () => {
+          changeValue(
+            harness,
+            container.querySelector("#new-task-title") as HTMLInputElement | null,
+            "Ship dashboard hardening",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-objective") as HTMLTextAreaElement | null,
+            "Fix task dashboard state contracts.",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-context") as HTMLTextAreaElement | null,
+            "The user selected Project Two from the sidebar.",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-acceptance") as HTMLTextAreaElement | null,
+            "Task starts in the selected project.",
+          );
+          changeValue(
+            harness,
+            container.querySelector('input[id^="work-item-title-"]') as HTMLInputElement | null,
+            "Implement the invariant",
+          );
+          changeValue(
+            harness,
+            container.querySelector(
+              'textarea[id^="work-item-outputs-"]',
+            ) as HTMLTextAreaElement | null,
+            "Passing regression tests",
+          );
+          await Promise.resolve();
+        });
+
+        await act(async () => {
+          submitForm(harness, container.querySelector("form"));
+          await Promise.resolve();
+        });
+
+        expect(startTask).toHaveBeenCalledWith({
+          workspaceId: "ws-2",
+          task: expect.objectContaining({
+            title: "Ship dashboard hardening",
+          }),
+        });
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial("retargets repeated new-task requests for the same project", async () => {
+    const harness = setupJsdom();
+    const startTask = mock(async () => null);
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+      const root = createRoot(container);
+      resetStore(null);
+      useAppStore.setState({
+        workspaces: [
+          {
+            id: "ws-1",
+            name: "Project One",
+            path: "/workspace-one",
+            workspaceKind: "project",
+            createdAt: NOW,
+            lastOpenedAt: NOW,
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+          {
+            id: "ws-2",
+            name: "Project Two",
+            path: "/workspace-two",
+            workspaceKind: "project",
+            createdAt: NOW,
+            lastOpenedAt: NOW,
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        selectedWorkspaceId: "ws-1",
+        newTaskWorkspaceId: "ws-1",
+        startTask,
+      } as never);
+
+      await act(async () => root.render(createElement(NewTaskLanding)));
+      const projectSelect = container.querySelector(
+        "#new-task-project",
+      ) as HTMLSelectElement | null;
+      expect(projectSelect?.value).toBe("ws-1");
+
+      await act(async () => {
+        changeValue(harness, projectSelect, "ws-2");
+        await Promise.resolve();
+      });
+      expect(projectSelect?.value).toBe("ws-2");
+
+      await act(async () => {
+        await useAppStore.getState().openNewTask("ws-1");
+        await Promise.resolve();
+      });
+
+      expect(projectSelect?.value).toBe("ws-1");
 
       await act(async () => root.unmount());
     } finally {
@@ -391,6 +658,337 @@ describe("desktop task mode UI", () => {
       harness.restore();
     }
   });
+
+  test.serial("resets dirty brief editor state when the selected task changes", async () => {
+    const harness = setupJsdom();
+    const updateTaskBrief = mock(async () => true);
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+      const root = createRoot(container);
+      const firstTask = taskRecord({ id: "task-1", title: "First task" });
+      const secondTask = taskRecord({
+        id: "task-2",
+        title: "Second task",
+        objective: "Keep this objective attached to task two.",
+        threads: [
+          {
+            id: "task-thread-2",
+            taskId: "task-2",
+            sessionId: "task-session-2",
+            title: "Main",
+            createdBy: "coordinator",
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        ],
+      });
+      resetStore(firstTask);
+      useAppStore.setState({
+        tasksById: { "task-1": firstTask, "task-2": secondTask },
+        selectedTaskId: "task-1",
+        updateTaskBrief,
+      } as never);
+
+      await act(async () => root.render(createElement(TaskContextSidebar)));
+      await act(async () => {
+        changeValue(
+          harness,
+          container.querySelector("#task-brief-title") as HTMLInputElement | null,
+          "Unsaved first task title",
+        );
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Save brief");
+
+      await act(async () => {
+        useAppStore.setState({
+          selectedTaskId: "task-2",
+          selectedThreadId: "task-session-2",
+        } as never);
+        await Promise.resolve();
+      });
+
+      const titleInput = container.querySelector("#task-brief-title") as HTMLInputElement | null;
+      const objectiveInput = container.querySelector(
+        "#task-brief-objective",
+      ) as HTMLTextAreaElement | null;
+      expect(titleInput?.value).toBe("Second task");
+      expect(objectiveInput?.value).toBe("Keep this objective attached to task two.");
+      expect(container.textContent).not.toContain("Save brief");
+      expect(updateTaskBrief).not.toHaveBeenCalled();
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("makes terminal task conversations read-only while preserving feed", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      resetStore(taskRecord({ status: "completed" }));
+      useAppStore.setState({
+        threads: [
+          {
+            id: "task-session-1",
+            workspaceId: "ws-1",
+            title: "Main",
+            createdAt: NOW,
+            lastMessageAt: NOW,
+            status: "active",
+            sessionId: "task-session-1",
+            messageCount: 1,
+            lastEventSeq: 1,
+            draft: false,
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+        ],
+        threadRuntimeById: {
+          "task-session-1": {
+            status: "connected",
+            sessionId: "task-session-1",
+            sessionKind: "chat",
+            title: "Main",
+            config: { provider: "openai", model: "gpt-5.2" },
+            sessionConfig: null,
+            busy: false,
+            busySince: null,
+            feed: [
+              {
+                id: "assistant-audit-note",
+                ts: NOW,
+                kind: "message",
+                role: "assistant",
+                text: "Preserved terminal transcript audit line.",
+              },
+            ],
+            agents: [],
+            pendingSteer: null,
+            pendingTurnStart: null,
+            transcriptOnly: false,
+          },
+        },
+      } as never);
+
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
+
+      expect(container.textContent).toContain("This task is completed.");
+      expect(container.textContent).toContain("Reopen the task to continue this conversation.");
+      expect(container.textContent).toContain("Preserved terminal transcript audit line.");
+      expect(container.querySelector('[aria-label="Message input"]')).toBeNull();
+      const addThreadButton = container.querySelector(
+        '[aria-label="Add focused task thread"]',
+      ) as HTMLButtonElement | null;
+      expect(addThreadButton?.disabled).toBe(false);
+      expect(addThreadButton?.getAttribute("aria-disabled")).toBe("true");
+      const descriptionId = addThreadButton?.getAttribute("aria-describedby");
+      expect(descriptionId).toBeTruthy();
+      const lockNotice = descriptionId
+        ? harness.dom.window.document.getElementById(descriptionId)
+        : null;
+      expect(lockNotice?.textContent).toContain("Reopen the task to continue this conversation.");
+      expect(lockNotice?.getAttribute("role")).toBe("status");
+      expect(lockNotice?.getAttribute("aria-live")).toBe("polite");
+      addThreadButton?.focus();
+      expect(harness.dom.window.document.activeElement).toBe(addThreadButton);
+      await act(async () => addThreadButton?.click());
+      expect(harness.dom.window.document.body.textContent).not.toContain("Add task thread");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("rebinds the message overlay observer when a task becomes read-only", async () => {
+    const observedElements: Element[] = [];
+    let disconnectCount = 0;
+    class TrackingResizeObserver {
+      observe(element: Element) {
+        observedElements.push(element);
+      }
+      disconnect() {
+        disconnectCount += 1;
+      }
+      unobserve() {}
+    }
+    const harness = setupJsdom({ extraGlobals: { ResizeObserver: TrackingResizeObserver } });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      const workingTask = taskRecord({ status: "working" });
+      resetStore(workingTask);
+      useAppStore.setState({
+        threads: [
+          {
+            id: "task-session-1",
+            workspaceId: "ws-1",
+            title: "Main",
+            createdAt: NOW,
+            lastMessageAt: NOW,
+            status: "active",
+            sessionId: "task-session-1",
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+        ],
+        threadRuntimeById: {},
+      } as never);
+
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
+      const firstOverlay = observedElements.find(
+        (element) => element.getAttribute("data-slot") === "message-bar-overlay",
+      );
+      expect(firstOverlay).toBeTruthy();
+
+      await act(async () => {
+        useAppStore.setState({
+          tasksById: { "task-1": taskRecord({ status: "completed", revision: 5 }) },
+        } as never);
+        await Promise.resolve();
+      });
+
+      const observedOverlays = observedElements.filter(
+        (element) => element.getAttribute("data-slot") === "message-bar-overlay",
+      );
+      expect(observedOverlays).toHaveLength(2);
+      expect(observedOverlays[0]).not.toBe(observedOverlays[1]);
+      expect(observedOverlays[1]?.isConnected).toBe(true);
+      expect(disconnectCount).toBeGreaterThanOrEqual(1);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial(
+    "isolates sandbox approvals by ordinary-chat and selected-task ownership",
+    async () => {
+      const harness = setupJsdom();
+      const selectTaskThread = mock(async () => {});
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { ChatView } = await import("../src/ui/ChatView");
+        const root = createRoot(container);
+        const task = taskRecord({
+          status: "working",
+          threads: [
+            ...taskRecord().threads,
+            {
+              id: "task-thread-2",
+              taskId: "task-1",
+              sessionId: "task-session-2",
+              title: "Task approval lane",
+              createdBy: "coordinator",
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+          threadCount: 2,
+        });
+        resetStore(task);
+        useAppStore.setState({
+          view: "chat",
+          selectedTaskId: null,
+          selectedThreadId: "chat-session-1",
+          selectTaskThread,
+          threads: [
+            {
+              id: "chat-session-1",
+              workspaceId: "ws-1",
+              title: "Ordinary chat",
+              createdAt: NOW,
+              lastMessageAt: NOW,
+              status: "active",
+              sessionId: "chat-session-1",
+              messageCount: 0,
+              lastEventSeq: 0,
+              draft: false,
+            },
+            {
+              id: "task-session-1",
+              workspaceId: "ws-1",
+              title: "Task main",
+              createdAt: NOW,
+              lastMessageAt: NOW,
+              status: "active",
+              sessionId: "task-session-1",
+              messageCount: 0,
+              lastEventSeq: 0,
+              draft: false,
+              taskId: "task-1",
+              taskThreadId: "task-thread-1",
+            },
+            {
+              id: "task-session-2",
+              workspaceId: "ws-1",
+              title: "Task approval lane",
+              createdAt: NOW,
+              lastMessageAt: NOW,
+              status: "active",
+              sessionId: "task-session-2",
+              messageCount: 0,
+              lastEventSeq: 0,
+              draft: false,
+              taskId: "task-1",
+              taskThreadId: "task-thread-2",
+            },
+          ],
+          sandboxApprovalsByThread: {
+            "chat-session-1": [sandboxApproval("chat-approval", "echo ordinary-chat")],
+            "task-session-2": [sandboxApproval("task-approval", "echo task-only")],
+          },
+        } as never);
+
+        await act(async () => root.render(createElement(ChatView)));
+        expect(container.textContent).toContain("echo ordinary-chat");
+        expect(container.textContent).not.toContain("echo task-only");
+
+        await act(async () => {
+          useAppStore.setState({
+            view: "task",
+            selectedTaskId: "task-1",
+            selectedThreadId: "task-session-1",
+          } as never);
+          await Promise.resolve();
+        });
+        expect(container.textContent).toContain("echo task-only");
+        expect(container.textContent).not.toContain("echo ordinary-chat");
+        const openButton = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Open",
+        );
+        await act(async () => openButton?.click());
+        expect(selectTaskThread).toHaveBeenCalledWith("task-1", "task-thread-2");
+
+        await act(async () => {
+          useAppStore.setState({
+            tasksById: { "task-1": taskRecord({ status: "completed" }) },
+          } as never);
+          await Promise.resolve();
+        });
+        expect(container.textContent).toContain("echo task-only");
+        expect(container.textContent).not.toContain("echo ordinary-chat");
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("bundles pending task questions and submits partial answers", async () => {
     const harness = setupJsdom();
@@ -538,6 +1136,99 @@ describe("desktop task mode UI", () => {
       harness.restore();
     }
   });
+
+  test.serial(
+    "keeps terminal artifact history readable while disabling revision starts",
+    async () => {
+      const harness = setupJsdom();
+      const startRevision = mock(async () => artifactDetail());
+      const captureVersion = mock(async () => artifactDetail());
+      const restoreVersion = mock(async () => artifactDetail());
+      const acceptVersion = mock(async () => artifactDetail());
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+        const root = createRoot(container);
+        resetStore(taskRecord({ status: "completed" }));
+        useAppStore.setState({
+          startTaskArtifactRevision: startRevision,
+          captureTaskArtifactVersion: captureVersion,
+          restoreTaskArtifactVersion: restoreVersion,
+          acceptTaskArtifactVersion: acceptVersion,
+        } as never);
+
+        await act(async () => root.render(createElement(TaskContextSidebar)));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        const reviewButton = Array.from(container.querySelectorAll("button")).find((button) =>
+          ["Revise this", "Review versions"].includes(button.textContent?.trim() ?? ""),
+        );
+        await act(async () => {
+          reviewButton?.click();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(harness.dom.window.document.body.textContent).toContain("Version history");
+        const reviewDialog = Array.from(
+          harness.dom.window.document.body.querySelectorAll('[data-slot="dialog-content"]'),
+        ).find((dialog) => dialog.textContent?.includes("Version history"));
+        const requestChangesButton = Array.from(
+          reviewDialog?.querySelectorAll("button") ?? [],
+        ).find((button) => button.textContent?.trim() === "Request changes");
+        const captureCurrentButton = Array.from(
+          reviewDialog?.querySelectorAll("button") ?? [],
+        ).find((button) => button.textContent?.trim() === "Capture current");
+        const acceptButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.trim() === "Accept",
+        );
+        expect(captureCurrentButton?.hasAttribute("disabled")).toBe(true);
+        expect(acceptButton?.hasAttribute("disabled")).toBe(true);
+        expect(requestChangesButton?.hasAttribute("disabled")).toBe(true);
+        expect(requestChangesButton?.getAttribute("aria-disabled")).toBe("true");
+        const descriptionId = requestChangesButton?.getAttribute("aria-describedby");
+        expect(descriptionId).toBeTruthy();
+        expect(
+          descriptionId
+            ? harness.dom.window.document.getElementById(descriptionId)?.textContent
+            : "",
+        ).toContain("Reopen the task before changing artifact versions");
+        await act(async () => {
+          captureCurrentButton?.click();
+          acceptButton?.click();
+          requestChangesButton?.click();
+        });
+        expect(
+          harness.dom.window.document.querySelector("#artifact-revision-artifact-1"),
+        ).toBeNull();
+        expect(captureVersion).not.toHaveBeenCalled();
+        expect(acceptVersion).not.toHaveBeenCalled();
+        expect(startRevision).not.toHaveBeenCalled();
+
+        const versionOneButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.includes("Version 1"),
+        );
+        await act(async () => {
+          versionOneButton?.click();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        const restoreButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.trim() === "Restore draft",
+        );
+        expect(restoreButton?.hasAttribute("disabled")).toBe(true);
+        await act(async () => restoreButton?.click());
+        expect(harness.dom.window.document.body.textContent).not.toContain(
+          "Restore this version as the draft?",
+        );
+        expect(restoreVersion).not.toHaveBeenCalled();
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("reviews artifact history and gates restore and revision actions", async () => {
     const harness = setupJsdom();

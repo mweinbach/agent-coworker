@@ -38,7 +38,11 @@ describe("InlineErrorBoundary", () => {
   test("renders children when no error", () => {
     act(() => {
       root.render(
-        createElement(InlineErrorBoundary, { label: "fallback" }, createElement(Boom, { message: "ok" })),
+        createElement(
+          InlineErrorBoundary,
+          { label: "fallback" },
+          createElement(Boom, { message: "ok" }),
+        ),
       );
     });
     expect(container.querySelector("[data-testid='child']")?.textContent).toBe("ok");
@@ -47,7 +51,11 @@ describe("InlineErrorBoundary", () => {
   test("renders inline fallback (not fullscreen) when a child throws", () => {
     act(() => {
       root.render(
-        createElement(InlineErrorBoundary, { label: "This message couldn't be rendered." }, createElement(Boom, { message: "boom" })),
+        createElement(
+          InlineErrorBoundary,
+          { label: "This message couldn't be rendered." },
+          createElement(Boom, { message: "boom" }),
+        ),
       );
     });
     const alert = container.querySelector("[role='alert']");
@@ -96,9 +104,7 @@ describe("InlineErrorBoundary", () => {
       );
     }
     act(() => {
-      root.render(
-        createElement(InlineErrorBoundary, { label: "fallback" }, createElement(Toggle)),
-      );
+      root.render(createElement(InlineErrorBoundary, { label: "fallback" }, createElement(Toggle)));
     });
     expect(container.querySelector("[role='alert']")).toBeTruthy();
 
@@ -142,11 +148,7 @@ describe("InlineErrorBoundary", () => {
   test("CrashReportingErrorBoundary still renders fullscreen fallback (unchanged backstop)", () => {
     act(() => {
       root.render(
-        createElement(
-          CrashReportingErrorBoundary,
-          null,
-          createElement(Boom, { message: "boom" }),
-        ),
+        createElement(CrashReportingErrorBoundary, null, createElement(Boom, { message: "boom" })),
       );
     });
     const fullscreen = container.querySelector(".min-h-screen");

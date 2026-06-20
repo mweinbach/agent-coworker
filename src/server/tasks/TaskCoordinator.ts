@@ -2139,6 +2139,7 @@ export class TaskCoordinator {
     summary: string;
     detail?: string;
     sessionId?: string;
+    validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
@@ -2171,6 +2172,7 @@ export class TaskCoordinator {
       detail: input.detail?.trim() || null,
       updatedAt: nowIso(),
       threadId: thread?.id ?? null,
+      validateUpdatedTask: input.validateUpdatedTask,
     });
     await this.quiesceTaskThreads(updated);
     this.notifyUpdated(updated);
@@ -2557,6 +2559,11 @@ export class TaskCoordinator {
       summary: input.summary,
       detail: input.caveats?.filter(Boolean).join("\n") || undefined,
       sessionId: input.sessionId,
+      validateUpdatedTask: currentMaterial
+        ? async (updatedTask) => {
+            await this.assertLiveArtifactEvidenceUnchanged(updatedTask, currentMaterial);
+          }
+        : undefined,
     });
     if (task.reviewRequired) return ready;
     return await this.acceptTaskLocked({

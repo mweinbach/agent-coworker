@@ -738,11 +738,34 @@ export class SessionDb {
   }
 
   async setTaskStatus(
-    input: Parameters<SessionTaskRepository["setStatus"]>[0],
+    input: Parameters<SessionTaskRepository["setStatus"]>[0] & {
+      validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
+    },
   ): Promise<TaskRecord> {
     return await this.writeCoordinator.runExclusive(
       "set_task_status",
-      async () => this.taskRepository.setStatus(input),
+      async () => {
+        if (!input.validateUpdatedTask) return this.taskRepository.setStatus(input);
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          this.taskRepository.setStatusInOpenTransaction(input);
+          const task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await input.validateUpdatedTask(task);
+          this.db.exec("COMMIT");
+          return task;
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back task status transition: ${String(rollbackError)}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
       { taskId: input.taskId, status: input.status },
     );
   }

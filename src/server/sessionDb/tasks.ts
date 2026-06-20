@@ -1662,38 +1662,48 @@ export class SessionTaskRepository {
     threadId?: string | null;
   }): TaskRecord {
     this.db.transaction(() => {
-      this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
-      this.db
-        .query("UPDATE tasks SET status = ? WHERE task_id = ?")
-        .run(input.status, input.taskId);
-      if (TERMINAL_TASK_STATUSES.has(input.status)) {
-        this.abandonActiveArtifactRevisionsForTerminalTask(input.taskId, input.updatedAt);
-      }
-      if (input.status === "cancelled") {
-        this.db
-          .query(
-            "UPDATE task_decisions SET status = 'superseded' WHERE task_id = ? AND decision_id IN (SELECT provisional_decision_id FROM task_questions WHERE task_id = ? AND status = 'pending' AND provisional_decision_id IS NOT NULL)",
-          )
-          .run(input.taskId, input.taskId);
-        this.db
-          .query(
-            "UPDATE task_questions SET status = 'dismissed', resolved_at = ? WHERE task_id = ? AND status = 'pending'",
-          )
-          .run(input.updatedAt, input.taskId);
-      }
-      this.insertActivity({
-        id: crypto.randomUUID(),
-        seq: 1,
-        taskId: input.taskId,
-        threadId: input.threadId ?? null,
-        workItemId: null,
-        kind: "status_changed",
-        summary: input.summary,
-        detail: input.detail ?? null,
-        createdAt: input.updatedAt,
-      });
+      this.setStatusInOpenTransaction(input);
     })();
     return this.requireTask(input.taskId);
+  }
+
+  setStatusInOpenTransaction(input: {
+    taskId: string;
+    expectedRevision: number;
+    status: TaskStatus;
+    summary: string;
+    detail?: string | null;
+    updatedAt: string;
+    threadId?: string | null;
+  }): void {
+    this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
+    this.db.query("UPDATE tasks SET status = ? WHERE task_id = ?").run(input.status, input.taskId);
+    if (TERMINAL_TASK_STATUSES.has(input.status)) {
+      this.abandonActiveArtifactRevisionsForTerminalTask(input.taskId, input.updatedAt);
+    }
+    if (input.status === "cancelled") {
+      this.db
+        .query(
+          "UPDATE task_decisions SET status = 'superseded' WHERE task_id = ? AND decision_id IN (SELECT provisional_decision_id FROM task_questions WHERE task_id = ? AND status = 'pending' AND provisional_decision_id IS NOT NULL)",
+        )
+        .run(input.taskId, input.taskId);
+      this.db
+        .query(
+          "UPDATE task_questions SET status = 'dismissed', resolved_at = ? WHERE task_id = ? AND status = 'pending'",
+        )
+        .run(input.updatedAt, input.taskId);
+    }
+    this.insertActivity({
+      id: crypto.randomUUID(),
+      seq: 1,
+      taskId: input.taskId,
+      threadId: input.threadId ?? null,
+      workItemId: null,
+      kind: "status_changed",
+      summary: input.summary,
+      detail: input.detail ?? null,
+      createdAt: input.updatedAt,
+    });
   }
 
   appendActivity(activity: TaskActivity, options?: { rejectTerminal?: boolean }): TaskRecord {

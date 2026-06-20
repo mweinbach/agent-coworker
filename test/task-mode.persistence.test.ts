@@ -1636,6 +1636,159 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("rejects artifact mutations between final completion hash and awaiting review write", async () => {
+    const variants: Array<{
+      name: string;
+      mutate: (input: { artifactPath: string; siblingPath: string }) => Promise<void>;
+      restoreForFreshReview?: (input: { artifactPath: string }) => Promise<void>;
+    }> = [
+      {
+        name: "rewrite",
+        mutate: async ({ artifactPath }) => {
+          await fs.writeFile(artifactPath, "# Report\n\nChanged in the final proposal gap.\n");
+        },
+      },
+      {
+        name: "delete",
+        mutate: async ({ artifactPath }) => {
+          await fs.rm(artifactPath);
+        },
+        restoreForFreshReview: async ({ artifactPath }) => {
+          await fs.writeFile(artifactPath, "# Report\n\nRestored after gap deletion.\n");
+        },
+      },
+      {
+        name: "path-swap",
+        mutate: async ({ artifactPath, siblingPath }) => {
+          await fs.rm(artifactPath);
+          await fs.symlink(siblingPath, artifactPath);
+        },
+      },
+    ];
+
+    for (const variant of variants) {
+      const harness = await createHarness();
+      let originalDbClosed = false;
+      const paths = {
+        rootDir: path.join(harness.home, ".cowork"),
+        sessionsDir: path.join(harness.home, ".cowork", "sessions"),
+      };
+      const originalSetTaskStatus = harness.sessionDb.setTaskStatus.bind(harness.sessionDb);
+      try {
+        let { task, artifactPath } = await createIndependentlyReviewedTask(harness);
+        const siblingPath = path.join(harness.workspacePath, `sibling-${variant.name}.md`);
+        await fs.writeFile(siblingPath, "# Sibling\n\nUnreviewed swapped bytes.\n");
+        task = (await recordPass(harness, task, "reviewer-1")).task;
+
+        let mutated = false;
+        const leakedSummary = `Ready during final gap ${variant.name}`;
+        harness.sessionDb.setTaskStatus = (async (input) => {
+          if (!mutated && input.taskId === task.id && input.status === "awaiting_review") {
+            mutated = true;
+            await variant.mutate({ artifactPath, siblingPath });
+          }
+          return await originalSetTaskStatus(input);
+        }) as SessionDb["setTaskStatus"];
+
+        await expect(
+          harness.coordinator.proposeCompletion({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            summary: leakedSummary,
+          }),
+        ).rejects.toThrow();
+        expect(mutated).toBe(true);
+
+        const current = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(current?.status).toBe("working");
+        expect(current?.revision).toBe(task.revision);
+        expect(
+          harness.notifications.some(
+            (notification) =>
+              (notification.params.task as TaskRecord | undefined)?.id === task.id &&
+              (notification.params.task as TaskRecord | undefined)?.status === "awaiting_review",
+          ),
+        ).toBe(false);
+        expect(
+          current?.activity.some(
+            (entry) => entry.kind === "status_changed" && entry.summary === leakedSummary,
+          ),
+        ).toBe(false);
+        expect(current?.activity.some((entry) => entry.kind === "artifact_version_accepted")).toBe(
+          false,
+        );
+        const rejectedDetail = harness.sessionDb.getTaskArtifactDetail(
+          task.id,
+          task.artifacts[0]?.id ?? "",
+        );
+        expect(rejectedDetail?.acceptedVersionId).toBeNull();
+        expect(
+          rejectedDetail?.versions.filter((version) => version.reviewStatus === "accepted"),
+        ).toHaveLength(0);
+
+        harness.sessionDb.setTaskStatus = originalSetTaskStatus as SessionDb["setTaskStatus"];
+        harness.sessionDb.close();
+        originalDbClosed = true;
+
+        const reloadedDb = await SessionDb.create({ paths });
+        const reloaded = new TaskCoordinator({ sessionDb: reloadedDb });
+        try {
+          let reloadedTask = reloaded.get(task.id, harness.workspacePath);
+          expect(reloadedTask?.status).toBe("working");
+          expect(
+            reloadedTask?.activity.some(
+              (entry) => entry.kind === "status_changed" && entry.summary === leakedSummary,
+            ),
+          ).toBe(false);
+          if (!reloadedTask) throw new Error("Expected task after proposal race reload");
+          await variant.restoreForFreshReview?.({ artifactPath });
+          reloadedTask = await reloaded.registerArtifact({
+            taskId: reloadedTask.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: reloadedTask.revision,
+            path: artifactPath,
+            title: "Report",
+            kind: "markdown",
+            sessionId: "task-session-1",
+          });
+          reloadedTask = (
+            await reloaded.recordReview({
+              taskId: reloadedTask.id,
+              workspacePath: harness.workspacePath,
+              sessionId: "task-session-1",
+              expectedRevision: reloadedTask.revision,
+              reviewerAgentId: `reviewer-current-${variant.name}`,
+              reviewerProvider: "openai",
+              reviewerModel: "gpt-5.5",
+              verdict: "pass",
+              feedback: "VERDICT: PASS\nThe current artifact bytes were reviewed.",
+            })
+          ).task;
+          reloadedTask = await reloaded.proposeCompletion({
+            taskId: reloadedTask.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: reloadedTask.revision,
+            summary: `Ready after current ${variant.name} bytes were reviewed`,
+          });
+          expect(reloadedTask.status).toBe("awaiting_review");
+          const reviewedDetail = reloadedDb.getTaskArtifactDetail(
+            reloadedTask.id,
+            reloadedTask.artifacts[0]?.id ?? "",
+          );
+          expect(reviewedDetail?.acceptedVersionId).toBeNull();
+        } finally {
+          reloadedDb.close();
+        }
+      } finally {
+        harness.sessionDb.setTaskStatus = originalSetTaskStatus as SessionDb["setTaskStatus"];
+        if (!originalDbClosed) {
+          harness.sessionDb.close();
+        }
+      }
+    }
+  });
+
   test("rejects recording a pass when material changes after the reviewer starts", async () => {
     const harness = await createHarness();
     try {

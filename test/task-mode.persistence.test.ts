@@ -2051,6 +2051,71 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("directive update_plan and API transition race settles without DB-lock task-tail deadlock", async () => {
+    const harness = await createHarness();
+    const originalSetTaskStatus = harness.sessionDb.setTaskStatus.bind(harness.sessionDb);
+    try {
+      const task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Plan race",
+        objective: "Create a plan while another transition is queued.",
+        sessionId: "session-1",
+      });
+      const pause = deferred();
+      const release = deferred();
+      let paused = false;
+      harness.sessionDb.setTaskStatus = (async (input) => {
+        if (!paused && input.taskId === task.id && input.status === "planning") {
+          paused = true;
+          pause.resolve();
+          await release.promise;
+        }
+        return await originalSetTaskStatus(input);
+      }) as SessionDb["setTaskStatus"];
+
+      const apiTransition = harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "planning",
+        summary: "API transition racing with directive",
+      });
+      await pause.promise;
+
+      const directiveUpdate = harness.coordinator.applyDirective("session-1", {
+        type: "update_plan",
+        idempotencyKey: "race-update-plan",
+        expectedRevision: task.revision,
+        objective: "Create a plan while another transition is queued.",
+        requirements: [
+          {
+            kind: "acceptance_criterion",
+            text: "The directive creates work without waiting on the task tail.",
+          },
+        ],
+        workItems: [{ id: "deliver", title: "Deliver" }],
+      });
+      await flushAsyncWork();
+      release.resolve();
+
+      const settled = await expectSettlesWithin(
+        Promise.allSettled([apiTransition, directiveUpdate]),
+        2_000,
+        "update_plan transition race",
+      );
+      expect(settled[0]?.status).toBe("rejected");
+      expect(settled[1]?.status).toBe("fulfilled");
+      const current = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(current?.status).toBe("working");
+      expect(current?.workItems).toEqual([
+        expect.objectContaining({ id: "deliver", title: "Deliver" }),
+      ]);
+    } finally {
+      harness.sessionDb.setTaskStatus = originalSetTaskStatus as SessionDb["setTaskStatus"];
+      harness.sessionDb.close();
+    }
+  });
+
   test("invalidates passing reviews after material task state changes but ignores activity-only progress", async () => {
     const harness = await createHarness();
     try {

@@ -1139,6 +1139,20 @@ export class TaskCoordinator {
     blocking: boolean;
     workItemId?: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.reportBlockerLocked(input),
+    );
+  }
+
+  private async reportBlockerLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    description: string;
+    blocking: boolean;
+    workItemId?: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1162,7 +1176,7 @@ export class TaskCoordinator {
       createdAt,
     );
     if (input.blocking && (updated.status === "planning" || updated.status === "working")) {
-      updated = await this.transition({
+      updated = await this.transitionLocked({
         taskId: task.id,
         workspacePath: task.workspacePath,
         expectedRevision: updated.revision,
@@ -1177,6 +1191,18 @@ export class TaskCoordinator {
   }
 
   async resolveBlocker(input: {
+    taskId: string;
+    workspacePath: string;
+    blockerId: string;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.resolveBlockerLocked(input),
+    );
+  }
+
+  private async resolveBlockerLocked(input: {
     taskId: string;
     workspacePath: string;
     blockerId: string;
@@ -1198,7 +1224,7 @@ export class TaskCoordinator {
       updated.blockers.some((item) => item.status === "active" && item.blocking) ||
       updated.questions.some((question) => question.status === "pending" && question.blocking);
     if (updated.status === "blocked" && !hasActiveBlockingIssue) {
-      updated = await this.transition({
+      updated = await this.transitionLocked({
         taskId: task.id,
         workspacePath: task.workspacePath,
         expectedRevision: updated.revision,
@@ -1225,6 +1251,26 @@ export class TaskCoordinator {
     workItemId?: string;
     provenance?: Record<string, unknown>;
   }): Promise<TaskRecord> {
+    return await this.registerArtifactLocked(input);
+  }
+
+  private async registerArtifactLocked(
+    input: {
+      taskId: string;
+      workspacePath: string;
+      expectedRevision: number;
+      sessionId?: string;
+      path: string;
+      title: string;
+      kind: string;
+      artifactId?: string;
+      baseVersionId?: string;
+      changeSummary?: string;
+      workItemId?: string;
+      provenance?: Record<string, unknown>;
+    },
+    options: { finishActiveRevisionInCurrentLock?: boolean } = {},
+  ): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1249,7 +1295,9 @@ export class TaskCoordinator {
       if (!activeDetail || !sameWorkspacePath(activeDetail.artifact.path, resolvedPath)) {
         throw new Error("Active revision targets a different artifact path");
       }
-      const finalized = await this.handleThreadOutcome(input.sessionId as string, "completed");
+      const finalized = options.finishActiveRevisionInCurrentLock
+        ? await this.handleThreadOutcomeLocked(input.sessionId as string, "completed")
+        : await this.handleThreadOutcome(input.sessionId as string, "completed");
       if (!finalized) throw new Error("Active artifact revision could not be finalized");
       return finalized.task;
     }
@@ -2556,7 +2604,7 @@ export class TaskCoordinator {
           items: directive.workItems,
         });
         if (updated.status === "draft") {
-          updated = await this.transition({
+          updated = await this.transitionLocked({
             taskId: current.id,
             workspacePath: current.workspacePath,
             expectedRevision: updated.revision,
@@ -2566,7 +2614,7 @@ export class TaskCoordinator {
           });
         }
         if (updated.status === "planning" && updated.workItems.length > 0) {
-          updated = await this.transition({
+          updated = await this.transitionLocked({
             taskId: current.id,
             workspacePath: current.workspacePath,
             expectedRevision: updated.revision,
@@ -2612,7 +2660,7 @@ export class TaskCoordinator {
         });
         break;
       case "report_blocker":
-        updated = await this.reportBlocker({
+        updated = await this.reportBlockerLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -2634,20 +2682,23 @@ export class TaskCoordinator {
         break;
       }
       case "register_artifact":
-        updated = await this.registerArtifact({
-          taskId: current.id,
-          workspacePath: current.workspacePath,
-          expectedRevision: directive.expectedRevision,
-          sessionId,
-          path: directive.path,
-          title: directive.title,
-          kind: directive.kind,
-          artifactId: directive.artifactId,
-          baseVersionId: directive.baseVersionId,
-          changeSummary: directive.changeSummary,
-          workItemId: directive.workItemId,
-          provenance: directive.provenance,
-        });
+        updated = await this.registerArtifactLocked(
+          {
+            taskId: current.id,
+            workspacePath: current.workspacePath,
+            expectedRevision: directive.expectedRevision,
+            sessionId,
+            path: directive.path,
+            title: directive.title,
+            kind: directive.kind,
+            artifactId: directive.artifactId,
+            baseVersionId: directive.baseVersionId,
+            changeSummary: directive.changeSummary,
+            workItemId: directive.workItemId,
+            provenance: directive.provenance,
+          },
+          { finishActiveRevisionInCurrentLock: true },
+        );
         break;
       case "record_review": {
         const result = await this.recordReviewLocked({

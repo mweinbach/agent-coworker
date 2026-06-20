@@ -45,6 +45,7 @@ import {
   requireWorkspacePath,
   shouldIncludeJsonRpcThreadSummary,
 } from "../jsonrpc/routes/shared";
+import { resolveTaskWorkspacePath } from "../jsonrpc/routes/tasks";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
 import { ResearchService } from "../research/ResearchService";
 import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
@@ -473,12 +474,14 @@ export async function createAgentServerRuntime(
     const params = isPlainObject(message.params) ? message.params : undefined;
     if (params || message.method.startsWith("task/")) {
       try {
-        const cwd = requireWorkspacePath(
-          params ?? {},
-          message.method,
-          config.workingDirectory,
-          opts.homedir,
-        );
+        const cwd = message.method.startsWith("task/")
+          ? await resolveTaskWorkspacePath(jsonRpcRouteContext, params ?? {}, message.method)
+          : requireWorkspacePath(
+              params ?? {},
+              message.method,
+              config.workingDirectory,
+              opts.homedir,
+            );
         workspaceControl.registerSubscriber(ws, cwd);
         taskSubscribers.register(ws, cwd);
       } catch {

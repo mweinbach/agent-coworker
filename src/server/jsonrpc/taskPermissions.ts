@@ -1,7 +1,6 @@
 const TASK_READ_METHODS = new Set([
   "task/list",
   "task/read",
-  "task/artifact/read",
   "task/artifact/version/compare",
   "task/artifact/version/preview",
 ]);

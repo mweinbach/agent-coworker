@@ -37,10 +37,11 @@ auth, MCP auth, backups, workspace settings, and server-request responses. Readi
 content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
 stays always-allowed. Newly paired devices default to no `conversations` access until it is granted;
 devices paired before this permission existed are grandfathered to preserve their prior read access.
-Task reads (`task/list`, `task/read`, `task/artifact/read`,
-`task/artifact/version/compare`, and `task/artifact/version/preview`) also require
-`conversations`. Task mutations, lifecycle operations, task thread creation, direct task creation,
-and artifact writes require both `conversations` and `turns`. The whole `cowork/mcp/*` config
+Task reads (`task/list`, `task/read`, `task/artifact/version/compare`, and
+`task/artifact/version/preview`) also require `conversations`. Task mutations, lifecycle operations,
+task thread creation, direct task creation, and artifact writes require both `conversations` and
+`turns`. `task/artifact/read` also requires both `conversations` and `turns` because active legacy
+artifact reads can lazily materialize the immutable baseline. The whole `cowork/mcp/*` config
 surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth permission) requires the
 workspace-settings permission: `cowork/mcp/servers/read` can expose configured transport
 env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command (spawns a
@@ -470,7 +471,7 @@ Requests:
 - `task/blocker/report` — params `{ cwd?, taskId, expectedRevision, description, blocking, workItemId? }`; result `{ task }`
 - `task/blocker/resolve` — params `{ cwd?, taskId, expectedRevision, blockerId }`; result `{ task }`
 - `task/artifact/register` — params `{ cwd?, taskId, expectedRevision, path, title, kind, artifactId?, baseVersionId?, changeSummary?, workItemId?, provenance? }`; captures immutable bytes from a workspace-contained path as a new logical artifact or version and returns `{ task }`; completed, cancelled, and failed tasks reject registration
-- `task/artifact/read` — params `{ cwd?, taskId, artifactId }`; lazily captures a baseline for legacy artifacts when necessary and returns `{ detail }`; completed, cancelled, and failed tasks remain readable but do not create new baselines
+- `task/artifact/read` — params `{ cwd?, taskId, artifactId }`; lazily captures a baseline for legacy artifacts when necessary and returns `{ detail }`; requires both `conversations` and `turns`; completed, cancelled, and failed tasks remain readable but do not create new baselines
 - `task/artifact/version/capture` — params `{ cwd?, taskId, artifactId, expectedRevision, changeSummary? }`; explicitly captures externally edited live bytes and returns `{ task, detail }`; completed, cancelled, and failed tasks reject capture
 - `task/artifact/version/compare` — params `{ cwd?, taskId, artifactId, baseVersionId, targetVersionId }`; returns `{ comparison }` with bounded text, DOCX, PPTX, XLSX, or binary changes
 - `task/artifact/version/preview` — params `{ cwd?, taskId, artifactId, versionId }`; returns `{ versionId, preview }` from immutable historical bytes

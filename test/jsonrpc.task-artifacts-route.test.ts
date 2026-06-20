@@ -196,11 +196,16 @@ function makeHarness() {
   return { context, results, errors, sentMessages, getBaselineCalls: () => baselineCalls, ...data };
 }
 
-async function invoke(context: JsonRpcRouteContext, method: string, params: unknown) {
+async function invoke(
+  context: JsonRpcRouteContext,
+  method: string,
+  params: unknown,
+  ws: Parameters<ReturnType<typeof createTaskRouteHandlers>[string]>[0] = {} as never,
+) {
   const handler = createTaskRouteHandlers(context)[method];
   if (!handler) throw new Error(`Missing handler: ${method}`);
   const request: JsonRpcLiteRequest = { id: 1, method, params };
-  await handler({} as never, request);
+  await handler(ws, request);
 }
 
 describe("task artifact JSON-RPC routes", () => {
@@ -227,6 +232,71 @@ describe("task artifact JSON-RPC routes", () => {
         acceptedVersionId: null,
       }),
     });
+  });
+
+  test("rejects baseline-producing artifact reads for read-only task callers", async () => {
+    const harness = makeHarness();
+    harness.task.status = "working";
+    harness.detail.versions = [];
+    harness.detail.latestVersionId = null;
+    harness.detail.acceptedVersionId = null;
+
+    await invoke(
+      harness.context,
+      "task/artifact/read",
+      {
+        cwd: "C:\\workspace",
+        taskId: "task-1",
+        artifactId: "artifact-1",
+      },
+      {
+        data: {
+          taskReadAllowed: true,
+          taskMutationAllowed: false,
+        },
+      } as never,
+    );
+
+    expect(harness.results).toEqual([]);
+    expect(harness.getBaselineCalls()).toBe(0);
+    expect(harness.errors).toEqual([
+      {
+        id: 1,
+        error: {
+          code: -32600,
+          message: "task/artifact/read requires turns permission",
+          data: { category: "permission_denied", permission: "turns" },
+        },
+      },
+    ]);
+  });
+
+  test("allows baseline-producing artifact reads for task mutation callers", async () => {
+    const harness = makeHarness();
+    harness.task.status = "working";
+    harness.detail.versions = [];
+    harness.detail.latestVersionId = null;
+    harness.detail.acceptedVersionId = null;
+
+    await invoke(
+      harness.context,
+      "task/artifact/read",
+      {
+        cwd: "C:\\workspace",
+        taskId: "task-1",
+        artifactId: "artifact-1",
+      },
+      {
+        data: {
+          taskReadAllowed: true,
+          taskMutationAllowed: true,
+        },
+      } as never,
+    );
+
+    expect(harness.errors).toEqual([]);
+    expect(harness.getBaselineCalls()).toBe(1);
+    expect(harness.results[0]?.result).toEqual({ detail: harness.detail });
   });
 
   test("compares immutable text versions through the harness", async () => {

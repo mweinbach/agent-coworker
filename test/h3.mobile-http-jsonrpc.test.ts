@@ -874,9 +874,24 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
       permission: "turns",
     });
 
-    const allowedMutation = await __internal.dispatchHttpRpcPayload(
+    const artifactRead = await __internal.dispatchHttpRpcPayload(
       {
         id: 4,
+        method: "task/artifact/read",
+        params: { taskId: "task-1", artifactId: "artifact-1" },
+      },
+      connection,
+      trustedDevice({ conversations: true }),
+    );
+    expect(artifactRead.status).toBe(403);
+    await expect(artifactRead.json()).resolves.toEqual({
+      error: "Mobile device permission required: turns.",
+      permission: "turns",
+    });
+
+    const allowedMutation = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 5,
         method: "task/updateBrief",
         params: { taskId: "task-1", expectedRevision: 1, title: "Updated" },
       },
@@ -884,14 +899,21 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
       trustedDevice({ conversations: true, turns: true }),
     );
     expect(allowedMutation.status).toBe(200);
-    await expect(allowedMutation.json()).resolves.toMatchObject({ id: 4, result: { ok: true } });
+    await expect(allowedMutation.json()).resolves.toMatchObject({ id: 5, result: { ok: true } });
     expect(dispatchedMethods).toEqual(["task/read", "task/updateBrief"]);
-    expect(__internal.getRequiredH3Permission({ id: 5, method: "task/list", params: {} })).toBe(
+    expect(__internal.getRequiredH3Permission({ id: 6, method: "task/list", params: {} })).toBe(
       "conversations",
     );
     expect(
       __internal.getRequiredH3Permission({
-        id: 6,
+        id: 7,
+        method: "task/artifact/read",
+        params: {},
+      }),
+    ).toEqual(["conversations", "turns"]);
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 8,
         method: "task/updateBrief",
         params: {},
       }),

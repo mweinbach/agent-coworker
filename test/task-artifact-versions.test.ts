@@ -641,97 +641,118 @@ describe("task artifact versions", () => {
     }
   });
 
-  test("ignores late completed artifact revision outcomes once the task is terminal", async () => {
-    const harness = await createHarness();
-    try {
-      let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
-      task = await harness.coordinator.transition({
-        taskId: task.id,
-        workspacePath: harness.workspacePath,
-        expectedRevision: task.revision,
-        status: "working",
-        summary: "Working",
-      });
-      const started = await harness.coordinator.startArtifactRevision({
-        taskId: task.id,
-        workspacePath: harness.workspacePath,
-        artifactId: artifact.id,
-        expectedRevision: task.revision,
-        instruction: "Try a terminal race edit.",
-      });
-      await fs.writeFile(artifactPath, "late terminal edit\n");
-      const terminal = await harness.coordinator.transition({
-        taskId: started.task.id,
-        workspacePath: harness.workspacePath,
-        expectedRevision: started.task.revision,
-        status: "cancelled",
-        summary: "User cancelled the task",
-      });
+  for (const terminalStatus of TERMINAL_TASK_STATUSES) {
+    test(`closes active artifact revisions safely when the parent task becomes ${terminalStatus}`, async () => {
+      const harness = await createHarness();
+      try {
+        let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
+        task = await harness.coordinator.transition({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          status: "working",
+          summary: "Working",
+        });
+        const started = await harness.coordinator.startArtifactRevision({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          expectedRevision: task.revision,
+          instruction: "Try a terminal race edit.",
+        });
+        await fs.writeFile(artifactPath, `late terminal edit for ${terminalStatus}\n`);
+        const terminal = await harness.coordinator.transition({
+          taskId: started.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: started.task.revision,
+          status: terminalStatus,
+          summary: `Task became ${terminalStatus}`,
+        });
+        const closedBeforeOutcome = harness.sessionDb.getTaskArtifactRevision(started.revision.id);
+        const detailBeforeOutcome = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+        });
 
-      const finalized = await harness.coordinator.handleThreadOutcome(
-        started.revision.sessionId,
-        "completed",
-      );
-      if (!finalized) throw new Error("Expected terminal snapshot");
+        expect(closedBeforeOutcome).toMatchObject({
+          status: "cancelled",
+          completedAt: expect.any(String),
+        });
+        expect(detailBeforeOutcome?.activeRevision).toBeNull();
 
-      expect(finalized.task).toMatchObject({ status: "cancelled", revision: terminal.revision });
-      expect(finalized.revision.status).toBe("active");
-      expect(finalized.detail.versions).toHaveLength(started.detail.versions.length);
-      expect(await fs.readFile(artifactPath, "utf8")).toBe("late terminal edit\n");
-      expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
-        status: "cancelled",
-        revision: terminal.revision,
-      });
-    } finally {
-      harness.sessionDb.close();
-    }
-  });
+        const finalized = await harness.coordinator.handleThreadOutcome(
+          started.revision.sessionId,
+          terminalStatus === "completed" ? "completed" : "cancelled",
+        );
+        if (!finalized) throw new Error("Expected terminal revision snapshot");
 
-  test("ignores late cancelled artifact revision outcomes once the task is terminal", async () => {
-    const harness = await createHarness();
-    try {
-      let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
-      task = await harness.coordinator.transition({
-        taskId: task.id,
-        workspacePath: harness.workspacePath,
-        expectedRevision: task.revision,
-        status: "working",
-        summary: "Working",
-      });
-      const started = await harness.coordinator.startArtifactRevision({
-        taskId: task.id,
-        workspacePath: harness.workspacePath,
-        artifactId: artifact.id,
-        expectedRevision: task.revision,
-        instruction: "Try a terminal cancellation race.",
-      });
-      await fs.writeFile(artifactPath, "late terminal edit\n");
-      const terminal = await harness.coordinator.transition({
-        taskId: started.task.id,
-        workspacePath: harness.workspacePath,
-        expectedRevision: started.task.revision,
-        status: "failed",
-        summary: "Task failed elsewhere",
-      });
+        expect(finalized.task).toMatchObject({
+          status: terminalStatus,
+          revision: terminal.revision,
+        });
+        expect(finalized.revision).toMatchObject({
+          id: started.revision.id,
+          status: "cancelled",
+        });
+        expect(finalized.detail.activeRevision).toBeNull();
+        expect(finalized.detail.versions).toHaveLength(started.detail.versions.length);
+        expect(await fs.readFile(artifactPath, "utf8")).toBe(
+          `late terminal edit for ${terminalStatus}\n`,
+        );
 
-      const finalized = await harness.coordinator.handleThreadOutcome(
-        started.revision.sessionId,
-        "cancelled",
-      );
-      if (!finalized) throw new Error("Expected terminal snapshot");
+        await harness.coordinator.handleThreadOutcome(
+          started.revision.sessionId,
+          "error",
+          new Error("late replay"),
+        );
+        expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+          status: terminalStatus,
+          revision: terminal.revision,
+        });
+        expect(harness.sessionDb.getTaskArtifactRevision(started.revision.id)).toMatchObject({
+          status: "cancelled",
+          completedAt: closedBeforeOutcome?.completedAt,
+        });
+        expect(await fs.readFile(artifactPath, "utf8")).toBe(
+          `late terminal edit for ${terminalStatus}\n`,
+        );
 
-      expect(finalized.task).toMatchObject({ status: "failed", revision: terminal.revision });
-      expect(finalized.revision.status).toBe("active");
-      expect(finalized.detail.versions).toHaveLength(started.detail.versions.length);
-      expect(await fs.readFile(artifactPath, "utf8")).toBe("late terminal edit\n");
-      expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
-        status: "failed",
-        revision: terminal.revision,
-      });
-    } finally {
-      harness.sessionDb.close();
-    }
-  });
+        await fs.writeFile(artifactPath, "version one\n");
+        let recovered = terminal;
+        if (terminalStatus === "failed") {
+          harness.coordinator.setContinuationDispatcher(async () => "queued");
+          const retried = await harness.coordinator.retryTask({
+            taskId: terminal.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: terminal.revision,
+          });
+          expect(retried.retryStatus).toBe("queued");
+          recovered = retried.task;
+        } else {
+          recovered = await harness.coordinator.reopenTask({
+            taskId: terminal.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: terminal.revision,
+            reason: "Continue after terminal revision cleanup.",
+          });
+        }
+
+        expect(recovered.status).toBe("working");
+        const freshRevision = await harness.coordinator.startArtifactRevision({
+          taskId: recovered.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          expectedRevision: recovered.revision,
+          instruction: "Start a fresh revision after recovery.",
+        });
+        expect(freshRevision.revision.id).not.toBe(started.revision.id);
+        expect(freshRevision.revision.status).toBe("active");
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
 
   test("keeps parallel revisions working until the final cancellation restores prior status", async () => {
     const harness = await createHarness();

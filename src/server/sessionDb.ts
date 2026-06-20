@@ -554,6 +554,10 @@ export class SessionDb {
     return this.taskRepository.getActiveArtifactRevisionForSession(sessionId);
   }
 
+  getTaskArtifactRevisionForSession(sessionId: string): TaskArtifactRevision | null {
+    return this.taskRepository.getArtifactRevisionForSession(sessionId);
+  }
+
   getTaskArtifactRevision(revisionId: string): TaskArtifactRevision | null {
     return this.taskRepository.getArtifactRevision(revisionId);
   }
@@ -630,6 +634,17 @@ export class SessionDb {
       "fail_task_artifact_revision",
       async () => this.taskRepository.failArtifactRevision(input),
       { revisionId: input.revisionId, status: input.status },
+    );
+  }
+
+  async abandonTaskArtifactRevisionForTerminalTask(input: {
+    revisionId: string;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "abandon_task_artifact_revision_terminal",
+      async () => this.taskRepository.abandonArtifactRevisionForTerminalTask(input),
+      { revisionId: input.revisionId },
     );
   }
 

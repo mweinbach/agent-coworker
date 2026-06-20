@@ -1609,6 +1609,16 @@ export class TaskCoordinator {
   } | null> {
     const revision = this.options.sessionDb.getActiveTaskArtifactRevisionForSession(sessionId);
     if (!revision) {
+      const closedRevision = this.options.sessionDb.getTaskArtifactRevisionForSession(sessionId);
+      if (closedRevision) {
+        const closedTask = this.options.sessionDb.getTask(closedRevision.taskId);
+        const closedDetail = this.options.sessionDb.getTaskArtifactDetail(
+          closedRevision.taskId,
+          closedRevision.artifactId,
+        );
+        if (!closedTask || !closedDetail) return null;
+        return { task: closedTask, detail: closedDetail, revision: closedRevision };
+      }
       if (outcome === "error") await this.failPrimaryTaskRun(sessionId, failure);
       return null;
     }
@@ -1618,7 +1628,20 @@ export class TaskCoordinator {
     if (!detail) throw new Error(`Unknown task artifact: ${revision.artifactId}`);
     const prior = detail.versions.find((version) => version.id === revision.priorVersionId);
     if (!prior) throw new Error(`Unknown prior artifact version: ${revision.priorVersionId}`);
-    if (isTerminalTask(task)) return { task, detail, revision };
+    if (isTerminalTask(task)) {
+      const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
+        revisionId: revision.id,
+        updatedAt: nowIso(),
+      });
+      const updatedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+      const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(
+        task.id,
+        revision.artifactId,
+      );
+      if (!updatedRevision || !updatedDetail) throw new Error("Artifact revision did not close");
+      this.notifyUpdated(updatedTask);
+      return { task: updatedTask, detail: updatedDetail, revision: updatedRevision };
+    }
     const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
 
     if (outcome === "completed") {

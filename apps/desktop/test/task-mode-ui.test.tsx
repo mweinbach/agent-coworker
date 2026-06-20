@@ -727,6 +727,7 @@ describe("desktop task mode UI", () => {
 
   test.serial("makes terminal task conversations read-only while preserving feed", async () => {
     const harness = setupJsdom();
+    const reopenTask = mock(async () => {});
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -734,6 +735,7 @@ describe("desktop task mode UI", () => {
       const root = createRoot(container);
       resetStore(taskRecord({ status: "completed" }));
       useAppStore.setState({
+        reopenTask,
         threads: [
           {
             id: "task-session-1",
@@ -781,8 +783,13 @@ describe("desktop task mode UI", () => {
 
       expect(container.textContent).toContain("This task is completed.");
       expect(container.textContent).toContain("Reopen the task to continue this conversation.");
+      expect(container.textContent).toContain("Reopen task");
       expect(container.textContent).toContain("Preserved terminal transcript audit line.");
       expect(container.querySelector('[aria-label="Message input"]')).toBeNull();
+      const reopenButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Reopen task",
+      );
+      expect(reopenButton).toBeDefined();
       const addThreadButton = container.querySelector(
         '[aria-label="Add focused task thread"]',
       ) as HTMLButtonElement | null;
@@ -800,6 +807,74 @@ describe("desktop task mode UI", () => {
       expect(harness.dom.window.document.activeElement).toBe(addThreadButton);
       await act(async () => addThreadButton?.click());
       expect(harness.dom.window.document.body.textContent).not.toContain("Add task thread");
+      await act(async () => {
+        reopenButton?.click();
+        await Promise.resolve();
+      });
+      expect(reopenTask).toHaveBeenCalledWith("task-1");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("shows failed task conversations as retry-only with pending state", async () => {
+    const harness = setupJsdom();
+    const retryResult = Promise.withResolvers<boolean>();
+    const retryTask = mock(async () => await retryResult.promise);
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      resetStore(taskRecord({ status: "failed" }));
+      useAppStore.setState({
+        retryTask,
+        threads: [
+          {
+            id: "task-session-1",
+            workspaceId: "ws-1",
+            title: "Main",
+            createdAt: NOW,
+            lastMessageAt: NOW,
+            status: "active",
+            sessionId: "task-session-1",
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+        ],
+        threadRuntimeById: {},
+      } as never);
+
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
+
+      expect(container.textContent).toContain("This task failed.");
+      expect(container.textContent).toContain("Retry the task to continue this conversation.");
+      expect(container.textContent).toContain("Retry task");
+      expect(container.textContent).not.toContain("Reopen task");
+      expect(container.querySelector('[aria-label="Message input"]')).toBeNull();
+      const retryButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Retry task",
+      ) as HTMLButtonElement | undefined;
+      expect(retryButton).toBeDefined();
+
+      await act(async () => {
+        retryButton?.click();
+        await Promise.resolve();
+      });
+      expect(retryTask).toHaveBeenCalledWith("task-1");
+      expect(retryButton?.disabled).toBe(true);
+      expect(retryButton?.getAttribute("aria-busy")).toBe("true");
+      expect(retryButton?.textContent).toContain("Retrying...");
+
+      await act(async () => {
+        retryResult.resolve(true);
+        await retryResult.promise;
+      });
 
       await act(async () => root.unmount());
     } finally {

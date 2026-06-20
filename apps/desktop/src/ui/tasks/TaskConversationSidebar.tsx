@@ -1,4 +1,4 @@
-import { MessageSquarePlusIcon } from "lucide-react";
+import { MessageSquarePlusIcon, RotateCcwIcon } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { TaskStatus } from "../../../../../src/shared/tasks";
@@ -15,6 +15,7 @@ import {
 } from "../../components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field";
 import { Input } from "../../components/ui/input";
+import { Spinner } from "../../components/ui/spinner";
 import { cn } from "../../lib/utils";
 import { ChatView } from "../ChatView";
 
@@ -48,9 +49,13 @@ export function TaskConversationSidebar() {
   );
   const selectTaskThread = useAppStore((state) => state.selectTaskThread);
   const createTaskThread = useAppStore((state) => state.createTaskThread);
+  const reopenTask = useAppStore((state) => state.reopenTask);
+  const retryTask = useAppStore((state) => state.retryTask);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [threadTitle, setThreadTitle] = useState("");
   const [creating, setCreating] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const terminal = task ? isTerminalTaskStatus(task.status) : false;
   const terminalCopy = task && terminal ? terminalConversationCopy(task.status) : null;
@@ -62,6 +67,36 @@ export function TaskConversationSidebar() {
   if (!task) return null;
 
   const terminalNoticeId = `task-terminal-lock-${task.id}`;
+
+  const restoreTaskWrites = async () => {
+    if (!terminal || reopening || retrying) return;
+    if (task.status === "failed") {
+      setRetrying(true);
+      try {
+        await retryTask(task.id);
+      } finally {
+        setRetrying(false);
+      }
+      return;
+    }
+    setReopening(true);
+    try {
+      await reopenTask(task.id);
+    } finally {
+      setReopening(false);
+    }
+  };
+
+  const terminalAction = terminal
+    ? {
+        label: task.status === "failed" ? "Retry task" : "Reopen task",
+        pendingLabel: task.status === "failed" ? "Retrying..." : "Reopening...",
+        pending: task.status === "failed" ? retrying : reopening,
+        icon: <RotateCcwIcon data-icon="inline-start" />,
+        pendingIcon: <Spinner data-icon="inline-start" />,
+        onClick: () => void restoreTaskWrites(),
+      }
+    : undefined;
 
   const submitThread = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -164,7 +199,11 @@ export function TaskConversationSidebar() {
       </div>
       <div className="min-h-0 flex-1">
         <ChatView
-          readOnlyNotice={terminalCopy ? { ...terminalCopy, id: terminalNoticeId } : undefined}
+          readOnlyNotice={
+            terminalCopy
+              ? { ...terminalCopy, id: terminalNoticeId, action: terminalAction }
+              : undefined
+          }
         />
       </div>
     </aside>

@@ -79,6 +79,10 @@ const loadPromptModule = async (): Promise<typeof import("../../prompt")> => {
 const lazyLoadAgentPrompt: typeof loadAgentPromptFn = async (...args) =>
   await (await loadPromptModule()).loadAgentPrompt(...args);
 
+function shouldRegisterTaskSubscriber(method: string): boolean {
+  return method === "task/list" || method === "task/read";
+}
+
 const lazyLoadSystemPromptWithSkills: typeof loadSystemPromptWithSkillsFn = async (...args) =>
   await (await loadPromptModule()).loadSystemPromptWithSkills(...args);
 
@@ -475,7 +479,8 @@ export async function createAgentServerRuntime(
     const params = isPlainObject(message.params) ? message.params : undefined;
     if (params || message.method.startsWith("task/")) {
       try {
-        const cwd = message.method.startsWith("task/")
+        const isTaskMethod = message.method.startsWith("task/");
+        const cwd = isTaskMethod
           ? await resolveTaskWorkspacePath(jsonRpcRouteContext, params ?? {}, message.method)
           : requireWorkspacePath(
               params ?? {},
@@ -484,7 +489,9 @@ export async function createAgentServerRuntime(
               opts.homedir,
             );
         workspaceControl.registerSubscriber(ws, cwd);
-        taskSubscribers.register(ws, cwd);
+        if (isTaskMethod && shouldRegisterTaskSubscriber(message.method)) {
+          taskSubscribers.register(ws, cwd);
+        }
       } catch {
         // Ignore non-workspace-control requests that do not resolve a cwd.
       }

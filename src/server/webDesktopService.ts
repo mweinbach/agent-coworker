@@ -264,7 +264,11 @@ function defaultState(): DesktopPersistedState {
   };
 }
 
-function buildFallbackWorkspace(cwd: string): DesktopWorkspaceRecord {
+function isFallbackWorkspaceId(id: string | null): boolean {
+  return typeof id === "string" && id.startsWith(`${FALLBACK_WORKSPACE_ID_PREFIX}-`);
+}
+
+function buildFallbackWorkspace(cwd: string, workspaceKind: WorkspaceKind): DesktopWorkspaceRecord {
   const now = new Date().toISOString();
   return withWorkspaceKindSource(
     {
@@ -274,24 +278,30 @@ function buildFallbackWorkspace(cwd: string): DesktopWorkspaceRecord {
       createdAt: now,
       lastOpenedAt: now,
       wsProtocol: "jsonrpc",
-      workspaceKind: "project",
+      workspaceKind,
       defaultEnableMcp: true,
       defaultBackupsEnabled: false,
       yolo: false,
     },
-    "default",
+    workspaceKind === "oneOffChat" ? "path" : "default",
   );
 }
 
 function normalizeWorkspaceKindWithSource(
   item: Record<string, unknown>,
+  id: string | null,
   rawWorkspacePath: string | null,
   homedir?: string,
 ): { workspaceKind: WorkspaceKind; source: WorkspaceKindSource } {
+  const isOneOffPath =
+    rawWorkspacePath !== null && isPathInsideOneOffChatsRoot(rawWorkspacePath, homedir);
+  if (item.workspaceKind === "project" && isFallbackWorkspaceId(id) && isOneOffPath) {
+    return { workspaceKind: "oneOffChat", source: "path" };
+  }
   if (item.workspaceKind === "project" || item.workspaceKind === "oneOffChat") {
     return { workspaceKind: item.workspaceKind, source: "explicit" };
   }
-  if (rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath, homedir)) {
+  if (isOneOffPath) {
     return { workspaceKind: "oneOffChat", source: "path" };
   }
   return { workspaceKind: normalizeWorkspaceKind(item.workspaceKind), source: "default" };
@@ -319,6 +329,7 @@ async function normalizeState(
     const rawWorkspacePath = asNonEmptyString(item.path);
     const { workspaceKind, source: workspaceKindSource } = normalizeWorkspaceKindWithSource(
       item,
+      id,
       rawWorkspacePath,
       opts.homedir,
     );
@@ -857,13 +868,20 @@ export class WebDesktopService implements WebDesktopServiceLike {
     }
 
     if (state.workspaces.length === 0 && opts.fallbackCwd) {
-      const fallbackWorkspacePath = await resolveWorkspacePath(opts.fallbackCwd, "project", {
-        homedir: this.homedir,
-      });
+      const fallbackWorkspaceKind = isPathInsideOneOffChatsRoot(opts.fallbackCwd, this.homedir)
+        ? "oneOffChat"
+        : "project";
+      const fallbackWorkspacePath = await resolveWorkspacePath(
+        opts.fallbackCwd,
+        fallbackWorkspaceKind,
+        {
+          homedir: this.homedir,
+        },
+      );
       if (fallbackWorkspacePath) {
         state = {
           ...state,
-          workspaces: [buildFallbackWorkspace(fallbackWorkspacePath)],
+          workspaces: [buildFallbackWorkspace(fallbackWorkspacePath, fallbackWorkspaceKind)],
         };
       }
     }
@@ -968,7 +986,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
   async createOneOffChatWorkspace(
     opts: { titleHint?: string } = {},
   ): Promise<{ name: string; path: string }> {
-    return await createOneOffChatWorkspaceDirectory(opts);
+    return await createOneOffChatWorkspaceDirectory({ ...opts, homedir: this.homedir });
   }
 
   async getWorkspaceRoots(fallbackCwd: string): Promise<string[]> {
@@ -978,7 +996,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
     // Global "New chat" sessions run under ~/.cowork/chats/<session> and may not
     // be persisted as project workspace roots; the file routes must still allow
     // browsing that app-managed location.
-    return [...base, getOneOffChatsRoot()];
+    return [...base, getOneOffChatsRoot(this.homedir)];
   }
 
   async resolveWorkspaceDirectory(workspacePath: string): Promise<string> {

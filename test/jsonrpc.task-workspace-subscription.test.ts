@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRunTurn } from "../src/agent";
 import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import type { StartServerSocket } from "../src/server/startServer/types";
+import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { WebDesktopService, type WebDesktopServiceLike } from "../src/server/webDesktopService";
 
 type JsonRpcMessage = {
@@ -949,6 +950,226 @@ describe("task workspace subscription routing", () => {
     } finally {
       await runtime?.stop();
       await fs.rm(cleanupRoot, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("rejects fallback one-off desktop state after HTTP roundtrip", async () => {
+    const { cleanupRoot, aliasHome } = await createAliasedHome("task-fallback-oneoff-home-");
+    const userDataDir = path.join(cleanupRoot, "user-data");
+    const activeOneOffWorkspace = path.join(
+      aliasHome,
+      ".cowork",
+      "chats",
+      "20260620-fallback-oneoff",
+    );
+    const projectWorkspace = path.join(cleanupRoot, "project");
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
+    try {
+      await fs.mkdir(activeOneOffWorkspace, { recursive: true });
+      await fs.mkdir(projectWorkspace, { recursive: true });
+      const activeOneOffPath = await fs.realpath(activeOneOffWorkspace);
+      const projectPath = await fs.realpath(projectWorkspace);
+      const desktopService = new WebDesktopService({ userDataDir, homedir: aliasHome });
+
+      const stateResponse = await handleWebDesktopRoute(
+        new Request("http://localhost/cowork/desktop/state"),
+        { cwd: activeOneOffPath, desktopService },
+      );
+      expect(stateResponse).not.toBeNull();
+      const roundtripState = await stateResponse!.json();
+      const saveResponse = await handleWebDesktopRoute(
+        new Request("http://localhost/cowork/desktop/state", {
+          method: "POST",
+          body: JSON.stringify(roundtripState),
+        }),
+        { cwd: activeOneOffPath, desktopService },
+      );
+      expect(saveResponse).not.toBeNull();
+
+      runtime = await createTaskTestRuntime({
+        cwd: activeOneOffPath,
+        homedir: aliasHome,
+        desktopService,
+      });
+
+      const oneOffReader = makeSocket("fallback-oneoff-reader");
+      const mutator = makeSocket("fallback-oneoff-mutator");
+      await initializeConnection(runtime, oneOffReader);
+      await initializeConnection(runtime, mutator);
+
+      const omittedListResponse = await sendRequest(runtime, oneOffReader, "task/list");
+      expect(omittedListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      const exactListResponse = await sendRequest(runtime, oneOffReader, "task/list", {
+        cwd: activeOneOffPath,
+      });
+      expect(exactListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+
+      const { cwd: _omittedCreateCwd, ...omittedCreateParams } = createTaskParams(
+        activeOneOffPath,
+        "fallback-oneoff-create-omitted",
+      );
+      const omittedCreateResponse = await sendRequest(
+        runtime,
+        mutator,
+        "task/create",
+        omittedCreateParams,
+      );
+      expect(omittedCreateResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      const exactCreateResponse = await sendRequest(
+        runtime,
+        mutator,
+        "task/create",
+        createTaskParams(activeOneOffPath, "fallback-oneoff-create-exact"),
+      );
+      expect(exactCreateResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(oneOffReader, (message) => message.method === "task/created");
+
+      const mutationResponse = await sendRequest(runtime, mutator, "task/updateBrief", {
+        cwd: activeOneOffPath,
+        taskId: "task-fallback-oneoff",
+        expectedRevision: 1,
+        title: "Should remain rejected",
+      });
+      expect(mutationResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(oneOffReader, (message) => message.method === "task/updated");
+
+      const projectService = new WebDesktopService({
+        userDataDir: path.join(cleanupRoot, "project-user-data"),
+        homedir: aliasHome,
+      });
+      await projectService.loadState({ fallbackCwd: projectPath });
+      await projectService.saveState(await projectService.loadState({ fallbackCwd: projectPath }));
+      const projectRuntime = await createTaskTestRuntime({
+        cwd: projectPath,
+        homedir: aliasHome,
+        desktopService: projectService,
+      });
+      try {
+        const projectReader = makeSocket("fallback-project-reader");
+        await initializeConnection(projectRuntime, projectReader);
+        const projectListResponse = await sendRequest(projectRuntime, projectReader, "task/list");
+        expect(projectListResponse.error).toBeUndefined();
+        expect(projectListResponse.result).toEqual({ tasks: [], total: 0 });
+      } finally {
+        await projectRuntime.stop();
+      }
+    } finally {
+      await runtime?.stop();
+      await fs.rm(cleanupRoot, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("non-task workspace reads do not establish task subscriptions", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-nontask-subscription-"));
+    const activeWorkspace = path.join(home, "active");
+    const targetWorkspace = path.join(home, "target");
+    let includeTargetWorkspace = false;
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
+    try {
+      await fs.mkdir(path.join(activeWorkspace, ".cowork"), { recursive: true });
+      await fs.mkdir(path.join(targetWorkspace, ".cowork"), { recursive: true });
+      const activePath = await fs.realpath(activeWorkspace);
+      const targetPath = await fs.realpath(targetWorkspace);
+      const desktopService = {
+        loadState: async () => ({
+          version: 2,
+          workspaces: [
+            {
+              id: "active",
+              name: "Active",
+              path: activePath,
+              workspaceKind: "project",
+              createdAt: "2026-06-20T00:00:00.000Z",
+              lastOpenedAt: "2026-06-20T00:00:00.000Z",
+            },
+            ...(includeTargetWorkspace
+              ? [
+                  {
+                    id: "target",
+                    name: "Target",
+                    path: targetPath,
+                    workspaceKind: "project" as const,
+                    createdAt: "2026-06-20T00:00:00.000Z",
+                    lastOpenedAt: "2026-06-20T00:00:00.000Z",
+                  },
+                ]
+              : []),
+          ],
+        }),
+      } as Partial<WebDesktopServiceLike> as WebDesktopServiceLike;
+      runtime = await createTaskTestRuntime({
+        cwd: activePath,
+        homedir: home,
+        desktopService,
+      });
+
+      const genericReader = makeSocket("generic-reader");
+      const taskReader = makeSocket("authorized-task-reader");
+      const mutator = makeSocket("generic-mutator");
+      await initializeConnection(runtime, genericReader);
+      await initializeConnection(runtime, taskReader);
+      await initializeConnection(runtime, mutator);
+
+      const rejectedListResponse = await sendRequest(runtime, genericReader, "task/list", {
+        cwd: targetPath,
+      });
+      expect(rejectedListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized workspace",
+      );
+      const providerCatalogResponse = await sendRequest(
+        runtime,
+        genericReader,
+        "cowork/provider/catalog/read",
+        { cwd: targetPath },
+      );
+      expect(providerCatalogResponse.error).toBeUndefined();
+
+      includeTargetWorkspace = true;
+      const createdBeforeSubscription = requireCreatedTask(
+        await sendRequest(
+          runtime,
+          mutator,
+          "task/create",
+          createTaskParams(targetPath, "generic-nontask-subscription-before"),
+        ),
+      );
+      await expectNoMessage(
+        genericReader,
+        taskNotificationPredicate("task/created", createdBeforeSubscription.id, targetPath),
+      );
+
+      const listResponse = await sendRequest(runtime, taskReader, "task/list", { cwd: targetPath });
+      expect(listResponse.error).toBeUndefined();
+      const createdAfterSubscription = requireCreatedTask(
+        await sendRequest(
+          runtime,
+          mutator,
+          "task/create",
+          createTaskParams(targetPath, "generic-nontask-subscription-after"),
+        ),
+      );
+      await waitForMessage(
+        taskReader,
+        taskNotificationPredicate("task/created", createdAfterSubscription.id, targetPath),
+        "task/created after explicit task subscription",
+      );
+      await expectNoMessage(
+        genericReader,
+        taskNotificationPredicate("task/created", createdAfterSubscription.id, targetPath),
+      );
+    } finally {
+      await runtime?.stop();
+      await fs.rm(home, { recursive: true, force: true });
     }
   }, 20_000);
 

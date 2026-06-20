@@ -220,4 +220,99 @@ describe("app window-mode notification routing", () => {
       harness.restore();
     }
   });
+
+  test("Escape dismisses pending sandbox approvals while settings overlays task", async () => {
+    const harness = setupJsdom();
+    const dismissPrompt = mock(() => {});
+    const closeSettings = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedTerminalTaskApprovalState(dismissPrompt);
+      useAppStore.setState({
+        view: "settings",
+        lastNonSettingsView: "task",
+        closeSettings,
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+
+      expect(dismissPrompt).toHaveBeenCalledTimes(1);
+      expect(closeSettings).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("Escape closes settings-over-chat without dismissing hidden task approvals", async () => {
+    const harness = setupJsdom();
+    const dismissPrompt = mock(() => {});
+    const closeSettings = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedTerminalTaskApprovalState(dismissPrompt);
+      useAppStore.setState((state) => ({
+        view: "settings",
+        lastNonSettingsView: "chat",
+        selectedTaskId: null,
+        selectedThreadId: "chat-session-1",
+        threads: [
+          ...state.threads,
+          {
+            id: "chat-session-1",
+            workspaceId: "ws-1",
+            title: "Ordinary chat",
+            createdAt: "2026-04-30T00:00:00.000Z",
+            lastMessageAt: "2026-04-30T00:00:00.000Z",
+            status: "active",
+            sessionId: "chat-session-1",
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+          },
+        ],
+        closeSettings,
+      }));
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+
+      expect(dismissPrompt).not.toHaveBeenCalled();
+      expect(closeSettings).toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
 });

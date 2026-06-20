@@ -443,6 +443,8 @@ export default function App() {
             pending.length > 0 && isSandboxApprovalThreadVisible(state, threadId),
         );
         if (hasPendingSandboxApproval) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
           state.dismissPrompt();
           return;
         }

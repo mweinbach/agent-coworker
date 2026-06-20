@@ -233,19 +233,34 @@ export function createWorkspaceActions(
           s.pluginManagementWorkspaceId === workspaceId && s.pluginManagementMode === "workspace"
             ? "auto"
             : s.pluginManagementMode;
-        const selectedThreadId =
-          s.selectedThreadId &&
-          remainingThreads.some(
-            (t) =>
-              t.id === s.selectedThreadId &&
-              (s.view === "task" || isStandardChatThread(t, { includeDrafts: true })),
-          )
-            ? s.selectedThreadId
-            : null;
         const selectedTaskId =
           selectedWorkspaceId && taskBelongsToWorkspace(s.selectedTaskId, selectedWorkspaceId)
             ? s.selectedTaskId
             : null;
+        const threadSelectionIntent = getThreadSelectionIntent(
+          s.view,
+          s.lastNonSettingsView,
+          selectedTaskId,
+        );
+        const selectedThread = s.selectedThreadId
+          ? (remainingThreads.find((t) => t.id === s.selectedThreadId) ?? null)
+          : null;
+        let selectedThreadId: string | null = null;
+        if (selectedWorkspaceId && selectedThread?.workspaceId === selectedWorkspaceId) {
+          if (threadSelectionIntent.context === "task" && threadSelectionIntent.selectedTaskId) {
+            const selectedTask = s.tasksById[threadSelectionIntent.selectedTaskId];
+            const selectedThreadBelongsToTask =
+              selectedThread.taskId === threadSelectionIntent.selectedTaskId ||
+              selectedTask?.threads.some((thread) => thread.sessionId === selectedThread.id) ===
+                true;
+            selectedThreadId = selectedThreadBelongsToTask ? selectedThread.id : null;
+          } else if (
+            threadSelectionIntent.context === "chat" &&
+            isStandardChatThread(selectedThread, { includeDrafts: true })
+          ) {
+            selectedThreadId = selectedThread.id;
+          }
+        }
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,

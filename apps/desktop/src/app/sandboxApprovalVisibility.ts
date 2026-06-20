@@ -1,9 +1,11 @@
 import type { TaskRecord } from "../../../../src/shared/tasks";
 import { isStandardChatThread } from "./threadFilters";
-import type { ThreadRecord } from "./types";
+import { getThreadSelectionContext } from "./threadSelectionContext";
+import type { ThreadRecord, ViewId } from "./types";
 
 type SandboxApprovalContext = {
-  view: string;
+  view: ViewId;
+  lastNonSettingsView?: ViewId | null;
   selectedTaskId: string | null;
   selectedThreadId: string | null;
   threads: ThreadRecord[];
@@ -51,9 +53,10 @@ export function isSandboxApprovalThreadVisible(
 ): boolean {
   const target = resolveSandboxApprovalThreadTarget(context, threadId);
   if (!target) return false;
-  if (context.view === "task") {
+  const selectionContext = getThreadSelectionContext(context.view, context.lastNonSettingsView);
+  if (selectionContext === "task") {
     if (target.kind !== "task" || target.taskId !== context.selectedTaskId) return false;
     return true;
   }
-  return context.view === "chat" && target.kind === "chat";
+  return target.kind === "chat";
 }

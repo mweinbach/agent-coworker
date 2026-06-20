@@ -585,6 +585,10 @@ export class SessionDb {
     return this.taskRepository.hasCompletedArtifactRevisionForWorkItem(taskId, workItemId);
   }
 
+  hasCancelledTaskArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
+    return this.taskRepository.hasCancelledArtifactRevisionForWorkItem(taskId, workItemId);
+  }
+
   async registerTaskArtifactVersioned(input: {
     artifact: TaskArtifact;
     version: TaskArtifactVersion;

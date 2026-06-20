@@ -1261,6 +1261,15 @@ export class SessionTaskRepository {
     return row !== null;
   }
 
+  hasCancelledArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
+    const row = this.db
+      .query(
+        "SELECT 1 AS found FROM task_artifact_revisions WHERE task_id = ? AND work_item_id = ? AND status = 'cancelled' LIMIT 1",
+      )
+      .get(taskId, workItemId);
+    return row !== null;
+  }
+
   registerArtifactVersioned(input: {
     artifact: TaskArtifact;
     version: TaskArtifactVersion;

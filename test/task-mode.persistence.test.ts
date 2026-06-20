@@ -1142,6 +1142,70 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("rejects directive plan cycles without partially mutating brief state", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Atomic plan",
+        objective: "Keep the original objective.",
+        sessionId: "session-1",
+      });
+      const beforeActivityCount = created.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective("session-1", {
+          type: "update_plan",
+          idempotencyKey: "cyclic-directive-plan",
+          expectedRevision: created.revision,
+          objective: "This objective must not persist.",
+          requirements: [
+            {
+              kind: "acceptance_criterion",
+              text: "This criterion must not persist.",
+            },
+          ],
+          workItems: [
+            { id: "a", title: "A", dependsOn: ["b"] },
+            { id: "b", title: "B", dependsOn: ["a"] },
+          ],
+        }),
+      ).rejects.toThrow("cycle");
+
+      const current = harness.coordinator.get(created.id, harness.workspacePath);
+      expect(current).toMatchObject({
+        objective: created.objective,
+        revision: created.revision,
+      });
+      expect(current?.requirements).toEqual(created.requirements);
+      expect(current?.workItems).toEqual([]);
+      expect(current?.activity).toHaveLength(beforeActivityCount);
+
+      const reloadedDb = await SessionDb.create({
+        paths: {
+          rootDir: path.join(harness.home, ".cowork"),
+          sessionsDir: path.join(harness.home, ".cowork", "sessions"),
+        },
+      });
+      try {
+        const reloaded = new TaskCoordinator({ sessionDb: reloadedDb });
+        const reloadedTask = reloaded.get(created.id, harness.workspacePath);
+        expect(reloadedTask).toMatchObject({
+          objective: created.objective,
+          revision: created.revision,
+        });
+        expect(reloadedTask?.requirements).toEqual(created.requirements);
+        expect(reloadedTask?.workItems).toEqual([]);
+        expect(reloadedTask?.activity).toHaveLength(beforeActivityCount);
+      } finally {
+        reloadedDb.close();
+      }
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("allows concurrent threads only one claim for the same work item", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

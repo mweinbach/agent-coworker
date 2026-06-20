@@ -27,6 +27,7 @@ import type {
   TaskDecision,
   TaskRecord,
   TaskReviewRecord,
+  TaskStatus,
   TaskSummary,
   TaskThread,
   WorkItemStatus,
@@ -50,6 +51,7 @@ import {
   SessionTaskRepository,
   type StartTaskArtifactRevisionInput,
   type TaskRequirementInput,
+  type UpdateTaskPlanInput,
   type WorkItemInput,
 } from "./sessionDb/tasks";
 import { SessionDbWriteCoordinator } from "./sessionDb/writeCoordinator";
@@ -461,6 +463,14 @@ export class SessionDb {
     );
   }
 
+  async updateTaskPlan(input: UpdateTaskPlanInput): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "update_task_plan",
+      async () => this.taskRepository.updatePlan(input),
+      { taskId: input.taskId },
+    );
+  }
+
   async updateTaskWorkItem(input: {
     taskId: string;
     workItemId: string;
@@ -567,6 +577,38 @@ export class SessionDb {
     return this.taskRepository.getArtifactRevision(revisionId);
   }
 
+  getTaskArtifactRevisionPriorTaskStatus(revisionId: string): TaskStatus | null {
+    return this.taskRepository.getArtifactRevisionPriorTaskStatus(revisionId);
+  }
+
+  hasCompletedTaskArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
+    return this.taskRepository.hasCompletedArtifactRevisionForWorkItem(taskId, workItemId);
+  }
+
+  hasPendingTaskArtifactRevisionSettlement(taskId: string): boolean {
+    return this.taskRepository.hasPendingArtifactRevisionSettlement(taskId);
+  }
+
+  hasPendingTaskArtifactRevisionSettlementForWorkItem(taskId: string, workItemId: string): boolean {
+    return this.taskRepository.hasPendingArtifactRevisionSettlementForWorkItem(taskId, workItemId);
+  }
+
+  listPendingTaskArtifactRevisionSettlementIds(taskId: string): string[] {
+    return this.taskRepository.listPendingArtifactRevisionSettlementIds(taskId);
+  }
+
+  listTaskArtifactRevisionOutputPathsForWorkItem(taskId: string, workItemId: string): string[] {
+    return this.taskRepository.listArtifactRevisionOutputPathsForWorkItem(taskId, workItemId);
+  }
+
+  listCoordinatorOwnedTaskArtifactRevisionWorkItemIds(taskId: string): string[] {
+    return this.taskRepository.listCoordinatorOwnedArtifactRevisionWorkItemIds(taskId);
+  }
+
+  hasCancelledTaskArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
+    return this.taskRepository.hasCancelledArtifactRevisionForWorkItem(taskId, workItemId);
+  }
+
   async registerTaskArtifactVersioned(input: {
     artifact: TaskArtifact;
     version: TaskArtifactVersion;
@@ -639,6 +681,184 @@ export class SessionDb {
       "fail_task_artifact_revision",
       async () => this.taskRepository.failArtifactRevision(input),
       { revisionId: input.revisionId, status: input.status },
+    );
+  }
+
+  async settlePendingTaskArtifactRevisionSettlements(input: {
+    taskId: string;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "settle_pending_task_artifact_revision_settlements",
+      async () => this.taskRepository.settlePendingArtifactRevisionSettlements(input),
+      { taskId: input.taskId },
+    );
+  }
+
+  async proposeTaskCompletionWithPendingArtifactRevisionSettlements(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+    summary: string;
+    detail?: string | null;
+    threadId?: string | null;
+    settlementRevisionIds: readonly string[];
+    reviewRequired: boolean;
+    validateReadyTask?: (task: TaskRecord) => Promise<void>;
+    validateAcceptedTask?: (task: TaskRecord) => Promise<void>;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "propose_task_completion_with_pending_artifact_revision_settlements",
+      async () => {
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          this.taskRepository.setStatusInOpenTransaction({
+            taskId: input.taskId,
+            expectedRevision: input.expectedRevision,
+            status: "awaiting_review",
+            summary: input.summary,
+            detail: input.detail ?? null,
+            updatedAt: input.updatedAt,
+            threadId: input.threadId ?? null,
+          });
+          let task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await input.validateReadyTask?.(task);
+          if (!input.reviewRequired) {
+            this.taskRepository.acceptAllArtifactVersionsInOpenTransaction({
+              taskId: input.taskId,
+              expectedRevision: task.revision,
+              updatedAt: input.updatedAt,
+            });
+            task = this.getTask(input.taskId);
+            if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+            await input.validateAcceptedTask?.(task);
+          }
+          this.taskRepository.settlePendingArtifactRevisionSettlementsInOpenTransaction({
+            taskId: input.taskId,
+            revisionIds: input.settlementRevisionIds,
+            updatedAt: input.updatedAt,
+          });
+          task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          this.db.exec("COMMIT");
+          return task;
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back task completion settlement: ${String(rollbackError)}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
+      { taskId: input.taskId },
+    );
+  }
+
+  async finalizeArtifactRevisionAndProposeTaskCompletion(input: {
+    taskId: string;
+    revision:
+      | {
+          outcome: "completed";
+          revisionId: string;
+          version: TaskArtifactVersion;
+        }
+      | {
+          outcome: "cancelled";
+          revisionId: string;
+          detail?: string;
+        };
+    updatedAt: string;
+    summary: string;
+    detail?: string | null;
+    threadId?: string | null;
+    settlementRevisionIds: readonly string[];
+    reviewRequired: boolean;
+    prepareCompletion: (task: TaskRecord) => Promise<
+      | {
+          ready: true;
+          validateReadyTask?: (task: TaskRecord) => Promise<void>;
+          validateAcceptedTask?: (task: TaskRecord) => Promise<void>;
+        }
+      | { ready: false; error: unknown }
+    >;
+  }): Promise<{ task: TaskRecord; completion: "committed" | "not_ready"; error?: unknown }> {
+    return await this.writeCoordinator.runExclusive(
+      "finalize_artifact_revision_and_propose_task_completion",
+      async () => {
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          if (input.revision.outcome === "completed") {
+            this.taskRepository.completeArtifactRevisionInOpenTransaction({
+              revisionId: input.revision.revisionId,
+              version: input.revision.version,
+              updatedAt: input.updatedAt,
+            });
+          } else {
+            this.taskRepository.failArtifactRevisionInOpenTransaction({
+              revisionId: input.revision.revisionId,
+              status: "cancelled",
+              updatedAt: input.updatedAt,
+              detail: input.revision.detail,
+            });
+          }
+          let task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          const prepared = await input.prepareCompletion(task);
+          if (!prepared.ready) {
+            this.db.exec("COMMIT");
+            return { task, completion: "not_ready" as const, error: prepared.error };
+          }
+          this.taskRepository.setStatusInOpenTransaction({
+            taskId: input.taskId,
+            expectedRevision: task.revision,
+            status: "awaiting_review",
+            summary: input.summary,
+            detail: input.detail ?? null,
+            updatedAt: input.updatedAt,
+            threadId: input.threadId ?? null,
+          });
+          task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await prepared.validateReadyTask?.(task);
+          if (!input.reviewRequired) {
+            this.taskRepository.acceptAllArtifactVersionsInOpenTransaction({
+              taskId: input.taskId,
+              expectedRevision: task.revision,
+              updatedAt: input.updatedAt,
+            });
+            task = this.getTask(input.taskId);
+            if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+            await prepared.validateAcceptedTask?.(task);
+          }
+          this.taskRepository.settlePendingArtifactRevisionSettlementsInOpenTransaction({
+            taskId: input.taskId,
+            revisionIds: input.settlementRevisionIds,
+            updatedAt: input.updatedAt,
+          });
+          task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          this.db.exec("COMMIT");
+          return { task, completion: "committed" as const };
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back artifact revision completion settlement: ${String(
+                rollbackError,
+              )}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
+      { taskId: input.taskId, revisionId: input.revision.revisionId },
     );
   }
 

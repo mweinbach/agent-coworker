@@ -69,6 +69,10 @@ export class SessionDbRepository {
     this.taskRepository.createArtifactVersionSchema();
   }
 
+  addTaskArtifactRevisionSettlementColumn(): void {
+    this.taskRepository.ensureArtifactRevisionSettlementStatusColumn();
+  }
+
   addTaskQuestionTables(): void {
     this.taskRepository.createQuestionSchema();
   }

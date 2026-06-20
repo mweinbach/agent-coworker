@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.38`
+- Current protocol version: `7.39`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -446,7 +446,7 @@ Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Code
 
 ### Task mode JSON-RPC methods
 
-Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. Task-owned sessions must be preserved by clients outside ordinary chat-list reconciliation. Once a task reaches `completed`, `failed`, or `cancelled`, its task threads reject `turn/start` and `turn/steer` with `task_locked` until an explicit lifecycle operation (`task/reopen` or `task/retry`) moves it back into active work. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace.
+Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. Task-owned sessions must be preserved by clients outside ordinary chat-list reconciliation. Once a task reaches `completed`, `failed`, or `cancelled`, its task threads reject `turn/start` and `turn/steer` with `task_locked` until an explicit lifecycle operation (`task/reopen` or `task/retry`) moves it back into active work. That rejection is server-authoritative and returned as a JSON-RPC error with code `-32600` plus `error.data: { "category": "task_locked", "source": "session" }`; clients should render the task read-only and offer only the matching lifecycle action. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace.
 
 Task RPCs are authorized in the harness/server. Read-only task methods require the same
 conversation-history permission as `thread/list` and `thread/read`; mutating task methods require
@@ -727,6 +727,10 @@ Ask/approval prompts still arrive as server requests, but the harness also emits
 | `-32002` | `notInitialized` | Request arrived before the `initialize`/`initialized` handshake completed |
 | `-32003` | `alreadyInitialized` | A second `initialize` was received on an already-initialized connection |
 
+Terminal task-thread `turn/start` and `turn/steer` rejections use `-32600` with structured
+`error.data` `{ "category": "task_locked", "source": "session" }`. Clients should treat this as a
+read-only task lifecycle state, not as a transient transport failure.
+
 ### JSON-RPC overload behavior
 
 Cowork reserves JSON-RPC error code `-32001` for bounded-queue overload handling:
@@ -753,6 +757,12 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.39`:
+
+- Terminal task-owned threads now return structured `task_locked` JSON-RPC error data for
+  `turn/start` and `turn/steer`, including after reconnect/restart. Terminal transitions also
+  interrupt live task-thread turns before late output or tool writes are projected.
 
 Changes in `7.38`:
 

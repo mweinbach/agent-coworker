@@ -215,8 +215,10 @@ async function createClaimedWorkTask(harness: Awaited<ReturnType<typeof createHa
     createdBy: "user",
   });
   const ownedItem = task.workItems.find((item) => item.id === workItem.id);
-  const ownerThread = task.threads.at(-2);
-  const otherThread = task.threads.at(-1);
+  const ownerThread = task.threads.find((thread) => thread.id === ownedItem?.assignedThreadId);
+  const otherThread = task.threads.find(
+    (thread) => thread.id !== task.primaryThreadId && thread.id !== ownerThread?.id,
+  );
   if (!ownedItem || !ownerThread || !otherThread) throw new Error("Expected claimed task state");
   return { task, workItem: ownedItem, ownerThread, otherThread };
 }

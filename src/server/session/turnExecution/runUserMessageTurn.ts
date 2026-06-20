@@ -301,6 +301,14 @@ export function createUserMessageTurnRunner(
           }
         }
 
+        if (context.state.abortController?.signal.aborted) {
+          context.state.pendingSteers.splice(0);
+          context.state.currentTurnOutcome = "cancelled";
+          context.state.acceptingSteers = false;
+          continueSameTurn = false;
+          continue;
+        }
+
         if (tracker.startedStepCount === startedStepsBeforePass) {
           tracker.startedStepCount += 1;
           context.state.acceptingSteers = tracker.startedStepCount < context.state.maxSteps;

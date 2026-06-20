@@ -128,5 +128,8 @@ export function sendSessionMutationError(
   context.jsonrpc.sendError(ws, id, {
     code: JSONRPC_ERROR_CODES.invalidRequest,
     message: event.message,
+    ...(event.code === "task_locked"
+      ? { data: { category: event.code, source: event.source } }
+      : {}),
   });
 }

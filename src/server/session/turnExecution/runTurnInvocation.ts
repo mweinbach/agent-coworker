@@ -71,6 +71,10 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       getTaskContext: taskContext
         ? () => context.deps.getTaskContextImpl?.(context.id) ?? null
         : undefined,
+      getTaskReviewMaterial:
+        taskContext && context.deps.getTaskReviewMaterialImpl
+          ? async () => (await context.deps.getTaskReviewMaterialImpl?.(context.id)) ?? null
+          : undefined,
       applyTaskDirective:
         taskContext && applyTaskDirective
           ? async (directive) => await applyTaskDirective(context.id, directive)

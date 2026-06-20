@@ -16,6 +16,7 @@ import type {
   TaskCreationResult,
   TaskDirective,
   TaskDirectiveResult,
+  TaskReviewMaterialReference,
 } from "../shared/tasks";
 import type { AgentConfig, ApproveCommandOptions, HarnessContextState, TodoItem } from "../types";
 
@@ -76,6 +77,7 @@ export interface ToolContext {
   harnessContext?: HarnessContextState | null;
   taskContext?: TaskContextSnapshot | null;
   getTaskContext?: () => TaskContextSnapshot | null;
+  getTaskReviewMaterial?: () => Promise<TaskReviewMaterialReference | null>;
   applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
   createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
 

@@ -39,6 +39,7 @@ import type {
   TaskCreationResult,
   TaskDirective,
   TaskDirectiveResult,
+  TaskReviewMaterialReference,
 } from "./shared/tasks";
 import type { AgentControl } from "./tools";
 import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
@@ -103,6 +104,7 @@ export interface RunTurnParams {
   harnessContext?: HarnessContextState | null;
   taskContext?: TaskContextSnapshot | null;
   getTaskContext?: () => TaskContextSnapshot | null;
+  getTaskReviewMaterial?: () => Promise<TaskReviewMaterialReference | null>;
   applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
   createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
   /** Plugins the user @-mentioned this turn; rendered as a soft-awareness system block. */
@@ -463,6 +465,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       harnessContext: params.harnessContext,
       taskContext: params.taskContext,
       getTaskContext: params.getTaskContext,
+      getTaskReviewMaterial: params.getTaskReviewMaterial,
       applyTaskDirective: params.applyTaskDirective
         ? async (directive: TaskDirective) => {
             const directiveResult = await params.applyTaskDirective?.(directive);

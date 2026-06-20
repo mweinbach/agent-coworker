@@ -23,6 +23,7 @@ import {
   type TaskRecord,
   type TaskRequirement,
   type TaskRequirementKind,
+  type TaskReviewMaterialReference,
   type TaskReviewRecord,
   type TaskReviewVerdict,
   type TaskStatus,
@@ -444,6 +445,31 @@ export class TaskCoordinator {
 
   private withDirectiveReviewState(task: TaskRecord): TaskDirectiveResult["task"] {
     return { ...task, reviews: this.options.sessionDb.listTaskReviews(task.id) };
+  }
+
+  async getReviewMaterial(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision?: number;
+  }): Promise<TaskReviewMaterialReference> {
+    return await this.runTaskMutation(input.taskId, async () => {
+      const task = this.requireTask(input.taskId, input.workspacePath);
+      if (input.expectedRevision !== undefined) {
+        assertExpectedTaskRevision(task, input.expectedRevision);
+      }
+      const material = await this.currentReviewMaterial(task);
+      return { fingerprint: material.fingerprint };
+    });
+  }
+
+  async getReviewMaterialForThread(sessionId: string): Promise<TaskReviewMaterialReference | null> {
+    const task = this.getForThread(sessionId);
+    if (!task) return null;
+    return await this.getReviewMaterial({
+      taskId: task.id,
+      workspacePath: task.workspacePath,
+      expectedRevision: task.revision,
+    });
   }
 
   async create(input: {
@@ -1534,6 +1560,12 @@ export class TaskCoordinator {
     if (current.status !== "awaiting_review") {
       throw new Error("Task must be awaiting review before it can be accepted");
     }
+    try {
+      await this.requireCompletionReviewEligibility(current);
+    } catch (error) {
+      await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
+      throw error;
+    }
     const task = await this.options.sessionDb.acceptAllTaskArtifactVersions({
       taskId: current.id,
       expectedRevision: input.expectedRevision,
@@ -2069,6 +2101,7 @@ export class TaskCoordinator {
     workspacePath: string;
     sessionId?: string;
     expectedRevision: number;
+    expectedMaterialFingerprint?: string;
     reviewerAgentId: string;
     reviewerProvider: string;
     reviewerModel: string;
@@ -2086,6 +2119,7 @@ export class TaskCoordinator {
     workspacePath: string;
     sessionId?: string;
     expectedRevision: number;
+    expectedMaterialFingerprint?: string;
     reviewerAgentId: string;
     reviewerProvider: string;
     reviewerModel: string;
@@ -2134,6 +2168,12 @@ export class TaskCoordinator {
 
     const round = rounds.length + 1;
     const material = await this.currentReviewMaterial(task);
+    const expectedMaterialFingerprint = input.expectedMaterialFingerprint?.trim();
+    if (expectedMaterialFingerprint && material.fingerprint !== expectedMaterialFingerprint) {
+      throw new Error(
+        "Reviewed material changed before the review could be recorded; rerun a fresh independent review",
+      );
+    }
     const reviewId = crypto.randomUUID();
     const feedback = nonEmpty(input.feedback, "Review feedback");
     const reviewerProvider = nonEmpty(input.reviewerProvider, "Reviewer provider");
@@ -2246,6 +2286,89 @@ export class TaskCoordinator {
     return updated;
   }
 
+  private assertCompletionReadiness(task: TaskRecord): void {
+    if (task.questions.some((question) => question.status === "pending" && question.blocking)) {
+      throw new Error("Task has unresolved blocking questions");
+    }
+    if (task.questions.some((question) => question.status === "pending")) {
+      throw new Error("Task has unresolved pending questions");
+    }
+    const unfinished = task.workItems.filter(
+      (item) => item.status !== "done" && item.status !== "review" && item.status !== "abandoned",
+    );
+    if (task.workItems.length === 0) throw new Error("Task has no work plan");
+    if (unfinished.length > 0) {
+      throw new Error(`Task has ${unfinished.length} unfinished work item(s)`);
+    }
+    const blocking = task.blockers.filter((item) => item.status === "active" && item.blocking);
+    if (blocking.length > 0) throw new Error("Task has unresolved blocking issues");
+    const missingOutput = task.workItems.find(
+      (item) =>
+        item.expectedOutputs.length > 0 &&
+        !task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id),
+    );
+    if (missingOutput) {
+      throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
+    }
+  }
+
+  private async requireCompletionReviewEligibility(
+    task: TaskRecord,
+  ): Promise<TaskReviewMaterial | null> {
+    const requiredReviewRounds = task.reviewRounds ?? 0;
+    if (requiredReviewRounds <= 0) return null;
+
+    const reviews = this.options.sessionDb.listTaskReviews(task.id);
+    const reviewRounds = getTaskReviewRoundsFromRecords(reviews);
+    const materialForCompletion = await this.currentReviewMaterial(task);
+    const currentPasses = reviewRounds.filter(
+      (round) =>
+        round.verdict === "pass" && round.materialFingerprint === materialForCompletion.fingerprint,
+    );
+    const pendingReview = getPendingTaskReviewFromRecords(reviews);
+    if (pendingReview) {
+      throw new Error(`Review round ${pendingReview.round} feedback must be addressed`);
+    }
+    if (currentPasses.length < requiredReviewRounds) {
+      throw new Error(
+        `Task requires ${requiredReviewRounds} independent review round(s) with fresh passing reviews for the current delivery state; ${currentPasses.length} recorded`,
+      );
+    }
+    const latestReview = reviewRounds.at(-1);
+    if (
+      latestReview?.verdict !== "pass" ||
+      latestReview.materialFingerprint !== materialForCompletion.fingerprint
+    ) {
+      throw new Error(
+        "Task requires a fresh passing review for the current delivery state before completion",
+      );
+    }
+    return materialForCompletion;
+  }
+
+  private async returnTaskToWorkingAfterStaleAcceptance(
+    task: TaskRecord,
+    error: unknown,
+    sessionId?: string,
+  ): Promise<void> {
+    const latest = this.options.sessionDb.getTask(task.id);
+    if (latest?.status !== "awaiting_review") return;
+    try {
+      await this.transitionLocked({
+        taskId: latest.id,
+        workspacePath: latest.workspacePath,
+        expectedRevision: latest.revision,
+        status: "working",
+        summary: "Task review material changed before acceptance",
+        detail: error instanceof Error ? error.message : String(error),
+        sessionId,
+      });
+    } catch {
+      // Keep the original acceptance failure. Some blocking-state changes may
+      // intentionally prevent an automatic return to working.
+    }
+  }
+
   async proposeCompletion(input: {
     taskId: string;
     workspacePath: string;
@@ -2283,49 +2406,11 @@ export class TaskCoordinator {
       this.notifyUpdated(task);
       this.notifyActivity(task);
     }
-    const unfinished = task.workItems.filter(
-      (item) => item.status !== "done" && item.status !== "review" && item.status !== "abandoned",
-    );
-    if (task.workItems.length === 0) throw new Error("Task has no work plan");
-    if (unfinished.length > 0) {
-      throw new Error(`Task has ${unfinished.length} unfinished work item(s)`);
-    }
-    const blocking = task.blockers.filter((item) => item.status === "active" && item.blocking);
-    if (blocking.length > 0) throw new Error("Task has unresolved blocking issues");
-    const missingOutput = task.workItems.find(
-      (item) =>
-        item.expectedOutputs.length > 0 &&
-        !task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id),
-    );
-    if (missingOutput) {
-      throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
-    }
-    const requiredReviewRounds = task.reviewRounds ?? 0;
-    let currentMaterial: TaskReviewMaterial | null = null;
-    if (requiredReviewRounds > 0) {
-      const reviews = this.options.sessionDb.listTaskReviews(task.id);
-      const reviewRounds = getTaskReviewRoundsFromRecords(reviews);
-      const materialForCompletion = await this.currentReviewMaterial(task);
-      currentMaterial = materialForCompletion;
-      const currentPasses = reviewRounds.filter(
-        (round) =>
-          round.verdict === "pass" &&
-          round.materialFingerprint === materialForCompletion.fingerprint,
-      );
-      const pendingReview = getPendingTaskReviewFromRecords(reviews);
-      if (pendingReview) {
-        throw new Error(`Review round ${pendingReview.round} feedback must be addressed`);
-      }
-      if (currentPasses.length < requiredReviewRounds) {
-        throw new Error(
-          `Task requires ${requiredReviewRounds} independent review round(s) with fresh passing reviews for the current delivery state; ${currentPasses.length} recorded`,
-        );
-      }
-      const latestReview = reviewRounds.at(-1);
-      if (
-        latestReview?.verdict !== "pass" ||
-        latestReview.materialFingerprint !== materialForCompletion.fingerprint
-      ) {
+    this.assertCompletionReadiness(task);
+    const currentMaterial = await this.requireCompletionReviewEligibility(task);
+    if (currentMaterial) {
+      const nextMaterial = await this.currentReviewMaterial(task);
+      if (nextMaterial.fingerprint !== currentMaterial.fingerprint) {
         throw new Error(
           "Task requires a fresh passing review for the current delivery state before completion",
         );
@@ -2340,37 +2425,6 @@ export class TaskCoordinator {
       detail: input.caveats?.filter(Boolean).join("\n") || undefined,
       sessionId: input.sessionId,
     });
-    if (currentMaterial) {
-      let nextMaterial: TaskReviewMaterial;
-      try {
-        nextMaterial = await this.currentReviewMaterial(ready);
-      } catch (error) {
-        await this.transitionLocked({
-          taskId: ready.id,
-          workspacePath: ready.workspacePath,
-          expectedRevision: ready.revision,
-          status: "working",
-          summary: "Task review material changed during completion",
-          detail: error instanceof Error ? error.message : String(error),
-          sessionId: input.sessionId,
-        });
-        throw error;
-      }
-      if (nextMaterial.fingerprint !== currentMaterial.fingerprint) {
-        await this.transitionLocked({
-          taskId: ready.id,
-          workspacePath: ready.workspacePath,
-          expectedRevision: ready.revision,
-          status: "working",
-          summary: "Task review material changed during completion",
-          detail: "Artifact bytes changed while completion eligibility was being checked.",
-          sessionId: input.sessionId,
-        });
-        throw new Error(
-          "Task requires a fresh passing review for the current delivery state before completion",
-        );
-      }
-    }
     if (task.reviewRequired) return ready;
     return await this.acceptTaskLocked({
       taskId: ready.id,
@@ -2596,10 +2650,11 @@ export class TaskCoordinator {
         });
         break;
       case "record_review": {
-        const result = await this.recordReview({
+        const result = await this.recordReviewLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
+          expectedMaterialFingerprint: directive.expectedMaterialFingerprint,
           sessionId,
           reviewerAgentId: directive.reviewerAgentId,
           reviewerProvider: directive.reviewerProvider,
@@ -2611,7 +2666,7 @@ export class TaskCoordinator {
         break;
       }
       case "address_review":
-        updated = await this.addressReview({
+        updated = await this.addressReviewLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -2621,7 +2676,7 @@ export class TaskCoordinator {
         });
         break;
       case "propose_completion":
-        updated = await this.proposeCompletion({
+        updated = await this.proposeCompletionLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,

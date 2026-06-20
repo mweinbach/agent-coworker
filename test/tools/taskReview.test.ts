@@ -117,6 +117,7 @@ describe("task review tool", () => {
         preferredChildModelRef: "openai:gpt-5.4",
       }),
       sessionId: "session-1",
+      getTaskReviewMaterial: async () => ({ fingerprint: "review-start-fingerprint-1" }),
       taskContext: {
         id: "task-1",
         title: "Financial model",
@@ -199,6 +200,7 @@ describe("task review tool", () => {
       expect.objectContaining({
         type: "record_review",
         expectedRevision: 2,
+        expectedMaterialFingerprint: "review-start-fingerprint-1",
         reviewerAgentId: "reviewer-1",
         verdict: "fail",
         feedback,
@@ -301,6 +303,7 @@ describe("task review tool", () => {
     }));
     const ctx = makeCtx(dir, {
       sessionId: "session-1",
+      getTaskReviewMaterial: async () => ({ fingerprint: "review-start-fingerprint-4" }),
       taskContext: {
         id: "task-1",
         title: "Reviewed task",
@@ -353,7 +356,11 @@ describe("task review tool", () => {
 
     expect(spawn).toHaveBeenCalled();
     expect(applyTaskDirective).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "record_review", expectedRevision: 4 }),
+      expect.objectContaining({
+        type: "record_review",
+        expectedRevision: 4,
+        expectedMaterialFingerprint: "review-start-fingerprint-4",
+      }),
     );
     expect(result).toMatchObject({ round: 4, requiredRounds: 3, verdict: "pass" });
   });

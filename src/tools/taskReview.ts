@@ -115,6 +115,8 @@ export function createTaskReviewTool(ctx: ToolContext) {
       const round = priorRounds.length + 1;
       const requestedModel =
         input.model ?? ctx.config.preferredChildModelRef ?? ctx.config.preferredChildModel;
+      const reviewedMaterial = await ctx.getTaskReviewMaterial?.();
+      if (!reviewedMaterial) throw new Error("Task review material is unavailable");
       ctx.log(`tool> reviewTask ${JSON.stringify({ round, requiredRounds, requestedModel })}`);
       const reviewer = await agentControl.spawn({
         message: reviewPrompt(round, requiredRounds, input.focus),
@@ -145,6 +147,7 @@ export function createTaskReviewTool(ctx: ToolContext) {
           type: "record_review",
           idempotencyKey: `review:${context.id}:${reviewer.agentId}`,
           expectedRevision: input.expectedRevision,
+          expectedMaterialFingerprint: reviewedMaterial.fingerprint,
           reviewerAgentId: reviewer.agentId,
           reviewerProvider: reviewer.provider,
           reviewerModel: reviewer.effectiveModel,

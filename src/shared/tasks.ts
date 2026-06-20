@@ -644,6 +644,7 @@ export type TaskDirective =
       type: "record_review";
       idempotencyKey: string;
       expectedRevision: number;
+      expectedMaterialFingerprint?: string;
       reviewerAgentId: string;
       reviewerProvider: string;
       reviewerModel: string;
@@ -674,6 +675,10 @@ export type TaskDirective =
 
 export type TaskDirectiveResultTask = TaskRecord & {
   reviews?: TaskReviewRecord[];
+};
+
+export type TaskReviewMaterialReference = {
+  fingerprint: string;
 };
 
 export type TaskDirectiveResult = {

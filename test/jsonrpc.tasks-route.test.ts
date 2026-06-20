@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
   JsonRpcLiteError,
   JsonRpcLiteId,
@@ -325,41 +328,52 @@ describe("task JSON-RPC routes", () => {
   });
 
   test("allows task reads for a desktop-persisted workspace from the workspace catalog", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-route-catalog-"));
     const harness = makeHarness();
     const calls: string[] = [];
-    (harness.context as unknown as { desktopService: unknown }).desktopService = {
-      loadState: async () => ({
-        version: 2,
-        workspaces: [
-          {
-            id: "project-b",
-            name: "Project B",
-            path: "C:\\workspace-b",
-            workspaceKind: "project",
-            createdAt: "2026-06-01T00:00:00.000Z",
-          },
-        ],
-      }),
-    };
-    (harness.context as unknown as { getConfig: () => { workingDirectory: string } }).getConfig =
-      () => ({ workingDirectory: "C:\\workspace-a" });
-    (
-      harness.context as unknown as { utils: { resolveWorkspacePath: () => string } }
-    ).utils.resolveWorkspacePath = () => {
-      throw new Error("task/list cwd must match an authorized workspace");
-    };
-    (
-      harness.context as unknown as { tasks: { list: (workspacePath: string) => unknown[] } }
-    ).tasks.list = (workspacePath: string) => {
-      calls.push(workspacePath);
-      return [];
-    };
+    try {
+      const activeWorkspace = path.join(home, "workspace-a");
+      const catalogWorkspace = path.join(home, "workspace-b");
+      await fs.mkdir(activeWorkspace, { recursive: true });
+      await fs.mkdir(catalogWorkspace, { recursive: true });
+      const activePath = await fs.realpath(activeWorkspace);
+      const catalogPath = await fs.realpath(catalogWorkspace);
+      (harness.context as unknown as { desktopService: unknown }).desktopService = {
+        loadState: async () => ({
+          version: 2,
+          workspaces: [
+            {
+              id: "project-b",
+              name: "Project B",
+              path: catalogPath,
+              workspaceKind: "project",
+              createdAt: "2026-06-01T00:00:00.000Z",
+            },
+          ],
+        }),
+      };
+      (harness.context as unknown as { getConfig: () => { workingDirectory: string } }).getConfig =
+        () => ({ workingDirectory: activePath });
+      (
+        harness.context as unknown as { utils: { resolveWorkspacePath: () => string } }
+      ).utils.resolveWorkspacePath = () => {
+        throw new Error("task/list cwd must match an authorized workspace");
+      };
+      (
+        harness.context as unknown as { tasks: { list: (workspacePath: string) => unknown[] } }
+      ).tasks.list = (workspacePath: string) => {
+        calls.push(workspacePath);
+        return [];
+      };
 
-    await invoke(harness.context, "task/list", { cwd: "C:\\workspace-b" });
+      await invoke(harness.context, "task/list", { cwd: `${catalogPath}${path.sep}.` });
 
-    expect(harness.errors).toEqual([]);
-    expect(harness.results[0]?.result).toEqual({ tasks: [], total: 0 });
-    expect(calls).toEqual(["C:\\workspace-b"]);
+      expect(harness.errors).toEqual([]);
+      expect(harness.results[0]?.result).toEqual({ tasks: [], total: 0 });
+      expect(calls).toEqual([catalogPath]);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 
   test("retries a failed task through the coordinator", async () => {

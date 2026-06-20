@@ -30,14 +30,7 @@ export function requireWorkspacePath(
   }
 
   if (isTaskWorkspaceMethod(method)) {
-    if (!path.isAbsolute(cwd)) {
-      throw new Error(`${method} cwd must use an absolute workspace path`);
-    }
-    const resolvedInput = path.resolve(cwd);
-    const resolved = resolveExistingDirectory(cwd, `${method} cwd`);
-    if (resolvedInput !== resolved) {
-      throw new Error(`${method} cwd must use the canonical workspace path`);
-    }
+    const resolved = resolveCanonicalTaskWorkspacePath(cwd, method);
     if (resolved === fallbackRoot) {
       return resolved;
     }
@@ -54,6 +47,18 @@ export function requireWorkspacePath(
     return resolved;
   }
   throw new Error(`${method} cwd must match the server workspace or a one-off chat workspace`);
+}
+
+export function resolveCanonicalTaskWorkspacePath(cwd: string, method: string): string {
+  if (!path.isAbsolute(cwd)) {
+    throw new Error(`${method} cwd must use an absolute workspace path`);
+  }
+  const resolvedInput = path.resolve(cwd);
+  const resolved = resolveExistingDirectory(cwd, `${method} cwd`);
+  if (resolvedInput !== resolved) {
+    throw new Error(`${method} cwd must use the canonical workspace path`);
+  }
+  return resolved;
 }
 
 function isThreadWorkspaceMethod(method: string): boolean {

@@ -342,6 +342,20 @@ describe("task workspace subscription routing", () => {
       expect(listResponse.error).toBeUndefined();
       expect(listResponse.result).toEqual({ tasks: [], total: 0 });
 
+      const normalizedCatalogReader = makeSocket("normalized-catalog-reader");
+      await initializeConnection(runtime, normalizedCatalogReader);
+      const normalizedCatalogCwd = `${catalogPath}${path.sep}.`;
+      const normalizedCatalogListResponse = await sendRequest(
+        runtime,
+        normalizedCatalogReader,
+        "task/list",
+        {
+          cwd: normalizedCatalogCwd,
+        },
+      );
+      expect(normalizedCatalogListResponse.error).toBeUndefined();
+      expect(normalizedCatalogListResponse.result).toEqual({ tasks: [], total: 0 });
+
       const createResponse = await sendRequest(
         runtime,
         mutator,
@@ -365,6 +379,18 @@ describe("task workspace subscription routing", () => {
         "task/created notification for catalog workspace",
       );
       expect(createdNotification.params).toMatchObject({
+        cwd: catalogPath,
+        task: {
+          title: "Catalog workspace task",
+          workspacePath: catalogPath,
+        },
+      });
+      const normalizedCreatedNotification = await waitForMessage(
+        normalizedCatalogReader,
+        (message) => message.method === "task/created",
+        "task/created notification for normalized catalog workspace",
+      );
+      expect(normalizedCreatedNotification.params).toMatchObject({
         cwd: catalogPath,
         task: {
           title: "Catalog workspace task",

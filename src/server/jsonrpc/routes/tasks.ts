@@ -8,6 +8,7 @@ import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcTaskRequestSchemas } from "../schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../taskPermissions";
 import { classifyWorkspaceKind, listWorkspaceSummaries } from "../workspaceCatalog";
+import { resolveCanonicalTaskWorkspacePath } from "./shared";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 type TaskRequestMethod = keyof typeof jsonRpcTaskRequestSchemas;
@@ -137,12 +138,18 @@ export async function resolveTaskWorkspacePath(
     if (!requestedCwd || !context.desktopService) {
       throw error;
     }
+    let requestedWorkspacePath: string;
+    try {
+      requestedWorkspacePath = resolveCanonicalTaskWorkspacePath(requestedCwd, method);
+    } catch {
+      throw error;
+    }
     const { workspaces } = await listWorkspaceSummaries({
       workingDirectory: context.getConfig().workingDirectory,
       desktopService: context.desktopService,
       homedir: context.homedir,
     });
-    const workspace = workspaces.find((entry) => entry.path === requestedCwd);
+    const workspace = workspaces.find((entry) => entry.path === requestedWorkspacePath);
     if (!workspace) {
       throw error;
     }

@@ -7,7 +7,7 @@ import { ArtifactConflictError, buildArtifactRevisionPrompt } from "../../tasks/
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcTaskRequestSchemas } from "../schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../taskPermissions";
-import { listWorkspaceSummaries } from "../workspaceCatalog";
+import { classifyWorkspaceKind, listWorkspaceSummaries } from "../workspaceCatalog";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 type TaskRequestMethod = keyof typeof jsonRpcTaskRequestSchemas;
@@ -98,13 +98,36 @@ function getDeniedTaskPermission(
   return null;
 }
 
+async function requireProjectTaskWorkspacePath(
+  context: JsonRpcRouteContext,
+  workspacePath: string,
+  method: string,
+): Promise<string> {
+  if (!context.desktopService) {
+    return workspacePath;
+  }
+  const { workspaces } = await listWorkspaceSummaries({
+    workingDirectory: context.getConfig().workingDirectory,
+    desktopService: context.desktopService,
+    homedir: context.homedir,
+  });
+  const workspace = workspaces.find((entry) => entry.path === workspacePath);
+  const workspaceKind =
+    workspace?.workspaceKind ?? classifyWorkspaceKind({ path: workspacePath }, context.homedir);
+  if (workspaceKind !== "project") {
+    throw new Error(`${method} cwd must match an authorized project workspace`);
+  }
+  return workspace?.path ?? workspacePath;
+}
+
 export async function resolveTaskWorkspacePath(
   context: JsonRpcRouteContext,
   params: { cwd?: string },
   method: string,
 ): Promise<string> {
   try {
-    return context.utils.resolveWorkspacePath(params, method);
+    const workspacePath = context.utils.resolveWorkspacePath(params, method);
+    return await requireProjectTaskWorkspacePath(context, workspacePath, method);
   } catch (error) {
     const requestedCwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
     if (!requestedCwd || !context.desktopService) {
@@ -113,6 +136,7 @@ export async function resolveTaskWorkspacePath(
     const { workspaces } = await listWorkspaceSummaries({
       workingDirectory: context.getConfig().workingDirectory,
       desktopService: context.desktopService,
+      homedir: context.homedir,
     });
     const workspace = workspaces.find((entry) => entry.path === requestedCwd);
     if (!workspace) {

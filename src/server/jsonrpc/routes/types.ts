@@ -54,6 +54,7 @@ export type JsonRpcRequestHandlerMap = Record<string, JsonRpcRequestHandler>;
 
 export interface JsonRpcRouteContext {
   getConfig(): AgentConfig;
+  homedir?: string;
   research: ResearchService;
   tasks: TaskCoordinator;
   threads: {

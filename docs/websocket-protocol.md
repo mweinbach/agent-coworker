@@ -450,11 +450,12 @@ Task mode is an explicit, project-scoped work mode alongside standard chat. Crea
 
 Task RPCs are authorized in the harness/server. Read-only task methods require the same
 conversation-history permission as `thread/list` and `thread/read`; mutating task methods require
-both conversation access and turn-start access. A provided `cwd` must resolve to the canonical
-active workspace or, in desktop relay mode, an exact desktop-persisted workspace path whose
-`workspaceKind` is `project`. `oneOffChat` workspaces enter Task mode only through the ordinary
-chat-to-task promotion flow, which links and locks the source chat. Task RPCs reject outside
-directories, project-local chat aliases, symlink aliases, drive-relative inputs, and task or
+both conversation access and turn-start access. An omitted `cwd` resolves to the canonical active
+workspace, and a provided `cwd` must resolve to that same canonical active workspace or, in desktop
+relay mode, an exact desktop-persisted workspace path. In all cases, the resolved task workspace
+must have `workspaceKind` `project`. `oneOffChat` workspaces enter Task mode only through the
+ordinary chat-to-task promotion flow, which links and locks the source chat. Task RPCs reject
+outside directories, project-local chat aliases, symlink aliases, drive-relative inputs, and task or
 artifact IDs whose stored workspace does not match the authorized request context.
 
 Every mutation after creation carries `expectedRevision`. A stale revision fails with a structured conflict containing the current task revision so clients can reload rather than overwrite concurrent work.

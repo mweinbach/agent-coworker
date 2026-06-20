@@ -399,6 +399,7 @@ export async function createAgentServerRuntime(
 
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
+    homedir: opts.homedir,
     research,
     tasks,
     threads: {

@@ -208,6 +208,83 @@ describe("createTools", () => {
     );
   });
 
+  test("preserves one-off chat task promotion results on the dedicated createTask tool path", async () => {
+    const dir = await tmpDir();
+    const createTask = mock(async () => ({
+      workspaceDisposition: "promote_one_off" as const,
+      task: {
+        id: "task-created",
+        workspacePath: dir,
+        title: "Promote chat task",
+        objective: "Keep one-off chat promotion on the dedicated tool path.",
+        context: "The source chat established the implementation constraints.",
+        sourceSessionId: "chat-1",
+        creationOrigin: "chat_tool" as const,
+        status: "working" as const,
+        revision: 0,
+        reviewRequired: true,
+        createdAt: "2026-06-20T12:00:00.000Z",
+        updatedAt: "2026-06-20T12:00:00.000Z",
+        threadCount: 1,
+        completedWorkItemCount: 0,
+        totalWorkItemCount: 1,
+        activeBlockerCount: 0,
+        pendingQuestionCount: 0,
+        blockingQuestionCount: 0,
+        requirements: [],
+        threads: [
+          {
+            id: "task-thread-1",
+            taskId: "task-created",
+            sessionId: "task-session-1",
+            title: "Main",
+            createdBy: "coordinator" as const,
+            createdAt: "2026-06-20T12:00:00.000Z",
+            updatedAt: "2026-06-20T12:00:00.000Z",
+          },
+        ],
+        workItems: [],
+        decisions: [],
+        questions: [],
+        artifacts: [],
+        blockers: [],
+        activity: [],
+        latestCheckpoint: null,
+      },
+    }));
+    const tool = createTools(makeCtx(dir, { sessionId: "chat-1", createTask })).createTask as {
+      execute: (input: unknown) => Promise<string>;
+    };
+
+    const output = JSON.parse(
+      await tool.execute({
+        idempotencyKey: "promote-one-off-task",
+        title: "Promote chat task",
+        objective: "Keep one-off chat promotion on the dedicated tool path.",
+        context: "The source chat established the implementation constraints.",
+        requirements: [
+          { kind: "acceptance_criterion", text: "Task mode links back to the source chat." },
+        ],
+        workItems: [
+          {
+            key: "implement",
+            title: "Implement promotion",
+            dependsOn: null,
+            expectedOutputs: ["Working task promotion"],
+          },
+        ],
+      }),
+    );
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(output).toMatchObject({
+      taskId: "task-created",
+      taskThreadId: "task-session-1",
+      workspaceDisposition: "promote_one_off",
+      modeChanged: true,
+    });
+  });
+
   test("rejects incomplete or cyclic task creation plans", async () => {
     const dir = await tmpDir();
     const createTask = mock(async () => {

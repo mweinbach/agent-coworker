@@ -232,6 +232,46 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("does not dispatch retry continuation when failed task recovery remains blocked", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const blocked = await harness.coordinator.reportBlocker({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        description: "Needs a user credential",
+        blocking: true,
+      });
+      expect(blocked.status).toBe("blocked");
+      const failed = await transitionToStatus(harness, created.task.id, "failed");
+
+      let dispatched = false;
+      harness.coordinator.setContinuationDispatcher(async () => {
+        dispatched = true;
+        return "queued";
+      });
+
+      const retried = await harness.coordinator.retryTask({
+        taskId: failed.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: failed.revision,
+      });
+
+      expect(retried.retryStatus).toBe("failed");
+      expect(retried.task.status).toBe("blocked");
+      expect(retried.task.blockers[0]).toMatchObject({
+        status: "active",
+        blocking: true,
+        description: "Needs a user credential",
+      });
+      expect(dispatched).toBe(false);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("recovers persisted working tasks whose primary run already errored", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

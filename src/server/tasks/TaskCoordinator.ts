@@ -1485,6 +1485,7 @@ export class TaskCoordinator {
     revision: TaskArtifactRevision;
   }> {
     let task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsNewThreads(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
@@ -1496,10 +1497,7 @@ export class TaskCoordinator {
         createdBy: "system",
       });
       task = this.requireTask(input.taskId, input.workspacePath);
-    } else if (task.revision !== input.expectedRevision) {
-      throw new Error(
-        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
-      );
+      assertTaskAcceptsNewThreads(task);
     }
     if (detail.activeRevision) throw new Error("Artifact already has an active revision");
     const prior = detail.versions.at(-1);
@@ -1620,6 +1618,7 @@ export class TaskCoordinator {
     if (!detail) throw new Error(`Unknown task artifact: ${revision.artifactId}`);
     const prior = detail.versions.find((version) => version.id === revision.priorVersionId);
     if (!prior) throw new Error(`Unknown prior artifact version: ${revision.priorVersionId}`);
+    if (isTerminalTask(task)) return { task, detail, revision };
     const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
 
     if (outcome === "completed") {
@@ -1717,12 +1716,19 @@ export class TaskCoordinator {
     const primaryThread = task.threads[0];
     if (!primaryThread) throw new Error("Task has no primary thread to retry");
 
-    await this.recoverTerminalTask({
+    const recovered = await this.recoverTerminalTask({
       task,
       expectedRevision: task.revision,
       summary: "Task retry started",
       sessionId: primaryThread.sessionId,
     });
+
+    if (recovered.status !== "working") {
+      return {
+        task: recovered,
+        retryStatus: "failed",
+      };
+    }
 
     if (!this.continuationDispatcher) {
       await this.failPrimaryTaskRun(

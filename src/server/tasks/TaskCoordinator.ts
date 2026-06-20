@@ -40,6 +40,7 @@ import {
   fingerprintTaskReviewMaterial,
   getPendingTaskReviewFromRecords,
   getTaskReviewRoundsFromRecords,
+  type TaskReviewArtifactFileSnapshot,
 } from "./taskReviewPolicy";
 
 type TaskNotification = {
@@ -102,6 +103,11 @@ type AcceptArtifactVersionRequest = {
   artifactId: string;
   versionId?: string;
   expectedRevision: number;
+};
+
+type TaskReviewMaterial = {
+  snapshot: ReturnType<typeof buildTaskReviewMaterialSnapshot>;
+  fingerprint: string;
 };
 
 type StartArtifactRevisionRequest = {
@@ -434,6 +440,10 @@ export class TaskCoordinator {
       reviews: this.options.sessionDb.listTaskReviews(task.id),
       activeThreadId: thread.id,
     };
+  }
+
+  private withDirectiveReviewState(task: TaskRecord): TaskDirectiveResult["task"] {
+    return { ...task, reviews: this.options.sessionDb.listTaskReviews(task.id) };
   }
 
   async create(input: {
@@ -1968,43 +1978,53 @@ export class TaskCoordinator {
   }): Promise<TaskRecord> {
     const initial = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(initial, input.expectedRevision);
-    return await this.runTaskMutation(input.taskId, async () => {
-      const task = this.requireTask(input.taskId, input.workspacePath);
-      assertExpectedTaskRevision(task, input.expectedRevision);
-      const expectedRevision = input.expectedRevision;
-      if (input.status === "completed" && task.status === "awaiting_review") {
-        return await this.acceptTaskLocked({
-          taskId: task.id,
-          workspacePath: task.workspacePath,
-          expectedRevision,
-        });
-      }
-      if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
-        throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
-      }
-      if (
-        input.status === "working" &&
-        (task.questions.some((question) => question.status === "pending" && question.blocking) ||
-          task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
-      ) {
-        throw new Error("Task cannot return to working while blocking input or issues remain");
-      }
-      const thread = input.sessionId
-        ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
-        : null;
-      const updated = await this.options.sessionDb.setTaskStatus({
+    return await this.runTaskMutation(input.taskId, async () => await this.transitionLocked(input));
+  }
+
+  private async transitionLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    status: TaskStatus;
+    summary: string;
+    detail?: string;
+    sessionId?: string;
+  }): Promise<TaskRecord> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    const expectedRevision = input.expectedRevision;
+    if (input.status === "completed" && task.status === "awaiting_review") {
+      return await this.acceptTaskLocked({
         taskId: task.id,
+        workspacePath: task.workspacePath,
         expectedRevision,
-        status: input.status,
-        summary: nonEmpty(input.summary, "Status summary"),
-        detail: input.detail?.trim() || null,
-        updatedAt: nowIso(),
-        threadId: thread?.id ?? null,
       });
-      await this.quiesceTaskThreads(updated);
-      this.notifyUpdated(updated);
-      return updated;
+    }
+    if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
+      throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
+    }
+    if (
+      input.status === "working" &&
+      (task.questions.some((question) => question.status === "pending" && question.blocking) ||
+        task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
+    ) {
+      throw new Error("Task cannot return to working while blocking input or issues remain");
+    }
+    const thread = input.sessionId
+      ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
+      : null;
+    const updated = await this.options.sessionDb.setTaskStatus({
+      taskId: task.id,
+      expectedRevision,
+      status: input.status,
+      summary: nonEmpty(input.summary, "Status summary"),
+      detail: input.detail?.trim() || null,
+      updatedAt: nowIso(),
+      threadId: thread?.id ?? null,
     });
+    await this.quiesceTaskThreads(updated);
+    this.notifyUpdated(updated);
+    return updated;
   }
 
   private async recoverTerminalTask(input: {
@@ -2113,7 +2133,7 @@ export class TaskCoordinator {
     }
 
     const round = rounds.length + 1;
-    const material = this.currentReviewMaterial(task);
+    const material = await this.currentReviewMaterial(task);
     const reviewId = crypto.randomUUID();
     const feedback = nonEmpty(input.feedback, "Review feedback");
     const reviewerProvider = nonEmpty(input.reviewerProvider, "Reviewer provider");
@@ -2234,6 +2254,20 @@ export class TaskCoordinator {
     caveats?: string[];
     sessionId?: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.proposeCompletionLocked(input),
+    );
+  }
+
+  private async proposeCompletionLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    summary: string;
+    caveats?: string[];
+    sessionId?: string;
+  }): Promise<TaskRecord> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -2267,13 +2301,16 @@ export class TaskCoordinator {
       throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
     }
     const requiredReviewRounds = task.reviewRounds ?? 0;
+    let currentMaterial: TaskReviewMaterial | null = null;
     if (requiredReviewRounds > 0) {
       const reviews = this.options.sessionDb.listTaskReviews(task.id);
       const reviewRounds = getTaskReviewRoundsFromRecords(reviews);
-      const currentMaterial = this.currentReviewMaterial(task);
+      const materialForCompletion = await this.currentReviewMaterial(task);
+      currentMaterial = materialForCompletion;
       const currentPasses = reviewRounds.filter(
         (round) =>
-          round.verdict === "pass" && round.materialFingerprint === currentMaterial.fingerprint,
+          round.verdict === "pass" &&
+          round.materialFingerprint === materialForCompletion.fingerprint,
       );
       const pendingReview = getPendingTaskReviewFromRecords(reviews);
       if (pendingReview) {
@@ -2287,14 +2324,14 @@ export class TaskCoordinator {
       const latestReview = reviewRounds.at(-1);
       if (
         latestReview?.verdict !== "pass" ||
-        latestReview.materialFingerprint !== currentMaterial.fingerprint
+        latestReview.materialFingerprint !== materialForCompletion.fingerprint
       ) {
         throw new Error(
           "Task requires a fresh passing review for the current delivery state before completion",
         );
       }
     }
-    const ready = await this.transition({
+    const ready = await this.transitionLocked({
       taskId: task.id,
       workspacePath: task.workspacePath,
       expectedRevision: task.revision,
@@ -2303,6 +2340,37 @@ export class TaskCoordinator {
       detail: input.caveats?.filter(Boolean).join("\n") || undefined,
       sessionId: input.sessionId,
     });
+    if (currentMaterial) {
+      let nextMaterial: TaskReviewMaterial;
+      try {
+        nextMaterial = await this.currentReviewMaterial(ready);
+      } catch (error) {
+        await this.transitionLocked({
+          taskId: ready.id,
+          workspacePath: ready.workspacePath,
+          expectedRevision: ready.revision,
+          status: "working",
+          summary: "Task review material changed during completion",
+          detail: error instanceof Error ? error.message : String(error),
+          sessionId: input.sessionId,
+        });
+        throw error;
+      }
+      if (nextMaterial.fingerprint !== currentMaterial.fingerprint) {
+        await this.transitionLocked({
+          taskId: ready.id,
+          workspacePath: ready.workspacePath,
+          expectedRevision: ready.revision,
+          status: "working",
+          summary: "Task review material changed during completion",
+          detail: "Artifact bytes changed while completion eligibility was being checked.",
+          sessionId: input.sessionId,
+        });
+        throw new Error(
+          "Task requires a fresh passing review for the current delivery state before completion",
+        );
+      }
+    }
     if (task.reviewRequired) return ready;
     return await this.acceptTaskLocked({
       taskId: ready.id,
@@ -2393,8 +2461,9 @@ export class TaskCoordinator {
       nonEmpty(directive.idempotencyKey, "Idempotency key"),
     );
     if (receipt !== null) {
+      const replayTask = this.requireTask(current.id, current.workspacePath);
       return {
-        task: this.requireTask(current.id, current.workspacePath),
+        task: this.withDirectiveReviewState(replayTask),
         continuation: current.questions.some(
           (question) => question.status === "pending" && question.blocking,
         )
@@ -2581,7 +2650,7 @@ export class TaskCoordinator {
     await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
       allowTerminal: true,
     });
-    return { task: updated, continuation };
+    return { task: this.withDirectiveReviewState(updated), continuation };
   }
 
   private requireTask(taskId: string, workspacePath: string): TaskRecord {
@@ -2602,15 +2671,31 @@ export class TaskCoordinator {
     return detail;
   }
 
-  private currentReviewMaterial(task: TaskRecord): {
-    snapshot: ReturnType<typeof buildTaskReviewMaterialSnapshot>;
-    fingerprint: string;
-  } {
-    const artifactDetails = task.artifacts.flatMap((artifactRecord) => {
+  private async currentReviewMaterial(task: TaskRecord): Promise<TaskReviewMaterial> {
+    const artifactDetails: TaskArtifactDetail[] = [];
+    for (const artifactRecord of task.artifacts) {
       const detail = this.options.sessionDb.getTaskArtifactDetail(task.id, artifactRecord.id);
-      return detail ? [detail] : [];
-    });
-    const snapshot = buildTaskReviewMaterialSnapshot({ task, artifactDetails });
+      if (!detail) throw new Error(`Artifact metadata is missing: ${artifactRecord.id}`);
+      artifactDetails.push(detail);
+    }
+    const workspaceRoot = await fs.realpath(task.workspacePath);
+    const artifactFiles: TaskReviewArtifactFileSnapshot[] = [];
+    for (const artifactRecord of task.artifacts) {
+      const resolvedPath = await this.resolveArtifactPath(task, artifactRecord.path);
+      const fingerprint = await this.artifactStore.fingerprintFile(resolvedPath);
+      if (!fingerprint) throw new Error(`Artifact does not exist: ${resolvedPath}`);
+      artifactFiles.push({
+        artifactId: artifactRecord.id,
+        path: artifactRecord.path,
+        canonicalWorkspaceRelativePath: path
+          .relative(workspaceRoot, resolvedPath)
+          .split(path.sep)
+          .join("/"),
+        sha256: fingerprint.sha256,
+        sizeBytes: fingerprint.sizeBytes,
+      });
+    }
+    const snapshot = buildTaskReviewMaterialSnapshot({ task, artifactDetails, artifactFiles });
     return {
       snapshot,
       fingerprint: fingerprintTaskReviewMaterial(snapshot),

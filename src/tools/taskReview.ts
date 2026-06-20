@@ -151,9 +151,12 @@ export function createTaskReviewTool(ctx: ToolContext) {
           verdict,
           feedback,
         });
-        const recorded = getTaskReviewRoundsForContext({ activity: result.task.activity }).at(-1);
+        const recorded = getTaskReviewRoundsForContext({
+          activity: result.task.activity,
+          reviews: result.task.reviews,
+        }).at(-1);
         if (!recorded || recorded.reviewerAgentId !== reviewer.agentId) {
-          throw new Error("Recorded review could not be read from the task activity");
+          throw new Error("Recorded review could not be read from the task review state");
         }
         ctx.log(
           `tool< reviewTask ${JSON.stringify({ round: recorded.round, verdict: recorded.verdict })}`,

@@ -57,6 +57,14 @@ export type TaskReviewMaterialSnapshot = {
   artifacts: Array<Record<string, unknown>>;
 };
 
+export type TaskReviewArtifactFileSnapshot = {
+  artifactId: string;
+  path: string;
+  canonicalWorkspaceRelativePath: string;
+  sha256: string;
+  sizeBytes: number;
+};
+
 function parseDetail(activity: TaskActivity): unknown {
   if (!activity.detail) return null;
   try {
@@ -182,10 +190,12 @@ function sortByStableValue<T>(items: readonly T[], projector: (item: T) => unkno
 export function buildTaskReviewMaterialSnapshot(input: {
   task: TaskRecord;
   artifactDetails: readonly TaskArtifactDetail[];
+  artifactFiles: readonly TaskReviewArtifactFileSnapshot[];
 }): TaskReviewMaterialSnapshot {
   const artifactDetailsById = new Map(
     input.artifactDetails.map((detail) => [detail.artifact.id, detail]),
   );
+  const artifactFilesById = new Map(input.artifactFiles.map((file) => [file.artifactId, file]));
   const activeRequirements = input.task.requirements.filter((item) => item.status === "active");
   const relevantDecisions = input.task.decisions.filter((item) => item.status === "active");
   const relevantQuestions = input.task.questions.filter((item) => item.status !== "superseded");
@@ -273,6 +283,7 @@ export function buildTaskReviewMaterialSnapshot(input: {
           kind: artifact.kind,
           title: artifact.title,
           provenance: artifact.provenance,
+          liveFile: artifactFilesById.get(artifact.id) ?? null,
           latestVersionId: detail?.latestVersionId ?? null,
           acceptedVersionId: detail?.acceptedVersionId ?? null,
           versions:

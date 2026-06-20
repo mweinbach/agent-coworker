@@ -672,8 +672,12 @@ export type TaskDirective =
       workItemId: string;
     };
 
+export type TaskDirectiveResultTask = TaskRecord & {
+  reviews?: TaskReviewRecord[];
+};
+
 export type TaskDirectiveResult = {
-  task: TaskRecord;
+  task: TaskDirectiveResultTask;
   continuation: "continue" | "pause_for_input";
 };
 

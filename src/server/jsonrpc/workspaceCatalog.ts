@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import {
+  getWorkspaceKindSource,
   isPathInsideOneOffChatsRoot,
   normalizeWorkspaceKind,
   type WorkspaceKind,
@@ -29,27 +30,43 @@ function hashWorkspaceId(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function buildFallbackWorkspaceSummary(cwd: string): JsonRpcWorkspaceSummary {
+function buildFallbackWorkspaceSummary(
+  cwd: string,
+  homedir?: string | null,
+): JsonRpcWorkspaceSummary {
   const now = new Date().toISOString();
   return {
     id: `server-${hashWorkspaceId(cwd)}`,
     name: path.basename(cwd) || cwd,
     path: cwd,
-    workspaceKind: "project",
+    workspaceKind: classifyWorkspaceKind({ path: cwd }, homedir),
     createdAt: now,
     lastOpenedAt: now,
   };
 }
 
+export function classifyWorkspaceKind(
+  record: { path: string; workspaceKind?: unknown },
+  homedir?: string | null,
+): WorkspaceKind {
+  const kindSource = getWorkspaceKindSource(record);
+  if (record.workspaceKind === "project" && kindSource !== "default") {
+    return "project";
+  }
+  if (
+    record.workspaceKind === "oneOffChat" ||
+    isPathInsideOneOffChatsRoot(record.path, homedir ?? undefined)
+  ) {
+    return "oneOffChat";
+  }
+  return normalizeWorkspaceKind(record.workspaceKind);
+}
+
 function toWorkspaceSummary(
   record: Awaited<ReturnType<WebDesktopServiceLike["loadState"]>>["workspaces"][number],
+  homedir?: string | null,
 ): JsonRpcWorkspaceSummary {
-  const workspaceKind =
-    record.workspaceKind === "project"
-      ? "project"
-      : record.workspaceKind === "oneOffChat" || isPathInsideOneOffChatsRoot(record.path)
-        ? "oneOffChat"
-        : normalizeWorkspaceKind(record.workspaceKind);
+  const workspaceKind = classifyWorkspaceKind(record, homedir);
   return {
     id: record.id,
     name: record.name,
@@ -83,9 +100,10 @@ function resolveActiveWorkspaceId(
 export async function listWorkspaceSummaries(opts: {
   workingDirectory: string;
   desktopService?: WebDesktopServiceLike | null;
+  homedir?: string | null;
 }): Promise<{ workspaces: JsonRpcWorkspaceSummary[]; activeWorkspaceId: string | null }> {
   if (!opts.desktopService) {
-    const fallback = buildFallbackWorkspaceSummary(opts.workingDirectory);
+    const fallback = buildFallbackWorkspaceSummary(opts.workingDirectory, opts.homedir);
     return {
       workspaces: [fallback],
       activeWorkspaceId: fallback.id,
@@ -93,7 +111,7 @@ export async function listWorkspaceSummaries(opts: {
   }
 
   const state = await opts.desktopService.loadState({ fallbackCwd: opts.workingDirectory });
-  const workspaces = state.workspaces.map(toWorkspaceSummary);
+  const workspaces = state.workspaces.map((record) => toWorkspaceSummary(record, opts.homedir));
   return {
     workspaces,
     activeWorkspaceId: resolveActiveWorkspaceId(workspaces, opts.workingDirectory),

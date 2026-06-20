@@ -36,20 +36,26 @@ auth, MCP auth, backups, workspace settings, and server-request responses. Readi
 (`thread/list`, `thread/read`, `thread/hydrate`, and `thread/resume`, which streams a thread's live
 content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
 stays always-allowed. Newly paired devices default to no `conversations` access until it is granted;
-devices paired before this permission existed are grandfathered to preserve their prior read access. The whole
-`cowork/mcp/*` config surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth
-permission) requires the workspace-settings permission: `cowork/mcp/servers/read` can expose
-configured transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP
-command (spawns a local subprocess) while connecting. The `cowork/memory/*` surface (including the
-`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the workspace-settings
-permission, because memory holds long-lived private user/project content. `cowork/plugins/install/preview` and
-`cowork/skills/install/preview` also require the workspace-settings permission, because they
-materialize an attacker-selectable local or GitHub source (only the passive plugin/skill
-catalog/list/detail reads stay always-allowed). The workspace document surface `cowork/workspace/presentation/preview` (which runs a workspace
-slide module on the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content
-from a caller-selected `cwd` that is not confined to the active workspace) require the
-workspace-settings permission. `cowork/session/state/read` (workspace/session config, provider
-options, userName/userProfile) also requires the workspace-settings permission, and
+devices paired before this permission existed are grandfathered to preserve their prior read access.
+Task reads (`task/list`, `task/read`, `task/artifact/version/compare`, and
+`task/artifact/version/preview`) also require `conversations`. Task mutations, lifecycle operations,
+task thread creation, direct task creation, and artifact writes require both `conversations` and
+`turns`. `task/artifact/read` also requires both `conversations` and `turns` because active legacy
+artifact reads can lazily materialize the immutable baseline. The whole `cowork/mcp/*` config
+surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth permission) requires the
+workspace-settings permission: `cowork/mcp/servers/read` can expose configured transport
+env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command (spawns a
+local subprocess) while connecting. The `cowork/memory/*` surface (including the
+`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the
+workspace-settings permission, because memory holds long-lived private user/project content.
+`cowork/plugins/install/preview` and `cowork/skills/install/preview` also require the
+workspace-settings permission, because they materialize an attacker-selectable local or GitHub
+source (only the passive plugin/skill catalog/list/detail reads stay always-allowed). The workspace
+document surface `cowork/workspace/presentation/preview` (which runs a workspace slide module on
+the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content from a
+caller-selected `cwd` that is not confined to the active workspace) require the workspace-settings
+permission. `cowork/session/state/read` (workspace/session config, provider options,
+userName/userProfile) also requires the workspace-settings permission, and
 `cowork/workspace/bootstrap` requires both the workspace-settings and conversations permissions
 because it returns that control state plus thread summaries. None of these are always-allowed
 defaults.
@@ -442,6 +448,22 @@ Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Code
 
 Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. Task-owned sessions must be preserved by clients outside ordinary chat-list reconciliation. Once a task reaches `completed`, `failed`, or `cancelled`, its task threads reject `turn/start` and `turn/steer` with `task_locked` until an explicit lifecycle operation (`task/reopen` or `task/retry`) moves it back into active work. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace.
 
+Task RPCs are authorized in the harness/server. Read-only task methods require the same
+conversation-history permission as `thread/list` and `thread/read`; mutating task methods require
+both conversation access and turn-start access. An omitted `cwd` resolves to the canonical active
+workspace, and a provided `cwd` must resolve to that same canonical active workspace or, in desktop
+relay mode, an exact desktop-persisted workspace path. In all cases, the resolved task workspace
+must have `workspaceKind` `project`. `oneOffChat` workspaces enter Task mode only through the
+ordinary chat-to-task promotion flow, which links and locks the source chat. Task RPCs reject
+outside directories, project-local chat aliases, symlink aliases, drive-relative inputs, and task or
+artifact IDs whose stored workspace does not match the authorized request context. Workspace-kind
+classification canonicalizes the configured home, global one-off chat root, and requested workspace
+path before applying the `~/.cowork/chats` rule, so filesystem aliases such as symlinked homes do
+not turn hidden one-off chat directories into generic project workspaces. Legacy desktop records
+whose `project` kind was defaulted from an omitted `workspaceKind` are still classified by path;
+only an explicitly persisted `workspaceKind: "project"` preserves an intentional promoted project
+under the one-off chat root.
+
 Every mutation after creation carries `expectedRevision`. A stale revision fails with a structured conflict containing the current task revision so clients can reload rather than overwrite concurrent work.
 
 Requests:
@@ -458,7 +480,7 @@ Requests:
 - `task/blocker/report` — params `{ cwd?, taskId, expectedRevision, description, blocking, workItemId? }`; result `{ task }`
 - `task/blocker/resolve` — params `{ cwd?, taskId, expectedRevision, blockerId }`; result `{ task }`
 - `task/artifact/register` — params `{ cwd?, taskId, expectedRevision, path, title, kind, artifactId?, baseVersionId?, changeSummary?, workItemId?, provenance? }`; captures immutable bytes from a workspace-contained path as a new logical artifact or version and returns `{ task }`; completed, cancelled, and failed tasks reject registration
-- `task/artifact/read` — params `{ cwd?, taskId, artifactId }`; lazily captures a baseline for legacy artifacts when necessary and returns `{ detail }`; completed, cancelled, and failed tasks remain readable but do not create new baselines
+- `task/artifact/read` — params `{ cwd?, taskId, artifactId }`; lazily captures a baseline for legacy artifacts when necessary and returns `{ detail }`; requires both `conversations` and `turns`; completed, cancelled, and failed tasks remain readable but do not create new baselines
 - `task/artifact/version/capture` — params `{ cwd?, taskId, artifactId, expectedRevision, changeSummary? }`; explicitly captures externally edited live bytes and returns `{ task, detail }`; completed, cancelled, and failed tasks reject capture
 - `task/artifact/version/compare` — params `{ cwd?, taskId, artifactId, baseVersionId, targetVersionId }`; returns `{ comparison }` with bounded text, DOCX, PPTX, XLSX, or binary changes
 - `task/artifact/version/preview` — params `{ cwd?, taskId, artifactId, versionId }`; returns `{ versionId, preview }` from immutable historical bytes
@@ -491,6 +513,15 @@ Notifications:
 - `task/updated` — params `{ cwd, task }`
 - `task/activity` — params `{ cwd, taskId, activity }`
 - `task/checkpointCreated` — params `{ cwd, taskId, checkpoint }`
+
+Task notifications are fan-out filtered by workspace subscription and task read permission. A
+recipient without conversation access for that workspace receives no task existence, ID, summary,
+question, approval, artifact, thread, checkpoint, or workspace metadata through task
+notifications. A successful authorized request against a project task workspace subscribes that
+connection to task notifications for that workspace; these task subscriptions are additive and
+idempotent across multiple authorized project workspaces on the same connection, and disconnecting
+removes every membership. This is separate from `cowork/control/event`, whose workspace-control
+subscription remains scoped to the latest requested workspace.
 
 ### Research JSON-RPC methods
 

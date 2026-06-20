@@ -49,4 +49,94 @@ describe("WorkspaceJsonRpcSubscribers", () => {
       },
     ]);
   });
+
+  test("filters task notifications for sockets without task read permission", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const allowed = socket("allowed");
+    const denied = socket("denied");
+    denied.data.taskReadAllowed = false;
+    const workspace = path.join(os.tmpdir(), "task-subscriber-authz");
+    subscribers.register(allowed, workspace);
+    subscribers.register(denied, workspace);
+
+    subscribers.notify(workspace, "task/created", {
+      task: { id: "task-1", title: "Secret task" },
+    });
+
+    expect(sent).toEqual([
+      {
+        connectionId: "allowed",
+        payload: {
+          method: "task/created",
+          params: { task: { id: "task-1", title: "Secret task" } },
+        },
+      },
+    ]);
+  });
+
+  test("keeps a connection subscribed to every requested task workspace idempotently", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const client = socket("client");
+    const firstWorkspace = path.join(os.tmpdir(), "task-subscriber-additive-one");
+    const secondWorkspace = path.join(os.tmpdir(), "task-subscriber-additive-two");
+
+    subscribers.register(client, firstWorkspace);
+    subscribers.register(client, secondWorkspace);
+    subscribers.register(client, secondWorkspace);
+
+    subscribers.notify(firstWorkspace, "task/created", {
+      cwd: firstWorkspace,
+      task: { id: "task-1" },
+    });
+    subscribers.notify(secondWorkspace, "task/updated", {
+      cwd: secondWorkspace,
+      task: { id: "task-2" },
+    });
+    subscribers.notify(path.join(os.tmpdir(), "task-subscriber-additive-three"), "task/created", {
+      task: { id: "task-3" },
+    });
+
+    expect(sent).toEqual([
+      {
+        connectionId: "client",
+        payload: {
+          method: "task/created",
+          params: { cwd: firstWorkspace, task: { id: "task-1" } },
+        },
+      },
+      {
+        connectionId: "client",
+        payload: {
+          method: "task/updated",
+          params: { cwd: secondWorkspace, task: { id: "task-2" } },
+        },
+      },
+    ]);
+
+    sent.length = 0;
+    subscribers.remove(client);
+    subscribers.notify(firstWorkspace, "task/created", {
+      cwd: firstWorkspace,
+      task: { id: "task-4" },
+    });
+    subscribers.notify(secondWorkspace, "task/updated", {
+      cwd: secondWorkspace,
+      task: { id: "task-5" },
+    });
+    expect(sent).toEqual([]);
+  });
 });

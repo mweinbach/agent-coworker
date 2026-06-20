@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { requireWorkspacePath } from "../src/server/jsonrpc/routes/shared";
 import { listWorkspaceSummaries } from "../src/server/jsonrpc/workspaceCatalog";
-import type { WebDesktopServiceLike } from "../src/server/webDesktopService";
+import { WebDesktopService, type WebDesktopServiceLike } from "../src/server/webDesktopService";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 
 describe("workspace catalog and path rules", () => {
@@ -29,6 +30,73 @@ describe("workspace catalog and path rules", () => {
       requireWorkspacePath({ cwd: legacyChatDir }, "thread/list", projectDir, homedir),
     ).toThrow("thread/list cwd must match the server workspace or a one-off chat workspace");
     await fs.rm(homedir, { recursive: true, force: true });
+  });
+
+  test("requireWorkspacePath confines task RPCs to the canonical active workspace", async () => {
+    const homedir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-home-"));
+    try {
+      const projectRoot = path.join(homedir, "project");
+      const outsideRoot = path.join(homedir, "outside");
+      const aliasDir = path.join(homedir, "project-alias");
+      await fs.mkdir(projectRoot, { recursive: true });
+      await fs.mkdir(outsideRoot, { recursive: true });
+      const projectDir = await fs.realpath(projectRoot);
+      const outsideDir = await fs.realpath(outsideRoot);
+      await fs.symlink(projectDir, aliasDir, "dir");
+
+      expect(requireWorkspacePath({}, "task/list", projectDir, homedir)).toBe(
+        await fs.realpath(projectDir),
+      );
+      expect(requireWorkspacePath({ cwd: projectDir }, "task/list", projectDir, homedir)).toBe(
+        await fs.realpath(projectDir),
+      );
+      expect(() =>
+        requireWorkspacePath({ cwd: outsideDir }, "task/list", projectDir, homedir),
+      ).toThrow("task/list cwd must match an authorized workspace");
+      expect(() =>
+        requireWorkspacePath({ cwd: aliasDir }, "task/list", projectDir, homedir),
+      ).toThrow("task/list cwd must use the canonical workspace path");
+      expect(() =>
+        requireWorkspacePath({ cwd: "C:project" }, "task/list", projectDir, homedir),
+      ).toThrow("task/list cwd must use an absolute workspace path");
+    } finally {
+      await fs.rm(homedir, { recursive: true, force: true });
+    }
+  });
+
+  test("listWorkspaceSummaries classifies no-desktop fallback one-off cwd with configured home", async () => {
+    const homedir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-home-"));
+    try {
+      const chatDir = path.join(getOneOffChatsRoot(homedir), "20260620-chat");
+      const projectDir = path.join(homedir, "project");
+      await fs.mkdir(chatDir, { recursive: true });
+      await fs.mkdir(projectDir, { recursive: true });
+
+      const chatResult = await listWorkspaceSummaries({
+        workingDirectory: await fs.realpath(chatDir),
+        homedir,
+      });
+      expect(chatResult.workspaces).toEqual([
+        expect.objectContaining({
+          path: await fs.realpath(chatDir),
+          workspaceKind: "oneOffChat",
+        }),
+      ]);
+      expect(chatResult.activeWorkspaceId).toBe(chatResult.workspaces[0]?.id);
+
+      const projectResult = await listWorkspaceSummaries({
+        workingDirectory: await fs.realpath(projectDir),
+        homedir,
+      });
+      expect(projectResult.workspaces).toEqual([
+        expect.objectContaining({
+          path: await fs.realpath(projectDir),
+          workspaceKind: "project",
+        }),
+      ]);
+    } finally {
+      await fs.rm(homedir, { recursive: true, force: true });
+    }
   });
 
   test("listWorkspaceSummaries returns desktop workspaces with workspaceKind", async () => {
@@ -161,5 +229,84 @@ describe("workspace catalog and path rules", () => {
         workspaceKind: "project",
       }),
     ]);
+  });
+
+  test("listWorkspaceSummaries classifies legacy missing-kind chat records with configured home", async () => {
+    const cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-catalog-home-"));
+    const realHomeRoot = path.join(cleanupRoot, "home-real");
+    const aliasHome = path.join(cleanupRoot, "home-alias");
+    const userDataDir = path.join(cleanupRoot, "user-data");
+    const legacyChat = path.join(aliasHome, ".cowork", "chats", "legacy-chat");
+    const promotedProject = path.join(aliasHome, ".cowork", "chats", "promoted-project");
+    const ordinaryProject = path.join(cleanupRoot, "ordinary-project");
+    try {
+      await fs.mkdir(realHomeRoot, { recursive: true });
+      await fs.symlink(realHomeRoot, aliasHome, process.platform === "win32" ? "junction" : "dir");
+      await fs.mkdir(legacyChat, { recursive: true });
+      await fs.mkdir(promotedProject, { recursive: true });
+      await fs.mkdir(ordinaryProject, { recursive: true });
+      await fs.mkdir(userDataDir, { recursive: true });
+      const timestamp = "2026-06-20T00:00:00.000Z";
+      await fs.writeFile(
+        path.join(userDataDir, "state.json"),
+        JSON.stringify({
+          version: 2,
+          workspaces: [
+            {
+              id: "legacy-chat",
+              name: "Legacy chat",
+              path: legacyChat,
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+            {
+              id: "promoted-project",
+              name: "Promoted project",
+              path: promotedProject,
+              workspaceKind: "project",
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+            {
+              id: "ordinary-project",
+              name: "Ordinary project",
+              path: ordinaryProject,
+              createdAt: timestamp,
+              lastOpenedAt: timestamp,
+            },
+          ],
+          threads: [],
+        }),
+      );
+
+      const desktopService = new WebDesktopService({ userDataDir, homedir: aliasHome });
+      const result = await listWorkspaceSummaries({
+        workingDirectory: await fs.realpath(legacyChat),
+        desktopService,
+        homedir: aliasHome,
+      });
+
+      expect(result.workspaces).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "legacy-chat",
+            path: await fs.realpath(legacyChat),
+            workspaceKind: "oneOffChat",
+          }),
+          expect.objectContaining({
+            id: "promoted-project",
+            path: await fs.realpath(promotedProject),
+            workspaceKind: "project",
+          }),
+          expect.objectContaining({
+            id: "ordinary-project",
+            path: await fs.realpath(ordinaryProject),
+            workspaceKind: "project",
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(cleanupRoot, { recursive: true, force: true });
+    }
   });
 });

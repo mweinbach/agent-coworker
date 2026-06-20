@@ -6,6 +6,9 @@ import { ArtifactFingerprintConflictError } from "../../tasks/ArtifactVersionSto
 import { ArtifactConflictError, buildArtifactRevisionPrompt } from "../../tasks/TaskCoordinator";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcTaskRequestSchemas } from "../schema.tasks";
+import { getTaskRpcRequiredPermissions } from "../taskPermissions";
+import { classifyWorkspaceKind, listWorkspaceSummaries } from "../workspaceCatalog";
+import { resolveCanonicalTaskWorkspacePath } from "./shared";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 type TaskRequestMethod = keyof typeof jsonRpcTaskRequestSchemas;
@@ -22,6 +25,15 @@ function createTaskHandler<M extends TaskRequestMethod>(
   run: (params: TaskRequestParams<M>) => Promise<unknown> | unknown,
 ): JsonRpcRequestHandler {
   return async (ws, message) => {
+    const deniedPermission = getDeniedTaskPermission(ws, method);
+    if (deniedPermission) {
+      context.jsonrpc.sendError(ws, message.id, {
+        code: JSONRPC_ERROR_CODES.invalidRequest,
+        message: `${method} requires ${deniedPermission} permission`,
+        data: { category: "permission_denied", permission: deniedPermission },
+      });
+      return;
+    }
     const parsed = jsonRpcTaskRequestSchemas[method].safeParse(message.params ?? {});
     if (!parsed.success) {
       context.jsonrpc.sendError(ws, message.id, {
@@ -73,18 +85,85 @@ function createTaskHandler<M extends TaskRequestMethod>(
   };
 }
 
-function resolveCwd(
+function getDeniedTaskPermission(
+  ws: Parameters<JsonRpcRequestHandler>[0],
+  method: TaskRequestMethod,
+): "conversations" | "turns" | null {
+  const requiredPermissions = getTaskRpcRequiredPermissions(method);
+  if (requiredPermissions.includes("conversations") && ws.data?.taskReadAllowed === false) {
+    return "conversations";
+  }
+  if (requiredPermissions.includes("turns") && ws.data?.taskMutationAllowed === false) {
+    return "turns";
+  }
+  return null;
+}
+
+async function requireProjectTaskWorkspacePath(
+  context: JsonRpcRouteContext,
+  workspacePath: string,
+  method: string,
+): Promise<string> {
+  if (!context.desktopService) {
+    const workspaceKind = classifyWorkspaceKind({ path: workspacePath }, context.homedir);
+    if (workspaceKind !== "project") {
+      throw new Error(`${method} cwd must match an authorized project workspace`);
+    }
+    return workspacePath;
+  }
+  const { workspaces } = await listWorkspaceSummaries({
+    workingDirectory: context.getConfig().workingDirectory,
+    desktopService: context.desktopService,
+    homedir: context.homedir,
+  });
+  const workspace = workspaces.find((entry) => entry.path === workspacePath);
+  const workspaceKind =
+    workspace?.workspaceKind ?? classifyWorkspaceKind({ path: workspacePath }, context.homedir);
+  if (workspaceKind !== "project") {
+    throw new Error(`${method} cwd must match an authorized project workspace`);
+  }
+  return workspace?.path ?? workspacePath;
+}
+
+export async function resolveTaskWorkspacePath(
   context: JsonRpcRouteContext,
   params: { cwd?: string },
   method: string,
-): string {
-  return context.utils.resolveWorkspacePath(params, method);
+): Promise<string> {
+  try {
+    const workspacePath = context.utils.resolveWorkspacePath(params, method);
+    return await requireProjectTaskWorkspacePath(context, workspacePath, method);
+  } catch (error) {
+    const requestedCwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
+    if (!requestedCwd || !context.desktopService) {
+      throw error;
+    }
+    let requestedWorkspacePath: string;
+    try {
+      requestedWorkspacePath = resolveCanonicalTaskWorkspacePath(requestedCwd, method);
+    } catch {
+      throw error;
+    }
+    const { workspaces } = await listWorkspaceSummaries({
+      workingDirectory: context.getConfig().workingDirectory,
+      desktopService: context.desktopService,
+      homedir: context.homedir,
+    });
+    const workspace = workspaces.find((entry) => entry.path === requestedWorkspacePath);
+    if (!workspace) {
+      throw error;
+    }
+    if (workspace.workspaceKind !== "project") {
+      throw new Error(`${method} cwd must match an authorized project workspace`);
+    }
+    return workspace.path;
+  }
 }
 
 export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "task/create": createTaskHandler(context, "task/create", async (params) => {
-      const cwd = resolveCwd(context, params, "task/create");
+      const cwd = await resolveTaskWorkspacePath(context, params, "task/create");
       const { cwd: _cwd, provider, model, ...rawCreation } = params;
       const creation = taskCreationInputSchema.parse(rawCreation);
       const existing = context.tasks.getByCreationKey(creation.idempotencyKey, {
@@ -130,24 +209,27 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         );
       return { task: result.task, thread: context.utils.buildThreadFromSession(runtime) };
     }),
-    "task/list": createTaskHandler(context, "task/list", (params) => {
-      const cwd = resolveCwd(context, params, "task/list");
+    "task/list": createTaskHandler(context, "task/list", async (params) => {
+      const cwd = await resolveTaskWorkspacePath(context, params, "task/list");
       const tasks = context.tasks.list(cwd);
       return { tasks, total: tasks.length };
     }),
-    "task/read": createTaskHandler(context, "task/read", (params) => ({
-      task: context.tasks.get(params.taskId, resolveCwd(context, params, "task/read")),
+    "task/read": createTaskHandler(context, "task/read", async (params) => ({
+      task: context.tasks.get(
+        params.taskId,
+        await resolveTaskWorkspacePath(context, params, "task/read"),
+      ),
     })),
     "task/updateBrief": createTaskHandler(context, "task/updateBrief", async (params) => ({
       task: await context.tasks.updateBrief({
         ...params,
-        workspacePath: resolveCwd(context, params, "task/updateBrief"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/updateBrief"),
       }),
     })),
     "task/updateGraph": createTaskHandler(context, "task/updateGraph", async (params) => ({
       task: await context.tasks.replaceWorkItems({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/updateGraph"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/updateGraph"),
         expectedRevision: params.expectedRevision,
         items: params.workItems,
       }),
@@ -155,7 +237,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/workItem/claim": createTaskHandler(context, "task/workItem/claim", async (params) => ({
       task: await context.tasks.claimWorkItem({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/workItem/claim"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/workItem/claim"),
         workItemId: params.workItemId,
         threadId: params.taskThreadId,
         expectedRevision: params.expectedRevision,
@@ -164,7 +246,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/workItem/mark": createTaskHandler(context, "task/workItem/mark", async (params) => ({
       task: await context.tasks.markWorkItem({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/workItem/mark"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/workItem/mark"),
         workItemId: params.workItemId,
         expectedRevision: params.expectedRevision,
         status: params.status,
@@ -174,7 +256,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/decision/record": createTaskHandler(context, "task/decision/record", async (params) => ({
       task: await context.tasks.recordDecision({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/decision/record"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/decision/record"),
         expectedRevision: params.expectedRevision,
         question: params.question,
         resolution: params.resolution,
@@ -190,7 +272,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) =>
         await context.tasks.resolveQuestions({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/questions/resolve"),
+          workspacePath: await resolveTaskWorkspacePath(context, params, "task/questions/resolve"),
           expectedRevision: params.expectedRevision,
           answers: params.answers,
         }),
@@ -198,7 +280,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/blocker/report": createTaskHandler(context, "task/blocker/report", async (params) => ({
       task: await context.tasks.reportBlocker({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/blocker/report"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/blocker/report"),
         expectedRevision: params.expectedRevision,
         description: params.description,
         blocking: params.blocking,
@@ -208,7 +290,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/blocker/resolve": createTaskHandler(context, "task/blocker/resolve", async (params) => ({
       task: await context.tasks.resolveBlocker({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/blocker/resolve"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/blocker/resolve"),
         expectedRevision: params.expectedRevision,
         blockerId: params.blockerId,
       }),
@@ -219,7 +301,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) => ({
         task: await context.tasks.registerArtifact({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/artifact/register"),
+          workspacePath: await resolveTaskWorkspacePath(context, params, "task/artifact/register"),
           expectedRevision: params.expectedRevision,
           path: params.path,
           title: params.title,
@@ -233,7 +315,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       }),
     ),
     "task/artifact/read": createTaskHandler(context, "task/artifact/read", async (params) => {
-      const workspacePath = resolveCwd(context, params, "task/artifact/read");
+      const workspacePath = await resolveTaskWorkspacePath(context, params, "task/artifact/read");
       let detail = context.tasks.getArtifactDetail({
         taskId: params.taskId,
         workspacePath,
@@ -275,7 +357,11 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) => {
         const result = await context.tasks.captureArtifactVersion({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/artifact/version/capture"),
+          workspacePath: await resolveTaskWorkspacePath(
+            context,
+            params,
+            "task/artifact/version/capture",
+          ),
           artifactId: params.artifactId,
           expectedRevision: params.expectedRevision,
           changeSummary: params.changeSummary,
@@ -287,7 +373,11 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       context,
       "task/artifact/version/compare",
       async (params) => {
-        const workspacePath = resolveCwd(context, params, "task/artifact/version/compare");
+        const workspacePath = await resolveTaskWorkspacePath(
+          context,
+          params,
+          "task/artifact/version/compare",
+        );
         const [before, after] = await Promise.all([
           context.tasks.readArtifactVersion({
             taskId: params.taskId,
@@ -324,7 +414,11 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) => {
         const source = await context.tasks.readArtifactVersion({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/artifact/version/preview"),
+          workspacePath: await resolveTaskWorkspacePath(
+            context,
+            params,
+            "task/artifact/version/preview",
+          ),
           artifactId: params.artifactId,
           versionId: params.versionId,
         });
@@ -342,7 +436,11 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       context,
       "task/artifact/version/restore",
       async (params) => {
-        const workspacePath = resolveCwd(context, params, "task/artifact/version/restore");
+        const workspacePath = await resolveTaskWorkspacePath(
+          context,
+          params,
+          "task/artifact/version/restore",
+        );
         const detail = context.tasks.getArtifactDetail({
           taskId: params.taskId,
           workspacePath,
@@ -368,7 +466,11 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) => {
         return await context.tasks.acceptArtifactVersion({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/artifact/version/accept"),
+          workspacePath: await resolveTaskWorkspacePath(
+            context,
+            params,
+            "task/artifact/version/accept",
+          ),
           artifactId: params.artifactId,
           versionId: params.versionId,
           expectedRevision: params.expectedRevision,
@@ -381,7 +483,11 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) => {
         const result = await context.tasks.startArtifactRevision({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/artifact/revision/start"),
+          workspacePath: await resolveTaskWorkspacePath(
+            context,
+            params,
+            "task/artifact/revision/start",
+          ),
           artifactId: params.artifactId,
           instruction: params.instruction,
           baseVersionId: params.baseVersionId,
@@ -415,7 +521,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/thread/create": createTaskHandler(context, "task/thread/create", async (params) => {
       const before = context.tasks.get(
         params.taskId,
-        resolveCwd(context, params, "task/thread/create"),
+        await resolveTaskWorkspacePath(context, params, "task/thread/create"),
       );
       if (!before) throw new Error(`Unknown task: ${params.taskId}`);
       const task = await context.tasks.addThread({
@@ -441,7 +547,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) => ({
         task: await context.tasks.proposeCompletion({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/proposeCompletion"),
+          workspacePath: await resolveTaskWorkspacePath(context, params, "task/proposeCompletion"),
           expectedRevision: params.expectedRevision,
           summary: params.summary,
           caveats: params.caveats,
@@ -449,7 +555,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       }),
     ),
     "task/cancel": createTaskHandler(context, "task/cancel", async (params) => {
-      const workspacePath = resolveCwd(context, params, "task/cancel");
+      const workspacePath = await resolveTaskWorkspacePath(context, params, "task/cancel");
       const task = await context.tasks.transition({
         taskId: params.taskId,
         workspacePath,
@@ -463,14 +569,14 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/accept": createTaskHandler(context, "task/accept", async (params) => ({
       task: await context.tasks.acceptTask({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/accept"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/accept"),
         expectedRevision: params.expectedRevision,
       }),
     })),
     "task/requestChanges": createTaskHandler(context, "task/requestChanges", async (params) => ({
       task: await context.tasks.requestChanges({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/requestChanges"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/requestChanges"),
         expectedRevision: params.expectedRevision,
         feedback: params.feedback,
       }),
@@ -478,7 +584,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/reopen": createTaskHandler(context, "task/reopen", async (params) => ({
       task: await context.tasks.reopenTask({
         taskId: params.taskId,
-        workspacePath: resolveCwd(context, params, "task/reopen"),
+        workspacePath: await resolveTaskWorkspacePath(context, params, "task/reopen"),
         expectedRevision: params.expectedRevision,
         reason: params.reason,
       }),
@@ -489,7 +595,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       async (params) =>
         await context.tasks.retryTask({
           taskId: params.taskId,
-          workspacePath: resolveCwd(context, params, "task/retry"),
+          workspacePath: await resolveTaskWorkspacePath(context, params, "task/retry"),
           expectedRevision: params.expectedRevision,
         }),
     ),

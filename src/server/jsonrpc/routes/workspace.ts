@@ -28,6 +28,7 @@ export function createWorkspaceRouteHandlers(
       const result = await listWorkspaceSummaries({
         workingDirectory: context.getConfig().workingDirectory,
         desktopService: context.desktopService,
+        homedir: context.homedir,
       });
       context.jsonrpc.sendResult(ws, message.id, result);
     },

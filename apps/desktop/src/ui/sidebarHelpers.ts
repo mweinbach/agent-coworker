@@ -12,7 +12,7 @@ export function groupStandardChatThreadsByWorkspace<
 >(threads: T[]): Map<string, T[]> {
   const grouped = new Map<string, T[]>();
   for (const thread of threads) {
-    if (!isStandardChatThread(thread)) continue;
+    if (!isStandardChatThread(thread, { includeDrafts: true })) continue;
     const bucket = grouped.get(thread.workspaceId);
     if (bucket) bucket.push(thread);
     else grouped.set(thread.workspaceId, [thread]);

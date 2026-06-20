@@ -21,7 +21,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
   const recentThreads = useMemo(
     () =>
       [...threads]
-        .filter((thread) => isStandardChatThread(thread))
+        .filter((thread) => isStandardChatThread(thread, { includeDrafts: true }))
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt))
         .slice(0, 8),
     [threads],

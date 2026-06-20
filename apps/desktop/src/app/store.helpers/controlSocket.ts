@@ -5,6 +5,7 @@ import {
 } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import { isStandardChatThread, isTaskOwnedThread } from "../threadFilters";
+import { getThreadSelectionContext } from "../threadSelectionContext";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
@@ -221,26 +222,29 @@ export function createControlSocketHelpers(
   }
 
   function reconcileSelectedThreadSelection(
-    allThreads: ThreadRecord[],
     nextThreads: ThreadRecord[],
     workspaceId: string,
     selectedWorkspaceId: string | null,
     selectedThreadId: string | null,
     selectedTaskId: string | null,
     view: ReturnType<StoreGet>["view"],
+    lastNonSettingsView: ReturnType<StoreGet>["lastNonSettingsView"],
   ): { selectedThreadId: string | null; selectedTaskId: string | null } {
+    const selectionContext = getThreadSelectionContext(view, lastNonSettingsView);
+    const selectionWorkspaceId = selectedWorkspaceId ?? workspaceId;
     if (!selectedThreadId) {
       return {
         selectedThreadId: null,
-        selectedTaskId: view === "chat" ? null : selectedTaskId,
+        selectedTaskId: selectionContext === "chat" ? null : selectedTaskId,
       };
     }
     const selectable = (thread: ThreadRecord): boolean =>
-      view === "task"
+      thread.workspaceId === selectionWorkspaceId &&
+      (selectionContext === "task"
         ? typeof selectedTaskId === "string" && thread.taskId === selectedTaskId
-        : isStandardChatThread(thread, { includeDrafts: true });
+        : isStandardChatThread(thread, { includeDrafts: true }));
     const selectionFor = (threadId: string | null) => {
-      if (view === "task") {
+      if (selectionContext === "task") {
         return { selectedThreadId: threadId, selectedTaskId };
       }
       return { selectedThreadId: threadId, selectedTaskId: null };
@@ -257,22 +261,18 @@ export function createControlSocketHelpers(
       return selectionFor(migratedThreadId);
     }
 
-    const fallbackWorkspaceId =
-      allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId ??
-      selectedWorkspaceId ??
-      workspaceId;
-    if (view === "task" && selectedTaskId) {
+    if (selectionContext === "task" && selectedTaskId) {
       return selectionFor(
         nextThreads.find(
           (thread) =>
-            thread.workspaceId === fallbackWorkspaceId && thread.taskId === selectedTaskId,
+            thread.workspaceId === selectionWorkspaceId && thread.taskId === selectedTaskId,
         )?.id ?? null,
       );
     }
     return selectionFor(
       nextThreads.find(
         (thread) =>
-          thread.workspaceId === fallbackWorkspaceId &&
+          thread.workspaceId === selectionWorkspaceId &&
           isStandardChatThread(thread, { includeDrafts: true }),
       )?.id ?? null,
     );
@@ -656,13 +656,13 @@ export function createControlSocketHelpers(
           sessions,
         );
         const selection = reconcileSelectedThreadSelection(
-          s.threads,
           nextThreads,
           workspaceId,
           s.selectedWorkspaceId,
           s.selectedThreadId,
           s.selectedTaskId,
           s.view,
+          s.lastNonSettingsView,
         );
         return {
           threads: nextThreads,

@@ -56,6 +56,7 @@ import {
 } from "../store.helpers";
 import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { isStandardChatThread } from "../threadFilters";
+import { getThreadSelectionContext } from "../threadSelectionContext";
 import {
   type CachedDesktopUiState,
   type CachedSessionSnapshot,
@@ -591,8 +592,7 @@ function buildResolvedDesktopUiState(
   const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
   const pluginManagementMode = selection.pluginManagementMode;
   const taskContextAllowed =
-    normalizedUi.view === "task" ||
-    (normalizedUi.view === "settings" && normalizedUi.lastNonSettingsView === "task");
+    getThreadSelectionContext(normalizedUi.view, normalizedUi.lastNonSettingsView) === "task";
   const selectingTaskThread =
     taskContextAllowed &&
     typeof normalizedUi.selectedTaskId === "string" &&

@@ -505,6 +505,44 @@ describe("desktop bootstrap cache", () => {
     ]);
   });
 
+  test("buildCachedDesktopStateSeed preserves task context while settings overlays task view", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "task-session-1",
+            sessionId: "task-session-1",
+            title: "Task thread",
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        lastNonSettingsView: "task",
+        selectedThreadId: "task-session-1",
+        selectedTaskId: "task-1",
+      },
+    });
+
+    expect(seed?.view).toBe("settings");
+    expect(seed?.lastNonSettingsView).toBe("task");
+    expect(seed?.selectedThreadId).toBe("task-session-1");
+    expect(seed?.selectedTaskId).toBe("task-1");
+  });
+
   test("buildCachedDesktopStateSeed clears stale task context when chat startup falls back to ordinary chat", () => {
     const seed = buildCachedDesktopStateSeed({
       ...cachedState,

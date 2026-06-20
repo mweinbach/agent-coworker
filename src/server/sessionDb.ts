@@ -679,6 +679,39 @@ export class SessionDb {
     );
   }
 
+  async acceptAllTaskArtifactVersionsValidated(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+    validateAcceptedTask: (task: TaskRecord) => Promise<void>;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "accept_all_task_artifact_versions_validated",
+      async () => {
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          this.taskRepository.acceptAllArtifactVersionsInOpenTransaction(input);
+          const task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await input.validateAcceptedTask(task);
+          this.db.exec("COMMIT");
+          return task;
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back task artifact acceptance: ${String(rollbackError)}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
+      { taskId: input.taskId },
+    );
+  }
+
   async reportTaskBlocker(
     blocker: TaskBlocker,
     expectedRevision: number,

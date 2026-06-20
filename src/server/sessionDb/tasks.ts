@@ -1550,37 +1550,45 @@ export class SessionTaskRepository {
     updatedAt: string;
   }): TaskRecord {
     this.db.transaction(() => {
-      this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
-      this.db
-        .query(
-          "UPDATE task_artifact_versions SET review_status = 'superseded' WHERE task_id = ? AND review_status = 'accepted' AND artifact_id IN (SELECT artifact_id FROM task_artifact_versions WHERE task_id = ? AND review_status = 'draft' GROUP BY artifact_id)",
-        )
-        .run(input.taskId, input.taskId);
-      this.db
-        .query(
-          "UPDATE task_artifact_versions SET review_status = 'accepted' WHERE version_id IN (SELECT version_id FROM task_artifact_versions draft WHERE draft.task_id = ? AND draft.review_status = 'draft' AND draft.version_number = (SELECT MAX(latest.version_number) FROM task_artifact_versions latest WHERE latest.artifact_id = draft.artifact_id AND latest.review_status = 'draft'))",
-        )
-        .run(input.taskId);
-      this.db
-        .query(
-          "UPDATE task_work_items SET status = 'done', completion_evidence = COALESCE(completion_evidence, 'Accepted with task delivery'), updated_at = ? WHERE task_id = ? AND status = 'review'",
-        )
-        .run(input.updatedAt, input.taskId);
-      this.db.query("DELETE FROM task_work_item_claims WHERE task_id = ?").run(input.taskId);
-      this.db.query("UPDATE tasks SET status = 'completed' WHERE task_id = ?").run(input.taskId);
-      this.insertActivity({
-        id: crypto.randomUUID(),
-        seq: 1,
-        taskId: input.taskId,
-        threadId: null,
-        workItemId: null,
-        kind: "status_changed",
-        summary: "Task accepted",
-        detail: null,
-        createdAt: input.updatedAt,
-      });
+      this.acceptAllArtifactVersionsInOpenTransaction(input);
     })();
     return this.requireTask(input.taskId);
+  }
+
+  acceptAllArtifactVersionsInOpenTransaction(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+  }): void {
+    this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
+    this.db
+      .query(
+        "UPDATE task_artifact_versions SET review_status = 'superseded' WHERE task_id = ? AND review_status = 'accepted' AND artifact_id IN (SELECT artifact_id FROM task_artifact_versions WHERE task_id = ? AND review_status = 'draft' GROUP BY artifact_id)",
+      )
+      .run(input.taskId, input.taskId);
+    this.db
+      .query(
+        "UPDATE task_artifact_versions SET review_status = 'accepted' WHERE version_id IN (SELECT version_id FROM task_artifact_versions draft WHERE draft.task_id = ? AND draft.review_status = 'draft' AND draft.version_number = (SELECT MAX(latest.version_number) FROM task_artifact_versions latest WHERE latest.artifact_id = draft.artifact_id AND latest.review_status = 'draft'))",
+      )
+      .run(input.taskId);
+    this.db
+      .query(
+        "UPDATE task_work_items SET status = 'done', completion_evidence = COALESCE(completion_evidence, 'Accepted with task delivery'), updated_at = ? WHERE task_id = ? AND status = 'review'",
+      )
+      .run(input.updatedAt, input.taskId);
+    this.db.query("DELETE FROM task_work_item_claims WHERE task_id = ?").run(input.taskId);
+    this.db.query("UPDATE tasks SET status = 'completed' WHERE task_id = ?").run(input.taskId);
+    this.insertActivity({
+      id: crypto.randomUUID(),
+      seq: 1,
+      taskId: input.taskId,
+      threadId: null,
+      workItemId: null,
+      kind: "status_changed",
+      summary: "Task accepted",
+      detail: null,
+      createdAt: input.updatedAt,
+    });
   }
 
   reportBlocker(blocker: TaskBlocker, expectedRevision: number, updatedAt: string): TaskRecord {

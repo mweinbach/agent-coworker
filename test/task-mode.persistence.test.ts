@@ -1863,9 +1863,8 @@ describe("task mode persistence", () => {
 
   test("task accept rejects artifact bytes changed during final acceptance", async () => {
     const harness = await createHarness();
-    const originalAcceptAll = harness.sessionDb.acceptAllTaskArtifactVersions.bind(
-      harness.sessionDb,
-    );
+    const originalAcceptAllValidated =
+      harness.sessionDb.acceptAllTaskArtifactVersionsValidated.bind(harness.sessionDb);
     try {
       let { task, artifactPath } = await createIndependentlyReviewedTask(harness);
       task = (await recordPass(harness, task, "reviewer-1")).task;
@@ -1877,13 +1876,18 @@ describe("task mode persistence", () => {
       });
 
       let mutated = false;
-      harness.sessionDb.acceptAllTaskArtifactVersions = (async (input) => {
-        if (!mutated && input.taskId === task.id) {
-          mutated = true;
-          await fs.writeFile(artifactPath, "# Report\n\nChanged during final accept.\n");
-        }
-        return await originalAcceptAll(input);
-      }) as SessionDb["acceptAllTaskArtifactVersions"];
+      harness.sessionDb.acceptAllTaskArtifactVersionsValidated = (async (input) => {
+        return await originalAcceptAllValidated({
+          ...input,
+          validateAcceptedTask: async (acceptedTask) => {
+            if (!mutated && input.taskId === task.id) {
+              mutated = true;
+              await fs.writeFile(artifactPath, "# Report\n\nChanged during final accept.\n");
+            }
+            await input.validateAcceptedTask(acceptedTask);
+          },
+        });
+      }) as SessionDb["acceptAllTaskArtifactVersionsValidated"];
 
       await expect(
         harness.coordinator.acceptTask({
@@ -1903,9 +1907,22 @@ describe("task mode persistence", () => {
         ),
       ).toBe(false);
       if (!working) throw new Error("Expected task after final accept race rejection");
+      const rejectedDetail = harness.sessionDb.getTaskArtifactDetail(
+        working.id,
+        working.artifacts[0]?.id ?? "",
+      );
+      expect(rejectedDetail?.acceptedVersionId).toBeNull();
+      expect(
+        rejectedDetail?.versions.filter((version) => version.reviewStatus === "accepted"),
+      ).toHaveLength(0);
+      expect(
+        working.activity.some(
+          (entry) => entry.kind === "status_changed" && entry.summary === "Task accepted",
+        ),
+      ).toBe(false);
 
-      harness.sessionDb.acceptAllTaskArtifactVersions =
-        originalAcceptAll as SessionDb["acceptAllTaskArtifactVersions"];
+      harness.sessionDb.acceptAllTaskArtifactVersionsValidated =
+        originalAcceptAllValidated as SessionDb["acceptAllTaskArtifactVersionsValidated"];
       task = await harness.coordinator.registerArtifact({
         taskId: working.id,
         workspacePath: harness.workspacePath,
@@ -1929,8 +1946,8 @@ describe("task mode persistence", () => {
       });
       expect(task.status).toBe("completed");
     } finally {
-      harness.sessionDb.acceptAllTaskArtifactVersions =
-        originalAcceptAll as SessionDb["acceptAllTaskArtifactVersions"];
+      harness.sessionDb.acceptAllTaskArtifactVersionsValidated =
+        originalAcceptAllValidated as SessionDb["acceptAllTaskArtifactVersionsValidated"];
       harness.sessionDb.close();
     }
   });
@@ -2147,15 +2164,6 @@ describe("task mode persistence", () => {
         return await originalSetTaskStatus(input);
       }) as SessionDb["setTaskStatus"];
 
-      const apiTransition = harness.coordinator.transition({
-        taskId: task.id,
-        workspacePath: harness.workspacePath,
-        expectedRevision: task.revision,
-        status: "planning",
-        summary: "API transition racing with directive",
-      });
-      await pause.promise;
-
       const directiveUpdate = harness.coordinator.applyDirective("session-1", {
         type: "update_plan",
         idempotencyKey: "race-update-plan",
@@ -2169,16 +2177,25 @@ describe("task mode persistence", () => {
         ],
         workItems: [{ id: "deliver", title: "Deliver" }],
       });
+      await pause.promise;
+
+      const apiTransition = harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "planning",
+        summary: "API transition racing with directive",
+      });
       await flushAsyncWork();
       release.resolve();
 
       const settled = await expectSettlesWithin(
-        Promise.allSettled([apiTransition, directiveUpdate]),
+        Promise.allSettled([directiveUpdate, apiTransition]),
         2_000,
         "update_plan transition race",
       );
-      expect(settled[0]?.status).toBe("rejected");
-      expect(settled[1]?.status).toBe("fulfilled");
+      expect(settled[0]?.status).toBe("fulfilled");
+      expect(settled[1]?.status).toBe("rejected");
       const current = harness.coordinator.get(task.id, harness.workspacePath);
       expect(current?.status).toBe("working");
       expect(current?.workItems).toEqual([

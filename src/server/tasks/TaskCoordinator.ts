@@ -1665,19 +1665,30 @@ export class TaskCoordinator {
       await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
       throw error;
     }
+    if (reviewedMaterial) {
+      let task: TaskRecord;
+      try {
+        task = await this.options.sessionDb.acceptAllTaskArtifactVersionsValidated({
+          taskId: current.id,
+          expectedRevision: input.expectedRevision,
+          updatedAt: nowIso(),
+          validateAcceptedTask: async (acceptedTask) => {
+            await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, reviewedMaterial);
+          },
+        });
+      } catch (error) {
+        await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
+        throw error;
+      }
+      await this.quiesceTaskThreads(task);
+      this.notifyUpdated(task);
+      return task;
+    }
     const task = await this.options.sessionDb.acceptAllTaskArtifactVersions({
       taskId: current.id,
       expectedRevision: input.expectedRevision,
       updatedAt: nowIso(),
     });
-    if (reviewedMaterial) {
-      try {
-        await this.assertLiveArtifactEvidenceUnchanged(task, reviewedMaterial);
-      } catch (error) {
-        await this.returnAcceptedTaskToWorkingAfterStaleAcceptance(task, error);
-        throw error;
-      }
-    }
     await this.quiesceTaskThreads(task);
     this.notifyUpdated(task);
     return task;
@@ -2473,24 +2484,6 @@ export class TaskCoordinator {
     } catch {
       // Keep the original acceptance failure. Some blocking-state changes may
       // intentionally prevent an automatic return to working.
-    }
-  }
-
-  private async returnAcceptedTaskToWorkingAfterStaleAcceptance(
-    task: TaskRecord,
-    error: unknown,
-  ): Promise<void> {
-    const latest = this.options.sessionDb.getTask(task.id);
-    if (latest?.status !== "completed") return;
-    try {
-      await this.recoverTerminalTask({
-        task: latest,
-        expectedRevision: latest.revision,
-        summary: "Task review material changed before acceptance",
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    } catch {
-      // Keep the original stale-material failure.
     }
   }
 

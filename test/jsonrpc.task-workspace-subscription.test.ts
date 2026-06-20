@@ -141,15 +141,18 @@ describe("task workspace subscription routing", () => {
     const activeWorkspace = path.join(home, "active");
     const catalogWorkspace = path.join(home, "catalog");
     const catalogAlias = path.join(home, "catalog-alias");
+    const oneOffWorkspace = path.join(home, ".cowork", "chats", "20260620-chat-oneoff");
     const outsideWorkspace = path.join(home, "outside");
     let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
     try {
       await fs.mkdir(path.join(activeWorkspace, ".cowork"), { recursive: true });
       await fs.mkdir(catalogWorkspace, { recursive: true });
+      await fs.mkdir(oneOffWorkspace, { recursive: true });
       await fs.mkdir(outsideWorkspace, { recursive: true });
       await fs.symlink(catalogWorkspace, catalogAlias, "dir");
       const activePath = await fs.realpath(activeWorkspace);
       const catalogPath = await fs.realpath(catalogWorkspace);
+      const oneOffPath = await fs.realpath(oneOffWorkspace);
       const outsidePath = await fs.realpath(outsideWorkspace);
       const desktopService = {
         loadState: async () => ({
@@ -168,6 +171,14 @@ describe("task workspace subscription routing", () => {
               name: "Catalog",
               path: catalogPath,
               workspaceKind: "project",
+              createdAt: "2026-06-20T00:00:00.000Z",
+              lastOpenedAt: "2026-06-20T00:00:00.000Z",
+            },
+            {
+              id: "one-off",
+              name: "One-off chat",
+              path: oneOffPath,
+              workspaceKind: "oneOffChat",
               createdAt: "2026-06-20T00:00:00.000Z",
               lastOpenedAt: "2026-06-20T00:00:00.000Z",
             },
@@ -262,6 +273,37 @@ describe("task workspace subscription routing", () => {
           workspacePath: catalogPath,
         },
       });
+
+      const oneOffReader = makeSocket("one-off-reader");
+      await initializeConnection(runtime, oneOffReader);
+      const oneOffListResponse = await sendRequest(runtime, oneOffReader, "task/list", {
+        cwd: oneOffPath,
+      });
+      expect(oneOffListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+
+      const oneOffCreateResponse = await sendRequest(
+        runtime,
+        mutator,
+        "task/create",
+        createTaskParams(oneOffPath, "one-off-task-create"),
+      );
+      expect(oneOffCreateResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(oneOffReader, (message) => message.method === "task/created");
+
+      const oneOffMutationResponse = await sendRequest(runtime, mutator, "task/updateBrief", {
+        cwd: oneOffPath,
+        taskId: "task-one-off",
+        expectedRevision: 1,
+        title: "Should stay rejected",
+      });
+      expect(oneOffMutationResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(oneOffReader, (message) => message.method === "task/updated");
 
       const aliasReader = makeSocket("alias-reader");
       await initializeConnection(runtime, aliasReader);

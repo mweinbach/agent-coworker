@@ -118,6 +118,9 @@ export async function resolveTaskWorkspacePath(
     if (!workspace) {
       throw error;
     }
+    if (workspace.workspaceKind !== "project") {
+      throw new Error(`${method} cwd must match an authorized project workspace`);
+    }
     return workspace.path;
   }
 }

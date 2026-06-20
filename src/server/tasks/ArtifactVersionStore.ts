@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { createReadStream, constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -99,13 +99,26 @@ export class ArtifactVersionStore {
   }
 
   async fingerprintFile(filePath: string): Promise<StoredArtifactBlob | null> {
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
-      const bytes = await fs.readFile(filePath);
-      return { sha256: sha256(bytes), sizeBytes: bytes.byteLength };
+      stat = await fs.stat(filePath);
     } catch (error) {
       if (errorCode(error) === "ENOENT") return null;
       throw error;
     }
+    if (!stat.isFile()) throw new Error(`Artifact is not a file: ${filePath}`);
+    const hash = createHash("sha256");
+    let sizeBytes = 0;
+    await new Promise<void>((resolve, reject) => {
+      const stream = createReadStream(filePath);
+      stream.on("data", (chunk) => {
+        hash.update(chunk);
+        sizeBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+      });
+      stream.on("error", reject);
+      stream.on("end", resolve);
+    });
+    return { sha256: hash.digest("hex"), sizeBytes };
   }
 
   async readBytes(blobSha256: string): Promise<Uint8Array> {

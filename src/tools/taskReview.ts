@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { getPendingTaskReview, getTaskReviewRounds } from "../server/tasks/taskReviewPolicy";
+import {
+  getPendingTaskReviewForContext,
+  getTaskReviewRoundsForContext,
+} from "../server/tasks/taskReviewPolicy";
 import {
   MAX_TASK_REVIEW_ROUNDS,
   type TaskContextSnapshot,
@@ -24,7 +27,7 @@ const taskReviewInputSchema = z.preprocess(
 );
 
 function reviewBriefing(context: TaskContextSnapshot, focus?: string): string {
-  const reviews = getTaskReviewRounds(context.activity ?? []);
+  const reviews = getTaskReviewRoundsForContext(context);
   return [
     `Task: ${context.title}`,
     `Objective: ${context.objective}`,
@@ -98,8 +101,8 @@ export function createTaskReviewTool(ctx: ToolContext) {
       }
       const requiredRounds = context.reviewRounds ?? 0;
       if (requiredRounds === 0) throw new Error("This task does not require independent reviews");
-      const priorRounds = getTaskReviewRounds(context.activity ?? []);
-      const pending = getPendingTaskReview(context.activity ?? []);
+      const priorRounds = getTaskReviewRoundsForContext(context);
+      const pending = getPendingTaskReviewForContext(context);
       if (pending) {
         throw new Error(
           `Review round ${pending.round} feedback must be implemented and addressed first`,
@@ -112,6 +115,8 @@ export function createTaskReviewTool(ctx: ToolContext) {
       const round = priorRounds.length + 1;
       const requestedModel =
         input.model ?? ctx.config.preferredChildModelRef ?? ctx.config.preferredChildModel;
+      const reviewedMaterial = await ctx.getTaskReviewMaterial?.();
+      if (!reviewedMaterial) throw new Error("Task review material is unavailable");
       ctx.log(`tool> reviewTask ${JSON.stringify({ round, requiredRounds, requestedModel })}`);
       const reviewer = await agentControl.spawn({
         message: reviewPrompt(round, requiredRounds, input.focus),
@@ -142,15 +147,19 @@ export function createTaskReviewTool(ctx: ToolContext) {
           type: "record_review",
           idempotencyKey: `review:${context.id}:${reviewer.agentId}`,
           expectedRevision: input.expectedRevision,
+          expectedMaterialFingerprint: reviewedMaterial.fingerprint,
           reviewerAgentId: reviewer.agentId,
           reviewerProvider: reviewer.provider,
           reviewerModel: reviewer.effectiveModel,
           verdict,
           feedback,
         });
-        const recorded = getTaskReviewRounds(result.task.activity).at(-1);
+        const recorded = getTaskReviewRoundsForContext({
+          activity: result.task.activity,
+          reviews: result.task.reviews,
+        }).at(-1);
         if (!recorded || recorded.reviewerAgentId !== reviewer.agentId) {
-          throw new Error("Recorded review could not be read from the task activity");
+          throw new Error("Recorded review could not be read from the task review state");
         }
         ctx.log(
           `tool< reviewTask ${JSON.stringify({ round: recorded.round, verdict: recorded.verdict })}`,

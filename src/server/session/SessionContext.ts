@@ -27,6 +27,7 @@ import type {
   TaskCreationResult,
   TaskDirective,
   TaskDirectiveResult,
+  TaskReviewMaterialReference,
 } from "../../shared/tasks";
 import type {
   AgentConfig,
@@ -227,6 +228,7 @@ export type SessionDependencies = {
   sessionDb: SessionDb | null;
   toolEnv?: Record<string, string | undefined>;
   getTaskContextImpl?: (sessionId: string) => TaskContextSnapshot | null;
+  getTaskReviewMaterialImpl?: (sessionId: string) => Promise<TaskReviewMaterialReference | null>;
   applyTaskDirectiveImpl?: (
     sessionId: string,
     directive: TaskDirective,

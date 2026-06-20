@@ -26,6 +26,7 @@ import type {
   TaskCheckpoint,
   TaskDecision,
   TaskRecord,
+  TaskReviewRecord,
   TaskSummary,
   TaskThread,
   WorkItemStatus,
@@ -397,6 +398,10 @@ export class SessionDb {
     return this.taskRepository.getTaskForThread(sessionId);
   }
 
+  listTaskReviews(taskId: string): TaskReviewRecord[] {
+    return this.taskRepository.listReviews(taskId);
+  }
+
   getTaskByCreationKey(
     idempotencyKey: string,
     scope?: { sourceSessionId?: string | null; workspacePath?: string },
@@ -674,6 +679,39 @@ export class SessionDb {
     );
   }
 
+  async acceptAllTaskArtifactVersionsValidated(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+    validateAcceptedTask: (task: TaskRecord) => Promise<void>;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "accept_all_task_artifact_versions_validated",
+      async () => {
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          this.taskRepository.acceptAllArtifactVersionsInOpenTransaction(input);
+          const task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await input.validateAcceptedTask(task);
+          this.db.exec("COMMIT");
+          return task;
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back task artifact acceptance: ${String(rollbackError)}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
+      { taskId: input.taskId },
+    );
+  }
+
   async reportTaskBlocker(
     blocker: TaskBlocker,
     expectedRevision: number,
@@ -700,11 +738,34 @@ export class SessionDb {
   }
 
   async setTaskStatus(
-    input: Parameters<SessionTaskRepository["setStatus"]>[0],
+    input: Parameters<SessionTaskRepository["setStatus"]>[0] & {
+      validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
+    },
   ): Promise<TaskRecord> {
     return await this.writeCoordinator.runExclusive(
       "set_task_status",
-      async () => this.taskRepository.setStatus(input),
+      async () => {
+        if (!input.validateUpdatedTask) return this.taskRepository.setStatus(input);
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          this.taskRepository.setStatusInOpenTransaction(input);
+          const task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await input.validateUpdatedTask(task);
+          this.db.exec("COMMIT");
+          return task;
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back task status transition: ${String(rollbackError)}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
       { taskId: input.taskId, status: input.status },
     );
   }
@@ -736,6 +797,33 @@ export class SessionDb {
       "append_task_activity_with_revision",
       async () => this.taskRepository.appendActivityWithRevision(activity, expectedRevision),
       { taskId: activity.taskId, kind: activity.kind },
+    );
+  }
+
+  async recordTaskReview(input: {
+    review: TaskReviewRecord;
+    activity: TaskActivity;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "record_task_review",
+      async () => this.taskRepository.recordReview(input),
+      { taskId: input.review.taskId, reviewId: input.review.id },
+    );
+  }
+
+  async addressTaskReview(input: {
+    taskId: string;
+    reviewId: string;
+    expectedRevision: number;
+    addressedAt: string;
+    implementationSummary: string;
+    activity: TaskActivity;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "address_task_review",
+      async () => this.taskRepository.addressReview(input),
+      { taskId: input.taskId, reviewId: input.reviewId },
     );
   }
 

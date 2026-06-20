@@ -56,6 +56,7 @@ export type AgentSessionFromPersistedOptions = {
   deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
   getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
   getTaskContextImpl?: SessionDependencies["getTaskContextImpl"];
+  getTaskReviewMaterialImpl?: SessionDependencies["getTaskReviewMaterialImpl"];
   applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
   createTaskImpl?: SessionDependencies["createTaskImpl"];
   readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
@@ -171,6 +172,7 @@ export function createAgentSessionFromPersisted(
     deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
     getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
     getTaskContextImpl: opts.getTaskContextImpl,
+    getTaskReviewMaterialImpl: opts.getTaskReviewMaterialImpl,
     applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
     createTaskImpl: opts.createTaskImpl,
     readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,

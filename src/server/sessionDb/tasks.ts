@@ -15,6 +15,7 @@ import type {
   TaskQuestion,
   TaskRecord,
   TaskRequirement,
+  TaskReviewRecord,
   TaskStatus,
   TaskSummary,
   TaskThread,
@@ -329,6 +330,7 @@ export class SessionTaskRepository {
     );
     this.createArtifactVersionSchema();
     this.createQuestionSchema();
+    this.createReviewSchema();
   }
 
   addCreationColumns(): void {
@@ -385,6 +387,33 @@ export class SessionTaskRepository {
         ");",
         "CREATE INDEX IF NOT EXISTS idx_task_questions_task_status ON task_questions(task_id, status, created_at);",
         "CREATE INDEX IF NOT EXISTS idx_task_questions_blocking ON task_questions(task_id, blocking, status);",
+      ]),
+    );
+  }
+
+  createReviewSchema(): void {
+    this.db.exec(
+      sql([
+        "CREATE TABLE IF NOT EXISTS task_reviews (",
+        "  review_id TEXT PRIMARY KEY,",
+        "  task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,",
+        "  round INTEGER NOT NULL,",
+        "  verdict TEXT NOT NULL,",
+        "  feedback TEXT NOT NULL,",
+        "  reviewer_agent_id TEXT NOT NULL,",
+        "  reviewer_provider TEXT NOT NULL,",
+        "  reviewer_model TEXT NOT NULL,",
+        "  task_revision INTEGER NOT NULL,",
+        "  material_fingerprint TEXT NOT NULL,",
+        "  material_snapshot_json TEXT NOT NULL,",
+        "  created_at TEXT NOT NULL,",
+        "  addressed_at TEXT NULL,",
+        "  implementation_summary TEXT NULL,",
+        "  UNIQUE(task_id, round),",
+        "  UNIQUE(task_id, reviewer_agent_id)",
+        ");",
+        "CREATE INDEX IF NOT EXISTS idx_task_reviews_task_round ON task_reviews(task_id, round);",
+        "CREATE INDEX IF NOT EXISTS idx_task_reviews_task_fingerprint ON task_reviews(task_id, material_fingerprint);",
       ]),
     );
   }
@@ -589,6 +618,14 @@ export class SessionTaskRepository {
       .query("SELECT task_id FROM task_threads WHERE session_id = ?")
       .get(sessionId) as { task_id: string } | null;
     return row ? this.getTask(row.task_id) : null;
+  }
+
+  listReviews(taskId: string): TaskReviewRecord[] {
+    return (
+      this.db
+        .query("SELECT * FROM task_reviews WHERE task_id = ? ORDER BY round, created_at")
+        .all(taskId) as Array<Record<string, unknown>>
+    ).map((row) => this.mapReview(row));
   }
 
   isTaskThread(sessionId: string): boolean {
@@ -1513,37 +1550,45 @@ export class SessionTaskRepository {
     updatedAt: string;
   }): TaskRecord {
     this.db.transaction(() => {
-      this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
-      this.db
-        .query(
-          "UPDATE task_artifact_versions SET review_status = 'superseded' WHERE task_id = ? AND review_status = 'accepted' AND artifact_id IN (SELECT artifact_id FROM task_artifact_versions WHERE task_id = ? AND review_status = 'draft' GROUP BY artifact_id)",
-        )
-        .run(input.taskId, input.taskId);
-      this.db
-        .query(
-          "UPDATE task_artifact_versions SET review_status = 'accepted' WHERE version_id IN (SELECT version_id FROM task_artifact_versions draft WHERE draft.task_id = ? AND draft.review_status = 'draft' AND draft.version_number = (SELECT MAX(latest.version_number) FROM task_artifact_versions latest WHERE latest.artifact_id = draft.artifact_id AND latest.review_status = 'draft'))",
-        )
-        .run(input.taskId);
-      this.db
-        .query(
-          "UPDATE task_work_items SET status = 'done', completion_evidence = COALESCE(completion_evidence, 'Accepted with task delivery'), updated_at = ? WHERE task_id = ? AND status = 'review'",
-        )
-        .run(input.updatedAt, input.taskId);
-      this.db.query("DELETE FROM task_work_item_claims WHERE task_id = ?").run(input.taskId);
-      this.db.query("UPDATE tasks SET status = 'completed' WHERE task_id = ?").run(input.taskId);
-      this.insertActivity({
-        id: crypto.randomUUID(),
-        seq: 1,
-        taskId: input.taskId,
-        threadId: null,
-        workItemId: null,
-        kind: "status_changed",
-        summary: "Task accepted",
-        detail: null,
-        createdAt: input.updatedAt,
-      });
+      this.acceptAllArtifactVersionsInOpenTransaction(input);
     })();
     return this.requireTask(input.taskId);
+  }
+
+  acceptAllArtifactVersionsInOpenTransaction(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+  }): void {
+    this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
+    this.db
+      .query(
+        "UPDATE task_artifact_versions SET review_status = 'superseded' WHERE task_id = ? AND review_status = 'accepted' AND artifact_id IN (SELECT artifact_id FROM task_artifact_versions WHERE task_id = ? AND review_status = 'draft' GROUP BY artifact_id)",
+      )
+      .run(input.taskId, input.taskId);
+    this.db
+      .query(
+        "UPDATE task_artifact_versions SET review_status = 'accepted' WHERE version_id IN (SELECT version_id FROM task_artifact_versions draft WHERE draft.task_id = ? AND draft.review_status = 'draft' AND draft.version_number = (SELECT MAX(latest.version_number) FROM task_artifact_versions latest WHERE latest.artifact_id = draft.artifact_id AND latest.review_status = 'draft'))",
+      )
+      .run(input.taskId);
+    this.db
+      .query(
+        "UPDATE task_work_items SET status = 'done', completion_evidence = COALESCE(completion_evidence, 'Accepted with task delivery'), updated_at = ? WHERE task_id = ? AND status = 'review'",
+      )
+      .run(input.updatedAt, input.taskId);
+    this.db.query("DELETE FROM task_work_item_claims WHERE task_id = ?").run(input.taskId);
+    this.db.query("UPDATE tasks SET status = 'completed' WHERE task_id = ?").run(input.taskId);
+    this.insertActivity({
+      id: crypto.randomUUID(),
+      seq: 1,
+      taskId: input.taskId,
+      threadId: null,
+      workItemId: null,
+      kind: "status_changed",
+      summary: "Task accepted",
+      detail: null,
+      createdAt: input.updatedAt,
+    });
   }
 
   reportBlocker(blocker: TaskBlocker, expectedRevision: number, updatedAt: string): TaskRecord {
@@ -1617,38 +1662,48 @@ export class SessionTaskRepository {
     threadId?: string | null;
   }): TaskRecord {
     this.db.transaction(() => {
-      this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
-      this.db
-        .query("UPDATE tasks SET status = ? WHERE task_id = ?")
-        .run(input.status, input.taskId);
-      if (TERMINAL_TASK_STATUSES.has(input.status)) {
-        this.abandonActiveArtifactRevisionsForTerminalTask(input.taskId, input.updatedAt);
-      }
-      if (input.status === "cancelled") {
-        this.db
-          .query(
-            "UPDATE task_decisions SET status = 'superseded' WHERE task_id = ? AND decision_id IN (SELECT provisional_decision_id FROM task_questions WHERE task_id = ? AND status = 'pending' AND provisional_decision_id IS NOT NULL)",
-          )
-          .run(input.taskId, input.taskId);
-        this.db
-          .query(
-            "UPDATE task_questions SET status = 'dismissed', resolved_at = ? WHERE task_id = ? AND status = 'pending'",
-          )
-          .run(input.updatedAt, input.taskId);
-      }
-      this.insertActivity({
-        id: crypto.randomUUID(),
-        seq: 1,
-        taskId: input.taskId,
-        threadId: input.threadId ?? null,
-        workItemId: null,
-        kind: "status_changed",
-        summary: input.summary,
-        detail: input.detail ?? null,
-        createdAt: input.updatedAt,
-      });
+      this.setStatusInOpenTransaction(input);
     })();
     return this.requireTask(input.taskId);
+  }
+
+  setStatusInOpenTransaction(input: {
+    taskId: string;
+    expectedRevision: number;
+    status: TaskStatus;
+    summary: string;
+    detail?: string | null;
+    updatedAt: string;
+    threadId?: string | null;
+  }): void {
+    this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
+    this.db.query("UPDATE tasks SET status = ? WHERE task_id = ?").run(input.status, input.taskId);
+    if (TERMINAL_TASK_STATUSES.has(input.status)) {
+      this.abandonActiveArtifactRevisionsForTerminalTask(input.taskId, input.updatedAt);
+    }
+    if (input.status === "cancelled") {
+      this.db
+        .query(
+          "UPDATE task_decisions SET status = 'superseded' WHERE task_id = ? AND decision_id IN (SELECT provisional_decision_id FROM task_questions WHERE task_id = ? AND status = 'pending' AND provisional_decision_id IS NOT NULL)",
+        )
+        .run(input.taskId, input.taskId);
+      this.db
+        .query(
+          "UPDATE task_questions SET status = 'dismissed', resolved_at = ? WHERE task_id = ? AND status = 'pending'",
+        )
+        .run(input.updatedAt, input.taskId);
+    }
+    this.insertActivity({
+      id: crypto.randomUUID(),
+      seq: 1,
+      taskId: input.taskId,
+      threadId: input.threadId ?? null,
+      workItemId: null,
+      kind: "status_changed",
+      summary: input.summary,
+      detail: input.detail ?? null,
+      createdAt: input.updatedAt,
+    });
   }
 
   appendActivity(activity: TaskActivity, options?: { rejectTerminal?: boolean }): TaskRecord {
@@ -1668,6 +1723,42 @@ export class SessionTaskRepository {
       this.insertActivity(activity);
     })();
     return this.requireTask(activity.taskId);
+  }
+
+  recordReview(input: {
+    review: TaskReviewRecord;
+    activity: TaskActivity;
+    expectedRevision: number;
+  }): TaskRecord {
+    this.db.transaction(() => {
+      this.bumpRevision(input.review.taskId, input.expectedRevision, input.review.createdAt);
+      this.insertReview(input.review);
+      this.insertActivity(input.activity);
+    })();
+    return this.requireTask(input.review.taskId);
+  }
+
+  addressReview(input: {
+    taskId: string;
+    reviewId: string;
+    expectedRevision: number;
+    addressedAt: string;
+    implementationSummary: string;
+    activity: TaskActivity;
+  }): TaskRecord {
+    this.db.transaction(() => {
+      this.bumpRevision(input.taskId, input.expectedRevision, input.addressedAt);
+      const result = this.db
+        .query(
+          "UPDATE task_reviews SET addressed_at = ?, implementation_summary = ? WHERE task_id = ? AND review_id = ? AND verdict != 'pass' AND addressed_at IS NULL",
+        )
+        .run(input.addressedAt, input.implementationSummary, input.taskId, input.reviewId);
+      if (Number(result.changes ?? 0) !== 1) {
+        throw new Error(`Unknown unaddressed review: ${input.reviewId}`);
+      }
+      this.insertActivity(input.activity);
+    })();
+    return this.requireTask(input.taskId);
   }
 
   createCheckpoint(
@@ -1945,6 +2036,49 @@ export class SessionTaskRepository {
       updatedAt: String(row.updated_at),
       completedAt: typeof row.completed_at === "string" ? row.completed_at : null,
     };
+  }
+
+  private mapReview(row: Record<string, unknown>): TaskReviewRecord {
+    return {
+      id: String(row.review_id),
+      taskId: String(row.task_id),
+      round: Number(row.round),
+      verdict: row.verdict as TaskReviewRecord["verdict"],
+      feedback: String(row.feedback),
+      reviewerAgentId: String(row.reviewer_agent_id),
+      reviewerProvider: String(row.reviewer_provider),
+      reviewerModel: String(row.reviewer_model),
+      taskRevision: Number(row.task_revision),
+      materialFingerprint: String(row.material_fingerprint),
+      materialSnapshot: parseJsonObject(row.material_snapshot_json),
+      createdAt: String(row.created_at),
+      addressedAt: typeof row.addressed_at === "string" ? row.addressed_at : null,
+      implementationSummary:
+        typeof row.implementation_summary === "string" ? row.implementation_summary : null,
+    };
+  }
+
+  private insertReview(review: TaskReviewRecord): void {
+    this.db
+      .query(
+        "INSERT INTO task_reviews(review_id, task_id, round, verdict, feedback, reviewer_agent_id, reviewer_provider, reviewer_model, task_revision, material_fingerprint, material_snapshot_json, created_at, addressed_at, implementation_summary) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        review.id,
+        review.taskId,
+        review.round,
+        review.verdict,
+        review.feedback,
+        review.reviewerAgentId,
+        review.reviewerProvider,
+        review.reviewerModel,
+        review.taskRevision,
+        review.materialFingerprint,
+        JSON.stringify(review.materialSnapshot),
+        review.createdAt,
+        review.addressedAt,
+        review.implementationSummary,
+      );
   }
 
   private insertThread(thread: TaskThread): void {

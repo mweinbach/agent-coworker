@@ -87,24 +87,23 @@ describe("task review tool", () => {
         questions: [],
         artifacts: [],
         blockers: [],
-        activity: [
+        activity: [],
+        reviews: [
           {
             id: "review-1",
-            seq: 2,
             taskId: "task-1",
-            threadId: "task-thread-1",
-            workItemId: null,
-            kind: "review_completed" as const,
-            summary: "Independent review round 1: FAIL",
-            detail: JSON.stringify({
-              round: 1,
-              verdict: "fail",
-              feedback,
-              reviewerAgentId: "reviewer-1",
-              reviewerProvider: "openai",
-              reviewerModel: "gpt-5.4",
-            }),
+            round: 1,
+            verdict: "fail" as const,
+            feedback,
+            reviewerAgentId: "reviewer-1",
+            reviewerProvider: "openai",
+            reviewerModel: "gpt-5.4",
+            taskRevision: 2,
+            materialFingerprint: "review-fingerprint-1",
+            materialSnapshot: { task: "snapshot" },
             createdAt: "2026-06-19T12:01:00.000Z",
+            addressedAt: null,
+            implementationSummary: null,
           },
         ],
         latestCheckpoint: null,
@@ -118,6 +117,7 @@ describe("task review tool", () => {
         preferredChildModelRef: "openai:gpt-5.4",
       }),
       sessionId: "session-1",
+      getTaskReviewMaterial: async () => ({ fingerprint: "review-start-fingerprint-1" }),
       taskContext: {
         id: "task-1",
         title: "Financial model",
@@ -200,6 +200,7 @@ describe("task review tool", () => {
       expect.objectContaining({
         type: "record_review",
         expectedRevision: 2,
+        expectedMaterialFingerprint: "review-start-fingerprint-1",
         reviewerAgentId: "reviewer-1",
         verdict: "fail",
         feedback,
@@ -302,6 +303,7 @@ describe("task review tool", () => {
     }));
     const ctx = makeCtx(dir, {
       sessionId: "session-1",
+      getTaskReviewMaterial: async () => ({ fingerprint: "review-start-fingerprint-4" }),
       taskContext: {
         id: "task-1",
         title: "Reviewed task",
@@ -354,7 +356,11 @@ describe("task review tool", () => {
 
     expect(spawn).toHaveBeenCalled();
     expect(applyTaskDirective).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "record_review", expectedRevision: 4 }),
+      expect.objectContaining({
+        type: "record_review",
+        expectedRevision: 4,
+        expectedMaterialFingerprint: "review-start-fingerprint-4",
+      }),
     );
     expect(result).toMatchObject({ round: 4, requiredRounds: 3, verdict: "pass" });
   });

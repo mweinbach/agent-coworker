@@ -506,6 +506,8 @@ export class SessionRegistry {
       toolEnv: this.options.env,
       getTaskContextImpl: (sessionId) =>
         this.options.taskCoordinator.getContextForThread(sessionId),
+      getTaskReviewMaterialImpl: async (sessionId) =>
+        await this.options.taskCoordinator.getReviewMaterialForThread(sessionId),
       applyTaskDirectiveImpl: async (sessionId, directive) =>
         await this.options.taskCoordinator.applyDirective(sessionId, directive),
       createTaskImpl: async (sessionId, input) => await this.createTaskFromChat(sessionId, input),

@@ -23,6 +23,8 @@ import {
   type TaskRecord,
   type TaskRequirement,
   type TaskRequirementKind,
+  type TaskReviewMaterialReference,
+  type TaskReviewRecord,
   type TaskReviewVerdict,
   type TaskStatus,
   type TaskSummary,
@@ -34,7 +36,14 @@ import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import type { SessionDb } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
-import { getPendingTaskReview, getTaskReviewRounds } from "./taskReviewPolicy";
+import {
+  buildTaskReviewMaterialSnapshot,
+  fingerprintTaskReviewMaterial,
+  getPendingTaskReviewFromRecords,
+  getTaskReviewRoundsFromRecords,
+  stableStringify,
+  type TaskReviewArtifactFileSnapshot,
+} from "./taskReviewPolicy";
 
 type TaskNotification = {
   method: "task/created" | "task/updated" | "task/activity" | "task/checkpointCreated";
@@ -97,6 +106,57 @@ type AcceptArtifactVersionRequest = {
   versionId?: string;
   expectedRevision: number;
 };
+
+type TaskReviewMaterial = {
+  snapshot: ReturnType<typeof buildTaskReviewMaterialSnapshot>;
+  fingerprint: string;
+};
+
+type TaskReviewLiveArtifactEvidence = Array<{
+  id: string;
+  path: string;
+  liveFile: TaskReviewArtifactFileSnapshot | null;
+}>;
+
+function liveArtifactEvidence(material: TaskReviewMaterial): TaskReviewLiveArtifactEvidence {
+  return material.snapshot.artifacts.map((artifact) => ({
+    id: stringSnapshotField(artifact, "id"),
+    path: stringSnapshotField(artifact, "path"),
+    liveFile: liveFileSnapshotField(artifact.liveFile),
+  }));
+}
+
+function stringSnapshotField(record: Record<string, unknown>, field: string): string {
+  const value = record[field];
+  if (typeof value !== "string") throw new Error(`Invalid review material artifact ${field}`);
+  return value;
+}
+
+function liveFileSnapshotField(value: unknown): TaskReviewArtifactFileSnapshot | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid review material live file evidence");
+  }
+  const record = value as Record<string, unknown>;
+  const artifactId = stringSnapshotField(record, "artifactId");
+  const filePath = stringSnapshotField(record, "path");
+  const canonicalWorkspaceRelativePath = stringSnapshotField(
+    record,
+    "canonicalWorkspaceRelativePath",
+  );
+  const sha256 = stringSnapshotField(record, "sha256");
+  const sizeBytes = record.sizeBytes;
+  if (typeof sizeBytes !== "number" || !Number.isFinite(sizeBytes)) {
+    throw new Error("Invalid review material live file size");
+  }
+  return {
+    artifactId,
+    path: filePath,
+    canonicalWorkspaceRelativePath,
+    sha256,
+    sizeBytes,
+  };
+}
 
 type StartArtifactRevisionRequest = {
   taskId: string;
@@ -425,8 +485,38 @@ export class TaskCoordinator {
       reviewRequired: task.reviewRequired,
       reviewRounds: task.reviewRounds ?? 0,
       activity: task.activity,
+      reviews: this.options.sessionDb.listTaskReviews(task.id),
       activeThreadId: thread.id,
     };
+  }
+
+  private withDirectiveReviewState(task: TaskRecord): TaskDirectiveResult["task"] {
+    return { ...task, reviews: this.options.sessionDb.listTaskReviews(task.id) };
+  }
+
+  async getReviewMaterial(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision?: number;
+  }): Promise<TaskReviewMaterialReference> {
+    return await this.runTaskMutation(input.taskId, async () => {
+      const task = this.requireTask(input.taskId, input.workspacePath);
+      if (input.expectedRevision !== undefined) {
+        assertExpectedTaskRevision(task, input.expectedRevision);
+      }
+      const material = await this.currentReviewMaterial(task);
+      return { fingerprint: material.fingerprint };
+    });
+  }
+
+  async getReviewMaterialForThread(sessionId: string): Promise<TaskReviewMaterialReference | null> {
+    const task = this.getForThread(sessionId);
+    if (!task) return null;
+    return await this.getReviewMaterial({
+      taskId: task.id,
+      workspacePath: task.workspacePath,
+      expectedRevision: task.revision,
+    });
   }
 
   async create(input: {
@@ -1096,6 +1186,20 @@ export class TaskCoordinator {
     blocking: boolean;
     workItemId?: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.reportBlockerLocked(input),
+    );
+  }
+
+  private async reportBlockerLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    description: string;
+    blocking: boolean;
+    workItemId?: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1119,7 +1223,7 @@ export class TaskCoordinator {
       createdAt,
     );
     if (input.blocking && (updated.status === "planning" || updated.status === "working")) {
-      updated = await this.transition({
+      updated = await this.transitionLocked({
         taskId: task.id,
         workspacePath: task.workspacePath,
         expectedRevision: updated.revision,
@@ -1134,6 +1238,18 @@ export class TaskCoordinator {
   }
 
   async resolveBlocker(input: {
+    taskId: string;
+    workspacePath: string;
+    blockerId: string;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.resolveBlockerLocked(input),
+    );
+  }
+
+  private async resolveBlockerLocked(input: {
     taskId: string;
     workspacePath: string;
     blockerId: string;
@@ -1155,7 +1271,7 @@ export class TaskCoordinator {
       updated.blockers.some((item) => item.status === "active" && item.blocking) ||
       updated.questions.some((question) => question.status === "pending" && question.blocking);
     if (updated.status === "blocked" && !hasActiveBlockingIssue) {
-      updated = await this.transition({
+      updated = await this.transitionLocked({
         taskId: task.id,
         workspacePath: task.workspacePath,
         expectedRevision: updated.revision,
@@ -1182,6 +1298,26 @@ export class TaskCoordinator {
     workItemId?: string;
     provenance?: Record<string, unknown>;
   }): Promise<TaskRecord> {
+    return await this.registerArtifactLocked(input);
+  }
+
+  private async registerArtifactLocked(
+    input: {
+      taskId: string;
+      workspacePath: string;
+      expectedRevision: number;
+      sessionId?: string;
+      path: string;
+      title: string;
+      kind: string;
+      artifactId?: string;
+      baseVersionId?: string;
+      changeSummary?: string;
+      workItemId?: string;
+      provenance?: Record<string, unknown>;
+    },
+    options: { finishActiveRevisionInCurrentLock?: boolean } = {},
+  ): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1206,7 +1342,9 @@ export class TaskCoordinator {
       if (!activeDetail || !sameWorkspacePath(activeDetail.artifact.path, resolvedPath)) {
         throw new Error("Active revision targets a different artifact path");
       }
-      const finalized = await this.handleThreadOutcome(input.sessionId as string, "completed");
+      const finalized = options.finishActiveRevisionInCurrentLock
+        ? await this.handleThreadOutcomeLocked(input.sessionId as string, "completed")
+        : await this.handleThreadOutcome(input.sessionId as string, "completed");
       if (!finalized) throw new Error("Active artifact revision could not be finalized");
       return finalized.task;
     }
@@ -1516,6 +1654,35 @@ export class TaskCoordinator {
     assertExpectedTaskRevision(current, input.expectedRevision);
     if (current.status !== "awaiting_review") {
       throw new Error("Task must be awaiting review before it can be accepted");
+    }
+    let reviewedMaterial: TaskReviewMaterial | null;
+    try {
+      reviewedMaterial = await this.requireCompletionReviewEligibility(current);
+      if (reviewedMaterial) {
+        await this.assertLiveArtifactEvidenceUnchanged(current, reviewedMaterial);
+      }
+    } catch (error) {
+      await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
+      throw error;
+    }
+    if (reviewedMaterial) {
+      let task: TaskRecord;
+      try {
+        task = await this.options.sessionDb.acceptAllTaskArtifactVersionsValidated({
+          taskId: current.id,
+          expectedRevision: input.expectedRevision,
+          updatedAt: nowIso(),
+          validateAcceptedTask: async (acceptedTask) => {
+            await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, reviewedMaterial);
+          },
+        });
+      } catch (error) {
+        await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
+        throw error;
+      }
+      await this.quiesceTaskThreads(task);
+      this.notifyUpdated(task);
+      return task;
     }
     const task = await this.options.sessionDb.acceptAllTaskArtifactVersions({
       taskId: current.id,
@@ -1961,43 +2128,55 @@ export class TaskCoordinator {
   }): Promise<TaskRecord> {
     const initial = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(initial, input.expectedRevision);
-    return await this.runTaskMutation(input.taskId, async () => {
-      const task = this.requireTask(input.taskId, input.workspacePath);
-      assertExpectedTaskRevision(task, input.expectedRevision);
-      const expectedRevision = input.expectedRevision;
-      if (input.status === "completed" && task.status === "awaiting_review") {
-        return await this.acceptTaskLocked({
-          taskId: task.id,
-          workspacePath: task.workspacePath,
-          expectedRevision,
-        });
-      }
-      if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
-        throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
-      }
-      if (
-        input.status === "working" &&
-        (task.questions.some((question) => question.status === "pending" && question.blocking) ||
-          task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
-      ) {
-        throw new Error("Task cannot return to working while blocking input or issues remain");
-      }
-      const thread = input.sessionId
-        ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
-        : null;
-      const updated = await this.options.sessionDb.setTaskStatus({
+    return await this.runTaskMutation(input.taskId, async () => await this.transitionLocked(input));
+  }
+
+  private async transitionLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    status: TaskStatus;
+    summary: string;
+    detail?: string;
+    sessionId?: string;
+    validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
+  }): Promise<TaskRecord> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
+    const expectedRevision = input.expectedRevision;
+    if (input.status === "completed" && task.status === "awaiting_review") {
+      return await this.acceptTaskLocked({
         taskId: task.id,
+        workspacePath: task.workspacePath,
         expectedRevision,
-        status: input.status,
-        summary: nonEmpty(input.summary, "Status summary"),
-        detail: input.detail?.trim() || null,
-        updatedAt: nowIso(),
-        threadId: thread?.id ?? null,
       });
-      await this.quiesceTaskThreads(updated);
-      this.notifyUpdated(updated);
-      return updated;
+    }
+    if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
+      throw new Error(`Invalid task transition: ${task.status} -> ${input.status}`);
+    }
+    if (
+      input.status === "working" &&
+      (task.questions.some((question) => question.status === "pending" && question.blocking) ||
+        task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking))
+    ) {
+      throw new Error("Task cannot return to working while blocking input or issues remain");
+    }
+    const thread = input.sessionId
+      ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
+      : null;
+    const updated = await this.options.sessionDb.setTaskStatus({
+      taskId: task.id,
+      expectedRevision,
+      status: input.status,
+      summary: nonEmpty(input.summary, "Status summary"),
+      detail: input.detail?.trim() || null,
+      updatedAt: nowIso(),
+      threadId: thread?.id ?? null,
+      validateUpdatedTask: input.validateUpdatedTask,
     });
+    await this.quiesceTaskThreads(updated);
+    this.notifyUpdated(updated);
+    return updated;
   }
 
   private async recoverTerminalTask(input: {
@@ -2042,6 +2221,25 @@ export class TaskCoordinator {
     workspacePath: string;
     sessionId?: string;
     expectedRevision: number;
+    expectedMaterialFingerprint?: string;
+    reviewerAgentId: string;
+    reviewerProvider: string;
+    reviewerModel: string;
+    verdict: TaskReviewVerdict;
+    feedback: string;
+  }): Promise<{ task: TaskRecord; reviewId: string; round: number }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.recordReviewLocked(input),
+    );
+  }
+
+  private async recordReviewLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    expectedRevision: number;
+    expectedMaterialFingerprint?: string;
     reviewerAgentId: string;
     reviewerProvider: string;
     reviewerModel: string;
@@ -2072,8 +2270,9 @@ export class TaskCoordinator {
       throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
     }
 
-    const rounds = getTaskReviewRounds(task.activity);
-    const pending = getPendingTaskReview(task.activity);
+    const reviews = this.options.sessionDb.listTaskReviews(task.id);
+    const rounds = getTaskReviewRoundsFromRecords(reviews);
+    const pending = getPendingTaskReviewFromRecords(reviews);
     if (pending) {
       throw new Error(
         `Review round ${pending.round} feedback must be addressed before another review`,
@@ -2088,6 +2287,34 @@ export class TaskCoordinator {
     }
 
     const round = rounds.length + 1;
+    const material = await this.currentReviewMaterial(task);
+    const expectedMaterialFingerprint = input.expectedMaterialFingerprint?.trim();
+    if (expectedMaterialFingerprint && material.fingerprint !== expectedMaterialFingerprint) {
+      throw new Error(
+        "Reviewed material changed before the review could be recorded; rerun a fresh independent review",
+      );
+    }
+    const reviewId = crypto.randomUUID();
+    const feedback = nonEmpty(input.feedback, "Review feedback");
+    const reviewerProvider = nonEmpty(input.reviewerProvider, "Reviewer provider");
+    const reviewerModel = nonEmpty(input.reviewerModel, "Reviewer model");
+    const createdAt = nowIso();
+    const review: TaskReviewRecord = {
+      id: reviewId,
+      taskId: task.id,
+      round,
+      verdict: input.verdict,
+      feedback,
+      reviewerAgentId,
+      reviewerProvider,
+      reviewerModel,
+      taskRevision: task.revision,
+      materialFingerprint: material.fingerprint,
+      materialSnapshot: material.snapshot,
+      createdAt,
+      addressedAt: null,
+      implementationSummary: null,
+    };
     const reviewActivity = activity({
       taskId: task.id,
       threadId:
@@ -2098,16 +2325,19 @@ export class TaskCoordinator {
       detail: JSON.stringify({
         round,
         verdict: input.verdict,
-        feedback: nonEmpty(input.feedback, "Review feedback"),
+        feedback,
         reviewerAgentId,
-        reviewerProvider: nonEmpty(input.reviewerProvider, "Reviewer provider"),
-        reviewerModel: nonEmpty(input.reviewerModel, "Reviewer model"),
+        reviewerProvider,
+        reviewerModel,
       }),
     });
-    const updated = await this.options.sessionDb.appendTaskActivityWithRevision(
-      reviewActivity,
-      input.expectedRevision,
-    );
+    reviewActivity.id = reviewId;
+    reviewActivity.createdAt = createdAt;
+    const updated = await this.options.sessionDb.recordTaskReview({
+      review,
+      activity: reviewActivity,
+      expectedRevision: input.expectedRevision,
+    });
     this.notifyUpdated(updated);
     this.notifyActivity(updated);
     return { task: updated, reviewId: reviewActivity.id, round };
@@ -2121,14 +2351,35 @@ export class TaskCoordinator {
     reviewId: string;
     implementationSummary: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.addressReviewLocked(input),
+    );
+  }
+
+  private async addressReviewLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    expectedRevision: number;
+    reviewId: string;
+    implementationSummary: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
-    const pending = getPendingTaskReview(task.activity);
+    const pending = getPendingTaskReviewFromRecords(
+      this.options.sessionDb.listTaskReviews(task.id),
+    );
     if (!pending) throw new Error("Task has no unaddressed review feedback");
     if (pending.reviewId !== input.reviewId) {
       throw new Error(`Review ${input.reviewId} is not the pending review`);
     }
+    const implementationSummary = nonEmpty(
+      input.implementationSummary,
+      "Review implementation summary",
+    );
+    const addressedAt = nowIso();
     const addressedActivity = activity({
       taskId: task.id,
       threadId:
@@ -2138,22 +2389,136 @@ export class TaskCoordinator {
       summary: `Independent review round ${pending.round} feedback implemented`,
       detail: JSON.stringify({
         reviewId: pending.reviewId,
-        implementationSummary: nonEmpty(
-          input.implementationSummary,
-          "Review implementation summary",
-        ),
+        implementationSummary,
       }),
     });
-    const updated = await this.options.sessionDb.appendTaskActivityWithRevision(
-      addressedActivity,
-      input.expectedRevision,
-    );
+    addressedActivity.createdAt = addressedAt;
+    const updated = await this.options.sessionDb.addressTaskReview({
+      taskId: task.id,
+      reviewId: pending.reviewId,
+      expectedRevision: input.expectedRevision,
+      addressedAt,
+      implementationSummary,
+      activity: addressedActivity,
+    });
     this.notifyUpdated(updated);
     this.notifyActivity(updated);
     return updated;
   }
 
+  private assertCompletionReadiness(task: TaskRecord): void {
+    if (task.questions.some((question) => question.status === "pending" && question.blocking)) {
+      throw new Error("Task has unresolved blocking questions");
+    }
+    if (task.questions.some((question) => question.status === "pending")) {
+      throw new Error("Task has unresolved pending questions");
+    }
+    const unfinished = task.workItems.filter(
+      (item) => item.status !== "done" && item.status !== "review" && item.status !== "abandoned",
+    );
+    if (task.workItems.length === 0) throw new Error("Task has no work plan");
+    if (unfinished.length > 0) {
+      throw new Error(`Task has ${unfinished.length} unfinished work item(s)`);
+    }
+    const blocking = task.blockers.filter((item) => item.status === "active" && item.blocking);
+    if (blocking.length > 0) throw new Error("Task has unresolved blocking issues");
+    const missingOutput = task.workItems.find(
+      (item) =>
+        item.expectedOutputs.length > 0 &&
+        !task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id),
+    );
+    if (missingOutput) {
+      throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
+    }
+  }
+
+  private async requireCompletionReviewEligibility(
+    task: TaskRecord,
+  ): Promise<TaskReviewMaterial | null> {
+    const requiredReviewRounds = task.reviewRounds ?? 0;
+    if (requiredReviewRounds <= 0) return null;
+
+    const reviews = this.options.sessionDb.listTaskReviews(task.id);
+    const reviewRounds = getTaskReviewRoundsFromRecords(reviews);
+    const materialForCompletion = await this.currentReviewMaterial(task);
+    const currentPasses = reviewRounds.filter(
+      (round) =>
+        round.verdict === "pass" && round.materialFingerprint === materialForCompletion.fingerprint,
+    );
+    const pendingReview = getPendingTaskReviewFromRecords(reviews);
+    if (pendingReview) {
+      throw new Error(`Review round ${pendingReview.round} feedback must be addressed`);
+    }
+    if (currentPasses.length < requiredReviewRounds) {
+      throw new Error(
+        `Task requires ${requiredReviewRounds} independent review round(s) with fresh passing reviews for the current delivery state; ${currentPasses.length} recorded`,
+      );
+    }
+    const latestReview = reviewRounds.at(-1);
+    if (
+      latestReview?.verdict !== "pass" ||
+      latestReview.materialFingerprint !== materialForCompletion.fingerprint
+    ) {
+      throw new Error(
+        "Task requires a fresh passing review for the current delivery state before completion",
+      );
+    }
+    return materialForCompletion;
+  }
+
+  private async returnTaskToWorkingAfterStaleAcceptance(
+    task: TaskRecord,
+    error: unknown,
+    sessionId?: string,
+  ): Promise<void> {
+    const latest = this.options.sessionDb.getTask(task.id);
+    if (latest?.status !== "awaiting_review") return;
+    try {
+      await this.transitionLocked({
+        taskId: latest.id,
+        workspacePath: latest.workspacePath,
+        expectedRevision: latest.revision,
+        status: "working",
+        summary: "Task review material changed before acceptance",
+        detail: error instanceof Error ? error.message : String(error),
+        sessionId,
+      });
+    } catch {
+      // Keep the original acceptance failure. Some blocking-state changes may
+      // intentionally prevent an automatic return to working.
+    }
+  }
+
+  private async assertLiveArtifactEvidenceUnchanged(
+    task: TaskRecord,
+    reviewedMaterial: TaskReviewMaterial,
+  ): Promise<void> {
+    const currentMaterial = await this.currentReviewMaterial(task);
+    if (
+      stableStringify(liveArtifactEvidence(currentMaterial)) !==
+      stableStringify(liveArtifactEvidence(reviewedMaterial))
+    ) {
+      throw new Error(
+        "Task requires a fresh passing review for the current delivery state before completion",
+      );
+    }
+  }
+
   async proposeCompletion(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    summary: string;
+    caveats?: string[];
+    sessionId?: string;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.proposeCompletionLocked(input),
+    );
+  }
+
+  private async proposeCompletionLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -2176,37 +2541,17 @@ export class TaskCoordinator {
       this.notifyUpdated(task);
       this.notifyActivity(task);
     }
-    const unfinished = task.workItems.filter(
-      (item) => item.status !== "done" && item.status !== "review" && item.status !== "abandoned",
-    );
-    if (task.workItems.length === 0) throw new Error("Task has no work plan");
-    if (unfinished.length > 0) {
-      throw new Error(`Task has ${unfinished.length} unfinished work item(s)`);
-    }
-    const blocking = task.blockers.filter((item) => item.status === "active" && item.blocking);
-    if (blocking.length > 0) throw new Error("Task has unresolved blocking issues");
-    const missingOutput = task.workItems.find(
-      (item) =>
-        item.expectedOutputs.length > 0 &&
-        !task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id),
-    );
-    if (missingOutput) {
-      throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
-    }
-    const requiredReviewRounds = task.reviewRounds ?? 0;
-    if (requiredReviewRounds > 0) {
-      const reviewRounds = getTaskReviewRounds(task.activity);
-      if (reviewRounds.length < requiredReviewRounds) {
+    this.assertCompletionReadiness(task);
+    const currentMaterial = await this.requireCompletionReviewEligibility(task);
+    if (currentMaterial) {
+      const nextMaterial = await this.currentReviewMaterial(task);
+      if (nextMaterial.fingerprint !== currentMaterial.fingerprint) {
         throw new Error(
-          `Task requires ${requiredReviewRounds} independent review round(s); ${reviewRounds.length} recorded`,
+          "Task requires a fresh passing review for the current delivery state before completion",
         );
       }
-      const pendingReview = getPendingTaskReview(task.activity);
-      if (pendingReview) {
-        throw new Error(`Review round ${pendingReview.round} feedback must be addressed`);
-      }
     }
-    const ready = await this.transition({
+    const ready = await this.transitionLocked({
       taskId: task.id,
       workspacePath: task.workspacePath,
       expectedRevision: task.revision,
@@ -2214,9 +2559,14 @@ export class TaskCoordinator {
       summary: input.summary,
       detail: input.caveats?.filter(Boolean).join("\n") || undefined,
       sessionId: input.sessionId,
+      validateUpdatedTask: currentMaterial
+        ? async (updatedTask) => {
+            await this.assertLiveArtifactEvidenceUnchanged(updatedTask, currentMaterial);
+          }
+        : undefined,
     });
     if (task.reviewRequired) return ready;
-    return await this.acceptTask({
+    return await this.acceptTaskLocked({
       taskId: ready.id,
       workspacePath: ready.workspacePath,
       expectedRevision: ready.revision,
@@ -2305,8 +2655,9 @@ export class TaskCoordinator {
       nonEmpty(directive.idempotencyKey, "Idempotency key"),
     );
     if (receipt !== null) {
+      const replayTask = this.requireTask(current.id, current.workspacePath);
       return {
-        task: this.requireTask(current.id, current.workspacePath),
+        task: this.withDirectiveReviewState(replayTask),
         continuation: current.questions.some(
           (question) => question.status === "pending" && question.blocking,
         )
@@ -2345,7 +2696,7 @@ export class TaskCoordinator {
           items: directive.workItems,
         });
         if (updated.status === "draft") {
-          updated = await this.transition({
+          updated = await this.transitionLocked({
             taskId: current.id,
             workspacePath: current.workspacePath,
             expectedRevision: updated.revision,
@@ -2355,7 +2706,7 @@ export class TaskCoordinator {
           });
         }
         if (updated.status === "planning" && updated.workItems.length > 0) {
-          updated = await this.transition({
+          updated = await this.transitionLocked({
             taskId: current.id,
             workspacePath: current.workspacePath,
             expectedRevision: updated.revision,
@@ -2401,7 +2752,7 @@ export class TaskCoordinator {
         });
         break;
       case "report_blocker":
-        updated = await this.reportBlocker({
+        updated = await this.reportBlockerLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -2423,26 +2774,30 @@ export class TaskCoordinator {
         break;
       }
       case "register_artifact":
-        updated = await this.registerArtifact({
-          taskId: current.id,
-          workspacePath: current.workspacePath,
-          expectedRevision: directive.expectedRevision,
-          sessionId,
-          path: directive.path,
-          title: directive.title,
-          kind: directive.kind,
-          artifactId: directive.artifactId,
-          baseVersionId: directive.baseVersionId,
-          changeSummary: directive.changeSummary,
-          workItemId: directive.workItemId,
-          provenance: directive.provenance,
-        });
+        updated = await this.registerArtifactLocked(
+          {
+            taskId: current.id,
+            workspacePath: current.workspacePath,
+            expectedRevision: directive.expectedRevision,
+            sessionId,
+            path: directive.path,
+            title: directive.title,
+            kind: directive.kind,
+            artifactId: directive.artifactId,
+            baseVersionId: directive.baseVersionId,
+            changeSummary: directive.changeSummary,
+            workItemId: directive.workItemId,
+            provenance: directive.provenance,
+          },
+          { finishActiveRevisionInCurrentLock: true },
+        );
         break;
       case "record_review": {
-        const result = await this.recordReview({
+        const result = await this.recordReviewLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
+          expectedMaterialFingerprint: directive.expectedMaterialFingerprint,
           sessionId,
           reviewerAgentId: directive.reviewerAgentId,
           reviewerProvider: directive.reviewerProvider,
@@ -2454,7 +2809,7 @@ export class TaskCoordinator {
         break;
       }
       case "address_review":
-        updated = await this.addressReview({
+        updated = await this.addressReviewLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -2464,7 +2819,7 @@ export class TaskCoordinator {
         });
         break;
       case "propose_completion":
-        updated = await this.proposeCompletion({
+        updated = await this.proposeCompletionLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -2493,7 +2848,7 @@ export class TaskCoordinator {
     await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
       allowTerminal: true,
     });
-    return { task: updated, continuation };
+    return { task: this.withDirectiveReviewState(updated), continuation };
   }
 
   private requireTask(taskId: string, workspacePath: string): TaskRecord {
@@ -2512,6 +2867,37 @@ export class TaskCoordinator {
     const detail = this.options.sessionDb.getTaskArtifactDetail(input.taskId, input.artifactId);
     if (!detail) throw new Error(`Unknown task artifact: ${input.artifactId}`);
     return detail;
+  }
+
+  private async currentReviewMaterial(task: TaskRecord): Promise<TaskReviewMaterial> {
+    const artifactDetails: TaskArtifactDetail[] = [];
+    for (const artifactRecord of task.artifacts) {
+      const detail = this.options.sessionDb.getTaskArtifactDetail(task.id, artifactRecord.id);
+      if (!detail) throw new Error(`Artifact metadata is missing: ${artifactRecord.id}`);
+      artifactDetails.push(detail);
+    }
+    const workspaceRoot = await fs.realpath(task.workspacePath);
+    const artifactFiles: TaskReviewArtifactFileSnapshot[] = [];
+    for (const artifactRecord of task.artifacts) {
+      const resolvedPath = await this.resolveArtifactPath(task, artifactRecord.path);
+      const fingerprint = await this.artifactStore.fingerprintFile(resolvedPath);
+      if (!fingerprint) throw new Error(`Artifact does not exist: ${resolvedPath}`);
+      artifactFiles.push({
+        artifactId: artifactRecord.id,
+        path: artifactRecord.path,
+        canonicalWorkspaceRelativePath: path
+          .relative(workspaceRoot, resolvedPath)
+          .split(path.sep)
+          .join("/"),
+        sha256: fingerprint.sha256,
+        sizeBytes: fingerprint.sizeBytes,
+      });
+    }
+    const snapshot = buildTaskReviewMaterialSnapshot({ task, artifactDetails, artifactFiles });
+    return {
+      snapshot,
+      fingerprint: fingerprintTaskReviewMaterial(snapshot),
+    };
   }
 
   private async resolveArtifactPath(task: TaskRecord, artifactPath: string): Promise<string> {

@@ -73,6 +73,10 @@ export class SessionDbRepository {
     this.taskRepository.createQuestionSchema();
   }
 
+  addTaskReviewTables(): void {
+    this.taskRepository.createReviewSchema();
+  }
+
   addTaskCreationColumns(): void {
     this.taskRepository.addCreationColumns();
   }

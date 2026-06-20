@@ -193,6 +193,7 @@ export class AgentSession {
     deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
     getTaskContextImpl?: SessionDependencies["getTaskContextImpl"];
+    getTaskReviewMaterialImpl?: SessionDependencies["getTaskReviewMaterialImpl"];
     applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
     createTaskImpl?: SessionDependencies["createTaskImpl"];
     getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
@@ -366,6 +367,7 @@ export class AgentSession {
       deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
       getTaskContextImpl: opts.getTaskContextImpl,
+      getTaskReviewMaterialImpl: opts.getTaskReviewMaterialImpl,
       applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
       createTaskImpl: opts.createTaskImpl,
       getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,

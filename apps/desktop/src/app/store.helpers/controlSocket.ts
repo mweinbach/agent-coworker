@@ -4,7 +4,7 @@ import {
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
-import { isTaskOwnedThread } from "../threadFilters";
+import { isStandardChatThread, isTaskOwnedThread } from "../threadFilters";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
@@ -226,17 +226,22 @@ export function createControlSocketHelpers(
     workspaceId: string,
     selectedWorkspaceId: string | null,
     selectedThreadId: string | null,
+    selectedTaskId: string | null,
+    view: ReturnType<StoreGet>["view"],
   ): string | null {
     if (!selectedThreadId) {
       return null;
     }
-    if (nextThreads.some((thread) => thread.id === selectedThreadId && !thread.archived)) {
+    const selectable = (thread: ThreadRecord): boolean =>
+      isStandardChatThread(thread, { includeDrafts: true }) ||
+      (view === "task" && typeof selectedTaskId === "string" && thread.taskId === selectedTaskId);
+    if (nextThreads.some((thread) => thread.id === selectedThreadId && selectable(thread))) {
       return selectedThreadId;
     }
 
     const migratedThreadId =
       nextThreads.find(
-        (thread) => thread.legacyTranscriptId === selectedThreadId && !thread.archived,
+        (thread) => thread.legacyTranscriptId === selectedThreadId && selectable(thread),
       )?.id ?? null;
     if (migratedThreadId) {
       return migratedThreadId;
@@ -247,8 +252,11 @@ export function createControlSocketHelpers(
       selectedWorkspaceId ??
       workspaceId;
     return (
-      nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId && !thread.archived)
-        ?.id ?? null
+      nextThreads.find(
+        (thread) =>
+          thread.workspaceId === fallbackWorkspaceId &&
+          isStandardChatThread(thread, { includeDrafts: true }),
+      )?.id ?? null
     );
   }
 
@@ -635,6 +643,8 @@ export function createControlSocketHelpers(
           workspaceId,
           s.selectedWorkspaceId,
           s.selectedThreadId,
+          s.selectedTaskId,
+          s.view,
         );
         return {
           threads: nextThreads,

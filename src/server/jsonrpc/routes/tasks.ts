@@ -104,6 +104,10 @@ async function requireProjectTaskWorkspacePath(
   method: string,
 ): Promise<string> {
   if (!context.desktopService) {
+    const workspaceKind = classifyWorkspaceKind({ path: workspacePath }, context.homedir);
+    if (workspaceKind !== "project") {
+      throw new Error(`${method} cwd must match an authorized project workspace`);
+    }
     return workspacePath;
   }
   const { workspaces } = await listWorkspaceSummaries({

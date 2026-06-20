@@ -454,6 +454,101 @@ describe("task workspace subscription routing", () => {
     }
   }, 15_000);
 
+  test("rejects generic task RPCs when the non-desktop active workspace is a one-off chat", async () => {
+    const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "task-cli-oneoff-")));
+    const activeOneOffWorkspace = path.join(home, ".cowork", "chats", "20260620-cli-oneoff");
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
+    try {
+      await fs.mkdir(activeOneOffWorkspace, { recursive: true });
+      const activeOneOffPath = await fs.realpath(activeOneOffWorkspace);
+      const runTurnImpl = createRunTurn({
+        createRuntime: () => ({
+          name: "pi",
+          runTurn: async () => ({
+            text: "done",
+            responseMessages: [],
+          }),
+        }),
+      });
+      runtime = await createAgentServerRuntime({
+        cwd: activeOneOffPath,
+        homedir: home,
+        env: {
+          AGENT_WORKING_DIR: activeOneOffPath,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "false",
+          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+        },
+        runTurnImpl,
+      });
+
+      const reader = makeSocket("cli-one-off-reader");
+      const mutator = makeSocket("cli-one-off-mutator");
+      await initializeConnection(runtime, reader);
+      await initializeConnection(runtime, mutator);
+
+      const omittedListResponse = await sendRequest(runtime, reader, "task/list");
+      expect(omittedListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+
+      const exactListResponse = await sendRequest(runtime, reader, "task/list", {
+        cwd: activeOneOffPath,
+      });
+      expect(exactListResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+
+      const { cwd: _omittedCreateCwd, ...omittedCreateParams } = createTaskParams(
+        activeOneOffPath,
+        "cli-one-off-create-omitted",
+      );
+      const omittedCreateResponse = await sendRequest(
+        runtime,
+        mutator,
+        "task/create",
+        omittedCreateParams,
+      );
+      expect(omittedCreateResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+
+      const exactCreateResponse = await sendRequest(
+        runtime,
+        mutator,
+        "task/create",
+        createTaskParams(activeOneOffPath, "cli-one-off-create-exact"),
+      );
+      expect(exactCreateResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(reader, (message) => message.method === "task/created");
+
+      const omittedMutationResponse = await sendRequest(runtime, mutator, "task/updateBrief", {
+        taskId: "task-one-off",
+        expectedRevision: 1,
+        title: "Should stay rejected",
+      });
+      expect(omittedMutationResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+
+      const exactMutationResponse = await sendRequest(runtime, mutator, "task/updateBrief", {
+        cwd: activeOneOffPath,
+        taskId: "task-one-off",
+        expectedRevision: 1,
+        title: "Should stay rejected",
+      });
+      expect(exactMutationResponse.error?.message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      await expectNoMessage(reader, (message) => message.method === "task/updated");
+    } finally {
+      await runtime?.stop();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("non-desktop active project cwd remains authorized for task RPCs", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-cli-project-"));
     const projectWorkspace = path.join(home, "project");

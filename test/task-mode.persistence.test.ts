@@ -1503,6 +1503,133 @@ describe("task mode persistence", () => {
     });
   }
 
+  test("taskUpdate update_plan cannot remove an incomplete dependency from existing work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, setup, dependent } = await createDependentWorkTask(harness);
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(sessionId, {
+          type: "update_plan",
+          idempotencyKey: "remove-incomplete-dependency",
+          expectedRevision: task.revision,
+          workItems: task.workItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            description: item.description,
+            dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+            expectedOutputs: item.expectedOutputs,
+            status: item.status,
+          })),
+        }),
+      ).rejects.toThrow(`Work item dependency is not complete: ${setup.id}`);
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [setup.id],
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "remove-incomplete-dependency"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan cannot remove an incomplete dependency and advance work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, setup, dependent } = await createDependentWorkTask(harness);
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(sessionId, {
+          type: "update_plan",
+          idempotencyKey: "remove-incomplete-dependency-and-advance",
+          expectedRevision: task.revision,
+          workItems: task.workItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            description: item.description,
+            dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+            expectedOutputs: item.expectedOutputs,
+            status: item.id === dependent.id ? "in_progress" : item.status,
+          })),
+        }),
+      ).rejects.toThrow(`Work item dependency is not complete: ${setup.id}`);
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [setup.id],
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(
+          task.id,
+          "remove-incomplete-dependency-and-advance",
+        ),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan can remove a completed dependency", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createDependentWorkTask(harness);
+      const setup = created.setup;
+      const dependent = created.dependent;
+      const task = await harness.coordinator.markWorkItem({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        workItemId: setup.id,
+        status: "done",
+        completionEvidence: "Prerequisite has been completed.",
+      });
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+
+      const updated = await harness.coordinator.applyDirective(sessionId, {
+        type: "update_plan",
+        idempotencyKey: "remove-completed-dependency",
+        expectedRevision: task.revision,
+        workItems: task.workItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          description: item.description,
+          dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+          expectedOutputs: item.expectedOutputs,
+          status: item.status,
+        })),
+      });
+
+      expect(updated.task.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [],
+      });
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "remove-completed-dependency"),
+      ).not.toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("taskUpdate update_plan cannot mark work done without completion evidence", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

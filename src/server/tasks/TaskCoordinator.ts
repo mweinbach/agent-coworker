@@ -292,6 +292,22 @@ function assertWorkItemDependenciesComplete(input: {
   }
 }
 
+function assertNoIncompleteDependencyRemoval(input: {
+  currentItems: WorkItem[];
+  existing: WorkItem;
+  next: WorkItem;
+}): void {
+  const nextDependencies = new Set(input.next.dependsOn);
+  const removedIncompleteDependency = input.existing.dependsOn.find(
+    (id) =>
+      !nextDependencies.has(id) &&
+      input.currentItems.find((candidate) => candidate.id === id)?.status !== "done",
+  );
+  if (removedIncompleteDependency) {
+    throw new Error(`Work item dependency is not complete: ${removedIncompleteDependency}`);
+  }
+}
+
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -959,6 +975,13 @@ export class TaskCoordinator {
         if (row.coordinatorOwnedRevisionItem) continue;
         if (!replacementChangesWorkItem(row.existing, row.item)) continue;
         assertThreadCanMutateWorkItem({ task: current, item: row.existing ?? row.item, threadId });
+        if (row.existing) {
+          assertNoIncompleteDependencyRemoval({
+            currentItems: current.workItems,
+            existing: row.existing,
+            next: row.item,
+          });
+        }
         assertWorkItemDependenciesComplete({
           items,
           item: row.item,

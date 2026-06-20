@@ -174,6 +174,87 @@ async function invoke(context: JsonRpcRouteContext, method: string, params: unkn
 }
 
 describe("task JSON-RPC routes", () => {
+  test("rejects task reads and mutations for explicitly underprivileged sockets", async () => {
+    const harness = makeHarness();
+    const handlers = createTaskRouteHandlers(harness.context);
+    const underprivilegedSocket = {
+      data: {
+        taskReadAllowed: false,
+        taskMutationAllowed: false,
+      },
+    } as never;
+
+    await handlers["task/list"]?.(underprivilegedSocket, {
+      id: 1,
+      method: "task/list",
+      params: { cwd: "C:\\workspace" },
+    });
+    await handlers["task/updateBrief"]?.(underprivilegedSocket, {
+      id: 2,
+      method: "task/updateBrief",
+      params: {
+        cwd: "C:\\workspace",
+        taskId: "task-1",
+        expectedRevision: 1,
+        title: "Updated",
+      },
+    });
+
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toEqual([
+      {
+        id: 1,
+        error: {
+          code: -32600,
+          message: "task/list requires conversations permission",
+          data: { category: "permission_denied", permission: "conversations" },
+        },
+      },
+      {
+        id: 2,
+        error: {
+          code: -32600,
+          message: "task/updateBrief requires conversations permission",
+          data: { category: "permission_denied", permission: "conversations" },
+        },
+      },
+    ]);
+  });
+
+  test("rejects task mutations for sockets with read-only task permission", async () => {
+    const harness = makeHarness();
+    const handlers = createTaskRouteHandlers(harness.context);
+    const readOnlySocket = {
+      data: {
+        taskReadAllowed: true,
+        taskMutationAllowed: false,
+      },
+    } as never;
+
+    await handlers["task/updateBrief"]?.(readOnlySocket, {
+      id: 1,
+      method: "task/updateBrief",
+      params: {
+        cwd: "C:\\workspace",
+        taskId: "task-1",
+        expectedRevision: 1,
+        title: "Updated",
+      },
+    });
+
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toEqual([
+      {
+        id: 1,
+        error: {
+          code: -32600,
+          message: "task/updateBrief requires turns permission",
+          data: { category: "permission_denied", permission: "turns" },
+        },
+      },
+    ]);
+  });
+
   test("creates an isolated task thread and waits for session persistence", async () => {
     const harness = makeHarness();
     await invoke(harness.context, "task/create", {
@@ -241,6 +322,44 @@ describe("task JSON-RPC routes", () => {
     expect(
       jsonRpcTaskResultSchemas["task/list"].safeParse(harness.results[0]?.result).success,
     ).toBe(true);
+  });
+
+  test("allows task reads for a desktop-persisted workspace from the workspace catalog", async () => {
+    const harness = makeHarness();
+    const calls: string[] = [];
+    (harness.context as unknown as { desktopService: unknown }).desktopService = {
+      loadState: async () => ({
+        version: 2,
+        workspaces: [
+          {
+            id: "project-b",
+            name: "Project B",
+            path: "C:\\workspace-b",
+            workspaceKind: "project",
+            createdAt: "2026-06-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    };
+    (harness.context as unknown as { getConfig: () => { workingDirectory: string } }).getConfig =
+      () => ({ workingDirectory: "C:\\workspace-a" });
+    (
+      harness.context as unknown as { utils: { resolveWorkspacePath: () => string } }
+    ).utils.resolveWorkspacePath = () => {
+      throw new Error("task/list cwd must match an authorized workspace");
+    };
+    (
+      harness.context as unknown as { tasks: { list: (workspacePath: string) => unknown[] } }
+    ).tasks.list = (workspacePath: string) => {
+      calls.push(workspacePath);
+      return [];
+    };
+
+    await invoke(harness.context, "task/list", { cwd: "C:\\workspace-b" });
+
+    expect(harness.errors).toEqual([]);
+    expect(harness.results[0]?.result).toEqual({ tasks: [], total: 0 });
+    expect(calls).toEqual(["C:\\workspace-b"]);
   });
 
   test("retries a failed task through the coordinator", async () => {

@@ -34,6 +34,7 @@ export class WorkspaceJsonRpcSubscribers {
     const subscribers = this.subscribers.get(canonicalWorkspacePath(cwd));
     if (!subscribers) return;
     for (const ws of subscribers.values()) {
+      if (ws.data.taskReadAllowed === false) continue;
       if (!this.sendQueue.shouldSendNotification(ws, method)) continue;
       this.sendQueue.send(ws, { method, params });
     }

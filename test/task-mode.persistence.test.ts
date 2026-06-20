@@ -130,6 +130,28 @@ async function createWorkingTask(harness: Awaited<ReturnType<typeof createHarnes
   });
 }
 
+test("task coordinator rejects task IDs outside the requested workspace context", async () => {
+  const harness = await createHarness();
+  try {
+    const { task } = await createWorkingTask(harness);
+    const otherWorkspace = path.join(harness.home, "other-project");
+
+    expect(() => harness.coordinator.get(task.id, otherWorkspace)).toThrow(
+      "Task is outside the active workspace",
+    );
+    await expect(
+      harness.coordinator.updateBrief({
+        taskId: task.id,
+        workspacePath: otherWorkspace,
+        expectedRevision: task.revision,
+        title: "Wrong workspace update",
+      }),
+    ).rejects.toThrow("Task is outside the active workspace");
+  } finally {
+    await fs.rm(harness.home, { recursive: true, force: true });
+  }
+});
+
 async function createReviewReadyTask(
   harness: Awaited<ReturnType<typeof createHarness>>,
   options: { reviewRequired?: boolean } = {},

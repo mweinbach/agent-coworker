@@ -49,4 +49,35 @@ describe("WorkspaceJsonRpcSubscribers", () => {
       },
     ]);
   });
+
+  test("filters task notifications for sockets without task read permission", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const allowed = socket("allowed");
+    const denied = socket("denied");
+    denied.data.taskReadAllowed = false;
+    const workspace = path.join(os.tmpdir(), "task-subscriber-authz");
+    subscribers.register(allowed, workspace);
+    subscribers.register(denied, workspace);
+
+    subscribers.notify(workspace, "task/created", {
+      task: { id: "task-1", title: "Secret task" },
+    });
+
+    expect(sent).toEqual([
+      {
+        connectionId: "allowed",
+        payload: {
+          method: "task/created",
+          params: { task: { id: "task-1", title: "Secret task" } },
+        },
+      },
+    ]);
+  });
 });

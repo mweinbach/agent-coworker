@@ -821,6 +821,84 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     connection.close();
   });
 
+  test("splits task reads from task mutations for mobile permissions", async () => {
+    const dispatchedMethods: string[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(
+        conn: { send(message: string): number },
+        message: JsonRpcLiteRequest | JsonRpcLiteNotification,
+      ) {
+        if ("method" in message) {
+          dispatchedMethods.push(message.method);
+        }
+        if ("id" in message) {
+          conn.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { ok: true } }));
+        }
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+
+    const defaultRead = await __internal.dispatchHttpRpcPayload(
+      { id: 1, method: "task/list", params: {} },
+      connection,
+      trustedDevice(),
+    );
+    expect(defaultRead.status).toBe(403);
+    await expect(defaultRead.json()).resolves.toEqual({
+      error: "Mobile device permission required: conversations.",
+      permission: "conversations",
+    });
+
+    const readOnly = await __internal.dispatchHttpRpcPayload(
+      { id: 2, method: "task/read", params: { taskId: "task-1" } },
+      connection,
+      trustedDevice({ conversations: true }),
+    );
+    expect(readOnly.status).toBe(200);
+    await expect(readOnly.json()).resolves.toMatchObject({ id: 2, result: { ok: true } });
+
+    const deniedMutation = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 3,
+        method: "task/updateBrief",
+        params: { taskId: "task-1", expectedRevision: 1, title: "Updated" },
+      },
+      connection,
+      trustedDevice({ conversations: true }),
+    );
+    expect(deniedMutation.status).toBe(403);
+    await expect(deniedMutation.json()).resolves.toEqual({
+      error: "Mobile device permission required: turns.",
+      permission: "turns",
+    });
+
+    const allowedMutation = await __internal.dispatchHttpRpcPayload(
+      {
+        id: 4,
+        method: "task/updateBrief",
+        params: { taskId: "task-1", expectedRevision: 1, title: "Updated" },
+      },
+      connection,
+      trustedDevice({ conversations: true, turns: true }),
+    );
+    expect(allowedMutation.status).toBe(200);
+    await expect(allowedMutation.json()).resolves.toMatchObject({ id: 4, result: { ok: true } });
+    expect(dispatchedMethods).toEqual(["task/read", "task/updateBrief"]);
+    expect(__internal.getRequiredH3Permission({ id: 5, method: "task/list", params: {} })).toBe(
+      "conversations",
+    );
+    expect(
+      __internal.getRequiredH3Permission({
+        id: 6,
+        method: "task/updateBrief",
+        params: {},
+      }),
+    ).toEqual(["conversations", "turns"]);
+    connection.close();
+  });
+
   test("blocks workspace state/config reads for default-permission devices before dispatch", async () => {
     const runtime = {
       openHttpConnection() {},

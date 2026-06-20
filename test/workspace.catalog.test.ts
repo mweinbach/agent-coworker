@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { requireWorkspacePath } from "../src/server/jsonrpc/routes/shared";
 import { listWorkspaceSummaries } from "../src/server/jsonrpc/workspaceCatalog";
@@ -29,6 +30,38 @@ describe("workspace catalog and path rules", () => {
       requireWorkspacePath({ cwd: legacyChatDir }, "thread/list", projectDir, homedir),
     ).toThrow("thread/list cwd must match the server workspace or a one-off chat workspace");
     await fs.rm(homedir, { recursive: true, force: true });
+  });
+
+  test("requireWorkspacePath confines task RPCs to the canonical active workspace", async () => {
+    const homedir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-home-"));
+    try {
+      const projectRoot = path.join(homedir, "project");
+      const outsideRoot = path.join(homedir, "outside");
+      const aliasDir = path.join(homedir, "project-alias");
+      await fs.mkdir(projectRoot, { recursive: true });
+      await fs.mkdir(outsideRoot, { recursive: true });
+      const projectDir = await fs.realpath(projectRoot);
+      const outsideDir = await fs.realpath(outsideRoot);
+      await fs.symlink(projectDir, aliasDir, "dir");
+
+      expect(requireWorkspacePath({}, "task/list", projectDir, homedir)).toBe(
+        await fs.realpath(projectDir),
+      );
+      expect(requireWorkspacePath({ cwd: projectDir }, "task/list", projectDir, homedir)).toBe(
+        await fs.realpath(projectDir),
+      );
+      expect(() =>
+        requireWorkspacePath({ cwd: outsideDir }, "task/list", projectDir, homedir),
+      ).toThrow("task/list cwd must match an authorized workspace");
+      expect(() =>
+        requireWorkspacePath({ cwd: aliasDir }, "task/list", projectDir, homedir),
+      ).toThrow("task/list cwd must use the canonical workspace path");
+      expect(() =>
+        requireWorkspacePath({ cwd: "C:project" }, "task/list", projectDir, homedir),
+      ).toThrow("task/list cwd must use an absolute workspace path");
+    } finally {
+      await fs.rm(homedir, { recursive: true, force: true });
+    }
   });
 
   test("listWorkspaceSummaries returns desktop workspaces with workspaceKind", async () => {

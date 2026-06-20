@@ -36,20 +36,25 @@ auth, MCP auth, backups, workspace settings, and server-request responses. Readi
 (`thread/list`, `thread/read`, `thread/hydrate`, and `thread/resume`, which streams a thread's live
 content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
 stays always-allowed. Newly paired devices default to no `conversations` access until it is granted;
-devices paired before this permission existed are grandfathered to preserve their prior read access. The whole
-`cowork/mcp/*` config surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth
-permission) requires the workspace-settings permission: `cowork/mcp/servers/read` can expose
-configured transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP
-command (spawns a local subprocess) while connecting. The `cowork/memory/*` surface (including the
-`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the workspace-settings
-permission, because memory holds long-lived private user/project content. `cowork/plugins/install/preview` and
-`cowork/skills/install/preview` also require the workspace-settings permission, because they
-materialize an attacker-selectable local or GitHub source (only the passive plugin/skill
-catalog/list/detail reads stay always-allowed). The workspace document surface `cowork/workspace/presentation/preview` (which runs a workspace
-slide module on the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content
-from a caller-selected `cwd` that is not confined to the active workspace) require the
-workspace-settings permission. `cowork/session/state/read` (workspace/session config, provider
-options, userName/userProfile) also requires the workspace-settings permission, and
+devices paired before this permission existed are grandfathered to preserve their prior read access.
+Task reads (`task/list`, `task/read`, `task/artifact/read`,
+`task/artifact/version/compare`, and `task/artifact/version/preview`) also require
+`conversations`. Task mutations, lifecycle operations, task thread creation, direct task creation,
+and artifact writes require both `conversations` and `turns`. The whole `cowork/mcp/*` config
+surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth permission) requires the
+workspace-settings permission: `cowork/mcp/servers/read` can expose configured transport
+env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command (spawns a
+local subprocess) while connecting. The `cowork/memory/*` surface (including the
+`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the
+workspace-settings permission, because memory holds long-lived private user/project content.
+`cowork/plugins/install/preview` and `cowork/skills/install/preview` also require the
+workspace-settings permission, because they materialize an attacker-selectable local or GitHub
+source (only the passive plugin/skill catalog/list/detail reads stay always-allowed). The workspace
+document surface `cowork/workspace/presentation/preview` (which runs a workspace slide module on
+the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content from a
+caller-selected `cwd` that is not confined to the active workspace) require the workspace-settings
+permission. `cowork/session/state/read` (workspace/session config, provider options,
+userName/userProfile) also requires the workspace-settings permission, and
 `cowork/workspace/bootstrap` requires both the workspace-settings and conversations permissions
 because it returns that control state plus thread summaries. None of these are always-allowed
 defaults.
@@ -442,6 +447,13 @@ Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Code
 
 Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. Task-owned sessions must be preserved by clients outside ordinary chat-list reconciliation. Once a task reaches `completed`, `failed`, or `cancelled`, its task threads reject `turn/start` and `turn/steer` with `task_locked` until an explicit lifecycle operation (`task/reopen` or `task/retry`) moves it back into active work. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace.
 
+Task RPCs are authorized in the harness/server. Read-only task methods require the same
+conversation-history permission as `thread/list` and `thread/read`; mutating task methods require
+both conversation access and turn-start access. A provided `cwd` must resolve to the canonical
+active workspace or, in desktop relay mode, an exact desktop-persisted workspace path. Task RPCs
+reject outside directories, project-local chat aliases, symlink aliases, drive-relative inputs, and
+task or artifact IDs whose stored workspace does not match the authorized request context.
+
 Every mutation after creation carries `expectedRevision`. A stale revision fails with a structured conflict containing the current task revision so clients can reload rather than overwrite concurrent work.
 
 Requests:
@@ -491,6 +503,11 @@ Notifications:
 - `task/updated` — params `{ cwd, task }`
 - `task/activity` — params `{ cwd, taskId, activity }`
 - `task/checkpointCreated` — params `{ cwd, taskId, checkpoint }`
+
+Task notifications are fan-out filtered by workspace subscription and task read permission. A
+recipient without conversation access for that workspace receives no task existence, ID, summary,
+question, approval, artifact, thread, checkpoint, or workspace metadata through task
+notifications.
 
 ### Research JSON-RPC methods
 

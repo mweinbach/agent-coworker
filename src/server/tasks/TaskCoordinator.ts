@@ -68,6 +68,48 @@ type TaskCoordinatorOptions = {
   quiesceTaskThreads?: TaskThreadQuiescer;
 };
 
+type CaptureArtifactVersionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  expectedRevision: number;
+  expectedSha256?: string;
+  changeSummary?: string;
+  createdBy?: string;
+  provenance?: Record<string, unknown>;
+};
+
+type RestoreArtifactVersionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  versionId: string;
+  expectedRevision: number;
+  expectedSha256?: string;
+  createdBy?: string;
+  changeSummary?: string;
+};
+
+type AcceptArtifactVersionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  versionId?: string;
+  expectedRevision: number;
+};
+
+type StartArtifactRevisionRequest = {
+  taskId: string;
+  workspacePath: string;
+  artifactId: string;
+  expectedRevision: number;
+  instruction: string;
+  baseVersionId?: string;
+  title?: string;
+  provider?: string;
+  model?: string;
+};
+
 const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ["planning", "working", "cancelled", "failed"],
   planning: ["working", "blocked", "cancelled", "failed"],
@@ -1301,16 +1343,18 @@ export class TaskCoordinator {
     return baseline;
   }
 
-  async captureArtifactVersion(input: {
-    taskId: string;
-    workspacePath: string;
-    artifactId: string;
-    expectedRevision: number;
-    expectedSha256?: string;
-    changeSummary?: string;
-    createdBy?: string;
-    provenance?: Record<string, unknown>;
-  }): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+  async captureArtifactVersion(
+    input: CaptureArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.captureArtifactVersionLocked(input),
+    );
+  }
+
+  private async captureArtifactVersionLocked(
+    input: CaptureArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1356,16 +1400,18 @@ export class TaskCoordinator {
     return { task, detail: updatedDetail, version };
   }
 
-  async restoreArtifactVersion(input: {
-    taskId: string;
-    workspacePath: string;
-    artifactId: string;
-    versionId: string;
-    expectedRevision: number;
-    expectedSha256?: string;
-    createdBy?: string;
-    changeSummary?: string;
-  }): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+  async restoreArtifactVersion(
+    input: RestoreArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.restoreArtifactVersionLocked(input),
+    );
+  }
+
+  private async restoreArtifactVersionLocked(
+    input: RestoreArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail; version: TaskArtifactVersion }> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1421,13 +1467,18 @@ export class TaskCoordinator {
     }
   }
 
-  async acceptArtifactVersion(input: {
-    taskId: string;
-    workspacePath: string;
-    artifactId: string;
-    versionId?: string;
-    expectedRevision: number;
-  }): Promise<{ task: TaskRecord; detail: TaskArtifactDetail }> {
+  async acceptArtifactVersion(
+    input: AcceptArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.acceptArtifactVersionLocked(input),
+    );
+  }
+
+  private async acceptArtifactVersionLocked(
+    input: AcceptArtifactVersionRequest,
+  ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail }> {
     const current = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(current, input.expectedRevision);
     assertTaskAcceptsMutation(current);
@@ -1516,17 +1567,18 @@ export class TaskCoordinator {
     });
   }
 
-  async startArtifactRevision(input: {
-    taskId: string;
-    workspacePath: string;
-    artifactId: string;
-    expectedRevision: number;
-    instruction: string;
-    baseVersionId?: string;
-    title?: string;
-    provider?: string;
-    model?: string;
-  }): Promise<{
+  async startArtifactRevision(input: StartArtifactRevisionRequest): Promise<{
+    task: TaskRecord;
+    detail: TaskArtifactDetail;
+    revision: TaskArtifactRevision;
+  }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.startArtifactRevisionLocked(input),
+    );
+  }
+
+  private async startArtifactRevisionLocked(input: StartArtifactRevisionRequest): Promise<{
     task: TaskRecord;
     detail: TaskArtifactDetail;
     revision: TaskArtifactRevision;

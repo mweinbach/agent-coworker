@@ -6,7 +6,7 @@ import path from "node:path";
 import { SessionDb } from "../src/server/sessionDb";
 import { ArtifactVersionStore } from "../src/server/tasks/ArtifactVersionStore";
 import { ArtifactConflictError, TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
-import type { TaskStatus } from "../src/shared/tasks";
+import type { TaskRecord, TaskStatus } from "../src/shared/tasks";
 
 const TERMINAL_TASK_STATUSES = [
   "completed",
@@ -112,7 +112,14 @@ async function createHarness() {
   };
 }
 
-async function createPausingHarness() {
+async function createPausingHarness(
+  options: {
+    quiesceTaskThreads?: (
+      task: TaskRecord,
+      reason: "completed" | "cancelled" | "failed",
+    ) => Promise<void> | void;
+  } = {},
+) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-artifact-version-test-"));
   const rootDir = path.join(home, ".cowork");
   const sessionsDir = path.join(rootDir, "sessions");
@@ -125,7 +132,11 @@ async function createPausingHarness() {
   const artifactStore = new PausingArtifactVersionStore({
     rootDir: path.join(rootDir, "artifacts"),
   });
-  const coordinator = new TaskCoordinator({ sessionDb, artifactStore });
+  const coordinator = new TaskCoordinator({
+    sessionDb,
+    artifactStore,
+    ...(options.quiesceTaskThreads ? { quiesceTaskThreads: options.quiesceTaskThreads } : {}),
+  });
   let threadIndex = 1;
   coordinator.setThreadFactory(async () => ({ sessionId: `revision-session-${threadIndex++}` }));
   return {
@@ -182,6 +193,37 @@ async function createTaskWithArtifact(
   });
   if (!detail) throw new Error("Expected artifact detail");
   return { task, artifact, detail, artifactPath };
+}
+
+async function createTaskWithRestorableArtifactVersion(
+  harness: Pick<Awaited<ReturnType<typeof createHarness>>, "workspacePath" | "coordinator">,
+) {
+  let { task, artifact, detail, artifactPath } = await createTaskWithArtifact(harness);
+  const first = detail.versions[0];
+  if (!first) throw new Error("Expected initial artifact version");
+  task = await harness.coordinator.transition({
+    taskId: task.id,
+    workspacePath: harness.workspacePath,
+    expectedRevision: task.revision,
+    status: "working",
+    summary: "Artifact work started",
+  });
+  await fs.writeFile(artifactPath, "version two\n");
+  const captured = await harness.coordinator.captureArtifactVersion({
+    taskId: task.id,
+    workspacePath: harness.workspacePath,
+    artifactId: artifact.id,
+    expectedRevision: task.revision,
+    changeSummary: "Second version",
+  });
+  return {
+    task: captured.task,
+    artifact,
+    artifactPath,
+    first,
+    second: captured.version,
+    detail: captured.detail,
+  };
 }
 
 describe("ArtifactVersionStore", () => {
@@ -850,6 +892,124 @@ describe("task artifact versions", () => {
         });
         expect(freshRevision.revision.id).not.toBe(started.revision.id);
         expect(freshRevision.revision.status).toBe("active");
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  for (const terminalStatus of TERMINAL_TASK_STATUSES) {
+    test(`serializes direct artifact restore before ${terminalStatus} transition commits`, async () => {
+      const harness = await createPausingHarness();
+      try {
+        const { task, artifact, artifactPath, first } =
+          await createTaskWithRestorableArtifactVersion(harness);
+        const beforeDetail = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+        });
+        if (!beforeDetail) throw new Error("Expected artifact detail before restore");
+        const pause = harness.artifactStore.pauseNext("restore", await fs.realpath(artifactPath));
+
+        const restorePromise = harness.coordinator.restoreArtifactVersion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          versionId: first.id,
+          expectedRevision: task.revision,
+        });
+        await pause.reached;
+
+        const terminalPromise = harness.coordinator.transition({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          status: terminalStatus,
+          summary: `Task became ${terminalStatus}`,
+        });
+        await flushAsyncWork();
+
+        expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+          status: "working",
+          revision: task.revision,
+        });
+        expect(harness.artifactStore.restoreCalls).toHaveLength(0);
+
+        pause.release();
+        const [restored, terminal] = await Promise.all([restorePromise, terminalPromise]);
+
+        expect(restored.task.status).toBe("working");
+        expect(restored.version.sha256).toBe(first.sha256);
+        expect(terminal.status).toBe(terminalStatus);
+        expect(harness.artifactStore.restoreCalls).toHaveLength(1);
+        expect(await fs.readFile(artifactPath, "utf8")).toBe("version one\n");
+        expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+          status: terminalStatus,
+          revision: terminal.revision,
+        });
+        expect(restored.detail.versions).toHaveLength(beforeDetail.versions.length + 1);
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+
+    test(`keeps terminal-first direct artifact restore inert after ${terminalStatus}`, async () => {
+      const terminalQuiesce = createDeferred<void>();
+      const releaseTerminal = createDeferred<void>();
+      const harness = await createPausingHarness({
+        quiesceTaskThreads: async () => {
+          terminalQuiesce.resolve();
+          await releaseTerminal.promise;
+        },
+      });
+      try {
+        const { task, artifact, artifactPath, first } =
+          await createTaskWithRestorableArtifactVersion(harness);
+
+        const terminalPromise = harness.coordinator.transition({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          status: terminalStatus,
+          summary: `Task became ${terminalStatus}`,
+        });
+        await terminalQuiesce.promise;
+        expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+          status: terminalStatus,
+          revision: task.revision + 1,
+        });
+
+        const detailAfterTerminal = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+        });
+        const restorePromise = harness.coordinator.restoreArtifactVersion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          versionId: first.id,
+          expectedRevision: task.revision + 1,
+        });
+        await flushAsyncWork();
+
+        expect(harness.artifactStore.restoreCalls).toHaveLength(0);
+        expect(await fs.readFile(artifactPath, "utf8")).toBe("version two\n");
+
+        releaseTerminal.resolve();
+        await terminalPromise;
+        await expect(restorePromise).rejects.toThrow(`Task ${task.id} is ${terminalStatus}`);
+
+        expect(harness.artifactStore.restoreCalls).toHaveLength(0);
+        expect(await fs.readFile(artifactPath, "utf8")).toBe("version two\n");
+        expect(
+          harness.coordinator.getArtifactDetail({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: artifact.id,
+          }),
+        ).toEqual(detailAfterTerminal);
       } finally {
         harness.sessionDb.close();
       }

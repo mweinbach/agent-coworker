@@ -569,6 +569,7 @@ export type TaskDirective =
         id?: string;
         title: string;
         description?: string;
+        status?: WorkItemStatus;
         dependsOn?: string[];
         expectedOutputs?: string[];
       }>;

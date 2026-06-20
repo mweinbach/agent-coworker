@@ -6,7 +6,7 @@ import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
-import type { TaskRecord, TaskStatus } from "../src/shared/tasks";
+import type { TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
 
 async function createHarness(
   options: {
@@ -146,6 +146,100 @@ async function createWorkingTask(harness: Awaited<ReturnType<typeof createHarnes
       reviewRequired: false,
     },
   });
+}
+
+async function createDependentWorkTask(harness: Awaited<ReturnType<typeof createHarness>>) {
+  const created = await harness.coordinator.createPlanned({
+    workspacePath: harness.workspacePath,
+    sessionId: `task-session-${crypto.randomUUID()}`,
+    sourceSessionId: `source-chat-${crypto.randomUUID()}`,
+    creationOrigin: "chat_tool",
+    workspaceDisposition: "existing_project",
+    creation: {
+      idempotencyKey: `dependent-${crypto.randomUUID()}`,
+      title: "Dependent work",
+      objective: "Complete work in dependency order.",
+      context: "The dependent item must not advance before its prerequisite is done.",
+      requirements: [{ kind: "acceptance_criterion", text: "Dependencies are respected." }],
+      workItems: [
+        { key: "setup", title: "Setup", expectedOutputs: ["Setup evidence"] },
+        {
+          key: "dependent",
+          title: "Dependent",
+          dependsOn: ["setup"],
+          expectedOutputs: ["Dependent evidence"],
+        },
+      ],
+      reviewRequired: false,
+      reviewRounds: 0,
+    },
+  });
+  const [setup, dependent] = created.task.workItems;
+  if (!setup || !dependent) throw new Error("Expected dependent work items");
+  return { task: created.task, setup, dependent };
+}
+
+async function createClaimedWorkTask(harness: Awaited<ReturnType<typeof createHarness>>) {
+  const created = await harness.coordinator.createPlanned({
+    workspacePath: harness.workspacePath,
+    sessionId: `task-session-${crypto.randomUUID()}`,
+    sourceSessionId: `source-chat-${crypto.randomUUID()}`,
+    creationOrigin: "chat_tool",
+    workspaceDisposition: "existing_project",
+    creation: {
+      idempotencyKey: `claimed-${crypto.randomUUID()}`,
+      title: "Claimed work",
+      objective: "Keep work item ownership isolated.",
+      context: "Only the owning task thread should mutate claimed work.",
+      requirements: [{ kind: "acceptance_criterion", text: "Ownership is enforced." }],
+      workItems: [{ key: "run", title: "Run", expectedOutputs: ["A visible result"] }],
+      reviewRequired: false,
+      reviewRounds: 0,
+    },
+  });
+  const workItem = created.task.workItems[0];
+  if (!workItem) throw new Error("Expected work item");
+  let task = await harness.coordinator.addThread({
+    taskId: created.task.id,
+    workspacePath: harness.workspacePath,
+    expectedRevision: created.task.revision,
+    title: "Owner lane",
+    createdBy: "user",
+    workItemId: workItem.id,
+  });
+  task = await harness.coordinator.addThread({
+    taskId: task.id,
+    workspacePath: harness.workspacePath,
+    expectedRevision: task.revision,
+    title: "Other lane",
+    createdBy: "user",
+  });
+  const ownedItem = task.workItems.find((item) => item.id === workItem.id);
+  const ownerThread = task.threads.at(-2);
+  const otherThread = task.threads.at(-1);
+  if (!ownedItem || !ownerThread || !otherThread) throw new Error("Expected claimed task state");
+  return { task, workItem: ownedItem, ownerThread, otherThread };
+}
+
+function replacementWorkItem(
+  item: WorkItem,
+  overrides: Partial<{
+    id: string;
+    title: string;
+    description: string;
+    status: WorkItem["status"];
+    dependsOn: string[];
+    expectedOutputs: string[];
+  }> = {},
+) {
+  return {
+    id: overrides.id ?? item.id,
+    title: overrides.title ?? item.title,
+    description: overrides.description ?? item.description,
+    status: overrides.status ?? item.status,
+    dependsOn: overrides.dependsOn ?? item.dependsOn,
+    expectedOutputs: overrides.expectedOutputs ?? item.expectedOutputs,
+  };
 }
 
 test("task coordinator rejects task IDs outside the requested workspace context", async () => {
@@ -1297,6 +1391,1486 @@ describe("task mode persistence", () => {
       expect(task.workItems.find((item) => item.id === "owned")?.claimedByThreadId).toBe(
         mainThread.id,
       );
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of ["in_progress", "review", "done"] as const) {
+    test(`thread-scoped marks cannot move dependent work to ${status} before prerequisites finish`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, dependent } = await createDependentWorkTask(harness);
+        const primaryThread = task.threads[0];
+        if (!primaryThread) throw new Error("Expected primary task thread");
+        const beforeActivityCount = task.activity.length;
+
+        await expect(
+          harness.coordinator.markWorkItem({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            workItemId: dependent.id,
+            status,
+            ...(status === "done"
+              ? { completionEvidence: "Dependent work was verified out of order." }
+              : {}),
+            threadId: primaryThread.id,
+          }),
+        ).rejects.toThrow("Work item dependency is not complete");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: task.revision });
+        expect(after?.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+          status: dependent.status,
+          completionEvidence: dependent.completionEvidence,
+        });
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  for (const status of ["in_progress", "review", "done"] as const) {
+    test(`taskUpdate directives cannot move dependent work to ${status} before prerequisites finish`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, dependent } = await createDependentWorkTask(harness);
+        const sessionId = task.threads[0]?.sessionId;
+        if (!sessionId) throw new Error("Expected primary task session");
+
+        await expect(
+          harness.coordinator.applyDirective(sessionId, {
+            type: "mark_work_item",
+            idempotencyKey: `dependent-${status}`,
+            expectedRevision: task.revision,
+            workItemId: dependent.id,
+            status,
+            ...(status === "done"
+              ? { completionEvidence: "Dependent work was verified out of order." }
+              : {}),
+          }),
+        ).rejects.toThrow("Work item dependency is not complete");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: task.revision });
+        expect(after?.workItems.find((item) => item.id === dependent.id)?.status).toBe(
+          dependent.status,
+        );
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(task.id, `dependent-${status}`),
+        ).toBeNull();
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  for (const status of ["in_progress", "review", "done"] as const) {
+    test(`taskUpdate update_plan cannot move dependent work to ${status} before prerequisites finish`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const created = await createDependentWorkTask(harness);
+        let task = created.task;
+        let dependent = created.dependent;
+        if (status === "done") {
+          task = await harness.coordinator.markWorkItem({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            workItemId: dependent.id,
+            status: "blocked",
+            completionEvidence: "Dependent evidence exists but the prerequisite is not done.",
+          });
+          dependent = task.workItems.find((item) => item.id === dependent.id) ?? dependent;
+        }
+        const sessionId = task.threads[0]?.sessionId;
+        if (!sessionId) throw new Error("Expected primary task session");
+        const beforeActivityCount = task.activity.length;
+
+        await expect(
+          harness.coordinator.applyDirective(sessionId, {
+            type: "update_plan",
+            idempotencyKey: `dependent-plan-${status}`,
+            expectedRevision: task.revision,
+            workItems: task.workItems.map((item) => ({
+              id: item.id,
+              title: item.title,
+              description: item.description,
+              dependsOn: item.dependsOn,
+              expectedOutputs: item.expectedOutputs,
+              status: item.id === dependent.id ? status : item.status,
+            })),
+          }),
+        ).rejects.toThrow("Work item dependency is not complete");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: task.revision });
+        expect(after?.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+          status: dependent.status,
+          completionEvidence: dependent.completionEvidence,
+        });
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(task.id, `dependent-plan-${status}`),
+        ).toBeNull();
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("taskUpdate update_plan cannot remove an incomplete dependency from existing work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, setup, dependent } = await createDependentWorkTask(harness);
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(sessionId, {
+          type: "update_plan",
+          idempotencyKey: "remove-incomplete-dependency",
+          expectedRevision: task.revision,
+          workItems: task.workItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            description: item.description,
+            dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+            expectedOutputs: item.expectedOutputs,
+            status: item.status,
+          })),
+        }),
+      ).rejects.toThrow(`Work item dependency is not complete: ${setup.id}`);
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [setup.id],
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "remove-incomplete-dependency"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan cannot remove an incomplete dependency and advance work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, setup, dependent } = await createDependentWorkTask(harness);
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(sessionId, {
+          type: "update_plan",
+          idempotencyKey: "remove-incomplete-dependency-and-advance",
+          expectedRevision: task.revision,
+          workItems: task.workItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            description: item.description,
+            dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+            expectedOutputs: item.expectedOutputs,
+            status: item.id === dependent.id ? "in_progress" : item.status,
+          })),
+        }),
+      ).rejects.toThrow(`Work item dependency is not complete: ${setup.id}`);
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [setup.id],
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(
+          task.id,
+          "remove-incomplete-dependency-and-advance",
+        ),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan can remove a completed dependency", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createDependentWorkTask(harness);
+      const setup = created.setup;
+      const dependent = created.dependent;
+      const task = await harness.coordinator.markWorkItem({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        workItemId: setup.id,
+        status: "done",
+        completionEvidence: "Prerequisite has been completed.",
+      });
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+
+      const updated = await harness.coordinator.applyDirective(sessionId, {
+        type: "update_plan",
+        idempotencyKey: "remove-completed-dependency",
+        expectedRevision: task.revision,
+        workItems: task.workItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          description: item.description,
+          dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+          expectedOutputs: item.expectedOutputs,
+          status: item.status,
+        })),
+      });
+
+      expect(updated.task.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [],
+      });
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "remove-completed-dependency"),
+      ).not.toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan can complete a dependency and remove the edge in the same replacement", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createDependentWorkTask(harness);
+      const setup = created.setup;
+      const dependent = created.dependent;
+      const task = await harness.coordinator.markWorkItem({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        workItemId: setup.id,
+        status: "blocked",
+        completionEvidence: "Prerequisite evidence is already attached.",
+      });
+      const sessionId = task.threads[0]?.sessionId;
+      if (!sessionId) throw new Error("Expected primary task session");
+
+      const updated = await harness.coordinator.applyDirective(sessionId, {
+        type: "update_plan",
+        idempotencyKey: "complete-and-remove-dependency",
+        expectedRevision: task.revision,
+        workItems: task.workItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          description: item.description,
+          dependsOn: item.id === dependent.id ? [] : item.dependsOn,
+          expectedOutputs: item.expectedOutputs,
+          status: item.id === setup.id ? "done" : item.status,
+        })),
+      });
+
+      expect(updated.task.workItems.find((item) => item.id === setup.id)).toMatchObject({
+        status: "done",
+        completionEvidence: "Prerequisite evidence is already attached.",
+      });
+      expect(updated.task.workItems.find((item) => item.id === dependent.id)).toMatchObject({
+        status: dependent.status,
+        dependsOn: [],
+      });
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "complete-and-remove-dependency"),
+      ).not.toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan cannot mark work done without completion evidence", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task } = await createWorkingTask(harness);
+      const workItem = task.workItems[0];
+      const sessionId = task.threads[0]?.sessionId;
+      if (!workItem || !sessionId) throw new Error("Expected primary work item");
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(sessionId, {
+          type: "update_plan",
+          idempotencyKey: "plan-done-without-evidence",
+          expectedRevision: task.revision,
+          workItems: [
+            {
+              id: workItem.id,
+              title: workItem.title,
+              description: workItem.description,
+              status: "done",
+              dependsOn: workItem.dependsOn,
+              expectedOutputs: workItem.expectedOutputs,
+            },
+          ],
+        }),
+      ).rejects.toThrow("Completion evidence is required");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems[0]).toMatchObject({
+        status: workItem.status,
+        completionEvidence: null,
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "plan-done-without-evidence"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("trusted JSON-RPC work-item marks remain explicit unthreaded overrides", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, dependent } = await createDependentWorkTask(harness);
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/workItem/mark", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: task.revision,
+        workItemId: dependent.id,
+        status: "done",
+        completionEvidence: "User override accepted the dependent work explicitly.",
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({
+            revision: task.revision + 1,
+            workItems: expect.arrayContaining([
+              expect.objectContaining({
+                id: dependent.id,
+                status: "done",
+                completionEvidence: "User override accepted the dependent work explicitly.",
+              }),
+            ]),
+          }),
+        }),
+      ]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of ["blocked", "done", "abandoned"] as const) {
+    test(`trusted direct graph replacement clears stale claims for ${status} overrides`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+
+        const updated = await harness.coordinator.replaceWorkItems({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          items: [
+            {
+              id: workItem.id,
+              title: workItem.title,
+              description: workItem.description,
+              status,
+              dependsOn: workItem.dependsOn,
+              expectedOutputs: workItem.expectedOutputs,
+            },
+          ],
+        });
+
+        expect(updated.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+          status,
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: null,
+        });
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("trusted JSON-RPC updateGraph overrides status but clears terminal claims", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/updateGraph", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: task.revision,
+        workItems: [
+          {
+            id: workItem.id,
+            title: workItem.title,
+            description: workItem.description,
+            status: "done",
+            dependsOn: workItem.dependsOn,
+            expectedOutputs: workItem.expectedOutputs,
+          },
+        ],
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({
+            revision: task.revision + 1,
+            workItems: [
+              expect.objectContaining({
+                id: workItem.id,
+                status: "done",
+                assignedThreadId: ownerThread.id,
+                claimedByThreadId: null,
+              }),
+            ],
+          }),
+        }),
+      ]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of [
+    "queued",
+    "in_progress",
+    "blocked",
+    "review",
+    "abandoned",
+    "done",
+  ] as const) {
+    test(`task thread cannot mark work owned by another thread as ${status}`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+        const beforeActivityCount = task.activity.length;
+
+        await expect(
+          harness.coordinator.markWorkItem({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            workItemId: workItem.id,
+            status,
+            ...(status === "done" || status === "in_progress"
+              ? { completionEvidence: "Evidence from the wrong thread." }
+              : {}),
+            threadId: otherThread.id,
+          }),
+        ).rejects.toThrow("Work item is owned by another task thread");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: task.revision });
+        expect(after?.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+          status: workItem.status,
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: ownerThread.id,
+          completionEvidence: workItem.completionEvidence,
+        });
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  for (const status of ["queued", "blocked", "review", "abandoned", "done"] as const) {
+    test(`taskUpdate update_plan cannot mark work owned by another thread as ${status}`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+        const beforeActivityCount = task.activity.length;
+
+        await expect(
+          harness.coordinator.applyDirective(otherThread.sessionId, {
+            type: "update_plan",
+            idempotencyKey: `wrong-owner-plan-${status}`,
+            expectedRevision: task.revision,
+            workItems: [
+              {
+                id: workItem.id,
+                title: workItem.title,
+                description: workItem.description,
+                status,
+                dependsOn: workItem.dependsOn,
+                expectedOutputs: workItem.expectedOutputs,
+              },
+            ],
+          }),
+        ).rejects.toThrow("Work item is owned by another task thread");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: task.revision });
+        expect(after?.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: ownerThread.id,
+          status: workItem.status,
+          completionEvidence: null,
+        });
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(task.id, `wrong-owner-plan-${status}`),
+        ).toBeNull();
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("taskUpdate update_plan cannot delete claimed work owned by another thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(otherThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-delete-claimed",
+          expectedRevision: task.revision,
+          workItems: [],
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems).toEqual([
+        expect.objectContaining({
+          id: workItem.id,
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: ownerThread.id,
+          status: workItem.status,
+        }),
+      ]);
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-delete-claimed"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan cannot delete unclaimed active work assigned to another thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "Owner finished before admin reopened the work item.",
+        threadId: ownerThread.id,
+      });
+      const active = await harness.coordinator.replaceWorkItems({
+        taskId: done.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: done.revision,
+        items: [
+          replacementWorkItem(done.workItems[0] ?? workItem, {
+            status: "queued",
+          }),
+        ],
+      });
+      const activeItem = active.workItems.find((item) => item.id === workItem.id);
+      if (!activeItem) throw new Error("Expected active assigned work item");
+      expect(activeItem).toMatchObject({
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: null,
+        status: "queued",
+      });
+      const beforeActivityCount = active.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(otherThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-delete-active-unclaimed",
+          expectedRevision: active.revision,
+          workItems: [],
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: active.revision });
+      expect(after?.workItems).toEqual([expect.objectContaining(activeItem)]);
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-delete-active-unclaimed"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of ["blocked", "done", "abandoned"] as const) {
+    test(`taskUpdate update_plan cannot delete ${status} work assigned to another thread`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+        const terminal = await harness.coordinator.markWorkItem({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          workItemId: workItem.id,
+          status,
+          ...(status === "done"
+            ? { completionEvidence: "Owner finished before the wrong-thread deletion." }
+            : {}),
+          threadId: ownerThread.id,
+        });
+        const terminalItem = terminal.workItems.find((item) => item.id === workItem.id);
+        if (!terminalItem) throw new Error("Expected terminal assigned work item");
+        expect(terminalItem).toMatchObject({
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: null,
+          status,
+        });
+        const beforeActivityCount = terminal.activity.length;
+
+        await expect(
+          harness.coordinator.applyDirective(otherThread.sessionId, {
+            type: "update_plan",
+            idempotencyKey: `wrong-owner-delete-${status}`,
+            expectedRevision: terminal.revision,
+            workItems: [],
+          }),
+        ).rejects.toThrow("Work item is owned by another task thread");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: terminal.revision });
+        expect(after?.workItems).toEqual([expect.objectContaining(terminalItem)]);
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(task.id, `wrong-owner-delete-${status}`),
+        ).toBeNull();
+
+        if (status === "done") {
+          const reloadedDb = await SessionDb.create({
+            paths: {
+              rootDir: path.join(harness.home, ".cowork"),
+              sessionsDir: path.join(harness.home, ".cowork", "sessions"),
+            },
+          });
+          try {
+            const reloaded = new TaskCoordinator({ sessionDb: reloadedDb });
+            expect(reloaded.get(task.id, harness.workspacePath)?.workItems).toEqual([
+              expect.objectContaining(terminalItem),
+            ]);
+            expect(
+              reloadedDb.getTaskDirectiveReceipt(task.id, `wrong-owner-delete-${status}`),
+            ).toBeNull();
+          } finally {
+            reloadedDb.close();
+          }
+        }
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("taskUpdate update_plan cannot rekey work assigned to another thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+      const primaryThread = task.threads[0];
+      if (!primaryThread) throw new Error("Expected primary task thread");
+      const terminal = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "blocked",
+        threadId: ownerThread.id,
+      });
+      const terminalItem = terminal.workItems.find((item) => item.id === workItem.id);
+      if (!terminalItem) throw new Error("Expected terminal assigned work item");
+      const beforeActivityCount = terminal.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(primaryThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-rekey-assigned",
+          expectedRevision: terminal.revision,
+          workItems: [
+            replacementWorkItem(terminalItem, {
+              id: "replacement-work-item",
+              status: terminalItem.status,
+            }),
+          ],
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: terminal.revision });
+      expect(after?.workItems).toEqual([expect.objectContaining(terminalItem)]);
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-rekey-assigned"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("owning task thread can delete its assigned work through update_plan", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "Owner completed the work before deleting the item.",
+        threadId: ownerThread.id,
+      });
+
+      const [ownerDelete, wrongThreadDelete] = await Promise.allSettled([
+        harness.coordinator.applyDirective(ownerThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "owner-delete-assigned",
+          expectedRevision: done.revision,
+          workItems: [],
+        }),
+        harness.coordinator.applyDirective(otherThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-concurrent-delete",
+          expectedRevision: done.revision,
+          workItems: [],
+        }),
+      ]);
+
+      expect(ownerDelete.status).toBe("fulfilled");
+      expect(wrongThreadDelete.status).toBe("rejected");
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after?.workItems).toEqual([]);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "owner-delete-assigned"),
+      ).not.toBeNull();
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-concurrent-delete"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("primary task thread can rekey unowned work through update_plan", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task } = await createWorkingTask(harness);
+      const workItem = task.workItems[0];
+      const primaryThread = task.threads[0];
+      if (!workItem || !primaryThread) throw new Error("Expected primary task work");
+
+      const updated = await harness.coordinator.applyDirective(primaryThread.sessionId, {
+        type: "update_plan",
+        idempotencyKey: "primary-rekey-unowned",
+        expectedRevision: task.revision,
+        workItems: [
+          replacementWorkItem(workItem, {
+            id: "renamed-work-item",
+          }),
+        ],
+      });
+
+      expect(updated.task.workItems).toEqual([
+        expect.objectContaining({
+          id: "renamed-work-item",
+          title: workItem.title,
+          assignedThreadId: null,
+          claimedByThreadId: null,
+        }),
+      ]);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "primary-rekey-unowned"),
+      ).not.toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("trusted JSON-RPC updateGraph can delete assigned terminal work as an admin override", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "User accepted this terminal item can be removed.",
+        threadId: ownerThread.id,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/updateGraph", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: done.revision,
+        workItems: [],
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({
+            revision: done.revision + 1,
+            workItems: [],
+          }),
+        }),
+      ]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan cannot remove active artifact revision helper work", async () => {
+    const harness = await createHarness();
+    try {
+      const { task: reviewed } = await createIndependentlyReviewedTask(harness, {
+        reviewRequired: false,
+      });
+      const artifact = reviewed.artifacts[0];
+      const primarySessionId = reviewed.threads[0]?.sessionId;
+      if (!artifact || !primarySessionId) throw new Error("Expected reviewed task artifact");
+      const { task, revision } = await harness.coordinator.startArtifactRevision({
+        taskId: reviewed.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: reviewed.revision,
+        artifactId: artifact.id,
+        instruction: "Revise the report.",
+        title: "Revise report",
+      });
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(primarySessionId, {
+          type: "update_plan",
+          idempotencyKey: "remove-active-artifact-revision",
+          expectedRevision: task.revision,
+          workItems: task.workItems.filter((item) => item.id !== revision.workItemId),
+        }),
+      ).rejects.toThrow("active artifact revision");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: revision.workItemId })]),
+      );
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "remove-active-artifact-revision"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate directives cannot mark work owned by another thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+
+      await expect(
+        harness.coordinator.applyDirective(otherThread.sessionId, {
+          type: "mark_work_item",
+          idempotencyKey: "wrong-owner-mark",
+          expectedRevision: task.revision,
+          workItemId: workItem.id,
+          status: "done",
+          completionEvidence: "Other thread tried to finish this item.",
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: ownerThread.id,
+        status: workItem.status,
+        completionEvidence: null,
+      });
+      expect(harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-mark")).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task thread cannot claim work still assigned to another thread after completion", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "Owner finished the item.",
+        threadId: ownerThread.id,
+      });
+
+      await expect(
+        harness.coordinator.claimWorkItem({
+          taskId: done.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: done.revision,
+          workItemId: workItem.id,
+          threadId: otherThread.id,
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: done.revision });
+      expect(after?.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+        status: "done",
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: null,
+        completionEvidence: "Owner finished the item.",
+      });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("JSON-RPC claims reject work still assigned to another task thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "Owner finished the item.",
+        threadId: ownerThread.id,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/workItem/claim", {
+        cwd: harness.workspacePath,
+        taskId: done.id,
+        expectedRevision: done.revision,
+        workItemId: workItem.id,
+        taskThreadId: otherThread.id,
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: expect.stringContaining("owned by another task thread"),
+        }),
+      ]);
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.workItems[0]).toMatchObject({
+        status: "done",
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: null,
+        completionEvidence: "Owner finished the item.",
+      });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("thread-scoped marks reject non-member and cross-task thread identities", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const first = await createWorkingTask(harness);
+      const firstItem = first.task.workItems[0];
+      if (!firstItem) throw new Error("Expected first work item");
+      const second = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "other-task-session",
+        sourceSessionId: "other-source-chat",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: `cross-task-${crypto.randomUUID()}`,
+          title: "Other task",
+          objective: "Stay isolated.",
+          context: "Threads from this task must not mutate the first task.",
+          requirements: [{ kind: "acceptance_criterion", text: "Task state is isolated." }],
+          workItems: [{ key: "run", title: "Run", expectedOutputs: ["Result"] }],
+          reviewRequired: false,
+          reviewRounds: 0,
+        },
+      });
+      const foreignThread = second.task.threads[0];
+      if (!foreignThread) throw new Error("Expected foreign task thread");
+
+      await expect(
+        harness.coordinator.markWorkItem({
+          taskId: first.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: first.task.revision,
+          workItemId: firstItem.id,
+          status: "done",
+          completionEvidence: "Non-member evidence.",
+          threadId: "missing-task-thread",
+        }),
+      ).rejects.toThrow("Unknown task thread");
+      await expect(
+        harness.coordinator.markWorkItem({
+          taskId: first.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: first.task.revision,
+          workItemId: firstItem.id,
+          status: "done",
+          completionEvidence: "Cross-task evidence.",
+          threadId: foreignThread.id,
+        }),
+      ).rejects.toThrow("Unknown task thread");
+      await expect(
+        harness.coordinator.markWorkItem({
+          taskId: first.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: first.task.revision,
+          workItemId: firstItem.id,
+          status: "done",
+          completionEvidence: "Whitespace thread evidence.",
+          threadId: " ",
+        }),
+      ).rejects.toThrow("Unknown task thread");
+
+      const afterFirst = harness.coordinator.get(first.task.id, harness.workspacePath);
+      const afterSecond = harness.coordinator.get(second.task.id, harness.workspacePath);
+      expect(afterFirst).toMatchObject({ revision: first.task.revision });
+      expect(afterFirst?.workItems[0]).toMatchObject({
+        status: firstItem.status,
+        completionEvidence: firstItem.completionEvidence,
+      });
+      expect(afterSecond).toMatchObject({ revision: second.task.revision });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("owning task thread and primary thread can mark their work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const claimed = await createClaimedWorkTask(harness);
+      const ownerDone = await harness.coordinator.markWorkItem({
+        taskId: claimed.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: claimed.task.revision,
+        workItemId: claimed.workItem.id,
+        status: "done",
+        completionEvidence: "Owner completed the work.",
+        threadId: claimed.ownerThread.id,
+      });
+      expect(ownerDone.workItems.find((item) => item.id === claimed.workItem.id)).toMatchObject({
+        status: "done",
+        assignedThreadId: claimed.ownerThread.id,
+        claimedByThreadId: null,
+        completionEvidence: "Owner completed the work.",
+      });
+
+      const unclaimed = await createWorkingTask(harness);
+      const unclaimedItem = unclaimed.task.workItems[0];
+      const primaryThread = unclaimed.task.threads[0];
+      if (!unclaimedItem || !primaryThread) throw new Error("Expected primary work item");
+      const primaryDone = await harness.coordinator.applyDirective(primaryThread.sessionId, {
+        type: "mark_work_item",
+        idempotencyKey: "primary-unclaimed-mark",
+        expectedRevision: unclaimed.task.revision,
+        workItemId: unclaimedItem.id,
+        status: "done",
+        completionEvidence: "Primary thread completed unclaimed work.",
+      });
+
+      expect(primaryDone.task.workItems.find((item) => item.id === unclaimedItem.id)).toMatchObject(
+        {
+          status: "done",
+          completionEvidence: "Primary thread completed unclaimed work.",
+        },
+      );
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(unclaimed.task.id, "primary-unclaimed-mark"),
+      ).not.toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("stale mark after a claim preserves ownership, status, and activity", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      let task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Race",
+        objective: "Serialize claim and mark updates.",
+        sessionId: "session-1",
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [{ id: "race", title: "Race work", expectedOutputs: ["Result"] }],
+      });
+      task = await harness.coordinator.addThread({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        title: "Second lane",
+        createdBy: "user",
+      });
+      const [ownerThread, otherThread] = task.threads;
+      if (!ownerThread || !otherThread) throw new Error("Expected two task threads");
+      const beforeActivityCount = task.activity.length;
+
+      const claimed = await harness.coordinator.claimWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: "race",
+        threadId: ownerThread.id,
+      });
+      await expect(
+        harness.coordinator.markWorkItem({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          workItemId: "race",
+          status: "done",
+          completionEvidence: "Stale completion evidence.",
+          threadId: otherThread.id,
+        }),
+      ).rejects.toThrow(`Task revision conflict: expected ${task.revision}, current`);
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: claimed.revision });
+      expect(after?.workItems.find((item) => item.id === "race")).toMatchObject({
+        status: "in_progress",
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: ownerThread.id,
+        completionEvidence: null,
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("concurrent claim and stale mark serialize without partial mark mutation", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      let task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Concurrent race",
+        objective: "Avoid partial ownership mutation.",
+        sessionId: "session-1",
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [{ id: "race", title: "Race work", expectedOutputs: ["Result"] }],
+      });
+      task = await harness.coordinator.addThread({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        title: "Second lane",
+        createdBy: "user",
+      });
+      const [ownerThread, otherThread] = task.threads;
+      if (!ownerThread || !otherThread) throw new Error("Expected two task threads");
+      const beforeActivityCount = task.activity.length;
+
+      const claim = harness.coordinator.claimWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: "race",
+        threadId: ownerThread.id,
+      });
+      const staleMark = harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: "race",
+        status: "done",
+        completionEvidence: "Concurrent stale completion.",
+        threadId: otherThread.id,
+      });
+      const [claimResult, markResult] = await Promise.allSettled([claim, staleMark]);
+
+      expect(claimResult.status).toBe("fulfilled");
+      expect(markResult.status).toBe("rejected");
+      if (markResult.status !== "rejected") throw new Error("Expected stale mark rejection");
+      expect(markResult.reason).toBeInstanceOf(Error);
+      expect((markResult.reason as Error).message).toMatch(
+        /Task revision conflict|owned by another task thread|must be claimed/,
+      );
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after?.workItems.find((item) => item.id === "race")).toMatchObject({
+        status: "in_progress",
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: ownerThread.id,
+        completionEvidence: null,
+      });
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("JSON-RPC stale updateGraph reports conflicts without disturbing claimed work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      let task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Route graph race",
+        objective: "Expose stale graph route conflicts.",
+        sessionId: "session-1",
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [{ id: "route", title: "Route work", expectedOutputs: ["Result"] }],
+      });
+      const ownerThread = task.threads[0];
+      if (!ownerThread) throw new Error("Expected task thread");
+      const claimed = await harness.coordinator.claimWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: "route",
+        threadId: ownerThread.id,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/updateGraph", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: task.revision,
+        workItems: [{ id: "route", title: "Route work", status: "done" }],
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          data: expect.objectContaining({
+            category: "revision_conflict",
+            expectedRevision: task.revision,
+            currentRevision: claimed.revision,
+          }),
+        }),
+      ]);
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.workItems[0]).toMatchObject({
+        status: "in_progress",
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: ownerThread.id,
+        completionEvidence: null,
+      });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("JSON-RPC stale marks report conflicts without disturbing claimed work", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      let task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Route race",
+        objective: "Expose stale route conflicts.",
+        sessionId: "session-1",
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [{ id: "route", title: "Route work", expectedOutputs: ["Result"] }],
+      });
+      const ownerThread = task.threads[0];
+      if (!ownerThread) throw new Error("Expected task thread");
+      const claimed = await harness.coordinator.claimWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: "route",
+        threadId: ownerThread.id,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/workItem/mark", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: task.revision,
+        workItemId: "route",
+        status: "done",
+        completionEvidence: "Stale JSON-RPC completion.",
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          data: expect.objectContaining({
+            category: "revision_conflict",
+            expectedRevision: task.revision,
+            currentRevision: claimed.revision,
+          }),
+        }),
+      ]);
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.workItems[0]).toMatchObject({
+        status: "in_progress",
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: ownerThread.id,
+        completionEvidence: null,
+      });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("restart preserves rejected and accepted thread ownership decisions", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const rejected = await createClaimedWorkTask(harness);
+      await expect(
+        harness.coordinator.markWorkItem({
+          taskId: rejected.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: rejected.task.revision,
+          workItemId: rejected.workItem.id,
+          status: "done",
+          completionEvidence: "Wrong-thread evidence.",
+          threadId: rejected.otherThread.id,
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const accepted = await createClaimedWorkTask(harness);
+      const acceptedDone = await harness.coordinator.markWorkItem({
+        taskId: accepted.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: accepted.task.revision,
+        workItemId: accepted.workItem.id,
+        status: "done",
+        completionEvidence: "Owner evidence survives restart.",
+        threadId: accepted.ownerThread.id,
+      });
+
+      const reloadedDb = await SessionDb.create({
+        paths: {
+          rootDir: path.join(harness.home, ".cowork"),
+          sessionsDir: path.join(harness.home, ".cowork", "sessions"),
+        },
+      });
+      try {
+        const reloaded = new TaskCoordinator({ sessionDb: reloadedDb });
+        expect(reloaded.get(rejected.task.id, harness.workspacePath)?.workItems[0]).toMatchObject({
+          status: rejected.workItem.status,
+          assignedThreadId: rejected.ownerThread.id,
+          claimedByThreadId: rejected.ownerThread.id,
+          completionEvidence: null,
+        });
+        expect(reloaded.get(acceptedDone.id, harness.workspacePath)?.workItems[0]).toMatchObject({
+          status: "done",
+          assignedThreadId: accepted.ownerThread.id,
+          claimedByThreadId: null,
+          completionEvidence: "Owner evidence survives restart.",
+        });
+      } finally {
+        reloadedDb.close();
+      }
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task directives cannot mutate work items from another task", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const first = await createWorkingTask(harness);
+      const second = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "second-task-session",
+        sourceSessionId: "second-source-chat",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: `directive-cross-task-${crypto.randomUUID()}`,
+          title: "Second task",
+          objective: "Stay in its own task.",
+          context: "Directive work item IDs must be resolved within the current task.",
+          requirements: [{ kind: "acceptance_criterion", text: "Tasks remain isolated." }],
+          workItems: [{ key: "run", title: "Run", expectedOutputs: ["Result"] }],
+          reviewRequired: false,
+          reviewRounds: 0,
+        },
+      });
+      const firstItem = first.task.workItems[0];
+      const secondSession = second.task.threads[0]?.sessionId;
+      if (!firstItem || !secondSession) throw new Error("Expected task state");
+
+      await expect(
+        harness.coordinator.applyDirective(secondSession, {
+          type: "mark_work_item",
+          idempotencyKey: "cross-task-work-item",
+          expectedRevision: second.task.revision,
+          workItemId: firstItem.id,
+          status: "done",
+          completionEvidence: "Cross-task completion attempt.",
+        }),
+      ).rejects.toThrow("Unknown work item");
+
+      expect(harness.coordinator.get(first.task.id, harness.workspacePath)).toMatchObject({
+        revision: first.task.revision,
+      });
+      expect(harness.coordinator.get(second.task.id, harness.workspacePath)).toMatchObject({
+        revision: second.task.revision,
+      });
     } finally {
       harness.sessionDb.close();
     }

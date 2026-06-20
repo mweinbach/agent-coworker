@@ -53,8 +53,7 @@ export function isSandboxApprovalThreadVisible(
   if (!target) return false;
   if (context.view === "task") {
     if (target.kind !== "task" || target.taskId !== context.selectedTaskId) return false;
-    const status = context.tasksById[target.taskId]?.status;
-    return status !== "completed" && status !== "cancelled" && status !== "failed";
+    return true;
   }
   return context.view === "chat" && target.kind === "chat";
 }

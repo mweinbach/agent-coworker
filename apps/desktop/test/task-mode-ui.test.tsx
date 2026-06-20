@@ -980,7 +980,8 @@ describe("desktop task mode UI", () => {
           } as never);
           await Promise.resolve();
         });
-        expect(container.textContent).not.toContain("echo task-only");
+        expect(container.textContent).toContain("echo task-only");
+        expect(container.textContent).not.toContain("echo ordinary-chat");
 
         await act(async () => root.unmount());
       } finally {

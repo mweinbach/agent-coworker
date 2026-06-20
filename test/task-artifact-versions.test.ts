@@ -6,6 +6,13 @@ import path from "node:path";
 import { SessionDb } from "../src/server/sessionDb";
 import { ArtifactVersionStore } from "../src/server/tasks/ArtifactVersionStore";
 import { ArtifactConflictError, TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
+import type { TaskStatus } from "../src/shared/tasks";
+
+const TERMINAL_TASK_STATUSES = [
+  "completed",
+  "cancelled",
+  "failed",
+] as const satisfies readonly TaskStatus[];
 
 async function createHarness() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-artifact-version-test-"));
@@ -20,8 +27,20 @@ async function createHarness() {
   const artifactStore = new ArtifactVersionStore({ rootDir: path.join(rootDir, "artifacts") });
   const coordinator = new TaskCoordinator({ sessionDb, artifactStore });
   let threadIndex = 1;
-  coordinator.setThreadFactory(async () => ({ sessionId: `revision-session-${threadIndex++}` }));
-  return { home, rootDir, workspacePath, sessionDb, artifactStore, coordinator };
+  let threadFactoryCalls = 0;
+  coordinator.setThreadFactory(async () => {
+    threadFactoryCalls += 1;
+    return { sessionId: `revision-session-${threadIndex++}` };
+  });
+  return {
+    home,
+    rootDir,
+    workspacePath,
+    sessionDb,
+    artifactStore,
+    coordinator,
+    getThreadFactoryCalls: () => threadFactoryCalls,
+  };
 }
 
 async function createTaskWithArtifact(
@@ -77,6 +96,62 @@ describe("ArtifactVersionStore", () => {
 });
 
 describe("task artifact versions", () => {
+  for (const status of TERMINAL_TASK_STATUSES) {
+    test(`rejects artifact revision starts on ${status} tasks before mutation`, async () => {
+      const harness = await createHarness();
+      try {
+        let { task, artifact } = await createTaskWithArtifact(harness);
+        task = await harness.coordinator.transition({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          status: "working",
+          summary: "Artifact work started",
+        });
+        task = await harness.coordinator.transition({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          status,
+          summary: `Task is ${status}`,
+        });
+        const threadFactoryCalls = harness.getThreadFactoryCalls();
+        const detailBefore = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+        });
+
+        await expect(
+          harness.coordinator.startArtifactRevision({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: artifact.id,
+            expectedRevision: task.revision,
+            instruction: "Mutate nothing after terminal state.",
+          }),
+        ).rejects.toThrow(`Task ${task.id} is ${status}`);
+
+        const taskAfter = harness.coordinator.get(task.id, harness.workspacePath);
+        const detailAfter = harness.coordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+        });
+        expect(harness.getThreadFactoryCalls()).toBe(threadFactoryCalls);
+        expect(taskAfter).toMatchObject({
+          status,
+          revision: task.revision,
+          threadCount: task.threadCount,
+        });
+        expect(detailAfter).toEqual(detailBefore);
+        expect(detailAfter?.activeRevision).toBeNull();
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
   test("persists lineage, skips identical captures, and restores as a new version", async () => {
     const harness = await createHarness();
     try {
@@ -358,6 +433,13 @@ describe("task artifact versions", () => {
         artifactId: artifact.id,
       });
       expect(detail?.acceptedVersionId).toBe(detail?.latestVersionId);
+
+      task = await harness.coordinator.reopenTask({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        reason: "Revise the accepted no-review delivery.",
+      });
 
       const started = await harness.coordinator.startArtifactRevision({
         taskId: task.id,

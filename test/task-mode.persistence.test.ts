@@ -76,6 +76,34 @@ async function transitionToStatus(
   });
 }
 
+async function invokeTaskRoute(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const errors: unknown[] = [];
+  const results: unknown[] = [];
+  const handlers = createTaskRouteHandlers({
+    tasks: harness.coordinator,
+    threads: { getLive: () => null },
+    jsonrpc: {
+      sendResult: (_ws: unknown, _id: unknown, result: unknown) => results.push(result),
+      sendError: (_ws: unknown, _id: unknown, error: unknown) => errors.push(error),
+    },
+    utils: {
+      resolveWorkspacePath: () => harness.workspacePath,
+      buildThreadFromSession: () => null,
+    },
+  } as never);
+  await handlers[method]?.({} as never, {
+    jsonrpc: "2.0",
+    id: 1,
+    method,
+    params,
+  });
+  return { errors, results };
+}
+
 describe("task mode persistence", () => {
   test("marks a task failed when its primary thread errors", async () => {
     const harness = await createHarness();
@@ -791,6 +819,61 @@ describe("task mode persistence", () => {
   });
 
   for (const status of TERMINAL_TASK_STATUSES) {
+    test(`generic transitions cannot revive ${status} tasks`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const created = await createWorkingTask(harness);
+        const terminal = await transitionToStatus(harness, created.task.id, status);
+
+        await expect(
+          harness.coordinator.transition({
+            taskId: terminal.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: terminal.revision,
+            status: "working",
+            summary: "Implicitly revived",
+          }),
+        ).rejects.toThrow(`Invalid task transition: ${status} -> working`);
+
+        expect(harness.coordinator.get(terminal.id, harness.workspacePath)).toMatchObject({
+          status,
+          revision: terminal.revision,
+        });
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+
+    test(`task/requestChanges rejects ${status} tasks without reopening them`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const created = await createWorkingTask(harness);
+        const terminal = await transitionToStatus(harness, created.task.id, status);
+        const { errors, results } = await invokeTaskRoute(harness, "task/requestChanges", {
+          cwd: harness.workspacePath,
+          taskId: terminal.id,
+          expectedRevision: terminal.revision,
+          feedback: "This must not reopen a terminal task.",
+        });
+
+        expect(results).toEqual([]);
+        expect(errors).toEqual([
+          expect.objectContaining({
+            code: JSONRPC_ERROR_CODES.invalidRequest,
+            message: expect.stringContaining("awaiting review"),
+          }),
+        ]);
+        expect(harness.coordinator.get(terminal.id, harness.workspacePath)).toMatchObject({
+          status,
+          revision: terminal.revision,
+        });
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+
     test(`rejects focused thread creation on ${status} tasks`, async () => {
       const harness = await createHarness();
       await fs.mkdir(harness.workspacePath, { recursive: true });
@@ -817,19 +900,50 @@ describe("task mode persistence", () => {
     });
   }
 
+  test("task/requestChanges returns an awaiting-review task to working", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const review = await harness.coordinator.transition({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        status: "awaiting_review",
+        summary: "Ready for review",
+      });
+      const { errors, results } = await invokeTaskRoute(harness, "task/requestChanges", {
+        cwd: harness.workspacePath,
+        taskId: review.id,
+        expectedRevision: review.revision,
+        feedback: "Tighten the final recommendation.",
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "working" }),
+        }),
+      ]);
+      expect(harness.coordinator.get(review.id, harness.workspacePath)?.activity[0]).toMatchObject({
+        summary: "Changes requested",
+        detail: "Tighten the final recommendation.",
+      });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("allows focused thread creation after a terminal task is explicitly reopened", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });
     try {
       const created = await createWorkingTask(harness);
       const terminal = await transitionToStatus(harness, created.task.id, "completed");
-      const reopened = await harness.coordinator.transition({
+      const reopened = await harness.coordinator.reopenTask({
         taskId: terminal.id,
         workspacePath: harness.workspacePath,
         expectedRevision: terminal.revision,
-        status: "working",
-        summary: "Task reopened",
-        sessionId: "task-session-1",
       });
 
       const updated = await harness.coordinator.addThread({

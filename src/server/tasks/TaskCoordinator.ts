@@ -67,9 +67,9 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   working: ["blocked", "awaiting_review", "completed", "cancelled", "failed"],
   blocked: ["working", "cancelled", "failed"],
   awaiting_review: ["working", "completed", "cancelled", "failed"],
-  completed: ["working"],
-  failed: ["working"],
-  cancelled: ["working"],
+  completed: [],
+  failed: [],
+  cancelled: [],
 };
 
 const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
@@ -1360,6 +1360,44 @@ export class TaskCoordinator {
     return task;
   }
 
+  async requestChanges(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    feedback: string;
+  }): Promise<TaskRecord> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    if (task.status !== "awaiting_review") {
+      throw new Error("Task must be awaiting review before changes can be requested");
+    }
+    return await this.transition({
+      taskId: task.id,
+      workspacePath: task.workspacePath,
+      expectedRevision: input.expectedRevision,
+      status: "working",
+      summary: "Changes requested",
+      detail: input.feedback,
+    });
+  }
+
+  async reopenTask(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    reason?: string;
+  }): Promise<TaskRecord> {
+    const task = this.requireTask(input.taskId, input.workspacePath);
+    if (task.status !== "completed" && task.status !== "cancelled") {
+      throw new Error("Only completed or cancelled tasks can be reopened");
+    }
+    return await this.recoverTerminalTask({
+      task,
+      expectedRevision: input.expectedRevision,
+      summary: "Task reopened",
+      detail: input.reason,
+    });
+  }
+
   async startArtifactRevision(input: {
     taskId: string;
     workspacePath: string;
@@ -1376,6 +1414,7 @@ export class TaskCoordinator {
     revision: TaskArtifactRevision;
   }> {
     let task = this.requireTask(input.taskId, input.workspacePath);
+    assertTaskAcceptsNewThreads(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
       detail = await this.ensureArtifactBaseline({
@@ -1607,11 +1646,9 @@ export class TaskCoordinator {
     const primaryThread = task.threads[0];
     if (!primaryThread) throw new Error("Task has no primary thread to retry");
 
-    await this.transition({
-      taskId: task.id,
-      workspacePath: task.workspacePath,
+    await this.recoverTerminalTask({
+      task,
       expectedRevision: task.revision,
-      status: "working",
       summary: "Task retry started",
       sessionId: primaryThread.sessionId,
     });
@@ -1727,6 +1764,44 @@ export class TaskCoordinator {
       taskId: task.id,
       expectedRevision: input.expectedRevision,
       status: input.status,
+      summary: nonEmpty(input.summary, "Status summary"),
+      detail: input.detail?.trim() || null,
+      updatedAt: nowIso(),
+      threadId: thread?.id ?? null,
+    });
+    this.notifyUpdated(updated);
+    return updated;
+  }
+
+  private async recoverTerminalTask(input: {
+    task: TaskRecord;
+    expectedRevision: number;
+    summary: string;
+    detail?: string;
+    sessionId?: string;
+  }): Promise<TaskRecord> {
+    const { task } = input;
+    if (!TERMINAL_TASK_STATUSES.has(task.status)) {
+      throw new Error(`Task ${task.id} is not terminal`);
+    }
+    if (task.revision !== input.expectedRevision) {
+      throw new Error(
+        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
+      );
+    }
+    if (
+      task.questions.some((question) => question.status === "pending" && question.blocking) ||
+      task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking)
+    ) {
+      throw new Error("Task cannot return to working while blocking input or issues remain");
+    }
+    const thread = input.sessionId
+      ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
+      : null;
+    const updated = await this.options.sessionDb.setTaskStatus({
+      taskId: task.id,
+      expectedRevision: input.expectedRevision,
+      status: "working",
       summary: nonEmpty(input.summary, "Status summary"),
       detail: input.detail?.trim() || null,
       updatedAt: nowIso(),

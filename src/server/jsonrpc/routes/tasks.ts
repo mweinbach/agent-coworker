@@ -466,23 +466,19 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       }),
     })),
     "task/requestChanges": createTaskHandler(context, "task/requestChanges", async (params) => ({
-      task: await context.tasks.transition({
+      task: await context.tasks.requestChanges({
         taskId: params.taskId,
         workspacePath: resolveCwd(context, params, "task/requestChanges"),
         expectedRevision: params.expectedRevision,
-        status: "working",
-        summary: "Changes requested",
-        detail: params.feedback,
+        feedback: params.feedback,
       }),
     })),
     "task/reopen": createTaskHandler(context, "task/reopen", async (params) => ({
-      task: await context.tasks.transition({
+      task: await context.tasks.reopenTask({
         taskId: params.taskId,
         workspacePath: resolveCwd(context, params, "task/reopen"),
         expectedRevision: params.expectedRevision,
-        status: "working",
-        summary: "Task reopened",
-        detail: params.reason,
+        reason: params.reason,
       }),
     })),
     "task/retry": createTaskHandler(

@@ -78,6 +78,12 @@ const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
   z.string().optional(),
 );
+const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
+const optionalSafeIdSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return SAFE_ID.test(trimmed) ? trimmed : undefined;
+}, z.string().optional());
 const optionalStringSchema = z.preprocess(
   (value) => (typeof value === "string" ? value : undefined),
   z.string().optional(),
@@ -306,6 +312,8 @@ const persistedThreadSchema = z
     messageCount: normalizedLastEventSeqSchema,
     lastEventSeq: normalizedLastEventSeqSchema,
     legacyTranscriptId: normalizedSessionIdSchema.optional(),
+    taskId: optionalSafeIdSchema,
+    taskThreadId: optionalSafeIdSchema,
     draft: z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
@@ -329,6 +337,8 @@ const persistedThreadSchema = z
       messageCount: thread.messageCount,
       lastEventSeq: thread.lastEventSeq,
       legacyTranscriptId: thread.legacyTranscriptId ?? (thread.id !== id ? thread.id : null),
+      ...(thread.taskId ? { taskId: thread.taskId } : {}),
+      ...(thread.taskThreadId ? { taskThreadId: thread.taskThreadId } : {}),
       draft: thread.draft ?? false,
       archived: thread.archived ?? false,
       archivedAt: thread.archivedAt,
@@ -580,8 +590,11 @@ function buildResolvedDesktopUiState(
   const selectedWorkspaceId = selection.selectedWorkspaceId;
   const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
   const pluginManagementMode = selection.pluginManagementMode;
+  const taskContextAllowed =
+    normalizedUi.view === "task" ||
+    (normalizedUi.view === "settings" && normalizedUi.lastNonSettingsView === "task");
   const selectingTaskThread =
-    normalizedUi.view === "task" &&
+    taskContextAllowed &&
     typeof normalizedUi.selectedTaskId === "string" &&
     normalizedUi.selectedTaskId.trim().length > 0;
   const workspaceThreads = selectedWorkspaceId
@@ -616,7 +629,7 @@ function buildResolvedDesktopUiState(
   return {
     selectedWorkspaceId,
     selectedThreadId,
-    selectedTaskId: normalizedUi.selectedTaskId ?? null,
+    selectedTaskId: taskContextAllowed ? (normalizedUi.selectedTaskId ?? null) : null,
     pluginManagementWorkspaceId,
     pluginManagementMode,
     view: normalizedUi.view ?? "chat",

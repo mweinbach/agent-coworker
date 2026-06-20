@@ -106,6 +106,11 @@ function normalizePersistedSidebarSectionOrder(value: unknown): SidebarSectionKe
   return ordered;
 }
 const safeIdSchema = nonEmptyStringSchema.regex(SAFE_ID, "contains invalid characters");
+const optionalSafeIdSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return SAFE_ID.test(trimmed) ? trimmed : undefined;
+}, z.string().optional());
 const directionSchema = z.enum(["server", "client"]);
 const reasoningEffortSchema = z.enum(OPENAI_REASONING_EFFORT_VALUES);
 const reasoningSummarySchema = z.enum(OPENAI_REASONING_SUMMARY_VALUES);
@@ -544,8 +549,18 @@ const persistedThreadSchema = z
         z.string().nullable(),
       )
       .optional(),
+    taskId: optionalSafeIdSchema,
+    taskThreadId: optionalSafeIdSchema,
   })
-  .passthrough();
+  .passthrough()
+  .transform((thread) => {
+    const { taskId, taskThreadId, ...rest } = thread;
+    return {
+      ...rest,
+      ...(taskId ? { taskId } : {}),
+      ...(taskId && taskThreadId ? { taskThreadId } : {}),
+    };
+  });
 
 const persistedOnboardingSchema = z
   .object({

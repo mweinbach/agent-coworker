@@ -349,6 +349,8 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
     if (!workspaceIds.has(workspaceId)) {
       continue;
     }
+    const taskId = asSafeId(item.taskId);
+    const taskThreadId = taskId ? asSafeId(item.taskThreadId) : null;
 
     threads.push({
       id,
@@ -364,6 +366,8 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       legacyTranscriptId: asNonEmptyString(item.legacyTranscriptId) ?? null,
       archived: typeof item.archived === "boolean" ? item.archived : false,
       archivedAt: typeof item.archivedAt === "string" ? item.archivedAt : undefined,
+      ...(taskId ? { taskId } : {}),
+      ...(taskThreadId ? { taskThreadId } : {}),
     });
     seenThreadIds.add(id);
   }

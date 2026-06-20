@@ -477,6 +477,70 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.selectedThreadId).not.toBe("task-1");
   });
 
+  test("buildCachedDesktopStateSeed preserves task thread ownership metadata", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "task-session-1",
+            sessionId: "task-session-1",
+            title: "Task thread",
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+        ],
+      },
+    });
+
+    expect(seed?.threads).toEqual([
+      expect.objectContaining({
+        id: "task-session-1",
+        sessionId: "task-session-1",
+        taskId: "task-1",
+        taskThreadId: "task-thread-1",
+      }),
+    ]);
+  });
+
+  test("buildCachedDesktopStateSeed clears stale task context when chat startup falls back to ordinary chat", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "task-session-1",
+            sessionId: "task-session-1",
+            title: "Task thread",
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
+          },
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "chat",
+        selectedThreadId: "task-session-1",
+        selectedTaskId: "task-1",
+      },
+    });
+
+    expect(seed?.view).toBe("chat");
+    expect(seed?.selectedThreadId).toBe("chat-session-1");
+    expect(seed?.selectedTaskId).toBeNull();
+  });
+
   test("buildCachedDesktopStateSeed restores normalized privacy telemetry settings", () => {
     const seed = buildCachedDesktopStateSeed({
       ...cachedState,

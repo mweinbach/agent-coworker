@@ -1,3 +1,4 @@
+import type { TaskRecord, TaskStatus } from "../../shared/tasks";
 import type { TurnReference } from "../../types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
@@ -15,6 +16,13 @@ import {
   createUserMessageAttachmentHelpers,
   getTurnAttachmentValidationMessage,
 } from "./turnExecution/userMessageAttachments";
+
+const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
+
+function terminalTaskLockMessage(task: Pick<TaskRecord, "id" | "status">): string | null {
+  if (!TERMINAL_TASK_STATUSES.has(task.status)) return null;
+  return `Task ${task.id} is ${task.status} and cannot accept new turns until it is reopened or retried.`;
+}
 
 export class TurnExecutionManager {
   private readonly steerCoordinator: SteerCoordinator;
@@ -87,6 +95,11 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
+    const taskThreadLockMessage = this.getTaskThreadLockMessage();
+    if (taskThreadLockMessage) {
+      this.context.emitError("task_locked", "session", taskThreadLockMessage);
+      return;
+    }
     const activeTask = this.context.deps.sessionDb?.getActiveTaskForSourceSession?.(
       this.context.id,
     );
@@ -116,6 +129,11 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
+    const taskThreadLockMessage = this.getTaskThreadLockMessage();
+    if (taskThreadLockMessage) {
+      this.context.emitError("task_locked", "session", taskThreadLockMessage);
+      return;
+    }
     const activeTask = this.context.deps.sessionDb?.getActiveTaskForSourceSession?.(
       this.context.id,
     );
@@ -157,5 +175,10 @@ export class TurnExecutionManager {
       this.context.state.abortController.abort();
     }
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
+  }
+
+  private getTaskThreadLockMessage(): string | null {
+    const task = this.context.deps.sessionDb?.getTaskForThread?.(this.context.id);
+    return task ? terminalTaskLockMessage(task) : null;
   }
 }

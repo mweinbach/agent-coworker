@@ -1,6 +1,7 @@
-import { MessageSquarePlusIcon } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { LockKeyholeIcon, MessageSquarePlusIcon } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
 
+import type { TaskStatus } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
 import {
@@ -17,6 +18,29 @@ import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
 import { ChatView } from "../ChatView";
 
+function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return status === "completed" || status === "cancelled" || status === "failed";
+}
+
+function terminalConversationCopy(status: TaskStatus): { title: string; detail: string } {
+  if (status === "failed") {
+    return {
+      title: "This task failed.",
+      detail: "Retry the task to continue this conversation.",
+    };
+  }
+  if (status === "cancelled") {
+    return {
+      title: "This task is cancelled.",
+      detail: "Reopen the task to continue this conversation.",
+    };
+  }
+  return {
+    title: "This task is completed.",
+    detail: "Reopen the task to continue this conversation.",
+  };
+}
+
 export function TaskConversationSidebar() {
   const selectedThreadId = useAppStore((state) => state.selectedThreadId);
   const task = useAppStore((state) =>
@@ -28,12 +52,19 @@ export function TaskConversationSidebar() {
   const [threadTitle, setThreadTitle] = useState("");
   const [creating, setCreating] = useState(false);
 
+  const terminal = task ? isTerminalTaskStatus(task.status) : false;
+  const terminalCopy = task && terminal ? terminalConversationCopy(task.status) : null;
+
+  useEffect(() => {
+    if (terminal && dialogOpen) setDialogOpen(false);
+  }, [dialogOpen, terminal]);
+
   if (!task) return null;
 
   const submitThread = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const title = threadTitle.trim();
-    if (!title || creating) return;
+    if (!title || creating || terminal) return;
     setCreating(true);
     try {
       await createTaskThread(task.id, title);
@@ -69,15 +100,20 @@ export function TaskConversationSidebar() {
             </Button>
           );
         })}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={terminal ? undefined : setDialogOpen}>
           <DialogTrigger asChild>
             <Button
               type="button"
               size="icon-sm"
               variant="ghost"
               className="size-7 shrink-0 text-muted-foreground"
+              disabled={terminal}
               aria-label="Add focused task thread"
-              title="Add focused task thread"
+              title={
+                terminal
+                  ? (terminalCopy?.detail ?? "Reopen the task to continue this conversation.")
+                  : "Add focused task thread"
+              }
             >
               <MessageSquarePlusIcon />
             </Button>
@@ -116,7 +152,21 @@ export function TaskConversationSidebar() {
         </Dialog>
       </div>
       <div className="min-h-0 flex-1">
-        <ChatView />
+        {terminal && terminalCopy ? (
+          <div className="flex h-full items-center justify-center px-6 text-center">
+            <div className="flex max-w-sm flex-col items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground">
+                <LockKeyholeIcon className="size-4" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <p className="text-sm font-medium text-foreground">{terminalCopy.title}</p>
+                <p className="text-xs leading-5 text-muted-foreground">{terminalCopy.detail}</p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <ChatView />
+        )}
       </div>
     </aside>
   );

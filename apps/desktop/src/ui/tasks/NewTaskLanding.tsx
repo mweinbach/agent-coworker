@@ -89,12 +89,21 @@ export function NewTaskLanding() {
   const nextWorkItemNumber = useRef(2);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const previousNewTaskWorkspaceId = useRef(newTaskWorkspaceId);
 
   useEffect(() => {
-    if (defaultWorkspaceId && !projects.some((workspace) => workspace.id === workspaceId)) {
+    const projectIds = new Set(projects.map((workspace) => workspace.id));
+    if (
+      newTaskWorkspaceId &&
+      newTaskWorkspaceId !== previousNewTaskWorkspaceId.current &&
+      projectIds.has(newTaskWorkspaceId)
+    ) {
+      setWorkspaceId(newTaskWorkspaceId);
+    } else if (defaultWorkspaceId && !projectIds.has(workspaceId)) {
       setWorkspaceId(defaultWorkspaceId);
     }
-  }, [defaultWorkspaceId, projects, workspaceId]);
+    previousNewTaskWorkspaceId.current = newTaskWorkspaceId;
+  }, [defaultWorkspaceId, newTaskWorkspaceId, projects, workspaceId]);
 
   useEffect(() => {
     if (workspaceId) void refreshTasks(workspaceId);

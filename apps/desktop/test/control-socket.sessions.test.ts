@@ -64,6 +64,59 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(persistCalls).toBe(1);
   });
 
+  test("requestWorkspaceSessions preserves task-owned threads and cached task snapshots omitted by thread/list", async () => {
+    const workspaceId = "ws-task-thread-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+      selectedThreadId: "task-session-1",
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    RUNTIME.sessionSnapshots.set("chat-keep", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "chat-keep" },
+    } as never);
+    RUNTIME.sessionSnapshots.set("task-session-1", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "task-session-1" },
+    } as never);
+
+    const helpers = createControlSocketHelpers(deps);
+    const sessions = await helpers.requestWorkspaceSessions(
+      get as never,
+      set as never,
+      workspaceId,
+    );
+
+    expect(sessions?.map((session) => session.sessionId)).toEqual(["chat-keep"]);
+    expect(state.threads.map((thread: { id: string }) => thread.id).sort()).toEqual([
+      "chat-keep",
+      "task-session-1",
+    ]);
+    expect(state.threads.find((thread: { id: string }) => thread.id === "task-session-1")).toEqual(
+      expect.objectContaining({
+        taskId: "task-1",
+        taskThreadId: "task-thread-1",
+      }),
+    );
+    expect(state.selectedThreadId).toBe("task-session-1");
+    expect(RUNTIME.sessionSnapshots.has("task-session-1")).toBe(true);
+  });
+
   test("requestWorkspaceSessions preserves the legacy transcript mapping for runtime-backed local threads", async () => {
     const workspaceId = "ws-legacy-thread";
     const localThreadId = "local-thread-1";

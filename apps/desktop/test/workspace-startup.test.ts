@@ -582,6 +582,69 @@ describe("workspace startup flow", () => {
     ).toBeGreaterThan(0);
   });
 
+  test("selectWorkspace clears a selected task that belongs to another project", async () => {
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+        {
+          id: "ws-2",
+          name: "Workspace Two",
+          path: "/tmp/workspace-two",
+          createdAt: "2026-03-09T00:00:00.000Z",
+          lastOpenedAt: "2026-03-09T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: null,
+      selectedTaskId: "task-ws-1",
+      newTaskWorkspaceId: null,
+      taskSummariesByWorkspaceId: {
+        "ws-1": [
+          {
+            id: "task-ws-1",
+            workspacePath: "/tmp/workspace-one",
+            title: "Workspace one task",
+            objective: "Only belongs to workspace one.",
+            status: "working",
+            revision: 1,
+            reviewRequired: true,
+            createdAt: "2026-03-08T00:00:00.000Z",
+            updatedAt: "2026-03-08T00:00:00.000Z",
+            threadCount: 1,
+            completedWorkItemCount: 0,
+            totalWorkItemCount: 1,
+            activeBlockerCount: 0,
+            pendingQuestionCount: 0,
+            blockingQuestionCount: 0,
+          },
+        ],
+        "ws-2": [],
+      },
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace("ws-2");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-2");
+    expect(useAppStore.getState().selectedTaskId).toBeNull();
+    expect(useAppStore.getState().selectedThreadId).toBeNull();
+
+    startDeferreds[0]?.resolve({ url: "ws://workspace-two" });
+    await selectPromise;
+  });
+
   test("selectThread returns from skills to chat even when the thread is already active", async () => {
     useAppStore.setState({
       view: "skills",

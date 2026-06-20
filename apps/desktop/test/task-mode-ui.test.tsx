@@ -263,6 +263,82 @@ function resetStore(task: TaskRecord | null) {
   } as never);
 }
 
+function setNativeValue(
+  element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  value: string,
+) {
+  const prototype =
+    element instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : element instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLSelectElement.prototype;
+  const valueSetter = Object.getOwnPropertyDescriptor(element, "value")?.set;
+  const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+    prototypeValueSetter.call(element, value);
+    return;
+  }
+  if (valueSetter) {
+    valueSetter.call(element, value);
+    return;
+  }
+  element.value = value;
+}
+
+type ValueElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+type ValueChangeEvent = {
+  target: ValueElement;
+  currentTarget: ValueElement;
+};
+type SubmitEventStub = {
+  preventDefault: () => void;
+  target: HTMLFormElement;
+  currentTarget: HTMLFormElement;
+};
+type ReactDomProps = {
+  onChange?: (event: ValueChangeEvent) => void;
+  onInput?: (event: ValueChangeEvent) => void;
+  onSubmit?: (event: SubmitEventStub) => void;
+};
+
+function reactDomProps(element: Element): ReactDomProps {
+  // The Bun preload imports React before jsdom exists, so direct DOM events alone
+  // do not reliably drive controlled fields in this file.
+  const propsKey = Object.keys(element).find((key) => key.startsWith("__reactProps$"));
+  if (!propsKey) return {};
+  const value = (element as unknown as Record<string, unknown>)[propsKey];
+  return typeof value === "object" && value !== null ? (value as ReactDomProps) : {};
+}
+
+function changeValue(
+  harness: ReturnType<typeof setupJsdom>,
+  element: ValueElement | null,
+  value: string,
+) {
+  if (!element) throw new Error("missing form element");
+  setNativeValue(element, value);
+  const props = reactDomProps(element);
+  props.onInput?.({ target: element, currentTarget: element });
+  props.onChange?.({ target: element, currentTarget: element });
+  element.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+  element.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+}
+
+function submitForm(harness: ReturnType<typeof setupJsdom>, form: HTMLFormElement | null) {
+  if (!form) throw new Error("missing form");
+  const props = reactDomProps(form);
+  if (props.onSubmit) {
+    props.onSubmit({
+      preventDefault: () => {},
+      target: form,
+      currentTarget: form,
+    });
+    return;
+  }
+  form.dispatchEvent(new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }));
+}
+
 describe("desktop task mode UI", () => {
   test.serial("renders an explicit task landing instead of a chat composer", async () => {
     const harness = setupJsdom();
@@ -290,6 +366,117 @@ describe("desktop task mode UI", () => {
       harness.restore();
     }
   });
+
+  test.serial(
+    "retargets a mounted new-task form to the project chosen from the sidebar",
+    async () => {
+      const harness = setupJsdom();
+      const startTask = mock(async () => null);
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+        const root = createRoot(container);
+        resetStore(null);
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Project One",
+              path: "/workspace-one",
+              workspaceKind: "project",
+              createdAt: NOW,
+              lastOpenedAt: NOW,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: false,
+              yolo: false,
+            },
+            {
+              id: "ws-2",
+              name: "Project Two",
+              path: "/workspace-two",
+              workspaceKind: "project",
+              createdAt: NOW,
+              lastOpenedAt: NOW,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: false,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          newTaskWorkspaceId: "ws-1",
+          startTask,
+        } as never);
+
+        await act(async () => root.render(createElement(NewTaskLanding)));
+        const projectSelect = container.querySelector(
+          "#new-task-project",
+        ) as HTMLSelectElement | null;
+        expect(projectSelect?.value).toBe("ws-1");
+
+        await act(async () => {
+          useAppStore.setState({
+            selectedWorkspaceId: "ws-2",
+            newTaskWorkspaceId: "ws-2",
+          } as never);
+          await Promise.resolve();
+        });
+        expect(projectSelect?.value).toBe("ws-2");
+
+        await act(async () => {
+          changeValue(
+            harness,
+            container.querySelector("#new-task-title") as HTMLInputElement | null,
+            "Ship dashboard hardening",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-objective") as HTMLTextAreaElement | null,
+            "Fix task dashboard state contracts.",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-context") as HTMLTextAreaElement | null,
+            "The user selected Project Two from the sidebar.",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-acceptance") as HTMLTextAreaElement | null,
+            "Task starts in the selected project.",
+          );
+          changeValue(
+            harness,
+            container.querySelector('input[id^="work-item-title-"]') as HTMLInputElement | null,
+            "Implement the invariant",
+          );
+          changeValue(
+            harness,
+            container.querySelector(
+              'textarea[id^="work-item-outputs-"]',
+            ) as HTMLTextAreaElement | null,
+            "Passing regression tests",
+          );
+          await Promise.resolve();
+        });
+
+        await act(async () => {
+          submitForm(harness, container.querySelector("form"));
+          await Promise.resolve();
+        });
+
+        expect(startTask).toHaveBeenCalledWith({
+          workspaceId: "ws-2",
+          task: expect.objectContaining({
+            title: "Ship dashboard hardening",
+          }),
+        });
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("renders coordinator state and review controls in the task work panel", async () => {
     const harness = setupJsdom();
@@ -391,6 +578,131 @@ describe("desktop task mode UI", () => {
       harness.restore();
     }
   });
+
+  test.serial("resets dirty brief editor state when the selected task changes", async () => {
+    const harness = setupJsdom();
+    const updateTaskBrief = mock(async () => true);
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+      const root = createRoot(container);
+      const firstTask = taskRecord({ id: "task-1", title: "First task" });
+      const secondTask = taskRecord({
+        id: "task-2",
+        title: "Second task",
+        objective: "Keep this objective attached to task two.",
+        threads: [
+          {
+            id: "task-thread-2",
+            taskId: "task-2",
+            sessionId: "task-session-2",
+            title: "Main",
+            createdBy: "coordinator",
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        ],
+      });
+      resetStore(firstTask);
+      useAppStore.setState({
+        tasksById: { "task-1": firstTask, "task-2": secondTask },
+        selectedTaskId: "task-1",
+        updateTaskBrief,
+      } as never);
+
+      await act(async () => root.render(createElement(TaskContextSidebar)));
+      await act(async () => {
+        changeValue(
+          harness,
+          container.querySelector("#task-brief-title") as HTMLInputElement | null,
+          "Unsaved first task title",
+        );
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Save brief");
+
+      await act(async () => {
+        useAppStore.setState({
+          selectedTaskId: "task-2",
+          selectedThreadId: "task-session-2",
+        } as never);
+        await Promise.resolve();
+      });
+
+      const titleInput = container.querySelector("#task-brief-title") as HTMLInputElement | null;
+      const objectiveInput = container.querySelector(
+        "#task-brief-objective",
+      ) as HTMLTextAreaElement | null;
+      expect(titleInput?.value).toBe("Second task");
+      expect(objectiveInput?.value).toBe("Keep this objective attached to task two.");
+      expect(container.textContent).not.toContain("Save brief");
+      expect(updateTaskBrief).not.toHaveBeenCalled();
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial(
+    "makes terminal task conversations read-only with a lifecycle explanation",
+    async () => {
+      const harness = setupJsdom();
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+        const root = createRoot(container);
+        resetStore(taskRecord({ status: "completed" }));
+        useAppStore.setState({
+          threads: [
+            {
+              id: "task-session-1",
+              workspaceId: "ws-1",
+              title: "Main",
+              createdAt: NOW,
+              lastMessageAt: NOW,
+              status: "active",
+              sessionId: "task-session-1",
+              messageCount: 0,
+              lastEventSeq: 0,
+              draft: false,
+              taskId: "task-1",
+              taskThreadId: "task-thread-1",
+            },
+          ],
+          threadRuntimeById: {
+            "task-session-1": {
+              status: "connected",
+              sessionId: "task-session-1",
+              sessionKind: "chat",
+              title: "Main",
+              config: { provider: "openai", model: "gpt-5.2" },
+              sessionConfig: null,
+              busy: false,
+              busySince: null,
+              feed: [],
+              agents: [],
+              pendingSteer: null,
+              pendingTurnStart: null,
+              transcriptOnly: false,
+            },
+          },
+        } as never);
+
+        await act(async () => root.render(createElement(TaskConversationSidebar)));
+
+        expect(container.textContent).toContain("This task is completed.");
+        expect(container.textContent).toContain("Reopen the task to continue this conversation.");
+        expect(container.querySelector('[aria-label="Message input"]')).toBeNull();
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("bundles pending task questions and submits partial answers", async () => {
     const harness = setupJsdom();

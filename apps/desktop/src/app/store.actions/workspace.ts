@@ -62,6 +62,21 @@ export function createWorkspaceActions(
     return workspaceThreads[0]?.id ?? null;
   };
 
+  const normalizeWorkspacePath = (value: string) =>
+    value.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
+
+  const taskBelongsToWorkspace = (taskId: string | null, workspaceId: string): boolean => {
+    if (!taskId) return false;
+    const state = get();
+    if ((state.taskSummariesByWorkspaceId[workspaceId] ?? []).some((task) => task.id === taskId)) {
+      return true;
+    }
+    const task = state.tasksById[taskId];
+    const workspace = state.workspaces.find((item) => item.id === workspaceId);
+    if (!task || !workspace) return false;
+    return normalizeWorkspacePath(task.workspacePath) === normalizeWorkspacePath(workspace.path);
+  };
+
   const isWorkspaceLifecycleEnabled = () => get().desktopFeatureFlags.workspaceLifecycle !== false;
 
   return {
@@ -188,6 +203,10 @@ export function createWorkspaceActions(
           s.selectedThreadId && remainingThreads.some((t) => t.id === s.selectedThreadId)
             ? s.selectedThreadId
             : null;
+        const selectedTaskId =
+          selectedWorkspaceId && taskBelongsToWorkspace(s.selectedTaskId, selectedWorkspaceId)
+            ? s.selectedTaskId
+            : null;
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
@@ -195,6 +214,8 @@ export function createWorkspaceActions(
           pluginManagementMode,
           selectedWorkspaceId,
           selectedThreadId,
+          selectedTaskId,
+          newTaskWorkspaceId: s.newTaskWorkspaceId === workspaceId ? null : s.newTaskWorkspaceId,
         };
       });
       clearWorkspaceStartState(workspaceId);
@@ -215,11 +236,18 @@ export function createWorkspaceActions(
             skipWorkspaceSelectOnReconnect: true,
           })
         : null;
-      set((s) => ({
-        selectedWorkspaceId: workspaceId,
-        selectedThreadId: nextThreadId,
-        view: s.view === "settings" ? "settings" : s.view,
-      }));
+      set((s) => {
+        const selectedTaskId = taskBelongsToWorkspace(s.selectedTaskId, workspaceId)
+          ? s.selectedTaskId
+          : null;
+        return {
+          selectedWorkspaceId: workspaceId,
+          selectedThreadId: nextThreadId,
+          selectedTaskId,
+          newTaskWorkspaceId: selectedTaskId === null && s.view === "task" ? workspaceId : null,
+          view: s.view === "settings" ? "settings" : s.view,
+        };
+      });
       ensureWorkspaceRuntime(get, set, workspaceId);
 
       const ws = get().workspaces.find((w) => w.id === workspaceId);

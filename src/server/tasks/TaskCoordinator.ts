@@ -228,6 +228,74 @@ function assertExpectedTaskRevision(task: TaskRecord, expectedRevision: number):
   throw new Error(taskRevisionConflictMessage(task, expectedRevision));
 }
 
+const DEPENDENCY_GATED_WORK_ITEM_STATUSES = new Set<WorkItemStatus>([
+  "in_progress",
+  "review",
+  "done",
+]);
+
+function assertThreadCanMarkWorkItem(input: {
+  task: TaskRecord;
+  item: WorkItem;
+  status: WorkItemStatus;
+  threadId?: string | null;
+}): void {
+  if (input.threadId === null || input.threadId === undefined) return;
+  const threadId = input.threadId;
+  if (!input.task.threads.some((thread) => thread.id === threadId)) {
+    throw new Error(`Unknown task thread: ${threadId}`);
+  }
+
+  const conflictingOwner = [input.item.assignedThreadId, input.item.claimedByThreadId].find(
+    (ownerThreadId) => ownerThreadId !== null && ownerThreadId !== threadId,
+  );
+  if (conflictingOwner) {
+    throw new Error(`Work item is owned by another task thread: ${input.item.id}`);
+  }
+
+  const ownsWorkItem =
+    input.item.assignedThreadId === threadId || input.item.claimedByThreadId === threadId;
+  const primaryThreadId = input.task.threads[0]?.id ?? null;
+  if (!ownsWorkItem && threadId !== primaryThreadId) {
+    throw new Error(
+      `Work item must be claimed before this task thread can mark it: ${input.item.id}`,
+    );
+  }
+
+  if (!DEPENDENCY_GATED_WORK_ITEM_STATUSES.has(input.status)) return;
+  const incompleteDependency = input.item.dependsOn.find(
+    (id) => input.task.workItems.find((candidate) => candidate.id === id)?.status !== "done",
+  );
+  if (incompleteDependency) {
+    throw new Error(`Work item dependency is not complete: ${incompleteDependency}`);
+  }
+}
+
+function assertThreadCanClaimWorkItem(input: {
+  task: TaskRecord;
+  item: WorkItem;
+  threadId: string;
+}): void {
+  const threadId = input.threadId;
+  if (!input.task.threads.some((thread) => thread.id === threadId)) {
+    throw new Error(`Unknown task thread: ${threadId}`);
+  }
+
+  const conflictingOwner = [input.item.assignedThreadId, input.item.claimedByThreadId].find(
+    (ownerThreadId) => ownerThreadId !== null && ownerThreadId !== threadId,
+  );
+  if (conflictingOwner) {
+    throw new Error(`Work item is owned by another task thread: ${input.item.id}`);
+  }
+
+  const incompleteDependency = input.item.dependsOn.find(
+    (id) => input.task.workItems.find((candidate) => candidate.id === id)?.status !== "done",
+  );
+  if (incompleteDependency) {
+    throw new Error(`Work item dependency is not complete: ${incompleteDependency}`);
+  }
+}
+
 function activity(input: Omit<TaskActivity, "id" | "seq" | "createdAt">): TaskActivity {
   return {
     id: crypto.randomUUID(),
@@ -935,15 +1003,7 @@ export class TaskCoordinator {
     assertTaskAcceptsMutation(task);
     const item = task.workItems.find((candidate) => candidate.id === input.workItemId);
     if (!item) throw new Error(`Unknown work item: ${input.workItemId}`);
-    if (!task.threads.some((thread) => thread.id === input.threadId)) {
-      throw new Error(`Unknown task thread: ${input.threadId}`);
-    }
-    const incompleteDependency = item.dependsOn.find(
-      (id) => task.workItems.find((candidate) => candidate.id === id)?.status !== "done",
-    );
-    if (incompleteDependency) {
-      throw new Error(`Work item dependency is not complete: ${incompleteDependency}`);
-    }
+    assertThreadCanClaimWorkItem({ task, item, threadId: input.threadId });
     const updated = await this.options.sessionDb.claimTaskWorkItem({
       taskId: task.id,
       workItemId: item.id,
@@ -969,6 +1029,12 @@ export class TaskCoordinator {
     assertTaskAcceptsMutation(task);
     const item = task.workItems.find((candidate) => candidate.id === input.workItemId);
     if (!item) throw new Error(`Unknown work item: ${input.workItemId}`);
+    assertThreadCanMarkWorkItem({
+      task,
+      item,
+      status: input.status,
+      threadId: input.threadId,
+    });
     if (input.status === "done" && !input.completionEvidence?.trim() && !item.completionEvidence) {
       throw new Error("Completion evidence is required before marking a work item done");
     }
@@ -3241,6 +3307,10 @@ export class TaskCoordinator {
     assertTaskAcceptsMutation(current);
 
     const thread = current.threads.find((candidate) => candidate.sessionId === sessionId);
+    const requireDirectiveThread = (): TaskThread => {
+      if (!thread) throw new Error(`Unknown task thread for session: ${sessionId}`);
+      return thread;
+    };
     let updated: TaskRecord;
     let continuation: TaskDirectiveResult["continuation"] = "continue";
     switch (directive.type) {
@@ -3283,7 +3353,7 @@ export class TaskCoordinator {
           expectedRevision: directive.expectedRevision,
           status: directive.status,
           completionEvidence: directive.completionEvidence,
-          threadId: thread?.id,
+          threadId: requireDirectiveThread().id,
         });
         break;
       case "record_decision":

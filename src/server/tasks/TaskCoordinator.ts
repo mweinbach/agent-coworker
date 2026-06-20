@@ -1002,11 +1002,19 @@ export class TaskCoordinator {
         `Cannot remove work item with active artifact revision or deferred artifact revision: ${removedCoordinatorOwnedRevision.title}`,
       );
     }
-    const removedClaim = current.workItems.find(
-      (item) => item.claimedByThreadId && !itemIds.has(item.id.trim()),
-    );
-    if (removedClaim) {
-      throw new Error(`Cannot remove claimed work item: ${removedClaim.title}`);
+    if (threadId !== null) {
+      for (const item of current.workItems) {
+        if (itemIds.has(item.id.trim())) continue;
+        if (coordinatorOwnedRevisionWorkItemIds.has(item.id.trim())) continue;
+        assertThreadCanMutateWorkItem({ task: current, item, threadId });
+      }
+    } else {
+      const removedClaim = current.workItems.find(
+        (item) => item.claimedByThreadId && !itemIds.has(item.id.trim()),
+      );
+      if (removedClaim) {
+        throw new Error(`Cannot remove claimed work item: ${removedClaim.title}`);
+      }
     }
     return items;
   }

@@ -6,7 +6,7 @@ import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
-import type { TaskRecord, TaskStatus } from "../src/shared/tasks";
+import type { TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
 
 async function createHarness(
   options: {
@@ -219,6 +219,27 @@ async function createClaimedWorkTask(harness: Awaited<ReturnType<typeof createHa
   const otherThread = task.threads.at(-1);
   if (!ownedItem || !ownerThread || !otherThread) throw new Error("Expected claimed task state");
   return { task, workItem: ownedItem, ownerThread, otherThread };
+}
+
+function replacementWorkItem(
+  item: WorkItem,
+  overrides: Partial<{
+    id: string;
+    title: string;
+    description: string;
+    status: WorkItem["status"];
+    dependsOn: string[];
+    expectedOutputs: string[];
+  }> = {},
+) {
+  return {
+    id: overrides.id ?? item.id,
+    title: overrides.title ?? item.title,
+    description: overrides.description ?? item.description,
+    status: overrides.status ?? item.status,
+    dependsOn: overrides.dependsOn ?? item.dependsOn,
+    expectedOutputs: overrides.expectedOutputs ?? item.expectedOutputs,
+  };
 }
 
 test("task coordinator rejects task IDs outside the requested workspace context", async () => {
@@ -1920,6 +1941,367 @@ describe("task mode persistence", () => {
       }
     });
   }
+
+  test("taskUpdate update_plan cannot delete claimed work owned by another thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(otherThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-delete-claimed",
+          expectedRevision: task.revision,
+          workItems: [],
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems).toEqual([
+        expect.objectContaining({
+          id: workItem.id,
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: ownerThread.id,
+          status: workItem.status,
+        }),
+      ]);
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-delete-claimed"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan cannot delete unclaimed active work assigned to another thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "Owner finished before admin reopened the work item.",
+        threadId: ownerThread.id,
+      });
+      const active = await harness.coordinator.replaceWorkItems({
+        taskId: done.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: done.revision,
+        items: [
+          replacementWorkItem(done.workItems[0] ?? workItem, {
+            status: "queued",
+          }),
+        ],
+      });
+      const activeItem = active.workItems.find((item) => item.id === workItem.id);
+      if (!activeItem) throw new Error("Expected active assigned work item");
+      expect(activeItem).toMatchObject({
+        assignedThreadId: ownerThread.id,
+        claimedByThreadId: null,
+        status: "queued",
+      });
+      const beforeActivityCount = active.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(otherThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-delete-active-unclaimed",
+          expectedRevision: active.revision,
+          workItems: [],
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: active.revision });
+      expect(after?.workItems).toEqual([expect.objectContaining(activeItem)]);
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-delete-active-unclaimed"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of ["blocked", "done", "abandoned"] as const) {
+    test(`taskUpdate update_plan cannot delete ${status} work assigned to another thread`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+        const terminal = await harness.coordinator.markWorkItem({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          workItemId: workItem.id,
+          status,
+          ...(status === "done"
+            ? { completionEvidence: "Owner finished before the wrong-thread deletion." }
+            : {}),
+          threadId: ownerThread.id,
+        });
+        const terminalItem = terminal.workItems.find((item) => item.id === workItem.id);
+        if (!terminalItem) throw new Error("Expected terminal assigned work item");
+        expect(terminalItem).toMatchObject({
+          assignedThreadId: ownerThread.id,
+          claimedByThreadId: null,
+          status,
+        });
+        const beforeActivityCount = terminal.activity.length;
+
+        await expect(
+          harness.coordinator.applyDirective(otherThread.sessionId, {
+            type: "update_plan",
+            idempotencyKey: `wrong-owner-delete-${status}`,
+            expectedRevision: terminal.revision,
+            workItems: [],
+          }),
+        ).rejects.toThrow("Work item is owned by another task thread");
+
+        const after = harness.coordinator.get(task.id, harness.workspacePath);
+        expect(after).toMatchObject({ revision: terminal.revision });
+        expect(after?.workItems).toEqual([expect.objectContaining(terminalItem)]);
+        expect(after?.activity).toHaveLength(beforeActivityCount);
+        expect(
+          harness.sessionDb.getTaskDirectiveReceipt(task.id, `wrong-owner-delete-${status}`),
+        ).toBeNull();
+
+        if (status === "done") {
+          const reloadedDb = await SessionDb.create({
+            paths: {
+              rootDir: path.join(harness.home, ".cowork"),
+              sessionsDir: path.join(harness.home, ".cowork", "sessions"),
+            },
+          });
+          try {
+            const reloaded = new TaskCoordinator({ sessionDb: reloadedDb });
+            expect(reloaded.get(task.id, harness.workspacePath)?.workItems).toEqual([
+              expect.objectContaining(terminalItem),
+            ]);
+            expect(
+              reloadedDb.getTaskDirectiveReceipt(task.id, `wrong-owner-delete-${status}`),
+            ).toBeNull();
+          } finally {
+            reloadedDb.close();
+          }
+        }
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("taskUpdate update_plan cannot rekey work assigned to another thread", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+      const primaryThread = task.threads[0];
+      if (!primaryThread) throw new Error("Expected primary task thread");
+      const terminal = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "blocked",
+        threadId: ownerThread.id,
+      });
+      const terminalItem = terminal.workItems.find((item) => item.id === workItem.id);
+      if (!terminalItem) throw new Error("Expected terminal assigned work item");
+      const beforeActivityCount = terminal.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(primaryThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-rekey-assigned",
+          expectedRevision: terminal.revision,
+          workItems: [
+            replacementWorkItem(terminalItem, {
+              id: "replacement-work-item",
+              status: terminalItem.status,
+            }),
+          ],
+        }),
+      ).rejects.toThrow("Work item is owned by another task thread");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: terminal.revision });
+      expect(after?.workItems).toEqual([expect.objectContaining(terminalItem)]);
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-rekey-assigned"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("owning task thread can delete its assigned work through update_plan", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread, otherThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "Owner completed the work before deleting the item.",
+        threadId: ownerThread.id,
+      });
+
+      const [ownerDelete, wrongThreadDelete] = await Promise.allSettled([
+        harness.coordinator.applyDirective(ownerThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "owner-delete-assigned",
+          expectedRevision: done.revision,
+          workItems: [],
+        }),
+        harness.coordinator.applyDirective(otherThread.sessionId, {
+          type: "update_plan",
+          idempotencyKey: "wrong-owner-concurrent-delete",
+          expectedRevision: done.revision,
+          workItems: [],
+        }),
+      ]);
+
+      expect(ownerDelete.status).toBe("fulfilled");
+      expect(wrongThreadDelete.status).toBe("rejected");
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after?.workItems).toEqual([]);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "owner-delete-assigned"),
+      ).not.toBeNull();
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "wrong-owner-concurrent-delete"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("primary task thread can rekey unowned work through update_plan", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task } = await createWorkingTask(harness);
+      const workItem = task.workItems[0];
+      const primaryThread = task.threads[0];
+      if (!workItem || !primaryThread) throw new Error("Expected primary task work");
+
+      const updated = await harness.coordinator.applyDirective(primaryThread.sessionId, {
+        type: "update_plan",
+        idempotencyKey: "primary-rekey-unowned",
+        expectedRevision: task.revision,
+        workItems: [
+          replacementWorkItem(workItem, {
+            id: "renamed-work-item",
+          }),
+        ],
+      });
+
+      expect(updated.task.workItems).toEqual([
+        expect.objectContaining({
+          id: "renamed-work-item",
+          title: workItem.title,
+          assignedThreadId: null,
+          claimedByThreadId: null,
+        }),
+      ]);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "primary-rekey-unowned"),
+      ).not.toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("trusted JSON-RPC updateGraph can delete assigned terminal work as an admin override", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
+      const done = await harness.coordinator.markWorkItem({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "User accepted this terminal item can be removed.",
+        threadId: ownerThread.id,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/updateGraph", {
+        cwd: harness.workspacePath,
+        taskId: task.id,
+        expectedRevision: done.revision,
+        workItems: [],
+      });
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({
+            revision: done.revision + 1,
+            workItems: [],
+          }),
+        }),
+      ]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("taskUpdate update_plan cannot remove active artifact revision helper work", async () => {
+    const harness = await createHarness();
+    try {
+      const { task: reviewed } = await createIndependentlyReviewedTask(harness, {
+        reviewRequired: false,
+      });
+      const artifact = reviewed.artifacts[0];
+      const primarySessionId = reviewed.threads[0]?.sessionId;
+      if (!artifact || !primarySessionId) throw new Error("Expected reviewed task artifact");
+      const { task, revision } = await harness.coordinator.startArtifactRevision({
+        taskId: reviewed.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: reviewed.revision,
+        artifactId: artifact.id,
+        instruction: "Revise the report.",
+        title: "Revise report",
+      });
+      const beforeActivityCount = task.activity.length;
+
+      await expect(
+        harness.coordinator.applyDirective(primarySessionId, {
+          type: "update_plan",
+          idempotencyKey: "remove-active-artifact-revision",
+          expectedRevision: task.revision,
+          workItems: task.workItems.filter((item) => item.id !== revision.workItemId),
+        }),
+      ).rejects.toThrow("active artifact revision");
+
+      const after = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(after).toMatchObject({ revision: task.revision });
+      expect(after?.workItems).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: revision.workItemId })]),
+      );
+      expect(after?.activity).toHaveLength(beforeActivityCount);
+      expect(
+        harness.sessionDb.getTaskDirectiveReceipt(task.id, "remove-active-artifact-revision"),
+      ).toBeNull();
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
 
   test("taskUpdate directives cannot mark work owned by another thread", async () => {
     const harness = await createHarness();

@@ -633,7 +633,7 @@ export function ArtifactReviewCard({
               ) : null}
               <Button
                 type="button"
-                disabled={!selectedVersion || pendingAction !== null}
+                disabled={terminal || !selectedVersion || pendingAction !== null}
                 aria-disabled={terminal || undefined}
                 aria-describedby={terminal ? terminalRevisionNoticeId : undefined}
                 onClick={() => {

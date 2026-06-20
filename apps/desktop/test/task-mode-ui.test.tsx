@@ -974,6 +974,14 @@ describe("desktop task mode UI", () => {
         await act(async () => openButton?.click());
         expect(selectTaskThread).toHaveBeenCalledWith("task-1", "task-thread-2");
 
+        await act(async () => {
+          useAppStore.setState({
+            tasksById: { "task-1": taskRecord({ status: "completed" }) },
+          } as never);
+          await Promise.resolve();
+        });
+        expect(container.textContent).not.toContain("echo task-only");
+
         await act(async () => root.unmount());
       } finally {
         harness.restore();
@@ -1160,6 +1168,7 @@ describe("desktop task mode UI", () => {
         const requestChangesButton = Array.from(
           reviewDialog?.querySelectorAll("button") ?? [],
         ).find((button) => button.textContent?.trim() === "Request changes");
+        expect(requestChangesButton?.hasAttribute("disabled")).toBe(true);
         expect(requestChangesButton?.getAttribute("aria-disabled")).toBe("true");
         const descriptionId = requestChangesButton?.getAttribute("aria-describedby");
         expect(descriptionId).toBeTruthy();

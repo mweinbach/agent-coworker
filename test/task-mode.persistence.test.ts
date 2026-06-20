@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
+import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
+import type { TaskStatus } from "../src/shared/tasks";
 
 async function createHarness() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-mode-test-"));
@@ -27,6 +30,50 @@ async function createHarness() {
     notifications,
     workspacePath: path.join(home, "project"),
   };
+}
+
+const TERMINAL_TASK_STATUSES = [
+  "completed",
+  "cancelled",
+  "failed",
+] as const satisfies readonly TaskStatus[];
+
+async function createWorkingTask(harness: Awaited<ReturnType<typeof createHarness>>) {
+  return await harness.coordinator.createPlanned({
+    workspacePath: harness.workspacePath,
+    sessionId: "task-session-1",
+    sourceSessionId: "source-chat-1",
+    creationOrigin: "chat_tool",
+    workspaceDisposition: "existing_project",
+    creation: {
+      idempotencyKey: `task-${crypto.randomUUID()}`,
+      title: "Terminal task",
+      objective: "Exercise task lifecycle guards.",
+      context: "Thread creation must stop after terminal lifecycle states.",
+      requirements: [
+        { kind: "acceptance_criterion", text: "Terminal tasks reject new focused threads." },
+      ],
+      workItems: [{ key: "run", title: "Run", expectedOutputs: ["A visible result"] }],
+      reviewRequired: false,
+    },
+  });
+}
+
+async function transitionToStatus(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  taskId: string,
+  status: (typeof TERMINAL_TASK_STATUSES)[number],
+) {
+  const task = harness.coordinator.get(taskId, harness.workspacePath);
+  if (!task) throw new Error("Expected task");
+  return await harness.coordinator.transition({
+    taskId,
+    workspacePath: harness.workspacePath,
+    expectedRevision: task.revision,
+    status,
+    summary: `Task is ${status}`,
+    sessionId: "task-session-1",
+  });
 }
 
 describe("task mode persistence", () => {
@@ -738,6 +785,119 @@ describe("task mode persistence", () => {
       });
 
       expect(task.status).toBe("completed");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const status of TERMINAL_TASK_STATUSES) {
+    test(`rejects focused thread creation on ${status} tasks`, async () => {
+      const harness = await createHarness();
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      try {
+        const created = await createWorkingTask(harness);
+        const terminal = await transitionToStatus(harness, created.task.id, status);
+
+        await expect(
+          harness.coordinator.addThread({
+            taskId: terminal.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: terminal.revision,
+            title: "Late focused lane",
+            createdBy: "user",
+          }),
+        ).rejects.toThrow(`Task ${terminal.id} is ${status}`);
+
+        expect(harness.coordinator.get(terminal.id, harness.workspacePath)?.threads).toHaveLength(
+          1,
+        );
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("allows focused thread creation after a terminal task is explicitly reopened", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const terminal = await transitionToStatus(harness, created.task.id, "completed");
+      const reopened = await harness.coordinator.transition({
+        taskId: terminal.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: terminal.revision,
+        status: "working",
+        summary: "Task reopened",
+        sessionId: "task-session-1",
+      });
+
+      const updated = await harness.coordinator.addThread({
+        taskId: reopened.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: reopened.revision,
+        title: "Focused lane after reopen",
+        createdBy: "user",
+      });
+
+      expect(updated.threads).toHaveLength(2);
+      expect(updated.threads.at(-1)?.title).toBe("Focused lane after reopen");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/thread/create returns a JSON-RPC error for terminal tasks", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const terminal = await transitionToStatus(harness, created.task.id, "completed");
+      const errors: unknown[] = [];
+      const results: unknown[] = [];
+      const handlers = createTaskRouteHandlers({
+        tasks: harness.coordinator,
+        threads: {
+          getLive: () => {
+            throw new Error("route should not create a live terminal task thread");
+          },
+        },
+        jsonrpc: {
+          sendResult: (_ws: unknown, _id: unknown, result: unknown) => {
+            results.push(result);
+          },
+          sendError: (_ws: unknown, _id: unknown, error: unknown) => {
+            errors.push(error);
+          },
+        },
+        utils: {
+          resolveWorkspacePath: () => harness.workspacePath,
+          buildThreadFromSession: () => {
+            throw new Error("route should not build a terminal task thread");
+          },
+        },
+      } as never);
+
+      await handlers["task/thread/create"]?.({} as never, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "task/thread/create",
+        params: {
+          cwd: harness.workspacePath,
+          taskId: terminal.id,
+          expectedRevision: terminal.revision,
+          title: "Late focused lane",
+        },
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: expect.stringContaining(`Task ${terminal.id} is completed`),
+        }),
+      ]);
+      expect(harness.coordinator.get(terminal.id, harness.workspacePath)?.threads).toHaveLength(1);
     } finally {
       harness.sessionDb.close();
     }

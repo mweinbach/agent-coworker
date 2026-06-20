@@ -191,6 +191,7 @@ export type AppStoreState = {
   selectedThreadId: string | null;
   selectedTaskId: string | null;
   newTaskWorkspaceId: string | null;
+  newTaskWorkspaceRequestId: number;
   taskSummariesByWorkspaceId: Record<string, TaskSummary[]>;
   tasksById: Record<string, TaskRecord>;
   taskListLoadingByWorkspaceId: Record<string, boolean>;

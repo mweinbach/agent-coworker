@@ -8,6 +8,7 @@ import {
 import { memo, useCallback, useMemo } from "react";
 
 import { useAppStore } from "../app/store";
+import { isStandardChatThread } from "../app/threadFilters";
 import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
 import {
   CommandDialog,
@@ -39,9 +40,7 @@ export const CommandPalette = memo(function CommandPalette({
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const developerMode = useAppStore((s) => s.developerMode);
-  const remoteAccessAvailable = useAppStore(
-    (s) => s.desktopFeatureFlags.remoteAccess === true,
-  );
+  const remoteAccessAvailable = useAppStore((s) => s.desktopFeatureFlags.remoteAccess === true);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
 
   const selectThread = useAppStore((s) => s.selectThread);
@@ -49,12 +48,10 @@ export const CommandPalette = memo(function CommandPalette({
   const openSettings = useAppStore((s) => s.openSettings);
   const openSkills = useAppStore((s) => s.openSkills);
 
-  // Recent, non-draft, non-archived threads, newest first.
+  // Recent ordinary chat threads, newest first.
   const recentThreads = useMemo(() => {
-    const eligible = threads.filter((t) => !t.draft && !t.archived);
-    return [...eligible]
-      .sort((a, b) => (b.lastMessageAt > a.lastMessageAt ? 1 : -1))
-      .slice(0, 8);
+    const eligible = threads.filter((thread) => isStandardChatThread(thread));
+    return [...eligible].sort((a, b) => (b.lastMessageAt > a.lastMessageAt ? 1 : -1)).slice(0, 8);
   }, [threads]);
 
   const workspaceNameById = useMemo(() => {
@@ -176,11 +173,7 @@ export const CommandPalette = memo(function CommandPalette({
             <CommandSeparator />
             <CommandGroup heading="Workspaces">
               {projectWorkspaces.slice(0, 8).map((ws) => (
-                <WorkspaceCommandItem
-                  key={ws.id}
-                  workspace={ws}
-                  onSelect={handleSelectWorkspace}
-                />
+                <WorkspaceCommandItem key={ws.id} workspace={ws} onSelect={handleSelectWorkspace} />
               ))}
             </CommandGroup>
           </>
@@ -239,10 +232,7 @@ const ThreadCommandItem = memo(function ThreadCommandItem({
 }) {
   const title = thread.title || "New chat";
   return (
-    <CommandItem
-      value={`thread ${title}`}
-      onSelect={() => onSelect(thread.id)}
-    >
+    <CommandItem value={`thread ${title}`} onSelect={() => onSelect(thread.id)}>
       <HistoryIcon />
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {workspaceName ? (
@@ -250,9 +240,7 @@ const ThreadCommandItem = memo(function ThreadCommandItem({
           {workspaceName}
         </span>
       ) : null}
-      {isSelected ? (
-        <span className="sr-only">(current)</span>
-      ) : null}
+      {isSelected ? <span className="sr-only">(current)</span> : null}
     </CommandItem>
   );
 });
@@ -265,10 +253,7 @@ const WorkspaceCommandItem = memo(function WorkspaceCommandItem({
   onSelect: (workspaceId: string) => void;
 }) {
   return (
-    <CommandItem
-      value={`workspace ${workspace.name}`}
-      onSelect={() => onSelect(workspace.id)}
-    >
+    <CommandItem value={`workspace ${workspace.name}`} onSelect={() => onSelect(workspace.id)}>
       <FolderIcon />
       <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
     </CommandItem>

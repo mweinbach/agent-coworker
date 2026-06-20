@@ -4,6 +4,7 @@ import {
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
+import { isTaskOwnedThread } from "../threadFilters";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
@@ -113,8 +114,6 @@ export function createControlSocketHelpers(
     workspaceId: string,
     sessions: Extract<SessionEvent, { type: "sessions" }>["sessions"],
   ): ThreadRecord[] {
-    const isTaskOwnedThread = (thread: ThreadRecord): boolean =>
-      typeof thread.taskId === "string" && thread.taskId.trim().length > 0;
     const workspaceThreads = allThreads.filter((thread) => thread.workspaceId === workspaceId);
     const serverBackedBySessionId = new Map<string, ThreadRecord>();
     for (const thread of workspaceThreads) {
@@ -189,7 +188,7 @@ export function createControlSocketHelpers(
     const sessionIds = new Set<string>();
     for (const thread of allThreads) {
       if (thread.workspaceId !== workspaceId) continue;
-      if (typeof thread.taskId === "string" && thread.taskId.trim().length > 0) continue;
+      if (isTaskOwnedThread(thread)) continue;
       const runtimeSessionId = threadRuntimeById[thread.id]?.sessionId;
       for (const candidateSessionId of [thread.sessionId, runtimeSessionId, thread.id]) {
         if (typeof candidateSessionId !== "string" || candidateSessionId.trim().length === 0) {

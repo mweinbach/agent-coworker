@@ -165,6 +165,7 @@ function createHarness() {
     selectedThreadId: "chat-1",
     selectedTaskId: null as string | null,
     newTaskWorkspaceId: null as string | null,
+    newTaskWorkspaceRequestId: 0,
     view: "chat",
     taskSummariesByWorkspaceId: {},
     tasksById: {} as Record<string, TaskRecord>,

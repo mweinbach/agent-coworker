@@ -2,6 +2,7 @@ import { ArrowUpRightIcon, MessageSquarePlusIcon, XIcon } from "lucide-react";
 import { type CSSProperties, useMemo } from "react";
 
 import { useAppStore } from "../../app/store";
+import { isStandardChatThread } from "../../app/threadFilters";
 import { workspaceLabelForThread } from "../../app/workspaceDisplayTargets";
 import { Button } from "../../components/ui/button";
 import { showMainWindow, showQuickChatWindow, windowClose } from "../../lib/desktopCommands";
@@ -20,6 +21,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
   const recentThreads = useMemo(
     () =>
       [...threads]
+        .filter((thread) => isStandardChatThread(thread))
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt))
         .slice(0, 8),
     [threads],

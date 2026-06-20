@@ -25,6 +25,7 @@ import {
   sendThread,
 } from "../store.helpers";
 import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
+import { isStandardChatThread } from "../threadFilters";
 import type { WorkspaceRecord } from "../types";
 import { hydrateThreadSelection } from "./thread";
 
@@ -51,12 +52,19 @@ export function createWorkspaceActions(
       ? (state.threads.find((thread) => thread.id === currentThreadId) ?? null)
       : null;
 
-    if (currentThread?.workspaceId === workspaceId && !currentThread.archived) {
+    if (
+      currentThread?.workspaceId === workspaceId &&
+      isStandardChatThread(currentThread, { includeDrafts: true })
+    ) {
       return currentThread.id;
     }
 
     const workspaceThreads = state.threads
-      .filter((thread) => thread.workspaceId === workspaceId && !thread.archived)
+      .filter(
+        (thread) =>
+          thread.workspaceId === workspaceId &&
+          isStandardChatThread(thread, { includeDrafts: true }),
+      )
       .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt));
 
     return workspaceThreads[0]?.id ?? null;
@@ -200,7 +208,12 @@ export function createWorkspaceActions(
             ? "auto"
             : s.pluginManagementMode;
         const selectedThreadId =
-          s.selectedThreadId && remainingThreads.some((t) => t.id === s.selectedThreadId)
+          s.selectedThreadId &&
+          remainingThreads.some(
+            (t) =>
+              t.id === s.selectedThreadId &&
+              (s.view === "task" || isStandardChatThread(t, { includeDrafts: true })),
+          )
             ? s.selectedThreadId
             : null;
         const selectedTaskId =
@@ -240,11 +253,15 @@ export function createWorkspaceActions(
         const selectedTaskId = taskBelongsToWorkspace(s.selectedTaskId, workspaceId)
           ? s.selectedTaskId
           : null;
+        const retargetNewTask = selectedTaskId === null && s.view === "task";
         return {
           selectedWorkspaceId: workspaceId,
           selectedThreadId: nextThreadId,
           selectedTaskId,
-          newTaskWorkspaceId: selectedTaskId === null && s.view === "task" ? workspaceId : null,
+          newTaskWorkspaceId: retargetNewTask ? workspaceId : null,
+          newTaskWorkspaceRequestId: retargetNewTask
+            ? s.newTaskWorkspaceRequestId + 1
+            : s.newTaskWorkspaceRequestId,
           view: s.view === "settings" ? "settings" : s.view,
         };
       });

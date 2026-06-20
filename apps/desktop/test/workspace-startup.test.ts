@@ -645,6 +645,62 @@ describe("workspace startup flow", () => {
     await selectPromise;
   });
 
+  test("selectWorkspace does not choose task-owned threads for ordinary chat", async () => {
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "task-session-1",
+          workspaceId: "ws-1",
+          title: "Hidden task thread",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastMessageAt: "2026-03-08T02:00:00.000Z",
+          status: "active",
+          sessionId: "task-session-1",
+          messageCount: 3,
+          lastEventSeq: 3,
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+        {
+          id: "chat-session-1",
+          workspaceId: "ws-1",
+          title: "Visible chat thread",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastMessageAt: "2026-03-08T01:00:00.000Z",
+          status: "active",
+          sessionId: "chat-session-1",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+      selectedWorkspaceId: null,
+      selectedThreadId: null,
+      selectedTaskId: null,
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace("ws-1");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().view).toBe("chat");
+    expect(useAppStore.getState().selectedThreadId).toBe("chat-session-1");
+    expect(useAppStore.getState().selectedTaskId).toBeNull();
+
+    startDeferreds[0]?.resolve({ url: "ws://workspace-one" });
+    await selectPromise;
+  });
+
   test("selectThread returns from skills to chat even when the thread is already active", async () => {
     useAppStore.setState({
       view: "skills",

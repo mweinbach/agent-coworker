@@ -1,4 +1,4 @@
-import { LockKeyholeIcon, MessageSquarePlusIcon } from "lucide-react";
+import { MessageSquarePlusIcon } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { TaskStatus } from "../../../../../src/shared/tasks";
@@ -152,21 +152,7 @@ export function TaskConversationSidebar() {
         </Dialog>
       </div>
       <div className="min-h-0 flex-1">
-        {terminal && terminalCopy ? (
-          <div className="flex h-full items-center justify-center px-6 text-center">
-            <div className="flex max-w-sm flex-col items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground">
-                <LockKeyholeIcon className="size-4" />
-              </div>
-              <div className="flex flex-col gap-1">
-                <p className="text-sm font-medium text-foreground">{terminalCopy.title}</p>
-                <p className="text-xs leading-5 text-muted-foreground">{terminalCopy.detail}</p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <ChatView />
-        )}
+        <ChatView readOnlyNotice={terminalCopy ?? undefined} />
       </div>
     </aside>
   );

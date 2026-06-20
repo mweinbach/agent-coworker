@@ -23,6 +23,7 @@ import {
 import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
+import { isStandardChatThread } from "../app/threadFilters";
 import {
   isOneOffChatWorkspace,
   normalizeSidebarSectionOrder,
@@ -391,7 +392,9 @@ export const Sidebar = memo(function Sidebar() {
       const workspace = thread
         ? workspaces.find((entry) => entry.id === thread.workspaceId)
         : undefined;
-      return Boolean(thread && workspace && !thread.draft && thread.messageCount > 0);
+      return Boolean(
+        thread && workspace && isStandardChatThread(thread) && thread.messageCount > 0,
+      );
     },
     [threads, workspaces],
   );

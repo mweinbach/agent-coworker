@@ -467,7 +467,10 @@ describe("task artifact versions", () => {
         kind: "markdown",
         workItemId: "deliver-notes",
       });
-      const notesArtifact = task.artifacts.find((candidate) => candidate.path === notesPath);
+      const canonicalNotesPath = await fs.realpath(notesPath);
+      const notesArtifact = task.artifacts.find(
+        (candidate) => candidate.path === canonicalNotesPath,
+      );
       if (!notesArtifact) throw new Error("Expected notes artifact");
       task = await harness.coordinator.transition({
         taskId: task.id,

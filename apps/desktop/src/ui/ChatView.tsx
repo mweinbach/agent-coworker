@@ -84,7 +84,16 @@ export {
 } from "./chat/chatLogic";
 export { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 
-export function ChatView() {
+type ChatViewReadOnlyNotice = {
+  title: string;
+  detail: string;
+};
+
+type ChatViewProps = {
+  readOnlyNotice?: ChatViewReadOnlyNotice;
+};
+
+export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const thread = useAppStore((s) => {
@@ -733,7 +742,11 @@ export function ChatView() {
 
   const busy = rt?.busy === true;
   const inputDisabled =
-    hasPromptModal || hasFilePreview || preparingAttachments || sourceTask !== null;
+    hasPromptModal ||
+    hasFilePreview ||
+    preparingAttachments ||
+    sourceTask !== null ||
+    readOnlyNotice !== undefined;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||
@@ -800,7 +813,22 @@ export function ChatView() {
           </div>
         ) : null}
 
-        {sourceTask ? (
+        {readOnlyNotice ? (
+          <div
+            ref={messageBarOverlayRef}
+            data-slot="message-bar-overlay"
+            className="absolute inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
+            style={{ minHeight: composerOverlayMinHeight }}
+          >
+            <div className="mx-auto flex max-w-3xl items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+              <LockKeyholeIcon className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">{readOnlyNotice.title}</p>
+                <p className="text-xs leading-5 text-muted-foreground">{readOnlyNotice.detail}</p>
+              </div>
+            </div>
+          </div>
+        ) : sourceTask ? (
           <div className="shrink-0 border-t border-border bg-background px-4 py-3">
             <div className="mx-auto flex max-w-3xl items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
               <LockKeyholeIcon className="size-4 shrink-0 text-muted-foreground" />

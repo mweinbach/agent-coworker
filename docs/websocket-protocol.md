@@ -465,7 +465,7 @@ Requests:
 - `task/artifact/version/restore` — params `{ cwd?, taskId, artifactId, versionId, expectedRevision }`; verifies the live fingerprint, restores the selected bytes as a new draft version, and returns `{ task, detail }`
 - `task/artifact/version/accept` — params `{ cwd?, taskId, artifactId, expectedRevision, versionId? }`; records the accepted version and returns `{ task, detail }`
 - `task/artifact/revision/start` — params `{ cwd?, taskId, artifactId, baseVersionId, expectedRevision, instruction }`; creates one focused revision work item and task thread for the artifact and returns `{ task, detail, revision, thread }`
-- `task/thread/create` — params `{ cwd?, taskId, expectedRevision, title, workItemId?, provider?, model? }`; result `{ task, thread }`
+- `task/thread/create` — params `{ cwd?, taskId, expectedRevision, title, workItemId?, provider?, model? }`; result `{ task, thread }`; completed, cancelled, and failed tasks reject new thread creation until `task/reopen` or `task/retry` returns them to `working`
 - `task/proposeCompletion` — params `{ cwd?, taskId, expectedRevision, summary, caveats? }`; validates plan, evidence, artifacts, required independent review rounds, and implemented feedback, then moves the task to `awaiting_review` when user review is required
 - `task/accept` — params `{ cwd?, taskId, expectedRevision }`; bulk-accepts eligible latest artifact drafts and completes an `awaiting_review` task
 - `task/requestChanges` — params `{ cwd?, taskId, expectedRevision, feedback }`; returns a delivered task to working state

@@ -72,6 +72,8 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   cancelled: ["working"],
 };
 
+const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -80,6 +82,13 @@ function nonEmpty(value: string, name: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error(`${name} is required`);
   return normalized;
+}
+
+function assertTaskAcceptsNewThreads(task: TaskRecord): void {
+  if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+  throw new Error(
+    `Task ${task.id} is ${task.status} and cannot create new focused threads until it is reopened or retried.`,
+  );
 }
 
 function activity(input: Omit<TaskActivity, "id" | "seq" | "createdAt">): TaskActivity {
@@ -457,6 +466,7 @@ export class TaskCoordinator {
     model?: string;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertTaskAcceptsNewThreads(task);
     const workItemId = input.workItemId ?? null;
     if (workItemId && !task.workItems.some((item) => item.id === workItemId)) {
       throw new Error(`Unknown work item: ${workItemId}`);
@@ -2185,7 +2195,21 @@ export class TaskCoordinator {
     try {
       resolved = await resolvePathInsideRootForBoundaryCheck(task.workspacePath, candidate);
     } catch {
-      throw new Error("Artifact path is outside the task workspace");
+      try {
+        const [canonicalWorkspacePath, canonicalCandidatePath] = await Promise.all([
+          fs.realpath(task.workspacePath),
+          fs.realpath(candidate).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return candidate;
+            throw error;
+          }),
+        ]);
+        resolved = await resolvePathInsideRootForBoundaryCheck(
+          canonicalWorkspacePath,
+          canonicalCandidatePath,
+        );
+      } catch {
+        throw new Error("Artifact path is outside the task workspace");
+      }
     }
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {

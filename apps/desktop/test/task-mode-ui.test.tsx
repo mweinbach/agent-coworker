@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -6,8 +6,13 @@ import type { TaskArtifactDetail, TaskQuestion, TaskRecord } from "../../../src/
 import { setupJsdom } from "./jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
+const realOpenFilePreview = useAppStore.getState().openFilePreview;
 
 const NOW = "2026-06-18T12:00:00.000Z";
+
+afterEach(() => {
+  useAppStore.setState({ openFilePreview: realOpenFilePreview });
+});
 
 function taskRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -478,6 +483,70 @@ describe("desktop task mode UI", () => {
     },
   );
 
+  test.serial("retargets repeated new-task requests for the same project", async () => {
+    const harness = setupJsdom();
+    const startTask = mock(async () => null);
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+      const root = createRoot(container);
+      resetStore(null);
+      useAppStore.setState({
+        workspaces: [
+          {
+            id: "ws-1",
+            name: "Project One",
+            path: "/workspace-one",
+            workspaceKind: "project",
+            createdAt: NOW,
+            lastOpenedAt: NOW,
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+          {
+            id: "ws-2",
+            name: "Project Two",
+            path: "/workspace-two",
+            workspaceKind: "project",
+            createdAt: NOW,
+            lastOpenedAt: NOW,
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        selectedWorkspaceId: "ws-1",
+        newTaskWorkspaceId: "ws-1",
+        startTask,
+      } as never);
+
+      await act(async () => root.render(createElement(NewTaskLanding)));
+      const projectSelect = container.querySelector(
+        "#new-task-project",
+      ) as HTMLSelectElement | null;
+      expect(projectSelect?.value).toBe("ws-1");
+
+      await act(async () => {
+        changeValue(harness, projectSelect, "ws-2");
+        await Promise.resolve();
+      });
+      expect(projectSelect?.value).toBe("ws-2");
+
+      await act(async () => {
+        await useAppStore.getState().openNewTask("ws-1");
+        await Promise.resolve();
+      });
+
+      expect(projectSelect?.value).toBe("ws-1");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("renders coordinator state and review controls in the task work panel", async () => {
     const harness = setupJsdom();
     try {
@@ -645,64 +714,70 @@ describe("desktop task mode UI", () => {
     }
   });
 
-  test.serial(
-    "makes terminal task conversations read-only with a lifecycle explanation",
-    async () => {
-      const harness = setupJsdom();
-      try {
-        const container = harness.dom.window.document.getElementById("root");
-        if (!container) throw new Error("missing root");
-        const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
-        const root = createRoot(container);
-        resetStore(taskRecord({ status: "completed" }));
-        useAppStore.setState({
-          threads: [
-            {
-              id: "task-session-1",
-              workspaceId: "ws-1",
-              title: "Main",
-              createdAt: NOW,
-              lastMessageAt: NOW,
-              status: "active",
-              sessionId: "task-session-1",
-              messageCount: 0,
-              lastEventSeq: 0,
-              draft: false,
-              taskId: "task-1",
-              taskThreadId: "task-thread-1",
-            },
-          ],
-          threadRuntimeById: {
-            "task-session-1": {
-              status: "connected",
-              sessionId: "task-session-1",
-              sessionKind: "chat",
-              title: "Main",
-              config: { provider: "openai", model: "gpt-5.2" },
-              sessionConfig: null,
-              busy: false,
-              busySince: null,
-              feed: [],
-              agents: [],
-              pendingSteer: null,
-              pendingTurnStart: null,
-              transcriptOnly: false,
-            },
+  test.serial("makes terminal task conversations read-only while preserving feed", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      resetStore(taskRecord({ status: "completed" }));
+      useAppStore.setState({
+        threads: [
+          {
+            id: "task-session-1",
+            workspaceId: "ws-1",
+            title: "Main",
+            createdAt: NOW,
+            lastMessageAt: NOW,
+            status: "active",
+            sessionId: "task-session-1",
+            messageCount: 1,
+            lastEventSeq: 1,
+            draft: false,
+            taskId: "task-1",
+            taskThreadId: "task-thread-1",
           },
-        } as never);
+        ],
+        threadRuntimeById: {
+          "task-session-1": {
+            status: "connected",
+            sessionId: "task-session-1",
+            sessionKind: "chat",
+            title: "Main",
+            config: { provider: "openai", model: "gpt-5.2" },
+            sessionConfig: null,
+            busy: false,
+            busySince: null,
+            feed: [
+              {
+                id: "assistant-audit-note",
+                ts: NOW,
+                kind: "message",
+                role: "assistant",
+                text: "Preserved terminal transcript audit line.",
+              },
+            ],
+            agents: [],
+            pendingSteer: null,
+            pendingTurnStart: null,
+            transcriptOnly: false,
+          },
+        },
+      } as never);
 
-        await act(async () => root.render(createElement(TaskConversationSidebar)));
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
 
-        expect(container.textContent).toContain("This task is completed.");
-        expect(container.textContent).toContain("Reopen the task to continue this conversation.");
-        expect(container.querySelector('[aria-label="Message input"]')).toBeNull();
+      expect(container.textContent).toContain("This task is completed.");
+      expect(container.textContent).toContain("Reopen the task to continue this conversation.");
+      expect(container.textContent).toContain("Preserved terminal transcript audit line.");
+      expect(container.querySelector('[aria-label="Message input"]')).toBeNull();
 
-        await act(async () => root.unmount());
-      } finally {
-        harness.restore();
-      }
-    },
-  );
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
 
   test.serial("bundles pending task questions and submits partial answers", async () => {
     const harness = setupJsdom();

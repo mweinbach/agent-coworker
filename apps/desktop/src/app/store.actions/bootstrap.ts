@@ -55,6 +55,7 @@ import {
   syncDesktopStateCacheNow,
 } from "../store.helpers";
 import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import { isStandardChatThread } from "../threadFilters";
 import {
   type CachedDesktopUiState,
   type CachedSessionSnapshot,
@@ -579,9 +580,17 @@ function buildResolvedDesktopUiState(
   const selectedWorkspaceId = selection.selectedWorkspaceId;
   const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
   const pluginManagementMode = selection.pluginManagementMode;
+  const selectingTaskThread =
+    normalizedUi.view === "task" &&
+    typeof normalizedUi.selectedTaskId === "string" &&
+    normalizedUi.selectedTaskId.trim().length > 0;
   const workspaceThreads = selectedWorkspaceId
     ? threads
-        .filter((thread) => thread.workspaceId === selectedWorkspaceId)
+        .filter((thread) => {
+          if (thread.workspaceId !== selectedWorkspaceId) return false;
+          if (selectingTaskThread) return thread.taskId === normalizedUi.selectedTaskId;
+          return isStandardChatThread(thread, { includeDrafts: true });
+        })
         .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
     : [];
   const fallbackSelectedThreadId =

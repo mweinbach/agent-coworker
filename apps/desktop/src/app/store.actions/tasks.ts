@@ -437,14 +437,15 @@ export function createTaskActions(
         if (addedProject) await get().openNewTask(addedProject.id);
         return;
       }
-      set({
+      set((state) => ({
         selectedWorkspaceId: project.id,
         selectedThreadId: null,
         selectedTaskId: null,
         newTaskWorkspaceId: project.id,
+        newTaskWorkspaceRequestId: state.newTaskWorkspaceRequestId + 1,
         view: "task",
         taskError: null,
-      });
+      }));
       deps.syncDesktopStateCache(get);
       await get().refreshTasks(project.id);
     },

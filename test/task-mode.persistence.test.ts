@@ -61,6 +61,39 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   };
 }
 
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function pauseNextTaskStatusWrite(harness: Awaited<ReturnType<typeof createHarness>>) {
+  const reached = deferred();
+  const released = deferred();
+  const original = harness.sessionDb.setTaskStatus.bind(harness.sessionDb);
+  let paused = false;
+  let calls = 0;
+  harness.sessionDb.setTaskStatus = (async (input) => {
+    calls += 1;
+    if (!paused) {
+      paused = true;
+      reached.resolve();
+      await released.promise;
+    }
+    return await original(input);
+  }) as SessionDb["setTaskStatus"];
+  return {
+    reached: reached.promise,
+    release: released.resolve,
+    restore: () => {
+      harness.sessionDb.setTaskStatus = original as SessionDb["setTaskStatus"];
+    },
+    get calls() {
+      return calls;
+    },
+  };
+}
+
 function restorePendingQuestionAfterCancellation(
   harness: Awaited<ReturnType<typeof createHarness>>,
   taskId: string,
@@ -521,6 +554,127 @@ describe("task mode persistence", () => {
         "working",
       );
     } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const terminalStatus of TERMINAL_TASK_STATUSES) {
+    test(`queued stale ${terminalStatus} transition preserves the winning task revision`, async () => {
+      const quiesced: string[] = [];
+      const harness = await createHarness({
+        quiesceTaskThreads: (task, reason) => {
+          quiesced.push(`${reason}:${task.revision}`);
+        },
+      });
+      await fs.mkdir(harness.workspacePath, { recursive: true });
+      const pause = pauseNextTaskStatusWrite(harness);
+      try {
+        const created = await createWorkingTask(harness);
+        const initial = created.task;
+        const initialRevision = initial.revision;
+        const winningTransition = harness.coordinator.transition({
+          taskId: initial.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: initialRevision,
+          status: "awaiting_review",
+          summary: "Ready before stale terminal request",
+        });
+        await pause.reached;
+
+        const staleTerminal = harness.coordinator
+          .transition({
+            taskId: initial.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: initialRevision,
+            status: terminalStatus,
+            summary: `Stale ${terminalStatus} request`,
+          })
+          .then(
+            (task) => ({ ok: true as const, task }),
+            (error: unknown) => ({ ok: false as const, error }),
+          );
+        await flushAsyncWork();
+
+        expect(harness.coordinator.get(initial.id, harness.workspacePath)).toMatchObject({
+          status: "working",
+          revision: initialRevision,
+        });
+
+        pause.release();
+        const winner = await winningTransition;
+        const stale = await staleTerminal;
+
+        expect(stale.ok).toBe(false);
+        if (stale.ok) throw new Error("Stale terminal transition unexpectedly succeeded");
+        expect(stale.error).toBeInstanceOf(Error);
+        expect((stale.error as Error).message).toBe(
+          `Task revision conflict: expected ${initialRevision}, current ${winner.revision}`,
+        );
+        expect(harness.coordinator.get(initial.id, harness.workspacePath)).toMatchObject({
+          status: "awaiting_review",
+          revision: winner.revision,
+        });
+        expect(quiesced).toEqual([]);
+        expect(
+          harness.notifications.some(
+            (notification) =>
+              (notification.params.task as TaskRecord | undefined)?.status === terminalStatus,
+          ),
+        ).toBe(false);
+      } finally {
+        pause.restore();
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("queued stale task/cancel returns a structured revision conflict", async () => {
+    const quiesced: string[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: (task, reason) => {
+        quiesced.push(`${reason}:${task.revision}`);
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    const pause = pauseNextTaskStatusWrite(harness);
+    try {
+      const created = await createWorkingTask(harness);
+      const initialRevision = created.task.revision;
+      const winningTransition = harness.coordinator.transition({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: initialRevision,
+        status: "awaiting_review",
+        summary: "Ready before stale route cancel",
+      });
+      await pause.reached;
+
+      const staleCancel = invokeTaskRoute(harness, "task/cancel", {
+        cwd: harness.workspacePath,
+        taskId: created.task.id,
+        expectedRevision: initialRevision,
+        reason: "Client is stale",
+      });
+      await flushAsyncWork();
+
+      pause.release();
+      const winner = await winningTransition;
+      const { errors, results } = await staleCancel;
+
+      expect(results).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as { data?: unknown }).data).toEqual({
+        category: "revision_conflict",
+        expectedRevision: initialRevision,
+        currentRevision: winner.revision,
+      });
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)).toMatchObject({
+        status: "awaiting_review",
+        revision: winner.revision,
+      });
+      expect(quiesced).toEqual([]);
+    } finally {
+      pause.restore();
       harness.sessionDb.close();
     }
   });
@@ -1228,6 +1382,50 @@ describe("task mode persistence", () => {
         .get(task.id, harness.workspacePath)
         ?.activity.filter((item) => item.kind === "progress_reported");
       expect(progress).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("same-task directive transitions still complete without deadlock", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const task = await harness.coordinator.create({
+        workspacePath: harness.workspacePath,
+        title: "Plan from directive",
+        objective: "Create a plan and start work.",
+        sessionId: "session-1",
+      });
+
+      const result = await Promise.race([
+        harness.coordinator.applyDirective("session-1", {
+          type: "update_plan",
+          idempotencyKey: "plan-starts-work",
+          expectedRevision: task.revision,
+          objective: "Create a plan and start work.",
+          requirements: [
+            {
+              kind: "acceptance_criterion",
+              text: "The directive creates work and starts the task.",
+            },
+          ],
+          workItems: [{ id: "deliver", title: "Deliver" }],
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Timed out waiting for directive transitions")), 1_000),
+        ),
+      ]);
+
+      expect(result.task.status).toBe("working");
+      expect(result.task.workItems).toEqual([
+        expect.objectContaining({ id: "deliver", title: "Deliver" }),
+      ]);
+      expect(
+        result.task.activity
+          .filter((item) => item.kind === "status_changed")
+          .map((item) => item.summary),
+      ).toEqual(["Task execution started", "Task plan created"]);
     } finally {
       harness.sessionDb.close();
     }

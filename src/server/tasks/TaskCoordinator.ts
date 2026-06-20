@@ -1961,15 +1961,10 @@ export class TaskCoordinator {
   }): Promise<TaskRecord> {
     const initial = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(initial, input.expectedRevision);
-    return await this.runTaskMutation(input.taskId, async ({ queued }) => {
+    return await this.runTaskMutation(input.taskId, async () => {
       const task = this.requireTask(input.taskId, input.workspacePath);
-      let expectedRevision = input.expectedRevision;
-      if (task.revision !== input.expectedRevision) {
-        if (!queued || !TERMINAL_TASK_STATUSES.has(input.status)) {
-          assertExpectedTaskRevision(task, input.expectedRevision);
-        }
-        expectedRevision = task.revision;
-      }
+      assertExpectedTaskRevision(task, input.expectedRevision);
+      const expectedRevision = input.expectedRevision;
       if (input.status === "completed" && task.status === "awaiting_review") {
         return await this.acceptTaskLocked({
           taskId: task.id,

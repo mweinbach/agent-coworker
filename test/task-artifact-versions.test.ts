@@ -899,7 +899,7 @@ describe("task artifact versions", () => {
   }
 
   for (const terminalStatus of TERMINAL_TASK_STATUSES) {
-    test(`serializes direct artifact restore before ${terminalStatus} transition commits`, async () => {
+    test(`rejects stale ${terminalStatus} transition after direct artifact restore wins the queue`, async () => {
       const harness = await createPausingHarness();
       try {
         const { task, artifact, artifactPath, first } =
@@ -937,16 +937,27 @@ describe("task artifact versions", () => {
         expect(harness.artifactStore.restoreCalls).toHaveLength(0);
 
         pause.release();
-        const [restored, terminal] = await Promise.all([restorePromise, terminalPromise]);
+        const [restored, terminal] = await Promise.all([
+          restorePromise,
+          terminalPromise.then(
+            (task) => ({ ok: true as const, task }),
+            (error: unknown) => ({ ok: false as const, error }),
+          ),
+        ]);
 
         expect(restored.task.status).toBe("working");
         expect(restored.version.sha256).toBe(first.sha256);
-        expect(terminal.status).toBe(terminalStatus);
+        expect(terminal.ok).toBe(false);
+        if (terminal.ok) throw new Error("Stale terminal transition unexpectedly succeeded");
+        expect(terminal.error).toBeInstanceOf(Error);
+        expect((terminal.error as Error).message).toBe(
+          `Task revision conflict: expected ${task.revision}, current ${restored.task.revision}`,
+        );
         expect(harness.artifactStore.restoreCalls).toHaveLength(1);
         expect(await fs.readFile(artifactPath, "utf8")).toBe("version one\n");
         expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
-          status: terminalStatus,
-          revision: terminal.revision,
+          status: "working",
+          revision: restored.task.revision,
         });
         expect(restored.detail.versions).toHaveLength(beforeDetail.versions.length + 1);
       } finally {
@@ -1016,7 +1027,58 @@ describe("task artifact versions", () => {
     });
   }
 
-  test("serializes same-task revision cancellation restore before terminal transition commits", async () => {
+  test("allows a fresh terminal transition queued behind non-revision-changing artifact work", async () => {
+    const quiesced: string[] = [];
+    const harness = await createPausingHarness({
+      quiesceTaskThreads: (task, reason) => {
+        quiesced.push(`${reason}:${task.revision}`);
+      },
+    });
+    try {
+      const { task, artifact, artifactPath, detail } = await createTaskWithArtifact(harness);
+      const latest = detail.versions.at(-1);
+      if (!latest) throw new Error("Expected artifact baseline");
+      const pause = harness.artifactStore.pauseNext("capture", await fs.realpath(artifactPath));
+
+      const noChangeCapture = harness.coordinator.captureArtifactVersion({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: artifact.id,
+        expectedRevision: task.revision,
+        changeSummary: "No byte change",
+      });
+      await pause.reached;
+
+      const terminalPromise = harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "cancelled",
+        summary: "Fresh queued cancellation",
+      });
+      await flushAsyncWork();
+
+      expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
+        status: "draft",
+        revision: task.revision,
+      });
+
+      pause.release();
+      const [captured, terminal] = await Promise.all([noChangeCapture, terminalPromise]);
+
+      expect(captured.version.id).toBe(latest.id);
+      expect(captured.task.revision).toBe(task.revision);
+      expect(terminal).toMatchObject({
+        status: "cancelled",
+        revision: task.revision + 1,
+      });
+      expect(quiesced).toEqual([`cancelled:${terminal.revision}`]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("rejects stale terminal transition after same-task revision cancellation wins the queue", async () => {
     const harness = await createPausingHarness();
     try {
       let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
@@ -1055,15 +1117,26 @@ describe("task artifact versions", () => {
       expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe("working");
 
       pause.release();
-      const [outcome, terminal] = await Promise.all([outcomePromise, terminalPromise]);
+      const [outcome, terminal] = await Promise.all([
+        outcomePromise,
+        terminalPromise.then(
+          (task) => ({ ok: true as const, task }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
+      ]);
       if (!outcome) throw new Error("Expected cancelled revision outcome");
 
       expect(outcome.revision.status).toBe("cancelled");
       expect(outcome.task.status).toBe("working");
-      expect(terminal.status).toBe("cancelled");
+      expect(terminal.ok).toBe(false);
+      if (terminal.ok) throw new Error("Stale terminal transition unexpectedly succeeded");
+      expect(terminal.error).toBeInstanceOf(Error);
+      expect((terminal.error as Error).message).toBe(
+        `Task revision conflict: expected ${started.task.revision}, current ${outcome.task.revision}`,
+      );
       expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
-        status: "cancelled",
-        revision: terminal.revision,
+        status: outcome.task.status,
+        revision: outcome.task.revision,
       });
       expect(await fs.readFile(artifactPath, "utf8")).toBe("version one\n");
     } finally {
@@ -1071,7 +1144,7 @@ describe("task artifact versions", () => {
     }
   });
 
-  test("serializes same-task revision completion capture before terminal transition commits", async () => {
+  test("rejects stale terminal transition after same-task revision completion wins the queue", async () => {
     const harness = await createPausingHarness();
     try {
       let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
@@ -1110,15 +1183,26 @@ describe("task artifact versions", () => {
       expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe("working");
 
       pause.release();
-      const [outcome, terminal] = await Promise.all([outcomePromise, terminalPromise]);
+      const [outcome, terminal] = await Promise.all([
+        outcomePromise,
+        terminalPromise.then(
+          (task) => ({ ok: true as const, task }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
+      ]);
       if (!outcome) throw new Error("Expected completed revision outcome");
 
       expect(outcome.revision.status).toBe("completed");
       expect(outcome.detail.versions.at(-1)?.changeSummary).toBe("Complete a revised draft.");
-      expect(terminal.status).toBe("failed");
+      expect(terminal.ok).toBe(false);
+      if (terminal.ok) throw new Error("Stale terminal transition unexpectedly succeeded");
+      expect(terminal.error).toBeInstanceOf(Error);
+      expect((terminal.error as Error).message).toBe(
+        `Task revision conflict: expected ${started.task.revision}, current ${outcome.task.revision}`,
+      );
       expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
-        status: "failed",
-        revision: terminal.revision,
+        status: outcome.task.status,
+        revision: outcome.task.revision,
       });
       expect(await fs.readFile(artifactPath, "utf8")).toBe("completed edit\n");
     } finally {

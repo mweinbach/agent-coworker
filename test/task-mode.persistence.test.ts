@@ -52,6 +52,21 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   };
 }
 
+function restorePendingQuestionAfterCancellation(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  taskId: string,
+  questionId: string,
+): void {
+  const db = (
+    harness.sessionDb as unknown as {
+      db: { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+    }
+  ).db;
+  db.query(
+    "UPDATE task_questions SET status = 'pending', resolved_at = NULL WHERE task_id = ? AND question_id = ?",
+  ).run(taskId, questionId);
+}
+
 async function createWorkingTask(harness: Awaited<ReturnType<typeof createHarness>>) {
   return await harness.coordinator.createPlanned({
     workspacePath: harness.workspacePath,
@@ -1179,6 +1194,134 @@ describe("task mode persistence", () => {
 
       expect(updated.threads).toHaveLength(2);
       expect(updated.threads.at(-1)?.title).toBe("Focused lane after reopen");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("reopening a cancelled task with active blocking issues restores blocked state", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const blocked = await harness.coordinator.reportBlocker({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        description: "Needs a user credential",
+        blocking: true,
+      });
+      expect(blocked.status).toBe("blocked");
+      const cancelled = await transitionToStatus(harness, created.task.id, "cancelled");
+      expect(cancelled.blockers).toEqual([
+        expect.objectContaining({ description: "Needs a user credential", status: "active" }),
+      ]);
+
+      const reopened = await harness.coordinator.reopenTask({
+        taskId: cancelled.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: cancelled.revision,
+        reason: "Credential is available again",
+      });
+      const blocker = reopened.blockers[0];
+      if (!blocker) throw new Error("Expected blocker");
+      const resolved = await harness.coordinator.resolveBlocker({
+        taskId: reopened.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: reopened.revision,
+        blockerId: blocker.id,
+      });
+
+      expect(reopened.status).toBe("blocked");
+      expect(resolved.status).toBe("working");
+      expect(resolved.blockers[0]).toMatchObject({ status: "resolved" });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("reopening a cancelled task with pending blocking questions restores blocked state", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const requested = await harness.coordinator.requestInput({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        sessionId: "task-session-1",
+        questions: [
+          {
+            header: "Credential",
+            question: "Which credential should this task use?",
+            blocking: true,
+            urgency: "now",
+          },
+        ],
+      });
+      expect(requested.task.status).toBe("blocked");
+      const question = requested.task.questions[0];
+      if (!question) throw new Error("Expected question");
+      const cancelled = await transitionToStatus(harness, created.task.id, "cancelled");
+      restorePendingQuestionAfterCancellation(harness, cancelled.id, question.id);
+      const persistedCancelled = harness.coordinator.get(cancelled.id, harness.workspacePath);
+      expect(persistedCancelled?.questions[0]).toMatchObject({
+        id: question.id,
+        status: "pending",
+        blocking: true,
+      });
+
+      const reopened = await harness.coordinator.reopenTask({
+        taskId: cancelled.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: cancelled.revision,
+        reason: "User can now answer",
+      });
+      const resolved = await harness.coordinator.resolveQuestions({
+        taskId: reopened.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: reopened.revision,
+        answers: [{ questionId: question.id, text: "Use the restored test credential." }],
+      });
+
+      expect(reopened.status).toBe("blocked");
+      expect(resolved.task.status).toBe("working");
+      expect(resolved.task.questions[0]).toMatchObject({ status: "answered" });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/reopen reports stale revision conflicts before lifecycle state errors", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const terminal = await transitionToStatus(harness, created.task.id, "completed");
+      await harness.coordinator.reopenTask({
+        taskId: terminal.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: terminal.revision,
+      });
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/reopen", {
+        cwd: harness.workspacePath,
+        taskId: terminal.id,
+        expectedRevision: terminal.revision,
+        reason: "Stale duplicate reopen",
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          data: expect.objectContaining({
+            category: "revision_conflict",
+            expectedRevision: terminal.revision,
+            currentRevision: terminal.revision + 1,
+          }),
+        }),
+      ]);
     } finally {
       harness.sessionDb.close();
     }

@@ -1457,6 +1457,7 @@ export class TaskCoordinator {
     reason?: string;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(task, input.expectedRevision);
     if (task.status !== "completed" && task.status !== "cancelled") {
       throw new Error("Only completed or cancelled tasks can be reopened");
     }
@@ -1860,19 +1861,18 @@ export class TaskCoordinator {
         `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
       );
     }
-    if (
+    const recoveryStatus: TaskStatus =
       task.questions.some((question) => question.status === "pending" && question.blocking) ||
       task.blockers.some((blocker) => blocker.status === "active" && blocker.blocking)
-    ) {
-      throw new Error("Task cannot return to working while blocking input or issues remain");
-    }
+        ? "blocked"
+        : "working";
     const thread = input.sessionId
       ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
       : null;
     const updated = await this.options.sessionDb.setTaskStatus({
       taskId: task.id,
       expectedRevision: input.expectedRevision,
-      status: "working",
+      status: recoveryStatus,
       summary: nonEmpty(input.summary, "Status summary"),
       detail: input.detail?.trim() || null,
       updatedAt: nowIso(),

@@ -1,3 +1,4 @@
+import { sameWorkspacePath } from "@cowork/utils/workspacePath";
 import {
   type ArtifactDiff,
   type ArtifactPreview,
@@ -18,6 +19,7 @@ import {
   taskRecordSchema,
   taskSummarySchema,
 } from "../../../../../src/shared/tasks";
+import { getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   ensureControlSocket,
@@ -54,8 +56,12 @@ const defaultTaskActionDependencies: TaskActionDependencies = {
   persistNow,
 };
 
-function normalizeWorkspacePath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
+function workspacePlatform(): NodeJS.Platform {
+  return getDesktopPlatformInfo().rawPlatform as NodeJS.Platform;
+}
+
+function workspacePathsMatch(a: string, b: string): boolean {
+  return sameWorkspacePath(a, b, workspacePlatform());
 }
 
 function taskSummary(task: TaskRecord): TaskSummary {
@@ -86,9 +92,8 @@ function workspaceIdForTask(
   get: StoreGet,
   task: Pick<TaskSummary, "workspacePath">,
 ): string | null {
-  const normalized = normalizeWorkspacePath(task.workspacePath);
   return (
-    get().workspaces.find((workspace) => normalizeWorkspacePath(workspace.path) === normalized)
+    get().workspaces.find((workspace) => workspacePathsMatch(workspace.path, task.workspacePath))
       ?.id ?? null
   );
 }
@@ -216,7 +221,7 @@ function ensureTaskRouter(
     if (
       !params ||
       typeof params.cwd !== "string" ||
-      normalizeWorkspacePath(params.cwd) !== normalizeWorkspacePath(workspace.path)
+      !workspacePathsMatch(params.cwd, workspace.path)
     ) {
       return;
     }
@@ -233,7 +238,7 @@ function ensureTaskRouter(
       if (workspaceDisposition === "promote_one_off") {
         set((state) => ({
           workspaces: state.workspaces.map((candidate) =>
-            normalizeWorkspacePath(candidate.path) === normalizeWorkspacePath(task.workspacePath)
+            workspacePathsMatch(candidate.path, task.workspacePath)
               ? { ...candidate, name: task.title, workspaceKind: "project" as const }
               : candidate,
           ),

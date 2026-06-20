@@ -16,11 +16,15 @@ const actualWorkspaceStore = require("../apps/mobile/src/features/cowork/workspa
 const actualThreadStore = require("../apps/mobile/src/features/cowork/threadStore");
 const actualRuntimeClient = require("../apps/mobile/src/features/cowork/runtimeClient");
 const actualPairingStore = require("../apps/mobile/src/features/pairing/pairingStore");
+const actualFeedDisplay = require("../apps/mobile/src/features/cowork/feedDisplay");
+const actualDisplayPreferencesStore = require("../apps/mobile/src/features/preferences/displayPreferencesStore");
 
 const realUseWorkspaceStore = actualWorkspaceStore.useWorkspaceStore;
 const realUseThreadStore = actualThreadStore.useThreadStore;
 const realGetActiveCoworkJsonRpcClient = actualRuntimeClient.getActiveCoworkJsonRpcClient;
 const realUsePairingStore = actualPairingStore.usePairingStore;
+const realFilterFeedForDisplay = actualFeedDisplay.filterFeedForDisplay;
+const realUseDisplayPreferencesStore = actualDisplayPreferencesStore.useDisplayPreferencesStore;
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => any) {
   mock.module(alias, factory);
@@ -257,6 +261,16 @@ describe("mobile thread toolbar affordances", () => {
     mock.module(path.resolve("apps/mobile/src/features/cowork/runtimeClient.ts"), () => ({
       getActiveCoworkJsonRpcClient: realGetActiveCoworkJsonRpcClient,
     }));
+    mockLocalModule(
+      "@/features/cowork/feedDisplay",
+      "apps/mobile/src/features/cowork/feedDisplay",
+      () => ({ filterFeedForDisplay: realFilterFeedForDisplay }),
+    );
+    mockLocalModule(
+      "@/features/preferences/displayPreferencesStore",
+      "apps/mobile/src/features/preferences/displayPreferencesStore",
+      () => ({ useDisplayPreferencesStore: realUseDisplayPreferencesStore }),
+    );
   });
 
   test("renders no dead overflow button when there is no pending server request", async () => {

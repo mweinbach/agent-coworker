@@ -105,6 +105,7 @@ async function createTaskWithArtifactSet(harness: Harness): Promise<{
 async function seedPopulatedRevisionRows(harness: Harness): Promise<{
   taskId: string;
   activeRevision: TaskArtifactRevision;
+  completedRevision: TaskArtifactRevision;
   revisionIds: Record<"active" | "completed" | "cancelled" | "failed", string>;
   artifactPaths: Record<"active" | "completed" | "cancelled" | "failed", string>;
 }> {
@@ -160,6 +161,7 @@ async function seedPopulatedRevisionRows(harness: Harness): Promise<{
   return {
     taskId: task.id,
     activeRevision: active.revision,
+    completedRevision: completed.revision,
     revisionIds: {
       active: active.revision.id,
       completed: completed.revision.id,
@@ -327,7 +329,7 @@ describe("task artifact revision settlement migration", () => {
             expect.objectContaining({
               revision_id: seed.revisionIds.completed,
               status: "completed",
-              settlement_status: "none",
+              settlement_status: "pending",
             }),
             expect.objectContaining({
               revision_id: seed.revisionIds.cancelled,
@@ -345,10 +347,10 @@ describe("task artifact revision settlement migration", () => {
         inspectDb.close();
       }
 
-      expect(upgraded.hasPendingTaskArtifactRevisionSettlement(seed.taskId)).toBe(false);
-      expect(upgraded.listCoordinatorOwnedTaskArtifactRevisionWorkItemIds(seed.taskId)).toEqual([
-        seed.activeRevision.workItemId,
-      ]);
+      expect(upgraded.hasPendingTaskArtifactRevisionSettlement(seed.taskId)).toBe(true);
+      expect(
+        upgraded.listCoordinatorOwnedTaskArtifactRevisionWorkItemIds(seed.taskId).sort(),
+      ).toEqual([seed.activeRevision.workItemId, seed.completedRevision.workItemId].sort());
       expect(upgraded.getTaskArtifactRevision(seed.revisionIds.completed)?.status).toBe(
         "completed",
       );
@@ -361,6 +363,10 @@ describe("task artifact revision settlement migration", () => {
       );
       expect(completedActive?.revision.status).toBe("completed");
       expect(upgraded.getTaskArtifactRevision(seed.revisionIds.active)?.status).toBe("completed");
+      expect(upgraded.hasPendingTaskArtifactRevisionSettlement(seed.taskId)).toBe(true);
+      expect(upgraded.listCoordinatorOwnedTaskArtifactRevisionWorkItemIds(seed.taskId)).toEqual([
+        seed.completedRevision.workItemId,
+      ]);
     } finally {
       upgraded.close();
     }
@@ -373,7 +379,7 @@ describe("task artifact revision settlement migration", () => {
         getRevisionColumns(dbPath).filter((column) => column.name === "settlement_status"),
       ).toHaveLength(1);
       expect(getMigrationCount(dbPath, SETTLEMENT_MIGRATION_VERSION)).toBe(1);
-      expect(reopened.hasPendingTaskArtifactRevisionSettlement(seed.taskId)).toBe(false);
+      expect(reopened.hasPendingTaskArtifactRevisionSettlement(seed.taskId)).toBe(true);
       expect(reopened.getTaskArtifactRevision(seed.revisionIds.completed)?.status).toBe(
         "completed",
       );

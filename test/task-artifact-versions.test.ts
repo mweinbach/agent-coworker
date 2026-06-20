@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -20,6 +21,11 @@ type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T) => void;
   reject: (error: unknown) => void;
+};
+
+type CapturedTaskNotification = {
+  method: string;
+  params: Record<string, unknown>;
 };
 
 function createDeferred<T>(): Deferred<T> {
@@ -96,7 +102,14 @@ async function createHarness() {
   ]);
   const sessionDb = await SessionDb.create({ paths: { rootDir, sessionsDir } });
   const artifactStore = new ArtifactVersionStore({ rootDir: path.join(rootDir, "artifacts") });
-  const coordinator = new TaskCoordinator({ sessionDb, artifactStore });
+  const notifications: CapturedTaskNotification[] = [];
+  const coordinator = new TaskCoordinator({
+    sessionDb,
+    artifactStore,
+    notify: (notification) => {
+      notifications.push({ method: notification.method, params: notification.params });
+    },
+  });
   let threadIndex = 1;
   let threadFactoryCalls = 0;
   coordinator.setThreadFactory(async () => {
@@ -110,8 +123,53 @@ async function createHarness() {
     sessionDb,
     artifactStore,
     coordinator,
+    notifications,
     getThreadFactoryCalls: () => threadFactoryCalls,
   };
+}
+
+function installSettlementFailureTrigger(dbPath: string): () => void {
+  const db = new Database(dbPath);
+  db.exec("DROP TRIGGER IF EXISTS fail_pending_artifact_revision_settlement");
+  db.exec(`
+    CREATE TRIGGER fail_pending_artifact_revision_settlement
+    BEFORE UPDATE OF settlement_status ON task_artifact_revisions
+    WHEN NEW.settlement_status = 'settled'
+    BEGIN
+      SELECT RAISE(ABORT, 'injected settlement failure');
+    END
+  `);
+  db.close();
+  return () => {
+    const cleanupDb = new Database(dbPath);
+    cleanupDb.exec("DROP TRIGGER IF EXISTS fail_pending_artifact_revision_settlement");
+    cleanupDb.close();
+  };
+}
+
+function taskActivityFingerprint(task: TaskRecord): string[] {
+  return task.activity.map((entry) =>
+    [
+      entry.kind,
+      entry.summary,
+      entry.detail ?? "",
+      entry.workItemId ?? "",
+      entry.threadId ?? "",
+    ].join("\u0000"),
+  );
+}
+
+function taskWorkItemFingerprint(task: TaskRecord): string[] {
+  return task.workItems.map((item) =>
+    [
+      item.id,
+      item.status,
+      item.completionEvidence ?? "",
+      item.assignedThreadId ?? "",
+      item.claimedByThreadId ?? "",
+      item.expectedOutputs.join("\u0000"),
+    ].join("\u0001"),
+  );
 }
 
 async function createPausingHarness(
@@ -1465,6 +1523,74 @@ describe("task artifact versions", () => {
           workspacePath: harness.workspacePath,
           expectedRevision: task.revision,
           summary: "Should not complete without the expected artifact.",
+        }),
+      ).rejects.toThrow("Expected artifact is not registered");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("revision helper outputs must still match the revised artifact path", async () => {
+    const harness = await createHarness();
+    try {
+      let { task, artifact, artifactPath } = await createTaskWithArtifact(harness, {
+        reviewRequired: false,
+      });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start helper output binding check.",
+      });
+      const started = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: artifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report before repurposing the helper.",
+      });
+      await fs.writeFile(artifactPath, "version two for helper output binding\n");
+      const finalized = await harness.coordinator.handleThreadOutcome(
+        started.revision.sessionId,
+        "completed",
+      );
+      if (!finalized) throw new Error("Expected completed revision");
+      expect(finalized.task.status).toBe("completed");
+
+      task = await harness.coordinator.reopenTask({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: finalized.task.revision,
+        reason: "Try to repurpose settled revision evidence.",
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: task.workItems.map((item) =>
+          item.id === started.revision.workItemId
+            ? {
+                id: item.id,
+                title: item.title,
+                status: "done" as const,
+                expectedOutputs: ["new-deliverable.md"],
+              }
+            : {
+                id: item.id,
+                title: item.title,
+                status: item.status,
+                expectedOutputs: item.expectedOutputs,
+              },
+        ),
+      });
+
+      await expect(
+        harness.coordinator.proposeCompletion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          summary: "Should not reuse revision evidence for a different output.",
         }),
       ).rejects.toThrow("Expected artifact is not registered");
     } finally {
@@ -3249,6 +3375,313 @@ describe("task artifact versions", () => {
       expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
     } finally {
       harness.sessionDb.close();
+    }
+  });
+
+  test("rolls back no-review deferred settlement when consuming pending rows fails", async () => {
+    const harness = await createHarness();
+    let closed = false;
+    let cleanupTrigger: (() => void) | null = null;
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: false });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start atomic no-review settlement.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report before injected settlement failure.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: reportRevision.task.revision,
+        instruction: "Cancel notes after injected settlement failure.",
+      });
+
+      await fs.writeFile(reportPath, "report version two before injected failure\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      expect(firstClosed.task.status).toBe("working");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+      const preAttemptTask = firstClosed.task;
+      const preAttemptReportRevision = harness.sessionDb.getTaskArtifactRevision(
+        reportRevision.revision.id,
+      );
+      const preAttemptNotesRevision = harness.sessionDb.getTaskArtifactRevision(
+        notesRevision.revision.id,
+      );
+      const preAttemptReportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      const preAttemptActivity = taskActivityFingerprint(preAttemptTask);
+      const preAttemptWorkItems = taskWorkItemFingerprint(preAttemptTask);
+      const preAttemptReviews = harness.sessionDb.listTaskReviews(task.id);
+      const preAttemptNotifications = harness.notifications.length;
+
+      cleanupTrigger = installSettlementFailureTrigger(harness.sessionDb.dbPath);
+      await fs.writeFile(notesPath, "notes version two to discard during injected failure\n");
+      await expect(
+        harness.coordinator.handleThreadOutcome(notesRevision.revision.sessionId, "cancelled"),
+      ).rejects.toThrow("injected settlement failure");
+
+      expect(harness.notifications).toHaveLength(preAttemptNotifications);
+      let afterFailureTask = harness.sessionDb.getTask(task.id);
+      expect(afterFailureTask).not.toBeNull();
+      if (!afterFailureTask) throw new Error("Expected task after failed settlement");
+      expect(afterFailureTask.status).toBe(preAttemptTask.status);
+      expect(afterFailureTask.revision).toBe(preAttemptTask.revision);
+      expect(taskWorkItemFingerprint(afterFailureTask)).toEqual(preAttemptWorkItems);
+      expect(taskActivityFingerprint(afterFailureTask)).toEqual(preAttemptActivity);
+      expect(harness.sessionDb.listTaskReviews(task.id)).toEqual(preAttemptReviews);
+      expect(harness.sessionDb.getTaskArtifactRevision(reportRevision.revision.id)).toEqual(
+        preAttemptReportRevision,
+      );
+      expect(harness.sessionDb.getTaskArtifactRevision(notesRevision.revision.id)).toEqual(
+        preAttemptNotesRevision,
+      );
+      let reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.acceptedVersionId).toBe(preAttemptReportDetail?.acceptedVersionId);
+      expect(reportDetail?.latestVersionId).toBe(preAttemptReportDetail?.latestVersionId);
+      expect(reportDetail?.versions).toEqual(preAttemptReportDetail?.versions);
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+
+      harness.sessionDb.close();
+      closed = true;
+      const reopenedNotifications: CapturedTaskNotification[] = [];
+      const reopenedDb = await SessionDb.create({
+        paths: {
+          rootDir: harness.rootDir,
+          sessionsDir: path.join(harness.rootDir, "sessions"),
+        },
+      });
+      const reopenedCoordinator = new TaskCoordinator({
+        sessionDb: reopenedDb,
+        artifactStore: new ArtifactVersionStore({
+          rootDir: path.join(harness.rootDir, "artifacts"),
+        }),
+        notify: (notification) => {
+          reopenedNotifications.push({
+            method: notification.method,
+            params: notification.params,
+          });
+        },
+      });
+      try {
+        afterFailureTask = reopenedDb.getTask(task.id);
+        expect(afterFailureTask).not.toBeNull();
+        if (!afterFailureTask) throw new Error("Expected task after restart");
+        expect(afterFailureTask.status).toBe(preAttemptTask.status);
+        expect(afterFailureTask.revision).toBe(preAttemptTask.revision);
+        expect(taskWorkItemFingerprint(afterFailureTask)).toEqual(preAttemptWorkItems);
+        expect(taskActivityFingerprint(afterFailureTask)).toEqual(preAttemptActivity);
+        expect(reopenedDb.listTaskReviews(task.id)).toEqual(preAttemptReviews);
+        expect(reopenedDb.getTaskArtifactRevision(notesRevision.revision.id)).toEqual(
+          preAttemptNotesRevision,
+        );
+        expect(reopenedDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+
+        cleanupTrigger();
+        cleanupTrigger = null;
+        const retried = await reopenedCoordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!retried) throw new Error("Expected retry settlement");
+        expect(retried.task.status).toBe("completed");
+        expect(reopenedDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(false);
+        reportDetail = reopenedCoordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: reportArtifact.id,
+        });
+        expect(reportDetail?.acceptedVersionId).toBe(reportDetail?.latestVersionId);
+        expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("accepted");
+        const afterRetryActivity = taskActivityFingerprint(retried.task);
+        const afterRetryNotifications = [...reopenedNotifications];
+
+        const replay = await reopenedCoordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!replay) throw new Error("Expected idempotent retry replay");
+        expect(replay.task.revision).toBe(retried.task.revision);
+        expect(taskActivityFingerprint(replay.task)).toEqual(afterRetryActivity);
+        expect(reopenedNotifications).toEqual(afterRetryNotifications);
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      cleanupTrigger?.();
+      if (!closed) harness.sessionDb.close();
+    }
+  });
+
+  test("rolls back review-required deferred settlement when consuming pending rows fails", async () => {
+    const harness = await createHarness();
+    let closed = false;
+    let cleanupTrigger: (() => void) | null = null;
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: true, reviewRounds: 0 });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start atomic review-required settlement.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report before review-required settlement failure.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: reportRevision.task.revision,
+        instruction: "Cancel notes after review-required settlement failure.",
+      });
+
+      await fs.writeFile(reportPath, "report version two awaiting atomic review\n");
+      const firstClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!firstClosed) throw new Error("Expected completed report revision");
+      const preAttemptTask = firstClosed.task;
+      const preAttemptReportRevision = harness.sessionDb.getTaskArtifactRevision(
+        reportRevision.revision.id,
+      );
+      const preAttemptNotesRevision = harness.sessionDb.getTaskArtifactRevision(
+        notesRevision.revision.id,
+      );
+      const preAttemptReportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      const preAttemptActivity = taskActivityFingerprint(preAttemptTask);
+      const preAttemptWorkItems = taskWorkItemFingerprint(preAttemptTask);
+      const preAttemptReviews = harness.sessionDb.listTaskReviews(task.id);
+      const preAttemptNotifications = harness.notifications.length;
+
+      cleanupTrigger = installSettlementFailureTrigger(harness.sessionDb.dbPath);
+      await fs.writeFile(notesPath, "notes version two to discard before atomic review\n");
+      await expect(
+        harness.coordinator.handleThreadOutcome(notesRevision.revision.sessionId, "cancelled"),
+      ).rejects.toThrow("injected settlement failure");
+
+      expect(harness.notifications).toHaveLength(preAttemptNotifications);
+      let afterFailureTask = harness.sessionDb.getTask(task.id);
+      expect(afterFailureTask).not.toBeNull();
+      if (!afterFailureTask) throw new Error("Expected task after failed review settlement");
+      expect(afterFailureTask.status).toBe(preAttemptTask.status);
+      expect(afterFailureTask.revision).toBe(preAttemptTask.revision);
+      expect(taskWorkItemFingerprint(afterFailureTask)).toEqual(preAttemptWorkItems);
+      expect(taskActivityFingerprint(afterFailureTask)).toEqual(preAttemptActivity);
+      expect(harness.sessionDb.listTaskReviews(task.id)).toEqual(preAttemptReviews);
+      expect(harness.sessionDb.getTaskArtifactRevision(reportRevision.revision.id)).toEqual(
+        preAttemptReportRevision,
+      );
+      expect(harness.sessionDb.getTaskArtifactRevision(notesRevision.revision.id)).toEqual(
+        preAttemptNotesRevision,
+      );
+      let reportDetail = harness.coordinator.getArtifactDetail({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+      });
+      expect(reportDetail?.acceptedVersionId).toBe(preAttemptReportDetail?.acceptedVersionId);
+      expect(reportDetail?.latestVersionId).toBe(preAttemptReportDetail?.latestVersionId);
+      expect(reportDetail?.versions).toEqual(preAttemptReportDetail?.versions);
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+
+      harness.sessionDb.close();
+      closed = true;
+      const reopenedNotifications: CapturedTaskNotification[] = [];
+      const reopenedDb = await SessionDb.create({
+        paths: {
+          rootDir: harness.rootDir,
+          sessionsDir: path.join(harness.rootDir, "sessions"),
+        },
+      });
+      const reopenedCoordinator = new TaskCoordinator({
+        sessionDb: reopenedDb,
+        artifactStore: new ArtifactVersionStore({
+          rootDir: path.join(harness.rootDir, "artifacts"),
+        }),
+        notify: (notification) => {
+          reopenedNotifications.push({
+            method: notification.method,
+            params: notification.params,
+          });
+        },
+      });
+      try {
+        afterFailureTask = reopenedDb.getTask(task.id);
+        expect(afterFailureTask).not.toBeNull();
+        if (!afterFailureTask) throw new Error("Expected task after review restart");
+        expect(afterFailureTask.status).toBe(preAttemptTask.status);
+        expect(afterFailureTask.revision).toBe(preAttemptTask.revision);
+        expect(taskWorkItemFingerprint(afterFailureTask)).toEqual(preAttemptWorkItems);
+        expect(taskActivityFingerprint(afterFailureTask)).toEqual(preAttemptActivity);
+        expect(reopenedDb.listTaskReviews(task.id)).toEqual(preAttemptReviews);
+        expect(reopenedDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+
+        cleanupTrigger();
+        cleanupTrigger = null;
+        const retried = await reopenedCoordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!retried) throw new Error("Expected review-required retry settlement");
+        expect(retried.task.status).toBe("awaiting_review");
+        expect(reopenedDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(false);
+        reportDetail = reopenedCoordinator.getArtifactDetail({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: reportArtifact.id,
+        });
+        expect(reportDetail?.acceptedVersionId).not.toBe(reportDetail?.latestVersionId);
+        expect(reportDetail?.versions.at(-1)?.reviewStatus).toBe("draft");
+        const afterRetryActivity = taskActivityFingerprint(retried.task);
+        const afterRetryNotifications = [...reopenedNotifications];
+
+        const replay = await reopenedCoordinator.handleThreadOutcome(
+          notesRevision.revision.sessionId,
+          "cancelled",
+        );
+        if (!replay) throw new Error("Expected review retry replay");
+        expect(replay.task.revision).toBe(retried.task.revision);
+        expect(taskActivityFingerprint(replay.task)).toEqual(afterRetryActivity);
+        expect(reopenedNotifications).toEqual(afterRetryNotifications);
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      cleanupTrigger?.();
+      if (!closed) harness.sessionDb.close();
     }
   });
 

@@ -368,6 +368,13 @@ export class ArtifactConflictError extends Error {
   }
 }
 
+class AtomicTaskCompletionSettlementError extends Error {
+  constructor(cause: unknown) {
+    super(`Failed to commit task completion settlement atomically: ${String(cause)}`, { cause });
+    this.name = "AtomicTaskCompletionSettlementError";
+  }
+}
+
 export function buildArtifactRevisionPrompt(input: {
   artifact: TaskArtifact;
   revision: TaskArtifactRevision;
@@ -2034,6 +2041,31 @@ export class TaskCoordinator {
           closedRevision.artifactId,
         );
         if (!closedTask || !closedDetail) return null;
+        if (
+          !isTerminalTask(closedTask) &&
+          !this.hasActiveArtifactRevision(closedTask) &&
+          this.hasCompletedArtifactRevisionAwaitingSettlement(closedTask) &&
+          (closedRevision.status === "completed" || closedRevision.status === "cancelled")
+        ) {
+          const priorTaskStatus =
+            this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(closedRevision.id) ??
+            closedTask.status;
+          const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+            task: closedTask,
+            priorTaskStatus,
+            outcome: closedRevision.status,
+            sessionId,
+            detail: closedRevision.status === "cancelled" ? "Revision cancelled" : undefined,
+          });
+          const settledRevision =
+            this.options.sessionDb.getTaskArtifactRevision(closedRevision.id) ?? closedRevision;
+          const settledDetail =
+            this.options.sessionDb.getTaskArtifactDetail(
+              closedRevision.taskId,
+              closedRevision.artifactId,
+            ) ?? closedDetail;
+          return { task: settledTask, detail: settledDetail, revision: settledRevision };
+        }
         return { task: closedTask, detail: closedDetail, revision: closedRevision };
       }
       return null;
@@ -2046,6 +2078,9 @@ export class TaskCoordinator {
     if (!prior) throw new Error(`Unknown prior artifact version: ${revision.priorVersionId}`);
     const priorTaskStatus =
       this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(revision.id) ?? task.status;
+    const hasPendingSettlementBeforeOutcome =
+      this.hasCompletedArtifactRevisionAwaitingSettlement(task);
+    const isFinalActiveRevision = !this.hasActiveArtifactRevisionOtherThan(task, revision.id);
     if (isTerminalTask(task)) {
       const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
         revisionId: revision.id,
@@ -2089,6 +2124,27 @@ export class TaskCoordinator {
           },
           reviewStatus: "draft",
         });
+        if (hasPendingSettlementBeforeOutcome && isFinalActiveRevision) {
+          const settledTask = await this.finalizeArtifactRevisionAndProposeCompletionAtomically({
+            task,
+            priorTaskStatus,
+            outcome: {
+              type: "completed",
+              revisionId: revision.id,
+              version,
+            },
+            sessionId,
+            summary: "Artifact revision completed",
+          });
+          const settledRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+          const settledDetail = this.options.sessionDb.getTaskArtifactDetail(
+            task.id,
+            detail.artifact.id,
+          );
+          if (!settledRevision || !settledDetail)
+            throw new Error("Artifact revision did not persist");
+          return { task: settledTask, detail: settledDetail, revision: settledRevision };
+        }
         updatedTask = await this.options.sessionDb.completeTaskArtifactRevision({
           revisionId: revision.id,
           version,
@@ -2104,6 +2160,7 @@ export class TaskCoordinator {
         completedRevision = persistedRevision;
         updatedDetail = persistedDetail;
       } catch (error) {
+        if (error instanceof AtomicTaskCompletionSettlementError) throw error;
         await this.artifactStore.restoreFile({
           blobSha256: prior.sha256,
           filePath: resolvedPath,
@@ -2140,10 +2197,44 @@ export class TaskCoordinator {
       return { task: settledTask, detail: settledDetail, revision: completedRevision };
     }
 
+    const restoreFailureRollback =
+      hasPendingSettlementBeforeOutcome && isFinalActiveRevision && outcome === "cancelled"
+        ? await this.artifactStore.captureFile(resolvedPath)
+        : null;
     await this.artifactStore.restoreFile({
       blobSha256: prior.sha256,
       filePath: resolvedPath,
     });
+    if (restoreFailureRollback) {
+      try {
+        const settledTask = await this.finalizeArtifactRevisionAndProposeCompletionAtomically({
+          task,
+          priorTaskStatus,
+          outcome: {
+            type: "cancelled",
+            revisionId: revision.id,
+            detail: "Revision cancelled",
+          },
+          sessionId,
+          summary: "Artifact revision cancelled",
+          detail: "Revision cancelled",
+        });
+        const settledRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+        const settledDetail = this.options.sessionDb.getTaskArtifactDetail(
+          task.id,
+          detail.artifact.id,
+        );
+        if (!settledRevision || !settledDetail)
+          throw new Error("Artifact revision did not finalize");
+        return { task: settledTask, detail: settledDetail, revision: settledRevision };
+      } catch (error) {
+        await this.artifactStore.restoreFile({
+          blobSha256: restoreFailureRollback.sha256,
+          filePath: resolvedPath,
+        });
+        throw error;
+      }
+    }
     const failedTask = await this.options.sessionDb.failTaskArtifactRevision({
       revisionId: revision.id,
       status: outcome,
@@ -2170,16 +2261,20 @@ export class TaskCoordinator {
     });
   }
 
+  private hasActiveArtifactRevisionOtherThan(task: TaskRecord, revisionId: string): boolean {
+    return task.artifacts.some((artifactRecord) => {
+      const detail = this.options.sessionDb.getTaskArtifactDetail(task.id, artifactRecord.id);
+      const activeRevisionId = detail?.activeRevision?.id ?? null;
+      return activeRevisionId !== null && activeRevisionId !== revisionId;
+    });
+  }
+
   private hasCompletedArtifactRevisionAwaitingSettlement(task: TaskRecord): boolean {
     return this.options.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id);
   }
 
-  private async settlePendingArtifactRevisionSettlements(task: TaskRecord): Promise<TaskRecord> {
-    if (!this.hasCompletedArtifactRevisionAwaitingSettlement(task)) return task;
-    return await this.options.sessionDb.settlePendingTaskArtifactRevisionSettlements({
-      taskId: task.id,
-      updatedAt: nowIso(),
-    });
+  private pendingArtifactRevisionSettlementIds(task: TaskRecord): string[] {
+    return this.options.sessionDb.listPendingTaskArtifactRevisionSettlementIds(task.id);
   }
 
   private hasBlockingState(task: TaskRecord): boolean {
@@ -2217,6 +2312,144 @@ export class TaskCoordinator {
     return restored;
   }
 
+  private async validateCompletionProposalTask(
+    task: TaskRecord,
+  ): Promise<TaskReviewMaterial | null> {
+    this.assertCompletionReadiness(task);
+    const currentMaterial = await this.requireCompletionReviewEligibility(task);
+    if (currentMaterial) {
+      const nextMaterial = await this.currentReviewMaterial(task);
+      if (nextMaterial.fingerprint !== currentMaterial.fingerprint) {
+        throw new Error(
+          "Task requires a fresh passing review for the current delivery state before completion",
+        );
+      }
+    }
+    return currentMaterial;
+  }
+
+  private async restoreAfterArtifactRevisionCompletionProposalFailure(input: {
+    taskId: string;
+    priorTaskStatus: TaskStatus;
+    outcome: "completed" | "cancelled" | "error";
+    sessionId: string;
+    detail?: string;
+  }): Promise<TaskRecord> {
+    const latest = this.options.sessionDb.getTask(input.taskId);
+    if (!latest) throw new Error(`Unknown task: ${input.taskId}`);
+    if (isTerminalTask(latest)) return latest;
+    if (latest.status === "blocked" || this.hasBlockingState(latest)) {
+      return await this.restoreTaskStatusAfterArtifactRevision({
+        task: latest,
+        status: "blocked",
+        summary: "Task remains blocked after artifact revision",
+        sessionId: input.sessionId,
+      });
+    }
+    if (input.priorTaskStatus === "draft" || input.priorTaskStatus === "planning") {
+      return await this.restoreTaskStatusAfterArtifactRevision({
+        task: latest,
+        status: input.priorTaskStatus,
+        summary:
+          input.outcome === "completed"
+            ? "Artifact revision completed"
+            : "Artifact revision cancelled",
+        detail: input.detail,
+        sessionId: input.sessionId,
+      });
+    }
+    this.notifyUpdated(latest);
+    return latest;
+  }
+
+  private async finalizeArtifactRevisionAndProposeCompletionAtomically(input: {
+    task: TaskRecord;
+    priorTaskStatus: TaskStatus;
+    outcome:
+      | {
+          type: "completed";
+          revisionId: string;
+          version: TaskArtifactVersion;
+        }
+      | {
+          type: "cancelled";
+          revisionId: string;
+          detail?: string;
+        };
+    sessionId: string;
+    summary: string;
+    detail?: string;
+  }): Promise<TaskRecord> {
+    const settlementRevisionIds = this.pendingArtifactRevisionSettlementIds(input.task);
+    let currentMaterial: TaskReviewMaterial | null = null;
+    const updatedAt = nowIso();
+    const thread = input.task.threads.find((candidate) => candidate.sessionId === input.sessionId);
+    let result: {
+      task: TaskRecord;
+      completion: "committed" | "not_ready";
+      error?: unknown;
+    };
+    try {
+      result = await this.options.sessionDb.finalizeArtifactRevisionAndProposeTaskCompletion({
+        taskId: input.task.id,
+        revision:
+          input.outcome.type === "completed"
+            ? {
+                outcome: "completed",
+                revisionId: input.outcome.revisionId,
+                version: input.outcome.version,
+              }
+            : {
+                outcome: "cancelled",
+                revisionId: input.outcome.revisionId,
+                detail: input.outcome.detail,
+              },
+        updatedAt,
+        summary: input.summary,
+        detail: input.detail ?? null,
+        threadId: thread?.id ?? null,
+        settlementRevisionIds,
+        reviewRequired: input.task.reviewRequired,
+        prepareCompletion: async (preparedTask) => {
+          try {
+            currentMaterial = await this.validateCompletionProposalTask(preparedTask);
+          } catch (error) {
+            return { ready: false, error };
+          }
+          return {
+            ready: true,
+            validateReadyTask: currentMaterial
+              ? async (readyTask) => {
+                  if (!currentMaterial) return;
+                  await this.assertLiveArtifactEvidenceUnchanged(readyTask, currentMaterial);
+                }
+              : undefined,
+            validateAcceptedTask: currentMaterial
+              ? async (acceptedTask) => {
+                  if (!currentMaterial) return;
+                  await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, currentMaterial);
+                }
+              : undefined,
+          };
+        },
+      });
+    } catch (error) {
+      throw new AtomicTaskCompletionSettlementError(error);
+    }
+    if (result.completion === "not_ready") {
+      return await this.restoreAfterArtifactRevisionCompletionProposalFailure({
+        taskId: input.task.id,
+        priorTaskStatus: input.priorTaskStatus,
+        outcome: input.outcome.type === "completed" ? "completed" : "cancelled",
+        sessionId: input.sessionId,
+        detail: input.detail,
+      });
+    }
+    await this.quiesceTaskThreads(result.task);
+    this.notifyUpdated(result.task);
+    return result.task;
+  }
+
   private async settleTaskAfterArtifactRevisionOutcome(input: {
     task: TaskRecord;
     priorTaskStatus: TaskStatus;
@@ -2224,7 +2457,7 @@ export class TaskCoordinator {
     sessionId: string;
     detail?: string;
   }): Promise<TaskRecord> {
-    let latest = this.options.sessionDb.getTask(input.task.id) ?? input.task;
+    const latest = this.options.sessionDb.getTask(input.task.id) ?? input.task;
     if (isTerminalTask(latest)) return latest;
 
     if (input.outcome === "error") {
@@ -2266,7 +2499,7 @@ export class TaskCoordinator {
       hasDeferredCompletedRevision
     ) {
       try {
-        const proposed = await this.proposeCompletionLocked({
+        return await this.proposeCompletionLocked({
           taskId: latest.id,
           workspacePath: latest.workspacePath,
           expectedRevision: latest.revision,
@@ -2277,33 +2510,15 @@ export class TaskCoordinator {
           sessionId: input.sessionId,
           defaultPendingQuestions: false,
         });
-        if (!hasDeferredCompletedRevision) return proposed;
-        return await this.settlePendingArtifactRevisionSettlements(proposed);
-      } catch {
-        latest = this.options.sessionDb.getTask(latest.id) ?? latest;
-        if (isTerminalTask(latest)) return latest;
-        if (latest.status === "blocked" || this.hasBlockingState(latest)) {
-          return await this.restoreTaskStatusAfterArtifactRevision({
-            task: latest,
-            status: "blocked",
-            summary: "Task remains blocked after artifact revision",
-            sessionId: input.sessionId,
-          });
-        }
-        if (input.priorTaskStatus === "draft" || input.priorTaskStatus === "planning") {
-          return await this.restoreTaskStatusAfterArtifactRevision({
-            task: latest,
-            status: input.priorTaskStatus,
-            summary:
-              input.outcome === "completed"
-                ? "Artifact revision completed"
-                : "Artifact revision cancelled",
-            detail: input.detail,
-            sessionId: input.sessionId,
-          });
-        }
-        this.notifyUpdated(latest);
-        return latest;
+      } catch (error) {
+        if (error instanceof AtomicTaskCompletionSettlementError) throw error;
+        return await this.restoreAfterArtifactRevisionCompletionProposalFailure({
+          taskId: latest.id,
+          priorTaskStatus: input.priorTaskStatus,
+          outcome: input.outcome,
+          sessionId: input.sessionId,
+          detail: input.detail,
+        });
       }
     }
 
@@ -2742,10 +2957,18 @@ export class TaskCoordinator {
   }
 
   private hasExpectedArtifactOutput(task: TaskRecord, item: WorkItem): boolean {
+    const revisionOutputPaths = new Set(
+      this.options.sessionDb.listTaskArtifactRevisionOutputPathsForWorkItem(task.id, item.id),
+    );
+    const revisionOutputsMatch =
+      item.expectedOutputs.length > 0 &&
+      item.expectedOutputs.every((expectedOutput) => revisionOutputPaths.has(expectedOutput));
     return (
       task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id) ||
-      this.options.sessionDb.hasCompletedTaskArtifactRevisionForWorkItem(task.id, item.id) ||
+      (revisionOutputsMatch &&
+        this.options.sessionDb.hasCompletedTaskArtifactRevisionForWorkItem(task.id, item.id)) ||
       (item.status === "abandoned" &&
+        revisionOutputsMatch &&
         this.options.sessionDb.hasCancelledTaskArtifactRevisionForWorkItem(task.id, item.id))
     );
   }
@@ -2863,15 +3086,42 @@ export class TaskCoordinator {
       this.notifyUpdated(task);
       this.notifyActivity(task);
     }
-    this.assertCompletionReadiness(task);
-    const currentMaterial = await this.requireCompletionReviewEligibility(task);
-    if (currentMaterial) {
-      const nextMaterial = await this.currentReviewMaterial(task);
-      if (nextMaterial.fingerprint !== currentMaterial.fingerprint) {
-        throw new Error(
-          "Task requires a fresh passing review for the current delivery state before completion",
-        );
+    const currentMaterial = await this.validateCompletionProposalTask(task);
+    const settlementRevisionIds = this.pendingArtifactRevisionSettlementIds(task);
+    if (settlementRevisionIds.length > 0) {
+      const thread = input.sessionId
+        ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
+        : null;
+      const updatedAt = nowIso();
+      let updated: TaskRecord;
+      try {
+        updated =
+          await this.options.sessionDb.proposeTaskCompletionWithPendingArtifactRevisionSettlements({
+            taskId: task.id,
+            expectedRevision: task.revision,
+            updatedAt,
+            summary: input.summary,
+            detail: input.caveats?.filter(Boolean).join("\n") || null,
+            threadId: thread?.id ?? null,
+            settlementRevisionIds,
+            reviewRequired: task.reviewRequired,
+            validateReadyTask: currentMaterial
+              ? async (readyTask) => {
+                  await this.assertLiveArtifactEvidenceUnchanged(readyTask, currentMaterial);
+                }
+              : undefined,
+            validateAcceptedTask: currentMaterial
+              ? async (acceptedTask) => {
+                  await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, currentMaterial);
+                }
+              : undefined,
+          });
+      } catch (error) {
+        throw new AtomicTaskCompletionSettlementError(error);
       }
+      await this.quiesceTaskThreads(updated);
+      this.notifyUpdated(updated);
+      return updated;
     }
     const ready = await this.transitionLocked({
       taskId: task.id,

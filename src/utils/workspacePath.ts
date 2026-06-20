@@ -34,6 +34,19 @@ function resolvePosixPath(value: string): string {
   return segments.length > 0 ? `/${segments.join("/")}` : "/";
 }
 
+function sameWindowsDrive(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+function windowsDriveRelativeBase(drive: string): string {
+  const cwd = runtimeCwd("win32");
+  const cwdMatch = /^([a-zA-Z]:)\\(.*)?$/.exec(cwd);
+  // Renderer-safe fallback: per-drive Windows cwd state is not observable here.
+  // Use the current cwd only for its own drive; other drive-relative inputs start at drive root.
+  if (!cwdMatch || !sameWindowsDrive(cwdMatch[1] ?? "", drive)) return `${drive}\\`;
+  return cwd.replace(/\\$/, "");
+}
+
 function resolveWindowsPath(value: string): string {
   const normalized = value.replaceAll("/", "\\");
   const uncMatch = /^\\\\([^\\]+)\\([^\\]+)(?:\\(.*))?$/.exec(normalized);
@@ -49,10 +62,13 @@ function resolveWindowsPath(value: string): string {
     return segments.length > 0 ? `${cwdDrive}\\${segments.join("\\")}` : `${cwdDrive}\\`;
   }
 
-  const driveMatch = /^([a-zA-Z]:)(?:\\(.*))?$/.exec(normalized);
+  const driveMatch = /^([a-zA-Z]:)(?:(\\)?(.*))?$/.exec(normalized);
   if (driveMatch) {
     const root = driveMatch[1] ?? "C:";
-    const segments = normalizeSegments((driveMatch[2] ?? "").split("\\"));
+    const rooted = driveMatch[2] === "\\";
+    const tail = driveMatch[3] ?? "";
+    const base = rooted ? `${root}\\` : windowsDriveRelativeBase(root);
+    const segments = normalizeSegments(`${base.replace(/\\$/, "")}\\${tail}`.split("\\").slice(1));
     return segments.length > 0 ? `${root}\\${segments.join("\\")}` : `${root}\\`;
   }
 

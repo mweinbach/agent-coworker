@@ -2160,7 +2160,7 @@ export class TaskCoordinator {
         completedRevision = persistedRevision;
         updatedDetail = persistedDetail;
       } catch (error) {
-        if (error instanceof AtomicTaskCompletionSettlementError) throw error;
+        const shouldRethrow = error instanceof AtomicTaskCompletionSettlementError;
         await this.artifactStore.restoreFile({
           blobSha256: prior.sha256,
           filePath: resolvedPath,
@@ -2184,6 +2184,7 @@ export class TaskCoordinator {
           sessionId,
           detail: error instanceof Error ? error.message : String(error),
         });
+        if (shouldRethrow) throw error;
         return { task: settledTask, detail: updatedDetail, revision: failedRevision };
       }
       const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({

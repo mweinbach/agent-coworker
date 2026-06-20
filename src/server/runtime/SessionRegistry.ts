@@ -85,6 +85,7 @@ export type SessionRegistryOptions = {
     allWorkspaces?: boolean;
   }) => Promise<void>;
   onThreadListChanged?: () => void;
+  onTaskCreatedFromChat?: (input: { sourceSessionId: string; workspacePath: string }) => void;
 };
 
 function shouldInvalidateThreadList(evt: SessionEvent): boolean {
@@ -305,6 +306,7 @@ export class SessionRegistry {
     );
     await taskRuntime.lifecycle.waitForPersistenceIdle();
     try {
+      this.options.onTaskCreatedFromChat?.({ sourceSessionId, workspacePath: cwd });
       const result = await this.options.taskCoordinator.createPlanned({
         workspacePath: cwd,
         sessionId: taskRuntime.id,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRunTurn } from "../src/agent";
+import type { RuntimeRunTurnParams } from "../src/runtime";
 import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import type { StartServerSocket } from "../src/server/startServer/types";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
@@ -144,6 +145,45 @@ function createTestRunTurnImpl(): ReturnType<typeof createRunTurn> {
         text: "done",
         responseMessages: [],
       }),
+    }),
+  });
+}
+
+function createTaskToolRunTurnImpl(): ReturnType<typeof createRunTurn> {
+  let invocation = 0;
+  return createRunTurn({
+    createRuntime: () => ({
+      name: "pi",
+      runTurn: async (params: RuntimeRunTurnParams) => {
+        invocation += 1;
+        const tool = params.tools.createTask;
+        if (!tool) throw new Error("createTask tool was not registered");
+        await tool.execute({
+          idempotencyKey: `chat-tool-create-${invocation}`,
+          title: "Chat-created task",
+          objective: "Prove chat task creation subscribes the source socket.",
+          context: "Regression test fixture.",
+          requirements: [
+            {
+              kind: "acceptance_criterion",
+              text: "The source chat socket receives task takeover notifications.",
+            },
+          ],
+          workItems: [
+            {
+              key: "deliver",
+              title: "Deliver",
+              expectedOutputs: ["A task takeover notification"],
+            },
+          ],
+          reviewRequired: false,
+          reviewRounds: 0,
+        });
+        return {
+          text: "",
+          responseMessages: [],
+        };
+      },
     }),
   });
 }
@@ -1173,6 +1213,66 @@ describe("task workspace subscription routing", () => {
     }
   }, 20_000);
 
+  test("successful task mutations subscribe the socket to task notifications", async () => {
+    const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "task-mutation-sub-")));
+    const projectWorkspace = path.join(home, "project");
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
+    try {
+      await fs.mkdir(projectWorkspace, { recursive: true });
+      const projectPath = await fs.realpath(projectWorkspace);
+      runtime = await createTaskTestRuntime({
+        cwd: projectPath,
+        homedir: home,
+      });
+
+      const creator = makeSocket("task-mutation-subscriber");
+      const deniedMutator = makeSocket("task-mutation-denied");
+      const secondCreator = makeSocket("task-mutation-second-creator");
+      await initializeConnection(runtime, creator);
+      await initializeConnection(runtime, deniedMutator);
+      await initializeConnection(runtime, secondCreator);
+      deniedMutator.data.taskMutationAllowed = false;
+
+      const createdByMutationOnlySocket = requireCreatedTask(
+        await sendRequest(
+          runtime,
+          creator,
+          "task/create",
+          createTaskParams(projectPath, "mutation-only-subscription"),
+        ),
+      );
+      await waitForMessage(
+        creator,
+        taskNotificationPredicate("task/created", createdByMutationOnlySocket.id, projectPath),
+        "task/created for successful task/create subscriber",
+      );
+
+      const deniedCreateResponse = await sendRequest(
+        runtime,
+        deniedMutator,
+        "task/create",
+        createTaskParams(projectPath, "denied-mutation-subscription"),
+      );
+      expect(deniedCreateResponse.error?.message ?? "").toContain("requires turns permission");
+
+      const createdAfterDeniedAttempt = requireCreatedTask(
+        await sendRequest(
+          runtime,
+          secondCreator,
+          "task/create",
+          createTaskParams(projectPath, "after-denied-mutation-subscription"),
+        ),
+      );
+      await expectNoMessage(
+        deniedMutator,
+        taskNotificationPredicate("task/created", createdAfterDeniedAttempt.id, projectPath),
+      );
+    } finally {
+      await runtime?.stop();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   test("rejects generic task RPCs when the active desktop workspace is a one-off chat", async () => {
     const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "task-active-oneoff-")));
     const activeOneOffWorkspace = path.join(home, ".cowork", "chats", "20260620-active-oneoff");
@@ -1372,6 +1472,108 @@ describe("task workspace subscription routing", () => {
         "cwd must match an authorized project workspace",
       );
       await expectNoMessage(reader, (message) => message.method === "task/updated");
+    } finally {
+      await runtime?.stop();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("ordinary chat createTask tool subscribes the source socket for takeover notifications", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-chat-tool-subscription-"));
+    const projectWorkspace = path.join(home, "project");
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
+    try {
+      await fs.mkdir(projectWorkspace, { recursive: true });
+      const projectPath = await fs.realpath(projectWorkspace);
+      runtime = await createAgentServerRuntime({
+        cwd: projectPath,
+        homedir: home,
+        env: {
+          AGENT_WORKING_DIR: projectPath,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "false",
+          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+        },
+        runTurnImpl: createTaskToolRunTurnImpl(),
+      });
+
+      const origin = makeSocket("chat-task-origin");
+      const unrelatedChat = makeSocket("chat-task-unrelated");
+      await initializeConnection(runtime, origin);
+      await initializeConnection(runtime, unrelatedChat);
+
+      const originStarted = await sendRequest(runtime, origin, "thread/start", {
+        cwd: projectPath,
+      });
+      expect(originStarted.error).toBeUndefined();
+      const originThread = originStarted.result as { thread?: { id?: unknown } };
+      expect(typeof originThread.thread?.id).toBe("string");
+      if (typeof originThread.thread?.id !== "string") {
+        throw new Error("thread/start did not return a source thread id");
+      }
+      await waitForMessage(
+        origin,
+        (message) =>
+          message.method === "thread/started" &&
+          (message.params as { thread?: { id?: unknown } }).thread?.id === originThread.thread?.id,
+        "source thread/started notification",
+      );
+
+      const unrelatedStarted = await sendRequest(runtime, unrelatedChat, "thread/start", {
+        cwd: projectPath,
+      });
+      expect(unrelatedStarted.error).toBeUndefined();
+      await waitForMessage(
+        unrelatedChat,
+        (message) => message.method === "thread/started",
+        "unrelated thread/started notification",
+      );
+
+      const turnResponse = await sendRequest(runtime, origin, "turn/start", {
+        threadId: originThread.thread.id,
+        input: [{ type: "text", text: "create the task" }],
+      });
+      expect(turnResponse.error).toBeUndefined();
+
+      const createdNotification = await waitForMessage(
+        origin,
+        (message) => message.method === "task/created",
+        "task/created takeover notification for source chat",
+      );
+      const createdParams = createdNotification.params as {
+        cwd?: unknown;
+        takeover?: unknown;
+        sourceSessionId?: unknown;
+        workspaceDisposition?: unknown;
+        task?: {
+          id?: unknown;
+          workspacePath?: unknown;
+          sourceSessionId?: unknown;
+          creationOrigin?: unknown;
+        };
+      };
+      expect(createdParams).toMatchObject({
+        cwd: projectPath,
+        takeover: true,
+        sourceSessionId: originThread.thread.id,
+        workspaceDisposition: "existing_project",
+        task: {
+          workspacePath: projectPath,
+          sourceSessionId: originThread.thread.id,
+          creationOrigin: "chat_tool",
+        },
+      });
+      expect(typeof createdParams.task?.id).toBe("string");
+      await waitForMessage(
+        origin,
+        (message) => {
+          if (message.method !== "task/updated") return false;
+          const params = message.params as { task?: { id?: unknown } };
+          return params.task?.id === createdParams.task?.id;
+        },
+        "task/updated takeover follow-up notification for source chat",
+      );
+      await expectNoMessage(unrelatedChat, (message) => message.method?.startsWith("task/"));
     } finally {
       await runtime?.stop();
       await fs.rm(home, { recursive: true, force: true });

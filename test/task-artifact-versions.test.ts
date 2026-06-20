@@ -1153,6 +1153,59 @@ describe("task artifact versions", () => {
     }
   });
 
+  for (const scenario of [
+    { priorStatus: "draft", outcome: "cancelled" },
+    { priorStatus: "planning", outcome: "completed" },
+  ] as const) {
+    test(`keeps ${scenario.priorStatus}-phase revisions blocked when blockers appear before ${scenario.outcome}`, async () => {
+      const harness = await createHarness();
+      try {
+        let { task, artifact, artifactPath } = await createTaskWithArtifact(harness);
+        if (scenario.priorStatus === "planning") {
+          task = await harness.coordinator.transition({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            status: "planning",
+            summary: "Still planning the task",
+          });
+        }
+        const started = await harness.coordinator.startArtifactRevision({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          expectedRevision: task.revision,
+          instruction: "Settle after a blocker appears.",
+        });
+        expect(started.task.status).toBe("working");
+        task = await harness.coordinator.reportBlocker({
+          taskId: started.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: started.task.revision,
+          description: "A new blocking dependency appeared.",
+          blocking: true,
+        });
+        expect(task.status).toBe("blocked");
+
+        await fs.writeFile(artifactPath, "early phase edit\n");
+        const settled = await harness.coordinator.handleThreadOutcome(
+          started.revision.sessionId,
+          scenario.outcome,
+        );
+        if (!settled) throw new Error("Expected settled revision");
+
+        expect(settled.revision.status).toBe(scenario.outcome);
+        expect(settled.task.status).toBe("blocked");
+        expect(settled.task.blockers.some((blocker) => blocker.status === "active")).toBe(true);
+        expect(await fs.readFile(artifactPath, "utf8")).toBe(
+          scenario.outcome === "cancelled" ? "version one\n" : "early phase edit\n",
+        );
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
   test("restores blocked status before completion proposal failures can strand a task working", async () => {
     const harness = await createHarness();
     try {

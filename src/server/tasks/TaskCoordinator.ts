@@ -2209,7 +2209,7 @@ export class TaskCoordinator {
       return latest;
     }
 
-    if (input.priorTaskStatus === "blocked" && this.hasBlockingState(latest)) {
+    if (this.hasBlockingState(latest)) {
       return await this.restoreTaskStatusAfterArtifactRevision({
         task: latest,
         status: "blocked",

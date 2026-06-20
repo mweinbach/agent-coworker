@@ -272,6 +272,86 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.selectedTaskId).toBeNull();
   });
 
+  test("requestWorkspaceSessions does not select chat fallback for task view without a selected task", async () => {
+    const workspaceId = "ws-task-new-task-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      view: "task",
+      selectedTaskId: null,
+      selectedThreadId: "missing-thread",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Other task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    RUNTIME.sessionSnapshots.set("chat-keep", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "chat-keep" },
+    } as never);
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.view).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.threads.find((thread: { id: string }) => thread.id === "task-session-1")).toEqual(
+      expect.objectContaining({ taskId: "task-1" }),
+    );
+    expect(RUNTIME.sessionSnapshots.has("chat-keep")).toBe(true);
+  });
+
+  test("requestWorkspaceSessions does not select chat fallback for settings over task without a selected task", async () => {
+    const workspaceId = "ws-settings-task-new-task-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      view: "settings",
+      lastNonSettingsView: "task",
+      selectedTaskId: null,
+      selectedThreadId: "missing-thread",
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        {
+          ...makeThread("task-session-1", workspaceId),
+          title: "Other task main",
+          taskId: "task-1",
+          taskThreadId: "task-thread-1",
+        },
+      ],
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+
+    state.view = state.lastNonSettingsView === "settings" ? "chat" : state.lastNonSettingsView;
+    expect(state.view).toBe("task");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+  });
+
   test("requestWorkspaceSessions falls back to another thread owned by the selected task", async () => {
     const workspaceId = "ws-task-thread-fallback";
     const { state, get, set } = createState(workspaceId, {

@@ -28,6 +28,7 @@ import {
 } from "../store.helpers";
 import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
 import { isStandardChatThread } from "../threadFilters";
+import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { WorkspaceRecord } from "../types";
 import { hydrateThreadSelection } from "./thread";
 
@@ -267,14 +268,23 @@ export function createWorkspaceActions(
     selectWorkspace: async (workspaceId: string) => {
       const wasSelected = get().selectedWorkspaceId === workspaceId;
       const currentState = get();
+      const threadSelectionIntent = getThreadSelectionIntent(
+        currentState.view,
+        currentState.lastNonSettingsView,
+        currentState.selectedTaskId,
+      );
       const selectedTaskId =
-        currentState.view === "task" &&
-        taskBelongsToWorkspace(currentState.selectedTaskId, workspaceId)
-          ? currentState.selectedTaskId
+        threadSelectionIntent.context === "task" &&
+        threadSelectionIntent.selectedTaskId &&
+        taskBelongsToWorkspace(threadSelectionIntent.selectedTaskId, workspaceId)
+          ? threadSelectionIntent.selectedTaskId
           : null;
-      const nextThreadId = selectedTaskId
-        ? preferredTaskThreadId(selectedTaskId, currentState.selectedThreadId)
-        : preferredThreadIdForWorkspace(workspaceId);
+      const nextThreadId =
+        threadSelectionIntent.context === "task"
+          ? selectedTaskId
+            ? preferredTaskThreadId(selectedTaskId, currentState.selectedThreadId)
+            : null
+          : preferredThreadIdForWorkspace(workspaceId);
       const hydrateSelectedThreadPromise = nextThreadId
         ? hydrateThreadSelection(get, set, nextThreadId, {
             preserveView: true,
@@ -283,7 +293,9 @@ export function createWorkspaceActions(
           })
         : null;
       set((s) => {
-        const retargetNewTask = selectedTaskId === null && s.view === "task";
+        const retargetNewTask =
+          getThreadSelectionIntent(s.view, s.lastNonSettingsView, selectedTaskId).context ===
+            "task" && selectedTaskId === null;
         return {
           selectedWorkspaceId: workspaceId,
           selectedThreadId: nextThreadId,

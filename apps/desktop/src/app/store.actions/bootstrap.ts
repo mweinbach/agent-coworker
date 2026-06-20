@@ -56,7 +56,7 @@ import {
 } from "../store.helpers";
 import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { isStandardChatThread } from "../threadFilters";
-import { getThreadSelectionContext } from "../threadSelectionContext";
+import { getThreadSelectionContext, getThreadSelectionIntent } from "../threadSelectionContext";
 import {
   type CachedDesktopUiState,
   type CachedSessionSnapshot,
@@ -591,17 +591,21 @@ function buildResolvedDesktopUiState(
   const selectedWorkspaceId = selection.selectedWorkspaceId;
   const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
   const pluginManagementMode = selection.pluginManagementMode;
-  const taskContextAllowed =
-    getThreadSelectionContext(normalizedUi.view, normalizedUi.lastNonSettingsView) === "task";
-  const selectingTaskThread =
-    taskContextAllowed &&
-    typeof normalizedUi.selectedTaskId === "string" &&
-    normalizedUi.selectedTaskId.trim().length > 0;
+  const threadSelectionIntent = getThreadSelectionIntent(
+    normalizedUi.view,
+    normalizedUi.lastNonSettingsView,
+    normalizedUi.selectedTaskId,
+  );
   const workspaceThreads = selectedWorkspaceId
     ? threads
         .filter((thread) => {
           if (thread.workspaceId !== selectedWorkspaceId) return false;
-          if (selectingTaskThread) return thread.taskId === normalizedUi.selectedTaskId;
+          if (threadSelectionIntent.context === "task") {
+            return Boolean(
+              threadSelectionIntent.selectedTaskId &&
+                thread.taskId === threadSelectionIntent.selectedTaskId,
+            );
+          }
           return isStandardChatThread(thread, { includeDrafts: true });
         })
         .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
@@ -629,7 +633,7 @@ function buildResolvedDesktopUiState(
   return {
     selectedWorkspaceId,
     selectedThreadId,
-    selectedTaskId: taskContextAllowed ? (normalizedUi.selectedTaskId ?? null) : null,
+    selectedTaskId: threadSelectionIntent.selectedTaskId,
     pluginManagementWorkspaceId,
     pluginManagementMode,
     view: normalizedUi.view ?? "chat",

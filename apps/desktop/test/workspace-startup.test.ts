@@ -871,6 +871,125 @@ describe("workspace startup flow", () => {
     await selectPromise;
   });
 
+  test("selectWorkspace keeps task view on the new-task landing when no task is selected", async () => {
+    useAppStore.setState({
+      view: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "chat-session-1",
+          workspaceId: "ws-1",
+          title: "Newer ordinary chat",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastMessageAt: "2026-03-08T02:00:00.000Z",
+          status: "active",
+          sessionId: "chat-session-1",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+      selectedWorkspaceId: null,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      newTaskWorkspaceId: null,
+      newTaskWorkspaceRequestId: 0,
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace("ws-1");
+    await flushAsyncWork();
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("task");
+    expect(state.selectedWorkspaceId).toBe("ws-1");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.newTaskWorkspaceId).toBe("ws-1");
+    expect(state.newTaskWorkspaceRequestId).toBe(1);
+    expect(state.threadRuntimeById["chat-session-1"]).toBeUndefined();
+    expect(isSandboxApprovalThreadVisible(state, "chat-session-1")).toBe(false);
+
+    startDeferreds[0]?.resolve({ url: "ws://workspace-one" });
+    await selectPromise;
+  });
+
+  test("selectWorkspace keeps settings-over-task on the new-task landing when no task is selected", async () => {
+    useAppStore.setState({
+      view: "settings",
+      lastNonSettingsView: "task",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+        {
+          id: "ws-2",
+          name: "Workspace Two",
+          path: "/tmp/workspace-two",
+          createdAt: "2026-03-09T00:00:00.000Z",
+          lastOpenedAt: "2026-03-09T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "chat-session-2",
+          workspaceId: "ws-2",
+          title: "Workspace two ordinary chat",
+          createdAt: "2026-03-09T00:00:00.000Z",
+          lastMessageAt: "2026-03-09T02:00:00.000Z",
+          status: "active",
+          sessionId: "chat-session-2",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: null,
+      selectedTaskId: null,
+      newTaskWorkspaceId: null,
+      newTaskWorkspaceRequestId: 0,
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace("ws-2");
+    await flushAsyncWork();
+
+    let state = useAppStore.getState();
+    expect(state.view).toBe("settings");
+    expect(state.lastNonSettingsView).toBe("task");
+    expect(state.selectedWorkspaceId).toBe("ws-2");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.newTaskWorkspaceId).toBe("ws-2");
+    expect(state.newTaskWorkspaceRequestId).toBe(1);
+
+    state.closeSettings();
+    state = useAppStore.getState();
+    expect(state.view).toBe("task");
+    expect(state.selectedWorkspaceId).toBe("ws-2");
+    expect(state.selectedTaskId).toBeNull();
+    expect(state.selectedThreadId).toBeNull();
+    expect(isSandboxApprovalThreadVisible(state, "chat-session-2")).toBe(false);
+
+    startDeferreds[0]?.resolve({ url: "ws://workspace-two" });
+    await selectPromise;
+  });
+
   test("selectWorkspace does not choose task-owned threads for ordinary chat", async () => {
     useAppStore.setState({
       view: "chat",

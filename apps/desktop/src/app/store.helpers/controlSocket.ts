@@ -5,7 +5,7 @@ import {
 } from "../openaiCompatibleProviderOptions";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import { isStandardChatThread, isTaskOwnedThread } from "../threadFilters";
-import { getThreadSelectionContext } from "../threadSelectionContext";
+import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
@@ -230,22 +230,24 @@ export function createControlSocketHelpers(
     view: ReturnType<StoreGet>["view"],
     lastNonSettingsView: ReturnType<StoreGet>["lastNonSettingsView"],
   ): { selectedThreadId: string | null; selectedTaskId: string | null } {
-    const selectionContext = getThreadSelectionContext(view, lastNonSettingsView);
+    const selectionIntent = getThreadSelectionIntent(view, lastNonSettingsView, selectedTaskId);
     const selectionWorkspaceId = selectedWorkspaceId ?? workspaceId;
     if (!selectedThreadId) {
       return {
         selectedThreadId: null,
-        selectedTaskId: selectionContext === "chat" ? null : selectedTaskId,
+        selectedTaskId: selectionIntent.selectedTaskId,
       };
     }
     const selectable = (thread: ThreadRecord): boolean =>
       thread.workspaceId === selectionWorkspaceId &&
-      (selectionContext === "task"
-        ? typeof selectedTaskId === "string" && thread.taskId === selectedTaskId
+      (selectionIntent.context === "task"
+        ? Boolean(
+            selectionIntent.selectedTaskId && thread.taskId === selectionIntent.selectedTaskId,
+          )
         : isStandardChatThread(thread, { includeDrafts: true }));
     const selectionFor = (threadId: string | null) => {
-      if (selectionContext === "task") {
-        return { selectedThreadId: threadId, selectedTaskId };
+      if (selectionIntent.context === "task") {
+        return { selectedThreadId: threadId, selectedTaskId: selectionIntent.selectedTaskId };
       }
       return { selectedThreadId: threadId, selectedTaskId: null };
     };
@@ -261,12 +263,15 @@ export function createControlSocketHelpers(
       return selectionFor(migratedThreadId);
     }
 
-    if (selectionContext === "task" && selectedTaskId) {
+    if (selectionIntent.context === "task") {
       return selectionFor(
-        nextThreads.find(
-          (thread) =>
-            thread.workspaceId === selectionWorkspaceId && thread.taskId === selectedTaskId,
-        )?.id ?? null,
+        selectionIntent.selectedTaskId
+          ? (nextThreads.find(
+              (thread) =>
+                thread.workspaceId === selectionWorkspaceId &&
+                thread.taskId === selectionIntent.selectedTaskId,
+            )?.id ?? null)
+          : null,
       );
     }
     return selectionFor(

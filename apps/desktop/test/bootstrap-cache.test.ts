@@ -652,6 +652,34 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.selectedThreadId).not.toBe("task-1");
   });
 
+  test("buildCachedDesktopStateSeed does not select chat fallback for task view without a selected task", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "task",
+        selectedThreadId: null,
+        selectedTaskId: null,
+      },
+    });
+
+    expect(seed?.view).toBe("task");
+    expect(seed?.selectedTaskId).toBeNull();
+    expect(seed?.selectedThreadId).toBeNull();
+  });
+
   test("buildCachedDesktopStateSeed preserves task thread ownership metadata", () => {
     const seed = buildCachedDesktopStateSeed({
       ...cachedState,
@@ -708,6 +736,36 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.lastNonSettingsView).toBe("task");
     expect(seed?.selectedThreadId).toBeNull();
     expect(seed?.selectedTaskId).toBe("task-1");
+  });
+
+  test("buildCachedDesktopStateSeed does not select chat fallback for settings over task without a selected task", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "chat-session-1",
+            sessionId: "chat-session-1",
+            title: "Ordinary chat",
+            lastMessageAt: "2026-03-19T01:00:00.000Z",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        lastNonSettingsView: "task",
+        selectedThreadId: null,
+        selectedTaskId: null,
+      },
+    });
+
+    expect(seed?.view).toBe("settings");
+    expect(seed?.lastNonSettingsView).toBe("task");
+    expect(seed?.selectedTaskId).toBeNull();
+    expect(seed?.selectedThreadId).toBeNull();
   });
 
   test("buildCachedDesktopStateSeed clears stale task context when chat startup falls back to ordinary chat", () => {

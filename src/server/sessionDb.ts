@@ -27,6 +27,7 @@ import type {
   TaskDecision,
   TaskRecord,
   TaskReviewRecord,
+  TaskStatus,
   TaskSummary,
   TaskThread,
   WorkItemStatus,
@@ -50,6 +51,7 @@ import {
   SessionTaskRepository,
   type StartTaskArtifactRevisionInput,
   type TaskRequirementInput,
+  type UpdateTaskPlanInput,
   type WorkItemInput,
 } from "./sessionDb/tasks";
 import { SessionDbWriteCoordinator } from "./sessionDb/writeCoordinator";
@@ -461,6 +463,14 @@ export class SessionDb {
     );
   }
 
+  async updateTaskPlan(input: UpdateTaskPlanInput): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "update_task_plan",
+      async () => this.taskRepository.updatePlan(input),
+      { taskId: input.taskId },
+    );
+  }
+
   async updateTaskWorkItem(input: {
     taskId: string;
     workItemId: string;
@@ -565,6 +575,14 @@ export class SessionDb {
 
   getTaskArtifactRevision(revisionId: string): TaskArtifactRevision | null {
     return this.taskRepository.getArtifactRevision(revisionId);
+  }
+
+  getTaskArtifactRevisionPriorTaskStatus(revisionId: string): TaskStatus | null {
+    return this.taskRepository.getArtifactRevisionPriorTaskStatus(revisionId);
+  }
+
+  hasCompletedTaskArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
+    return this.taskRepository.hasCompletedArtifactRevisionForWorkItem(taskId, workItemId);
   }
 
   async registerTaskArtifactVersioned(input: {

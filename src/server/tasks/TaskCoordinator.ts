@@ -750,7 +750,30 @@ export class TaskCoordinator {
     assertExpectedTaskRevision(current, input.expectedRevision);
     assertTaskAcceptsMutation(current);
     const now = nowIso();
-    const items: WorkItem[] = input.items.map((item, position) => {
+    const items = this.prepareReplacementWorkItems(current, input.items, now);
+    const task = await this.options.sessionDb.replaceTaskWorkItems({
+      taskId: current.id,
+      expectedRevision: input.expectedRevision,
+      items,
+      updatedAt: now,
+    });
+    this.notifyUpdated(task);
+    return task;
+  }
+
+  private prepareReplacementWorkItems(
+    current: TaskRecord,
+    inputItems: Array<{
+      id?: string;
+      title: string;
+      description?: string;
+      status?: WorkItemStatus;
+      dependsOn?: string[];
+      expectedOutputs?: string[];
+    }>,
+    updatedAt: string,
+  ): WorkItem[] {
+    const items: WorkItem[] = inputItems.map((item, position) => {
       const existing = item.id
         ? current.workItems.find((candidate) => candidate.id === item.id)
         : undefined;
@@ -766,20 +789,92 @@ export class TaskCoordinator {
         expectedOutputs: (item.expectedOutputs ?? []).map((value) => value.trim()).filter(Boolean),
         completionEvidence: existing?.completionEvidence ?? null,
         position,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
+        createdAt: existing?.createdAt ?? updatedAt,
+        updatedAt,
       };
     });
     validateWorkGraph(items);
+    const itemIds = new Set(items.map((item) => item.id));
+    const activeRevisionWorkItemIds = new Set<string>();
+    for (const artifactRecord of current.artifacts) {
+      const detail = this.options.sessionDb.getTaskArtifactDetail(current.id, artifactRecord.id);
+      if (detail?.activeRevision) activeRevisionWorkItemIds.add(detail.activeRevision.workItemId);
+    }
+    const removedActiveRevision = current.workItems.find(
+      (item) => activeRevisionWorkItemIds.has(item.id) && !itemIds.has(item.id),
+    );
+    if (removedActiveRevision) {
+      throw new Error(
+        `Cannot remove work item with active artifact revision: ${removedActiveRevision.title}`,
+      );
+    }
     const removedClaim = current.workItems.find(
-      (item) => item.claimedByThreadId && !items.some((candidate) => candidate.id === item.id),
+      (item) => item.claimedByThreadId && !itemIds.has(item.id),
     );
     if (removedClaim) {
       throw new Error(`Cannot remove claimed work item: ${removedClaim.title}`);
     }
-    const task = await this.options.sessionDb.replaceTaskWorkItems({
+    return items;
+  }
+
+  private mergeDirectiveRequirements(
+    current: TaskRecord,
+    requirements: Array<{
+      kind: TaskRequirementKind;
+      text: string;
+      permanence?: "fixed" | "temporary";
+    }>,
+  ): TaskRequirement[] {
+    const preserved = current.requirements.filter(
+      (item) =>
+        item.status === "active" &&
+        item.permanence === "fixed" &&
+        (item.source === "user" || item.source === "policy"),
+    );
+    return [
+      ...preserved,
+      ...requirements.map((item) =>
+        requirement({
+          ...item,
+          source: "agent",
+        }),
+      ),
+    ];
+  }
+
+  private async updatePlanLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    objective?: string;
+    requirements?: Array<{
+      kind: TaskRequirementKind;
+      text: string;
+      permanence?: "fixed" | "temporary";
+    }>;
+    items: Array<{
+      id?: string;
+      title: string;
+      description?: string;
+      status?: WorkItemStatus;
+      dependsOn?: string[];
+      expectedOutputs?: string[];
+    }>;
+  }): Promise<TaskRecord> {
+    const current = this.requireTask(input.taskId, input.workspacePath);
+    assertExpectedTaskRevision(current, input.expectedRevision);
+    assertTaskAcceptsMutation(current);
+    const now = nowIso();
+    const items = this.prepareReplacementWorkItems(current, input.items, now);
+    const task = await this.options.sessionDb.updateTaskPlan({
       taskId: current.id,
       expectedRevision: input.expectedRevision,
+      ...(input.objective !== undefined
+        ? { objective: nonEmpty(input.objective, "Task objective") }
+        : {}),
+      ...(input.requirements
+        ? { requirements: this.mergeDirectiveRequirements(current, input.requirements) }
+        : {}),
       items,
       updatedAt: now,
     });
@@ -1915,6 +2010,8 @@ export class TaskCoordinator {
     if (!detail) throw new Error(`Unknown task artifact: ${revision.artifactId}`);
     const prior = detail.versions.find((version) => version.id === revision.priorVersionId);
     if (!prior) throw new Error(`Unknown prior artifact version: ${revision.priorVersionId}`);
+    const priorTaskStatus =
+      this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(revision.id) ?? task.status;
     if (isTerminalTask(task)) {
       const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
         revisionId: revision.id,
@@ -1932,6 +2029,9 @@ export class TaskCoordinator {
     const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
 
     if (outcome === "completed") {
+      let updatedTask: TaskRecord;
+      let completedRevision: TaskArtifactRevision;
+      let updatedDetail: TaskArtifactDetail;
       try {
         const latest = detail.versions.at(-1);
         if (latest?.id !== prior.id) {
@@ -1955,20 +2055,20 @@ export class TaskCoordinator {
           },
           reviewStatus: "draft",
         });
-        const updatedTask = await this.options.sessionDb.completeTaskArtifactRevision({
+        updatedTask = await this.options.sessionDb.completeTaskArtifactRevision({
           revisionId: revision.id,
           version,
           updatedAt: createdAt,
         });
-        const completedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
-        const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(
+        const persistedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+        const persistedDetail = this.options.sessionDb.getTaskArtifactDetail(
           task.id,
           detail.artifact.id,
         );
-        if (!completedRevision || !updatedDetail)
+        if (!persistedRevision || !persistedDetail)
           throw new Error("Artifact revision did not persist");
-        this.notifyUpdated(updatedTask);
-        return { task: updatedTask, detail: updatedDetail, revision: completedRevision };
+        completedRevision = persistedRevision;
+        updatedDetail = persistedDetail;
       } catch (error) {
         await this.artifactStore.restoreFile({
           blobSha256: prior.sha256,
@@ -1986,9 +2086,24 @@ export class TaskCoordinator {
           detail.artifact.id,
         );
         if (!failedRevision || !updatedDetail) throw error;
-        this.notifyUpdated(failedTask);
-        return { task: failedTask, detail: updatedDetail, revision: failedRevision };
+        const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+          task: failedTask,
+          priorTaskStatus,
+          outcome: "error",
+          sessionId,
+          detail: error instanceof Error ? error.message : String(error),
+        });
+        return { task: settledTask, detail: updatedDetail, revision: failedRevision };
       }
+      const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+        task: updatedTask,
+        priorTaskStatus,
+        outcome: "completed",
+        sessionId,
+      });
+      const settledDetail =
+        this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ?? updatedDetail;
+      return { task: settledTask, detail: settledDetail, revision: completedRevision };
     }
 
     await this.artifactStore.restoreFile({
@@ -2004,8 +2119,91 @@ export class TaskCoordinator {
     const failedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
     const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id);
     if (!failedRevision || !updatedDetail) throw new Error("Artifact revision did not finalize");
-    this.notifyUpdated(failedTask);
-    return { task: failedTask, detail: updatedDetail, revision: failedRevision };
+    const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+      task: failedTask,
+      priorTaskStatus,
+      outcome,
+      sessionId,
+      detail: outcome === "cancelled" ? "Revision cancelled" : "Revision thread failed",
+    });
+    return { task: settledTask, detail: updatedDetail, revision: failedRevision };
+  }
+
+  private hasActiveArtifactRevision(task: TaskRecord): boolean {
+    return task.artifacts.some((artifactRecord) => {
+      const detail = this.options.sessionDb.getTaskArtifactDetail(task.id, artifactRecord.id);
+      return Boolean(detail?.activeRevision);
+    });
+  }
+
+  private async settleTaskAfterArtifactRevisionOutcome(input: {
+    task: TaskRecord;
+    priorTaskStatus: TaskStatus;
+    outcome: "completed" | "cancelled" | "error";
+    sessionId: string;
+    detail?: string;
+  }): Promise<TaskRecord> {
+    let latest = this.options.sessionDb.getTask(input.task.id) ?? input.task;
+    if (isTerminalTask(latest)) return latest;
+
+    if (input.outcome === "error") {
+      if (latest.status === "blocked") {
+        this.notifyUpdated(latest);
+        return latest;
+      }
+      return await this.transitionLocked({
+        taskId: latest.id,
+        workspacePath: latest.workspacePath,
+        expectedRevision: latest.revision,
+        status: "blocked",
+        summary: "Artifact revision failed",
+        detail: input.detail,
+        sessionId: input.sessionId,
+      });
+    }
+
+    if (this.hasActiveArtifactRevision(latest)) {
+      this.notifyUpdated(latest);
+      return latest;
+    }
+
+    if (input.outcome === "completed" || input.priorTaskStatus === "awaiting_review") {
+      try {
+        return await this.proposeCompletionLocked({
+          taskId: latest.id,
+          workspacePath: latest.workspacePath,
+          expectedRevision: latest.revision,
+          summary:
+            input.outcome === "completed"
+              ? "Artifact revision completed"
+              : "Artifact revision cancelled",
+          sessionId: input.sessionId,
+        });
+      } catch {
+        latest = this.options.sessionDb.getTask(latest.id) ?? latest;
+        this.notifyUpdated(latest);
+        return latest;
+      }
+    }
+
+    if (input.priorTaskStatus === "blocked" && latest.status !== "blocked") {
+      const hasBlockingState =
+        latest.blockers.some((blocker) => blocker.status === "active" && blocker.blocking) ||
+        latest.questions.some((question) => question.status === "pending" && question.blocking);
+      if (hasBlockingState) {
+        return await this.transitionLocked({
+          taskId: latest.id,
+          workspacePath: latest.workspacePath,
+          expectedRevision: latest.revision,
+          status: "blocked",
+          summary: "Task remains blocked after artifact revision",
+          sessionId: input.sessionId,
+        });
+      }
+    }
+
+    this.notifyUpdated(latest);
+    return latest;
   }
 
   async retryTask(input: {
@@ -2262,9 +2460,7 @@ export class TaskCoordinator {
       throw new Error(`Task has ${unfinished.length} unfinished work item(s)`);
     }
     const missingOutput = task.workItems.find(
-      (item) =>
-        item.expectedOutputs.length > 0 &&
-        !task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id),
+      (item) => item.expectedOutputs.length > 0 && !this.hasExpectedArtifactOutput(task, item),
     );
     if (missingOutput) {
       throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
@@ -2423,13 +2619,19 @@ export class TaskCoordinator {
     const blocking = task.blockers.filter((item) => item.status === "active" && item.blocking);
     if (blocking.length > 0) throw new Error("Task has unresolved blocking issues");
     const missingOutput = task.workItems.find(
-      (item) =>
-        item.expectedOutputs.length > 0 &&
-        !task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id),
+      (item) => item.expectedOutputs.length > 0 && !this.hasExpectedArtifactOutput(task, item),
     );
     if (missingOutput) {
       throw new Error(`Expected artifact is not registered for: ${missingOutput.title}`);
     }
+  }
+
+  private hasExpectedArtifactOutput(task: TaskRecord, item: WorkItem): boolean {
+    if (item.status === "abandoned") return true;
+    return (
+      task.artifacts.some((artifactRecord) => artifactRecord.workItemId === item.id) ||
+      this.options.sessionDb.hasCompletedTaskArtifactRevisionForWorkItem(task.id, item.id)
+    );
   }
 
   private async requireCompletionReviewEligibility(
@@ -2672,27 +2874,12 @@ export class TaskCoordinator {
     let continuation: TaskDirectiveResult["continuation"] = "continue";
     switch (directive.type) {
       case "update_plan": {
-        updated = current;
-        if (directive.objective !== undefined || directive.requirements !== undefined) {
-          updated = await this.updateBrief({
-            taskId: current.id,
-            workspacePath: current.workspacePath,
-            expectedRevision: directive.expectedRevision,
-            ...(directive.objective !== undefined ? { objective: directive.objective } : {}),
-            ...(directive.requirements
-              ? {
-                  requirements: directive.requirements.map((item) => ({
-                    ...item,
-                    source: "agent" as const,
-                  })),
-                }
-              : {}),
-          });
-        }
-        updated = await this.replaceWorkItems({
+        updated = await this.updatePlanLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
-          expectedRevision: updated.revision,
+          expectedRevision: directive.expectedRevision,
+          ...(directive.objective !== undefined ? { objective: directive.objective } : {}),
+          ...(directive.requirements ? { requirements: directive.requirements } : {}),
           items: directive.workItems,
         });
         if (updated.status === "draft") {

@@ -165,6 +165,16 @@ export type StartTaskArtifactRevisionInput = {
   expectedRevision: number;
 };
 
+export type UpdateTaskPlanInput = {
+  taskId: string;
+  expectedRevision: number;
+  title?: string;
+  objective?: string;
+  requirements?: TaskRequirementInput[];
+  items: WorkItemInput[];
+  updatedAt: string;
+};
+
 export type QueueTaskQuestionsInput = {
   taskId: string;
   expectedRevision: number;
@@ -664,47 +674,22 @@ export class SessionTaskRepository {
   }): TaskRecord {
     this.db.transaction(() => {
       this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
-      if (input.title !== undefined) {
-        this.db
-          .query("UPDATE tasks SET title = ? WHERE task_id = ?")
-          .run(input.title, input.taskId);
+      this.updateBriefInOpenTransaction(input);
+    })();
+    return this.requireTask(input.taskId);
+  }
+
+  updatePlan(input: UpdateTaskPlanInput): TaskRecord {
+    this.db.transaction(() => {
+      this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
+      if (
+        input.title !== undefined ||
+        input.objective !== undefined ||
+        input.requirements !== undefined
+      ) {
+        this.updateBriefInOpenTransaction(input);
       }
-      if (input.objective !== undefined) {
-        this.db
-          .query("UPDATE tasks SET objective = ? WHERE task_id = ?")
-          .run(input.objective, input.taskId);
-      }
-      if (input.requirements) {
-        this.db.query("DELETE FROM task_requirements WHERE task_id = ?").run(input.taskId);
-        for (const requirement of input.requirements) {
-          this.db
-            .query(
-              "INSERT INTO task_requirements(requirement_id, task_id, kind, text, source, permanence, status, created_at, supersedes) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .run(
-              requirement.id,
-              input.taskId,
-              requirement.kind,
-              requirement.text,
-              requirement.source,
-              requirement.permanence,
-              requirement.status,
-              requirement.createdAt,
-              requirement.supersedes,
-            );
-        }
-      }
-      this.insertActivity({
-        id: crypto.randomUUID(),
-        seq: 1,
-        taskId: input.taskId,
-        threadId: null,
-        workItemId: null,
-        kind: "brief_updated",
-        summary: "Task brief updated",
-        detail: null,
-        createdAt: input.updatedAt,
-      });
+      this.replaceWorkItemsInOpenTransaction(input);
     })();
     return this.requireTask(input.taskId);
   }
@@ -717,15 +702,98 @@ export class SessionTaskRepository {
   }): TaskRecord {
     this.db.transaction(() => {
       this.bumpRevision(input.taskId, input.expectedRevision, input.updatedAt);
-      this.db.query("DELETE FROM task_work_items WHERE task_id = ?").run(input.taskId);
-      for (const item of input.items) {
+      this.replaceWorkItemsInOpenTransaction(input);
+    })();
+    return this.requireTask(input.taskId);
+  }
+
+  private updateBriefInOpenTransaction(input: {
+    taskId: string;
+    title?: string;
+    objective?: string;
+    requirements?: TaskRequirementInput[];
+    updatedAt: string;
+  }): void {
+    if (input.title !== undefined) {
+      this.db.query("UPDATE tasks SET title = ? WHERE task_id = ?").run(input.title, input.taskId);
+    }
+    if (input.objective !== undefined) {
+      this.db
+        .query("UPDATE tasks SET objective = ? WHERE task_id = ?")
+        .run(input.objective, input.taskId);
+    }
+    if (input.requirements) {
+      this.db.query("DELETE FROM task_requirements WHERE task_id = ?").run(input.taskId);
+      for (const requirement of input.requirements) {
         this.db
           .query(
-            "INSERT INTO task_work_items(work_item_id, task_id, title, description, status, assigned_thread_id, expected_outputs_json, completion_evidence, position, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO task_requirements(requirement_id, task_id, kind, text, source, permanence, status, created_at, supersedes) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
           )
           .run(
-            item.id,
+            requirement.id,
             input.taskId,
+            requirement.kind,
+            requirement.text,
+            requirement.source,
+            requirement.permanence,
+            requirement.status,
+            requirement.createdAt,
+            requirement.supersedes,
+          );
+      }
+    }
+    this.insertActivity({
+      id: crypto.randomUUID(),
+      seq: 1,
+      taskId: input.taskId,
+      threadId: null,
+      workItemId: null,
+      kind: "brief_updated",
+      summary: "Task brief updated",
+      detail: null,
+      createdAt: input.updatedAt,
+    });
+  }
+
+  private replaceWorkItemsInOpenTransaction(input: {
+    taskId: string;
+    items: WorkItemInput[];
+    updatedAt: string;
+  }): void {
+    const existingRows = this.db
+      .query("SELECT work_item_id FROM task_work_items WHERE task_id = ?")
+      .all(input.taskId) as Array<{ work_item_id: string }>;
+    const existingIds = new Set(existingRows.map((row) => row.work_item_id));
+    const inputIds = new Set(input.items.map((item) => item.id));
+    for (const existingId of existingIds) {
+      if (inputIds.has(existingId)) continue;
+      const activeRevision = this.db
+        .query(
+          "SELECT revision_id FROM task_artifact_revisions WHERE task_id = ? AND work_item_id = ? AND status = 'active' LIMIT 1",
+        )
+        .get(input.taskId, existingId) as { revision_id: string } | null;
+      if (activeRevision) {
+        throw new Error(`Cannot remove work item with active artifact revision: ${existingId}`);
+      }
+    }
+
+    this.db.query("DELETE FROM task_work_item_dependencies WHERE task_id = ?").run(input.taskId);
+    this.db.query("DELETE FROM task_work_item_claims WHERE task_id = ?").run(input.taskId);
+
+    for (const existingId of existingIds) {
+      if (inputIds.has(existingId)) continue;
+      this.db
+        .query("DELETE FROM task_work_items WHERE task_id = ? AND work_item_id = ?")
+        .run(input.taskId, existingId);
+    }
+
+    for (const item of input.items) {
+      if (existingIds.has(item.id)) {
+        this.db
+          .query(
+            "UPDATE task_work_items SET title = ?, description = ?, status = ?, assigned_thread_id = ?, expected_outputs_json = ?, completion_evidence = ?, position = ?, updated_at = ? WHERE task_id = ? AND work_item_id = ?",
+          )
+          .run(
             item.title,
             item.description,
             item.status,
@@ -733,39 +801,65 @@ export class SessionTaskRepository {
             JSON.stringify(item.expectedOutputs),
             item.completionEvidence,
             item.position,
-            item.createdAt,
             item.updatedAt,
+            input.taskId,
+            item.id,
           );
+        continue;
       }
-      for (const item of input.items) {
-        for (const dependencyId of item.dependsOn) {
-          this.db
-            .query(
-              "INSERT INTO task_work_item_dependencies(task_id, work_item_id, depends_on_work_item_id) VALUES(?, ?, ?)",
-            )
-            .run(input.taskId, item.id, dependencyId);
-        }
-        if (item.claimedByThreadId) {
-          this.db
-            .query(
-              "INSERT INTO task_work_item_claims(work_item_id, task_id, thread_id, claimed_at) VALUES(?, ?, ?, ?)",
-            )
-            .run(item.id, input.taskId, item.claimedByThreadId, input.updatedAt);
-        }
+      const conflictingOwner = this.db
+        .query("SELECT task_id FROM task_work_items WHERE work_item_id = ?")
+        .get(item.id) as { task_id: string } | null;
+      if (conflictingOwner && conflictingOwner.task_id !== input.taskId) {
+        throw new Error(`Work item id already belongs to another task: ${item.id}`);
       }
-      this.insertActivity({
-        id: crypto.randomUUID(),
-        seq: 1,
-        taskId: input.taskId,
-        threadId: null,
-        workItemId: null,
-        kind: "plan_updated",
-        summary: `Work plan updated (${input.items.length} items)`,
-        detail: null,
-        createdAt: input.updatedAt,
-      });
-    })();
-    return this.requireTask(input.taskId);
+      this.db
+        .query(
+          "INSERT INTO task_work_items(work_item_id, task_id, title, description, status, assigned_thread_id, expected_outputs_json, completion_evidence, position, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          item.id,
+          input.taskId,
+          item.title,
+          item.description,
+          item.status,
+          item.assignedThreadId,
+          JSON.stringify(item.expectedOutputs),
+          item.completionEvidence,
+          item.position,
+          item.createdAt,
+          item.updatedAt,
+        );
+    }
+
+    for (const item of input.items) {
+      for (const dependencyId of item.dependsOn) {
+        this.db
+          .query(
+            "INSERT INTO task_work_item_dependencies(task_id, work_item_id, depends_on_work_item_id) VALUES(?, ?, ?)",
+          )
+          .run(input.taskId, item.id, dependencyId);
+      }
+      if (item.claimedByThreadId) {
+        this.db
+          .query(
+            "INSERT INTO task_work_item_claims(work_item_id, task_id, thread_id, claimed_at) VALUES(?, ?, ?, ?)",
+          )
+          .run(item.id, input.taskId, item.claimedByThreadId, input.updatedAt);
+      }
+    }
+
+    this.insertActivity({
+      id: crypto.randomUUID(),
+      seq: 1,
+      taskId: input.taskId,
+      threadId: null,
+      workItemId: null,
+      kind: "plan_updated",
+      summary: `Work plan updated (${input.items.length} items)`,
+      detail: null,
+      createdAt: input.updatedAt,
+    });
   }
 
   updateWorkItem(input: {
@@ -1151,6 +1245,22 @@ export class SessionTaskRepository {
     return row ? this.mapArtifactRevision(row) : null;
   }
 
+  getArtifactRevisionPriorTaskStatus(revisionId: string): TaskStatus | null {
+    const row = this.db
+      .query("SELECT prior_task_status FROM task_artifact_revisions WHERE revision_id = ?")
+      .get(revisionId) as { prior_task_status: TaskStatus } | null;
+    return row?.prior_task_status ?? null;
+  }
+
+  hasCompletedArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
+    const row = this.db
+      .query(
+        "SELECT 1 AS found FROM task_artifact_revisions WHERE task_id = ? AND work_item_id = ? AND status = 'completed' AND result_version_id IS NOT NULL LIMIT 1",
+      )
+      .get(taskId, workItemId);
+    return row !== null;
+  }
+
   registerArtifactVersioned(input: {
     artifact: TaskArtifact;
     version: TaskArtifactVersion;
@@ -1339,27 +1449,12 @@ export class SessionTaskRepository {
           "UPDATE task_artifact_revisions SET result_version_id = ?, status = 'completed', updated_at = ?, completed_at = ? WHERE revision_id = ? AND status = 'active'",
         )
         .run(input.version.id, input.updatedAt, input.updatedAt, input.revisionId);
-      const taskSettings = this.db
-        .query("SELECT review_required FROM tasks WHERE task_id = ?")
-        .get(taskId) as { review_required: number };
-      if (!bool(taskSettings.review_required)) {
-        this.db
-          .query(
-            "UPDATE task_artifact_versions SET review_status = 'superseded' WHERE task_id = ? AND artifact_id = ? AND review_status = 'accepted'",
-          )
-          .run(taskId, String(revisionRow.artifact_id));
-        this.db
-          .query(
-            "UPDATE task_artifact_versions SET review_status = 'accepted' WHERE version_id = ?",
-          )
-          .run(input.version.id);
-      }
       this.db
         .query(
           "UPDATE task_work_items SET status = ?, completion_evidence = ?, updated_at = ? WHERE task_id = ? AND work_item_id = ?",
         )
         .run(
-          bool(taskSettings.review_required) ? "review" : "done",
+          "review",
           input.version.changeSummary,
           input.updatedAt,
           taskId,
@@ -1368,16 +1463,6 @@ export class SessionTaskRepository {
       this.db
         .query("DELETE FROM task_work_item_claims WHERE work_item_id = ?")
         .run(String(revisionRow.work_item_id));
-      const activeRevision = this.db
-        .query(
-          "SELECT 1 AS found FROM task_artifact_revisions WHERE task_id = ? AND status = 'active' LIMIT 1",
-        )
-        .get(taskId);
-      if (!activeRevision) {
-        this.db
-          .query("UPDATE tasks SET status = ? WHERE task_id = ?")
-          .run(bool(taskSettings.review_required) ? "awaiting_review" : "completed", taskId);
-      }
       this.insertActivity({
         id: crypto.randomUUID(),
         seq: 1,
@@ -1423,22 +1508,6 @@ export class SessionTaskRepository {
       this.db
         .query("DELETE FROM task_work_item_claims WHERE work_item_id = ?")
         .run(String(revisionRow.work_item_id));
-      const hasActiveRevision =
-        this.db
-          .query(
-            "SELECT 1 AS found FROM task_artifact_revisions WHERE task_id = ? AND status = 'active' LIMIT 1",
-          )
-          .get(taskId) !== null;
-      this.db
-        .query("UPDATE tasks SET status = ? WHERE task_id = ?")
-        .run(
-          input.status === "error"
-            ? "blocked"
-            : hasActiveRevision
-              ? "working"
-              : String(revisionRow.prior_task_status),
-          taskId,
-        );
       this.insertActivity({
         id: crypto.randomUUID(),
         seq: 1,

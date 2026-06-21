@@ -1144,12 +1144,14 @@ describe("server JSON-RPC task terminal turn locks", () => {
         ),
       ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
 
-      const steerAfterTimeout = await rpc.sendRequest("turn/steer", {
-        threadId,
-        turnId,
-        input: [{ type: "text", text: "accepted after timed-out terminal lock releases" }],
+      const threadAfterTimeout = await rpc.sendRequest("task/thread/create", {
+        cwd: tmpDir,
+        taskId: created.id,
+        expectedRevision: afterTimeout.revision,
+        title: "Recovery after timed-out terminal lock",
       });
-      expect(steerAfterTimeout.error).toBeUndefined();
+      expect(threadAfterTimeout.error).toBeUndefined();
+      expect(threadAfterTimeout.result.task.status).toBe("working");
 
       releaseMcpWrite.resolve();
       await waitForFile(mcpWritePath);
@@ -1178,7 +1180,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       rpc = await connectJsonRpc(running.url);
       const afterRestart = await readTask(rpc, tmpDir, created.id);
       expect(afterRestart.status).toBe("working");
-      expect(afterRestart.revision).toBe(latest.revision);
+      expect(afterRestart.revision).toBe(threadAfterTimeout.result.task.revision);
 
       const retryTerminalUpdate = rpc.waitFor(
         (message) =>
@@ -1798,12 +1800,14 @@ describe("server JSON-RPC task terminal turn locks", () => {
         ),
       ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
 
-      const steerAfterTimeout = await rpc.sendRequest("turn/steer", {
-        threadId,
-        turnId,
-        input: [{ type: "text", text: "accepted after timed-out self-terminal lock releases" }],
+      const threadAfterTimeout = await rpc.sendRequest("task/thread/create", {
+        cwd: tmpDir,
+        taskId: created.id,
+        expectedRevision: afterTimeout.revision,
+        title: "Recovery after timed-out self terminal lock",
       });
-      expect(steerAfterTimeout.error).toBeUndefined();
+      expect(threadAfterTimeout.error).toBeUndefined();
+      expect(threadAfterTimeout.result.task.status).toBe("awaiting_review");
 
       releaseProviderSideEffect.resolve();
       await providerWriteCompleted.promise;
@@ -1833,6 +1837,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       rpc = await connectJsonRpc(running.url);
       const afterRestart = await readTask(rpc, tmpDir, created.id);
       expect(afterRestart.status).toBe("awaiting_review");
+      expect(afterRestart.revision).toBe(threadAfterTimeout.result.task.revision);
       const acceptUpdate = rpc.waitFor(
         (message) =>
           message.method === "task/updated" &&

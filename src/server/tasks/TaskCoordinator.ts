@@ -57,6 +57,15 @@ type TaskNotification = {
   params: Record<string, unknown>;
 };
 
+type TerminalTaskStatus = Extract<TaskStatus, "completed" | "cancelled" | "failed">;
+
+type PreparedTerminalTaskLock = {
+  taskId: string;
+  status: TerminalTaskStatus;
+  release: () => void;
+  consumed: boolean;
+};
+
 type TaskThreadFactory = (input: {
   task: TaskRecord;
   title: string;
@@ -213,18 +222,24 @@ function nonEmpty(value: string, name: string): string {
   return normalized;
 }
 
-function assertTaskAcceptsNewThreads(task: TaskRecord): void {
+function assertTaskAcceptsNewThreads(
+  task: TaskRecord,
+  opts: { allowPendingTerminalLock?: boolean } = {},
+): void {
   const pendingLock = getPendingTerminalTaskLock(task.id);
-  if (pendingLock) throw makeTaskLockedError(pendingLock);
+  if (pendingLock && !opts.allowPendingTerminalLock) throw makeTaskLockedError(pendingLock);
   if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot create new focused threads until it is reopened or retried.`,
   );
 }
 
-function assertTaskAcceptsMutation(task: TaskRecord): void {
+function assertTaskAcceptsMutation(
+  task: TaskRecord,
+  opts: { allowPendingTerminalLock?: boolean } = {},
+): void {
   const pendingLock = getPendingTerminalTaskLock(task.id);
-  if (pendingLock) throw makeTaskLockedError(pendingLock);
+  if (pendingLock && !opts.allowPendingTerminalLock) throw makeTaskLockedError(pendingLock);
   if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot be changed until it is reopened or retried.`,
@@ -597,7 +612,7 @@ export class TaskCoordinator {
 
   private async prepareTerminalTaskWrite(
     task: TaskRecord,
-    reason: "completed" | "cancelled" | "failed",
+    reason: TerminalTaskStatus,
     opts?: { originSessionId?: string },
   ): Promise<() => void> {
     const releasePendingLocks = registerPendingTerminalTaskLocks(task, reason);
@@ -606,6 +621,49 @@ export class TaskCoordinator {
       return releasePendingLocks;
     } catch (error) {
       releasePendingLocks();
+      throw error;
+    }
+  }
+
+  prepareTerminalRouteLock(input: {
+    taskId: string;
+    expectedRevision: number;
+    status: TerminalTaskStatus;
+  }): PreparedTerminalTaskLock | null {
+    const task = this.options.sessionDb.getTask(input.taskId);
+    if (!task) return null;
+    if (task.revision !== input.expectedRevision) return null;
+    if (isTerminalTaskStatus(task.status)) return null;
+    if (!TASK_TRANSITIONS[task.status].includes(input.status)) return null;
+    if (getPendingTerminalTaskLock(task.id)) return null;
+    return {
+      taskId: task.id,
+      status: input.status,
+      release: registerPendingTerminalTaskLocks(task, input.status),
+      consumed: false,
+    };
+  }
+
+  private async prepareTerminalTaskWriteFromRouteLock(
+    task: TaskRecord,
+    reason: TerminalTaskStatus,
+    prepared: PreparedTerminalTaskLock | undefined,
+    opts?: { originSessionId?: string },
+  ): Promise<() => void> {
+    if (
+      !prepared ||
+      prepared.consumed ||
+      prepared.taskId !== task.id ||
+      prepared.status !== reason
+    ) {
+      return await this.prepareTerminalTaskWrite(task, reason, opts);
+    }
+    prepared.consumed = true;
+    try {
+      await this.options.quiesceTaskThreads?.(task, reason, opts);
+      return prepared.release;
+    } catch (error) {
+      prepared.release();
       throw error;
     }
   }
@@ -3151,10 +3209,21 @@ export class TaskCoordinator {
     detail?: string;
     sessionId?: string;
     deferTerminalUntilOriginSettled?: boolean;
+    preparedTerminalLock?: PreparedTerminalTaskLock;
   }): Promise<TaskRecord> {
     const initial = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(initial, input.expectedRevision);
-    return await this.runTaskMutation(input.taskId, async () => await this.transitionLocked(input));
+    const runTransition = async () =>
+      await this.runTaskMutation(input.taskId, async () => await this.transitionLocked(input));
+    if (
+      input.preparedTerminalLock &&
+      input.preparedTerminalLock.taskId === input.taskId &&
+      input.preparedTerminalLock.status === input.status &&
+      !input.preparedTerminalLock.consumed
+    ) {
+      return await this.runWithPendingTerminalMutationBypass(input.taskId, runTransition);
+    }
+    return await runTransition();
   }
 
   private async transitionLocked(input: {
@@ -3166,6 +3235,7 @@ export class TaskCoordinator {
     detail?: string;
     sessionId?: string;
     deferTerminalUntilOriginSettled?: boolean;
+    preparedTerminalLock?: PreparedTerminalTaskLock;
     validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
     deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
@@ -3220,9 +3290,14 @@ export class TaskCoordinator {
       ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
       : null;
     const terminalRelease = isTerminalTaskStatus(input.status)
-      ? await this.prepareTerminalTaskWrite(task, input.status, {
-          originSessionId: input.sessionId,
-        })
+      ? await this.prepareTerminalTaskWriteFromRouteLock(
+          task,
+          input.status,
+          input.preparedTerminalLock,
+          {
+            originSessionId: input.sessionId,
+          },
+        )
       : null;
     let updated: TaskRecord;
     try {
@@ -3607,10 +3682,15 @@ export class TaskCoordinator {
     defaultPendingQuestions?: boolean;
     deferTerminalUntilOriginSettled?: boolean;
     deferredTerminalCommitHook?: DeferredTerminalCommitHook;
+    allowPendingTerminalMutation?: boolean;
   }): Promise<TaskRecord> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
-    assertTaskAcceptsMutation(task);
+    assertTaskAcceptsMutation(task, {
+      allowPendingTerminalLock:
+        input.allowPendingTerminalMutation === true &&
+        this.allowsPendingTerminalMutation(input.taskId),
+    });
     if (task.questions.some((question) => question.status === "pending" && question.blocking)) {
       throw new Error("Task has unresolved blocking questions");
     }
@@ -3653,13 +3733,17 @@ export class TaskCoordinator {
           run: async () => {
             const latest = this.requireTask(task.id, task.workspacePath);
             if (isTerminalTask(latest)) return latest;
-            return await this.proposeCompletion({
+            return await this.proposeCompletionLocked({
               taskId: latest.id,
               workspacePath: latest.workspacePath,
               expectedRevision: latest.revision,
               summary: input.summary,
               ...(input.caveats ? { caveats: input.caveats } : {}),
               defaultPendingQuestions: input.defaultPendingQuestions,
+              sessionId: input.sessionId,
+              deferTerminalUntilOriginSettled: false,
+              deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+              allowPendingTerminalMutation: true,
             });
           },
         });
@@ -3732,6 +3816,20 @@ export class TaskCoordinator {
   }
 
   async checkpointThread(
+    sessionId: string,
+    reason: string,
+    agentSummary = "",
+    options?: { allowTerminal?: boolean },
+  ): Promise<TaskRecord | null> {
+    const task = this.getForThread(sessionId);
+    if (!task) return null;
+    return await this.runTaskMutation(
+      task.id,
+      async () => await this.checkpointThreadLocked(sessionId, reason, agentSummary, options),
+    );
+  }
+
+  private async checkpointThreadLocked(
     sessionId: string,
     reason: string,
     agentSummary = "",
@@ -4038,7 +4136,7 @@ export class TaskCoordinator {
     }
     if (!directiveCommitDeferred) {
       await recordDirectiveReceipt(updated);
-      await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
+      await this.checkpointThreadLocked(sessionId, `directive ${directive.type}`, "", {
         allowTerminal: true,
       });
     }

@@ -198,6 +198,7 @@ export class AgentSession {
     applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
     createTaskImpl?: SessionDependencies["createTaskImpl"];
     getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
+    getLiveSessionParentIdImpl?: SessionDependencies["getLiveSessionParentIdImpl"];
     buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
     getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
     readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
@@ -372,6 +373,10 @@ export class AgentSession {
       applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
       createTaskImpl: opts.createTaskImpl,
       getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
+      getLiveSessionParentIdImpl:
+        opts.getLiveSessionParentIdImpl ??
+        ((sessionId: string) =>
+          sessionId === this.id ? (this.state.sessionInfo.parentSessionId ?? null) : null),
       buildLegacySessionSnapshotImpl: opts.buildLegacySessionSnapshotImpl,
       getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,
       readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,

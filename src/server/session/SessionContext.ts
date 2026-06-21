@@ -317,6 +317,7 @@ export type SessionDependencies = {
   }) => Promise<WorkspaceBackupDeltaPreview>;
   getLiveSessionSnapshotImpl?: (sessionId: string) => SessionSnapshot | null;
   getLiveSessionWorkingDirectoryImpl?: (sessionId: string) => string | null;
+  getLiveSessionParentIdImpl?: (sessionId: string) => string | null;
   buildLegacySessionSnapshotImpl?: (
     record: import("../sessionDb").PersistedSessionRecord,
   ) => SessionSnapshot;

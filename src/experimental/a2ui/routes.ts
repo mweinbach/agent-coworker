@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { JSONRPC_ERROR_CODES } from "../../server/jsonrpc/protocol";
 import {
   captureBindingOutcome,
@@ -73,15 +74,26 @@ export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       // Otherwise, start a new turn carrying the action as the user message.
       const activeTurnId = runtime.turns.activeTurnId;
       if (activeTurnId) {
+        const steerRequestId = crypto.randomUUID();
         const outcome = await captureBindingOutcome(
           context,
           binding,
-          () => runtime.turns.sendSteerMessage(text, activeTurnId, clientMessageId),
+          () =>
+            runtime.turns.sendSteerMessage(
+              text,
+              activeTurnId,
+              clientMessageId,
+              undefined,
+              undefined,
+              undefined,
+              steerRequestId,
+            ),
           (event): event is JsonRpcTurnSteerOutcome =>
             (event.type === "steer_accepted" &&
               event.sessionId === runtime.id &&
-              event.turnId === activeTurnId) ||
-            context.utils.isSessionError(event),
+              event.turnId === activeTurnId &&
+              event.steerRequestId === steerRequestId) ||
+            (context.utils.isSessionError(event) && event.steerRequestId === steerRequestId),
         );
         if (outcome.type === "error") {
           sendSessionMutationError(context, ws, message.id, outcome);

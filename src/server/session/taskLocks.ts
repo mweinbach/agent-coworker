@@ -165,20 +165,26 @@ export function getActiveSourceChatLock(
 export function getSessionTaskLock(
   sessionDb: TaskSessionDb | null | undefined,
   sessionId: string,
+  getLiveParentSessionId?: (sessionId: string) => string | null | undefined,
 ): TaskLockError | null {
-  return getSessionTaskLockRecursive(sessionDb, sessionId, new Set());
+  return getSessionTaskLockRecursive(sessionDb, sessionId, new Set(), getLiveParentSessionId);
 }
 
 function getSessionTaskLockRecursive(
   sessionDb: TaskSessionDb | null | undefined,
   sessionId: string,
   seen: Set<string>,
+  getLiveParentSessionId?: (sessionId: string) => string | null | undefined,
 ): TaskLockError | null {
   if (seen.has(sessionId)) return null;
   seen.add(sessionId);
   const directLock =
     getTaskThreadLock(sessionDb, sessionId) ?? getActiveSourceChatLock(sessionDb, sessionId);
   if (directLock) return directLock;
-  const parentSessionId = sessionDb?.getSessionRecord?.(sessionId)?.parentSessionId ?? null;
-  return parentSessionId ? getSessionTaskLockRecursive(sessionDb, parentSessionId, seen) : null;
+  const liveParentSessionId = getLiveParentSessionId?.(sessionId) ?? null;
+  const parentSessionId =
+    liveParentSessionId ?? sessionDb?.getSessionRecord?.(sessionId)?.parentSessionId ?? null;
+  return parentSessionId
+    ? getSessionTaskLockRecursive(sessionDb, parentSessionId, seen, getLiveParentSessionId)
+    : null;
 }

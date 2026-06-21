@@ -614,6 +614,8 @@ export class SessionRegistry {
         this.sessionBindings.get(sessionId)?.runtime?.snapshot.peek() ?? null,
       getLiveSessionWorkingDirectoryImpl: (sessionId) =>
         this.sessionBindings.get(sessionId)?.runtime?.read.workingDirectory ?? null,
+      getLiveSessionParentIdImpl: (sessionId) =>
+        this.sessionBindings.get(sessionId)?.runtime?.read.parentSessionId ?? null,
       buildLegacySessionSnapshotImpl: (record: PersistedSessionRecord) =>
         loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(record),
       readSkillCatalogMtimeSnapshotImpl: this.options.readSkillCatalogMtimeSnapshot,

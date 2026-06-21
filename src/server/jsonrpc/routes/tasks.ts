@@ -557,16 +557,28 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       }),
     ),
     "task/cancel": createTaskHandler(context, "task/cancel", async (params) => {
-      const workspacePath = await resolveTaskWorkspacePath(context, params, "task/cancel");
-      const task = await context.tasks.transition({
+      const preparedTerminalLock = context.tasks.prepareTerminalRouteLock({
         taskId: params.taskId,
-        workspacePath,
         expectedRevision: params.expectedRevision,
         status: "cancelled",
-        summary: "Task cancelled",
-        detail: params.reason,
       });
-      return { task };
+      try {
+        const workspacePath = await resolveTaskWorkspacePath(context, params, "task/cancel");
+        const task = await context.tasks.transition({
+          taskId: params.taskId,
+          workspacePath,
+          expectedRevision: params.expectedRevision,
+          status: "cancelled",
+          summary: "Task cancelled",
+          detail: params.reason,
+          ...(preparedTerminalLock ? { preparedTerminalLock } : {}),
+        });
+        return { task };
+      } finally {
+        if (preparedTerminalLock && !preparedTerminalLock.consumed) {
+          preparedTerminalLock.release();
+        }
+      }
     }),
     "task/accept": createTaskHandler(context, "task/accept", async (params) => ({
       task: await context.tasks.acceptTask({

@@ -790,6 +790,65 @@ rl.on("line", (line) => {
   });
 
   test.serial(
+    "gates yolo native execution after Cowork dynamic tools can lock the source chat",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-yolo-dynamic-native-"));
+      const nativeWritePath = path.join(dir, "native-output.txt");
+      const capturePath = path.join(dir, "requests.jsonl");
+      const previousArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS;
+      const previousNativePath = process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH;
+      const previousCapturePath = process.env.CODEX_APP_SERVER_CAPTURE_PATH;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = "dynamic-lock-then-native";
+      process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH = nativeWritePath;
+      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+      let locked = false;
+      const gateCalls: string[] = [];
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        await runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Create task then run native command" }],
+          tools: {
+            createTask: {
+              description: "Create a Cowork task and lock this source chat.",
+              inputSchema: z.object({}),
+              execute: () => {
+                locked = true;
+                return "created task";
+              },
+            },
+          },
+          maxSteps: 1,
+          yolo: true,
+          shellPolicy: "full",
+          assertCanMutate: async (toolName: string) => {
+            gateCalls.push(toolName);
+            if (locked) throw new Error("task locked");
+          },
+        });
+
+        const requests = await readCapturedRequests(capturePath);
+        const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
+          | { approvalPolicy?: string }
+          | undefined;
+        expect(turnStart?.approvalPolicy).toBe("on-request");
+        expect(gateCalls).toContain("codex:commandExecution");
+        await expect(fs.access(nativeWritePath)).rejects.toThrow();
+      } finally {
+        if (previousArgs === undefined) delete process.env.COWORK_CODEX_APP_SERVER_ARGS;
+        else process.env.COWORK_CODEX_APP_SERVER_ARGS = previousArgs;
+        if (previousNativePath === undefined) delete process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH;
+        else process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH = previousNativePath;
+        if (previousCapturePath === undefined) delete process.env.CODEX_APP_SERVER_CAPTURE_PATH;
+        else process.env.CODEX_APP_SERVER_CAPTURE_PATH = previousCapturePath;
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.serial(
     "passes workspace-write sandbox and approval prompts for regular Codex turns",
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-sandbox-"));

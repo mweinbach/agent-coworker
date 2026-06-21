@@ -364,6 +364,133 @@ describe("AgentSession", () => {
       );
     });
 
+    test("locks live child-agent user turns through their parent before the parent link is persisted", async () => {
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: () => null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+
+      await session.sendUserMessage("live child should inherit the terminal parent task lock");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          data: expect.objectContaining({
+            lockKind: "terminal_task_thread",
+            taskId: "task-completed",
+            taskStatus: "completed",
+          }),
+        }),
+      );
+    });
+
+    test("locks live child-agent steers through their parent before the parent link is persisted", async () => {
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: () => null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+      (session as any).state.running = true;
+      (session as any).state.currentTurnId = "turn-live";
+      (session as any).state.acceptingSteers = true;
+
+      await session.sendSteerMessage("live child steer", "turn-live", "steer-live-child");
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          data: expect.objectContaining({
+            lockKind: "terminal_task_thread",
+            taskId: "task-completed",
+            taskStatus: "completed",
+          }),
+        }),
+      );
+      expect(events.some((event) => event.type === "steer_accepted")).toBe(false);
+    });
+
+    test("blocks live child-agent tool mutation gates through their parent before persistence", async () => {
+      let locked = false;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          locked && sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: () => null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+      let sideEffectCount = 0;
+      mockRunTurn.mockImplementation(async (params: any) => {
+        locked = true;
+        params.assertCanMutate("write");
+        sideEffectCount += 1;
+        return { text: "", reasoningText: undefined, responseMessages: [] };
+      });
+
+      await session.sendUserMessage("attempt child tool mutation");
+
+      expect(mockRunTurn).toHaveBeenCalledTimes(1);
+      expect(sideEffectCount).toBe(0);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          message: expect.stringContaining("task task-completed is completed"),
+        }),
+      );
+    });
+
     for (const status of TERMINAL_TASK_STATUSES) {
       test(`locks ${status} task threads against new steers`, async () => {
         const { session, events } = makeSession({

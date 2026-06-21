@@ -148,14 +148,22 @@ export function createUserMessageTurnRunner(
   };
 
   const emitTaskLockIfPresent = (): boolean => {
-    const taskLock = getSessionTaskLock(context.deps.sessionDb, context.id);
+    const taskLock = getSessionTaskLock(
+      context.deps.sessionDb,
+      context.id,
+      context.deps.getLiveSessionParentIdImpl,
+    );
     if (!taskLock) return false;
     context.emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
   const makeAssertCanMaterializeUserContent = () => {
     return () => {
-      const taskLock = getSessionTaskLock(context.deps.sessionDb, context.id);
+      const taskLock = getSessionTaskLock(
+        context.deps.sessionDb,
+        context.id,
+        context.deps.getLiveSessionParentIdImpl,
+      );
       const interrupted = context.state.abortController?.signal.aborted === true;
       if (taskLock || interrupted) {
         context.state.pendingSteers.splice(0);

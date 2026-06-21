@@ -1060,6 +1060,21 @@ describe("task mode persistence", () => {
           source: "user",
         }),
       );
+      await expectTaskLocked(
+        harness.coordinator.checkpointThread(
+          "task-session-1",
+          "pending finalizer checkpoint",
+          "This checkpoint must not persist while terminal quiescence is pending.",
+        ),
+      );
+      expect(
+        harness.notifications.some(
+          (notification) =>
+            notification.method === "task/checkpointCreated" &&
+            (notification.params.checkpoint as TaskCheckpoint | undefined)?.reason ===
+              "pending finalizer checkpoint",
+        ),
+      ).toBe(false);
 
       const routeOutcome = await invokeTaskRoute(harness, "task/requestChanges", {
         taskId: created.task.id,
@@ -4539,6 +4554,110 @@ describe("task mode persistence", () => {
         .get(task.id, harness.workspacePath)
         ?.activity.filter((item) => item.kind === "progress_reported");
       expect(progress).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("self-origin deferred completion retry settles pending artifact revisions through the internal finalizer", async () => {
+    const quiesceEntered = deferred();
+    const releaseQuiesce = deferred();
+    const harness = await createHarness({
+      quiesceTaskThreads: async () => {
+        quiesceEntered.resolve();
+        await releaseQuiesce.promise;
+      },
+    });
+    try {
+      let { task } = await createIndependentlyReviewedTask(harness, {
+        reviewRequired: false,
+        reviewRounds: 0,
+      });
+      const artifact = task.artifacts[0];
+      if (!artifact) throw new Error("Expected task artifact");
+
+      const revisionRun = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        artifactId: artifact.id,
+        instruction: "Revise report for final delivery.",
+        title: "Revise report",
+      });
+      const detail = harness.sessionDb.getTaskArtifactDetail(task.id, artifact.id);
+      const resultVersion = detail?.versions.at(-1);
+      if (!resultVersion) throw new Error("Expected artifact version");
+      const updatedAt = new Date().toISOString();
+      (
+        harness.sessionDb as unknown as {
+          db: { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+        }
+      ).db
+        .query(
+          "UPDATE task_artifact_revisions SET status = 'completed', result_version_id = ?, settlement_status = 'pending', updated_at = ?, completed_at = ? WHERE revision_id = ?",
+        )
+        .run(resultVersion.id, updatedAt, updatedAt, revisionRun.revision.id);
+      (
+        harness.sessionDb as unknown as {
+          db: { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+        }
+      ).db
+        .query(
+          "UPDATE task_work_items SET status = 'review', completion_evidence = ?, updated_at = ? WHERE task_id = ? AND work_item_id = ?",
+        )
+        .run(
+          "Revision is ready for settlement.",
+          updatedAt,
+          task.id,
+          revisionRun.revision.workItemId,
+        );
+
+      task = harness.coordinator.get(task.id, harness.workspacePath) ?? task;
+      expect(harness.sessionDb.listPendingTaskArtifactRevisionSettlementIds(task.id)).toEqual([
+        revisionRun.revision.id,
+      ]);
+
+      const proposalPromise = harness.coordinator.proposeCompletion({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        summary: "Complete after deferred artifact settlement",
+        sessionId: "task-session-1",
+        deferTerminalUntilOriginSettled: true,
+      });
+      await quiesceEntered.promise;
+      const proposal = await expectSettlesWithin(
+        proposalPromise,
+        1_000,
+        "deferred artifact-settlement proposal return",
+      );
+      expect(proposal.status).toBe("working");
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe("working");
+
+      releaseQuiesce.resolve();
+      const completed = await expectSettlesWithin(
+        (async () => {
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            await flushAsyncWork();
+            const latest = harness.coordinator.get(task.id, harness.workspacePath);
+            if (latest?.status === "completed") return latest;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          throw new Error("deferred artifact-settlement completion did not finalize");
+        })(),
+        1_000,
+        "deferred artifact-settlement completion",
+      );
+
+      expect(completed.status).toBe("completed");
+      expect(harness.sessionDb.listPendingTaskArtifactRevisionSettlementIds(task.id)).toEqual([]);
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "completed",
+        ),
+      ).toHaveLength(1);
     } finally {
       harness.sessionDb.close();
     }

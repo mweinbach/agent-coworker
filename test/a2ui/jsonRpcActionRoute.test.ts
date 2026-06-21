@@ -18,7 +18,15 @@ type SessionMock = {
     componentType?: string;
   };
   sendUserMessage?: (text: string, cmid?: string) => void;
-  sendSteerMessage?: (text: string, turnId: string, cmid?: string) => void;
+  sendSteerMessage?: (
+    text: string,
+    turnId: string,
+    cmid?: string,
+    attachments?: unknown,
+    inputParts?: unknown,
+    references?: unknown,
+    steerRequestId?: string,
+  ) => void;
 };
 
 function createRuntime(session: SessionMock) {
@@ -33,8 +41,24 @@ function createRuntime(session: SessionMock) {
         return session.activeTurnId;
       },
       sendUserMessage: async (text: string, cmid?: string) => session.sendUserMessage?.(text, cmid),
-      sendSteerMessage: async (text: string, turnId: string, cmid?: string) =>
-        session.sendSteerMessage?.(text, turnId, cmid),
+      sendSteerMessage: async (
+        text: string,
+        turnId: string,
+        cmid?: string,
+        attachments?: unknown,
+        inputParts?: unknown,
+        references?: unknown,
+        steerRequestId?: string,
+      ) =>
+        session.sendSteerMessage?.(
+          text,
+          turnId,
+          cmid,
+          attachments,
+          inputParts,
+          references,
+          steerRequestId,
+        ),
     },
   };
 }
@@ -43,6 +67,7 @@ function createHarness(opts: {
   session?: SessionMock;
   activeTurnId?: string | null;
   experimental?: boolean;
+  capture?: JsonRpcRouteContext["events"]["capture"];
 }) {
   const sent: any[] = [];
   const session: SessionMock = opts.session ?? {
@@ -54,6 +79,7 @@ function createHarness(opts: {
   let capturedText = "";
   let capturedClientMessageId: string | undefined;
   let capturedTurnId: string | null = null;
+  let capturedSteerRequestId: string | undefined;
 
   const binding = { session, runtime: createRuntime(session) } as any;
   const context: JsonRpcRouteContext = {
@@ -87,26 +113,29 @@ function createHarness(opts: {
       replay: () => new Set<string>(),
     },
     events: {
-      capture: async (_binding, action, _predicate, _timeout) => {
-        // Fire the action then emit a synthesized matching event.
-        await Promise.resolve(action());
-        if (session.activeTurnId) {
-          return {
-            type: "steer_accepted",
-            sessionId: session.id,
-            turnId: session.activeTurnId,
-            text: capturedText,
-            ...(capturedClientMessageId ? { clientMessageId: capturedClientMessageId } : {}),
-          } as any;
-        }
-        return {
-          type: "session_busy",
-          sessionId: session.id,
-          busy: true,
-          turnId: "turn-new",
-          cause: "user_message",
-        } as any;
-      },
+      capture: opts.capture
+        ? opts.capture
+        : async (_binding, action, _predicate, _timeout) => {
+            // Fire the action then emit a synthesized matching event.
+            await Promise.resolve(action());
+            if (session.activeTurnId) {
+              return {
+                type: "steer_accepted",
+                sessionId: session.id,
+                turnId: session.activeTurnId,
+                text: capturedText,
+                ...(capturedClientMessageId ? { clientMessageId: capturedClientMessageId } : {}),
+                ...(capturedSteerRequestId ? { steerRequestId: capturedSteerRequestId } : {}),
+              } as any;
+            }
+            return {
+              type: "session_busy",
+              sessionId: session.id,
+              busy: true,
+              turnId: "turn-new",
+              cause: "user_message",
+            } as any;
+          },
       captureMutationOutcome: (async () => {
         throw new Error("nope");
       }) as any,
@@ -142,15 +171,36 @@ function createHarness(opts: {
     },
   };
 
+  const originalSendUserMessage = session.sendUserMessage;
+  const originalSendSteerMessage = session.sendSteerMessage;
   session.sendUserMessage = (text, cmid) => {
     capturedText = text;
     capturedClientMessageId = cmid;
     capturedTurnId = null;
+    originalSendUserMessage?.(text, cmid);
   };
-  session.sendSteerMessage = (text, turnId, cmid) => {
+  session.sendSteerMessage = (
+    text,
+    turnId,
+    cmid,
+    _attachments,
+    _inputParts,
+    _references,
+    steerRequestId,
+  ) => {
     capturedText = text;
     capturedClientMessageId = cmid;
     capturedTurnId = turnId;
+    capturedSteerRequestId = steerRequestId;
+    originalSendSteerMessage?.(
+      text,
+      turnId,
+      cmid,
+      _attachments,
+      _inputParts,
+      _references,
+      steerRequestId,
+    );
   };
 
   const router =
@@ -166,6 +216,7 @@ function createHarness(opts: {
     getCapturedText: () => capturedText,
     getCapturedClientMessageId: () => capturedClientMessageId,
     getCapturedTurnId: () => capturedTurnId,
+    getCapturedSteerRequestId: () => capturedSteerRequestId,
   };
 }
 
@@ -238,7 +289,119 @@ describe("cowork/session/a2ui/action route", () => {
     expect(reply.result.delivery).toBe("delivered-as-steer");
     expect(reply.result.turnId).toBe("turn-live");
     expect(h.getCapturedTurnId()).toBe("turn-live");
+    expect(h.getCapturedSteerRequestId()).toBeTruthy();
     expect(h.getCapturedText()).toContain('"count":2');
+  });
+
+  test("isolates concurrent active-turn action steer acknowledgements by request id", async () => {
+    const sentSteers: Array<{
+      text: string;
+      turnId: string;
+      clientMessageId?: string;
+      steerRequestId?: string;
+    }> = [];
+    const secondSteerSent = Promise.withResolvers<void>();
+    let firstPredicateMatchedSecondAck = false;
+
+    const session: SessionMock = {
+      id: "t1",
+      activeTurnId: "turn-live",
+      validateA2uiAction: () => ({ ok: true, componentType: "Button" }),
+      sendSteerMessage: (
+        text,
+        turnId,
+        cmid,
+        _attachments,
+        _inputParts,
+        _references,
+        steerRequestId,
+      ) => {
+        sentSteers.push({ text, turnId, clientMessageId: cmid, steerRequestId });
+        if (sentSteers.length === 2) secondSteerSent.resolve();
+      },
+    };
+
+    const h = createHarness({
+      activeTurnId: "turn-live",
+      session,
+      capture: async (_binding, action, predicate) => {
+        await Promise.resolve(action());
+        const own = sentSteers.at(-1);
+        if (!own) throw new Error("Action did not send a steer");
+        if (sentSteers.length === 1) {
+          await secondSteerSent.promise;
+          const other = sentSteers[1];
+          if (!other) throw new Error("Second steer was not captured");
+          const otherAck = {
+            type: "steer_accepted",
+            sessionId: session.id,
+            turnId: other.turnId,
+            text: other.text,
+            ...(other.clientMessageId ? { clientMessageId: other.clientMessageId } : {}),
+            ...(other.steerRequestId ? { steerRequestId: other.steerRequestId } : {}),
+          } as SessionEvent;
+          firstPredicateMatchedSecondAck = predicate(otherAck);
+          if (firstPredicateMatchedSecondAck) return otherAck;
+        }
+        return {
+          type: "steer_accepted",
+          sessionId: session.id,
+          turnId: own.turnId,
+          text: own.text,
+          ...(own.clientMessageId ? { clientMessageId: own.clientMessageId } : {}),
+          ...(own.steerRequestId ? { steerRequestId: own.steerRequestId } : {}),
+        } as SessionEvent;
+      },
+    });
+
+    await Promise.all([
+      h.router(
+        {} as any,
+        {
+          id: "a",
+          method: "cowork/session/a2ui/action",
+          params: {
+            threadId: "t1",
+            surfaceId: "s1",
+            componentId: "buy",
+            eventType: "click",
+            payload: { request: "A" },
+          },
+        } as any,
+      ),
+      h.router(
+        {} as any,
+        {
+          id: "b",
+          method: "cowork/session/a2ui/action",
+          params: {
+            threadId: "t1",
+            surfaceId: "s1",
+            componentId: "buy",
+            eventType: "click",
+            payload: { request: "B" },
+          },
+        } as any,
+      ),
+    ]);
+
+    expect(sentSteers).toHaveLength(2);
+    expect(sentSteers[0]?.steerRequestId).toBeTruthy();
+    expect(sentSteers[1]?.steerRequestId).toBeTruthy();
+    expect(sentSteers[0]?.steerRequestId).not.toBe(sentSteers[1]?.steerRequestId);
+    expect(firstPredicateMatchedSecondAck).toBe(false);
+    expect(h.sent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "b",
+          result: expect.objectContaining({ turnId: "turn-live" }),
+        }),
+        expect.objectContaining({
+          id: "a",
+          result: expect.objectContaining({ turnId: "turn-live" }),
+        }),
+      ]),
+    );
   });
 
   test("rejects invalid params with invalidParams error", async () => {

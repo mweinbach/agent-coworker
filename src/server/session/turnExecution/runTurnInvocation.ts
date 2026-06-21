@@ -63,7 +63,11 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       if (isTurnAborted()) {
         throw new Error(`Tool ${toolName} blocked because the turn was cancelled.`);
       }
-      const taskLock = getSessionTaskLock(context.deps.sessionDb, context.id);
+      const taskLock = getSessionTaskLock(
+        context.deps.sessionDb,
+        context.id,
+        context.deps.getLiveSessionParentIdImpl,
+      );
       if (taskLock?.data.lockKind === "terminal_task_thread") {
         throw new Error(
           `Tool ${toolName} blocked because task ${taskLock.data.taskId} is ${taskLock.data.taskStatus}. Reopen or retry the task before mutating files or tools.`,

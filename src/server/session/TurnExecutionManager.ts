@@ -63,7 +63,7 @@ export class TurnExecutionManager {
       validateUploadedFileAttachments: attachmentHelpers.validateUploadedFileAttachments,
       buildUserMessageContent: attachmentHelpers.buildUserMessageContent,
       classifyTurnError,
-      getTaskLock: () => getSessionTaskLock(this.context.deps.sessionDb, this.context.id),
+      getTaskLock: () => this.getTaskLock(),
       trackLiveSteerSettlement: async (operation) => await this.trackLiveSteerSettlement(operation),
     });
 
@@ -85,6 +85,14 @@ export class TurnExecutionManager {
     });
   }
 
+  private getTaskLock() {
+    return getSessionTaskLock(
+      this.context.deps.sessionDb,
+      this.context.id,
+      this.context.deps.getLiveSessionParentIdImpl,
+    );
+  }
+
   async sendSteerMessage(
     text: string,
     expectedTurnId: string,
@@ -94,7 +102,7 @@ export class TurnExecutionManager {
     references?: TurnReference[],
     steerRequestId?: string,
   ) {
-    const taskLock = getSessionTaskLock(this.context.deps.sessionDb, this.context.id);
+    const taskLock = this.getTaskLock();
     if (taskLock) {
       this.context.emit({
         type: "error",
@@ -126,7 +134,7 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
-    const taskLock = getSessionTaskLock(this.context.deps.sessionDb, this.context.id);
+    const taskLock = this.getTaskLock();
     if (taskLock) {
       this.context.emitError("task_locked", "session", taskLock.message, taskLock.data);
       return;
@@ -194,6 +202,8 @@ export class TurnExecutionManager {
 
   private cancelOwnTurn() {
     if (!this.context.state.running) return;
+    this.context.state.acceptingSteers = false;
+    this.context.state.activeSteerHandler = null;
     if (this.context.state.abortController) {
       this.context.state.abortController.abort();
     }

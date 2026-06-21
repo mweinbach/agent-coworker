@@ -261,6 +261,13 @@ export function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode
 }
 
 export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApprovalPolicy {
+  if (
+    params.yolo === true &&
+    typeof params.assertCanMutate === "function" &&
+    Object.keys(params.tools).some((name) => isCodexDynamicCoworkToolName(name))
+  ) {
+    return "on-request";
+  }
   return params.yolo === true ? "never" : "on-request";
 }
 
@@ -321,7 +328,9 @@ function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undef
   // under YOLO. An explicitly restrictive `read-only` sandbox is a hard floor and
   // must not be widened either — YOLO only relaxes the APPROVAL policy, not the
   // sandbox mode the user explicitly selected. Only an unscoped, non-read-only
-  // session is lifted to full access. YOLO still maps to approvalPolicy "never".
+  // session is lifted to full access. YOLO usually maps to approvalPolicy
+  // "never", except turns with Cowork dynamic tools keep approval requests so
+  // native app-server effects still cross the mutation gate.
   const scoped = (params.agentTargetPaths?.length ?? 0) > 0;
   const explicitlyReadOnly = params.config.sandbox?.mode === "read-only";
   if (params.yolo !== true || scoped || explicitlyReadOnly) {

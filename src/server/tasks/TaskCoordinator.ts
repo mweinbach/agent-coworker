@@ -34,7 +34,11 @@ import {
 } from "../../shared/tasks";
 import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
-import { isTerminalTaskStatus, registerPendingTerminalTaskThreadLocks } from "../session/taskLocks";
+import {
+  getPendingTerminalTaskLock,
+  isTerminalTaskStatus,
+  registerPendingTerminalTaskLocks,
+} from "../session/taskLocks";
 import type { SessionDb } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
 import {
@@ -203,6 +207,8 @@ function nonEmpty(value: string, name: string): string {
 }
 
 function assertTaskAcceptsNewThreads(task: TaskRecord): void {
+  const pendingLock = getPendingTerminalTaskLock(task.id);
+  if (pendingLock) throw new Error(pendingLock.message);
   if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot create new focused threads until it is reopened or retried.`,
@@ -210,6 +216,8 @@ function assertTaskAcceptsNewThreads(task: TaskRecord): void {
 }
 
 function assertTaskAcceptsMutation(task: TaskRecord): void {
+  const pendingLock = getPendingTerminalTaskLock(task.id);
+  if (pendingLock) throw new Error(pendingLock.message);
   if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot be changed until it is reopened or retried.`,
@@ -566,7 +574,7 @@ export class TaskCoordinator {
     reason: "completed" | "cancelled" | "failed",
     opts?: { originSessionId?: string },
   ): Promise<() => void> {
-    const releasePendingLocks = registerPendingTerminalTaskThreadLocks(task, reason);
+    const releasePendingLocks = registerPendingTerminalTaskLocks(task, reason);
     try {
       await this.options.quiesceTaskThreads?.(task, reason, opts);
       return releasePendingLocks;
@@ -589,7 +597,7 @@ export class TaskCoordinator {
     sessionId: string;
     run: () => Promise<TaskRecord>;
   }): TaskRecord {
-    const releasePendingLocks = registerPendingTerminalTaskThreadLocks(input.task, input.status);
+    const releasePendingLocks = registerPendingTerminalTaskLocks(input.task, input.status);
     void (async () => {
       try {
         await this.options.quiesceTaskThreads?.(input.task, input.status, {
@@ -829,6 +837,19 @@ export class TaskCoordinator {
   }
 
   async addThread(input: {
+    taskId: string;
+    workspacePath: string;
+    title: string;
+    expectedRevision: number;
+    createdBy: "user" | "coordinator";
+    workItemId?: string | null;
+    provider?: string;
+    model?: string;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(input.taskId, async () => await this.addThreadLocked(input));
+  }
+
+  private async addThreadLocked(input: {
     taskId: string;
     workspacePath: string;
     title: string;
@@ -1629,7 +1650,11 @@ export class TaskCoordinator {
     workItemId?: string;
     provenance?: Record<string, unknown>;
   }): Promise<TaskRecord> {
-    return await this.registerArtifactLocked(input);
+    return await this.runTaskMutation(
+      input.taskId,
+      async () =>
+        await this.registerArtifactLocked(input, { finishActiveRevisionInCurrentLock: true }),
+    );
   }
 
   private async registerArtifactLocked(
@@ -3536,8 +3561,7 @@ export class TaskCoordinator {
   async applyDirective(sessionId: string, directive: TaskDirective): Promise<TaskDirectiveResult> {
     const task = this.getForThread(sessionId);
     if (!task) throw new Error("Task directives are available only in task threads");
-    return await this.options.sessionDb.runTaskMutationExclusive(
-      "apply_task_directive",
+    return await this.runTaskMutation(
       task.id,
       async () => await this.applyDirectiveLocked(sessionId, directive),
     );
@@ -3719,7 +3743,7 @@ export class TaskCoordinator {
         });
         break;
       case "create_thread":
-        updated = await this.addThread({
+        updated = await this.addThreadLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,

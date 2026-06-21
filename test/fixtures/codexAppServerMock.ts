@@ -631,6 +631,16 @@ export function createMockClient(): CodexAppServerClient {
       mockInterrupts.push(params);
       const turnId = params.turnId ?? "turn_1";
       queueMicrotask(() => {
+        if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("late-todo-after-abort")) {
+          sendNotification({
+            method: "todoList/updated",
+            params: {
+              threadId: params.threadId,
+              turnId,
+              todos: [{ content: "late todo after abort", status: "in_progress" }],
+            },
+          });
+        }
         sendNotification({
           method: "turn/completed",
           params: {

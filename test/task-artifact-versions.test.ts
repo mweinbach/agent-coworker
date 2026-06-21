@@ -1815,7 +1815,7 @@ describe("task artifact versions", () => {
       expect(plan.ok).toBe(false);
       if (plan.ok) throw new Error("Stale plan update unexpectedly succeeded");
       expect(plan.error).toBeInstanceOf(Error);
-      expect((plan.error as Error).message).toContain("active artifact revision");
+      expect((plan.error as Error).message).toContain("Task revision conflict");
 
       const current = harness.coordinator.get(task.id, harness.workspacePath);
       expect(current).toMatchObject({

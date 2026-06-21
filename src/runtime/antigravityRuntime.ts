@@ -318,6 +318,7 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
                     toolCallId,
                     workingDirectory: params.config.workingDirectory,
                     toolOutputOverflowChars: params.config.toolOutputOverflowChars,
+                    assertCanMutate: params.assertCanMutate,
                     log: params.log,
                   });
                   const emittedOutput = overflow?.output ?? result;

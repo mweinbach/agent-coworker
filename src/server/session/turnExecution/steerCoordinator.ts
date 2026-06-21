@@ -219,6 +219,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
         );
         if (emitTaskLockIfPresent()) return;
         await activeSteerHandler({ text, expectedTurnId: currentTurnId, content: deliveryContent });
+        if (emitTaskLockIfPresent()) return;
         // Persist the model-facing content (with any forced-skill text folded in)
         // as plain text — accepted by all providers, unlike synthetic tool calls.
         historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);

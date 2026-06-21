@@ -394,6 +394,7 @@ export function createCodexTurnNotificationRouter(
     }
 
     if (!targetsActiveCodexTurn(payload, target)) return;
+    if (completion.abortSignal?.aborted) return;
 
     let routePayload = payload;
 

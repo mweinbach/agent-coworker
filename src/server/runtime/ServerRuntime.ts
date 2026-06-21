@@ -342,14 +342,7 @@ export async function createAgentServerRuntime(
         const binding = registry.sessionBindings.get(thread.sessionId);
         const runtime = binding?.runtime;
         if (!runtime) continue;
-        try {
-          waits.push(
-            runtime.turns.cancelAndWaitForSettlement({
-              includeSubagents: true,
-              timeoutMs: taskTerminalQuiesceTimeoutMs,
-            }),
-          );
-        } catch {
+        const disposeRuntime = () => {
           try {
             runtime.lifecycle.dispose(`task ${task.id} ${reason}`, {
               closeSharedCodexClient: true,
@@ -357,9 +350,28 @@ export async function createAgentServerRuntime(
           } catch {
             // Continue quiescing sibling task threads.
           }
+        };
+        try {
+          waits.push(
+            runtime.turns
+              .cancelAndWaitForSettlement({
+                includeSubagents: true,
+                timeoutMs: taskTerminalQuiesceTimeoutMs,
+              })
+              .catch((error) => {
+                disposeRuntime();
+                throw error;
+              }),
+          );
+        } catch {
+          disposeRuntime();
         }
       }
-      await Promise.all(waits);
+      const settled = await Promise.allSettled(waits);
+      const rejection = settled.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (rejection) throw rejection.reason;
     },
   });
   const threadJournal = new ThreadJournal(sessionDb);

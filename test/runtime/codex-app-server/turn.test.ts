@@ -468,6 +468,37 @@ describe("codex app-server turn lifecycle", () => {
     expect(mockInterrupts).toEqual([{ threadId: "thread_1", turnId: "turn_1" }]);
   });
 
+  test.serial(
+    "drops stateful todo notifications after abort while waiting for completion",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-late-todo-"));
+      process.env.CODEX_APP_SERVER_DELAY_COMPLETION = "1";
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = "late-todo-after-abort";
+      const controller = new AbortController();
+      const todos: unknown[] = [];
+      const runtime = createRuntime(makeConfig(dir));
+
+      await expect(
+        runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+          abortSignal: controller.signal,
+          updateTodos: (nextTodos) => todos.push(nextTodos),
+          onModelRawEvent: (event) => {
+            const message = event.event.message as { method?: string } | undefined;
+            if (message?.method === "turn/start") setTimeout(() => controller.abort(), 0);
+          },
+        }),
+      ).rejects.toThrow("Cancelled by user");
+
+      expect(mockInterrupts).toEqual([{ threadId: "thread_1", turnId: "turn_1" }]);
+      expect(todos).toEqual([]);
+    },
+  );
+
   test.serial("projects requestUserInput, todoList, and fileChange events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-events-"));
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "eventful";

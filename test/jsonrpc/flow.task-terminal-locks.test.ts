@@ -898,6 +898,118 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }
   }, 20_000);
 
+  test("terminal transition timeout waits for cooperative sibling quiescence before failing closed", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const modeBySession = new Map<string, "stuck" | "cooperative">();
+    const kickoffCompleted = Promise.withResolvers<void>();
+    const stuckStarted = Promise.withResolvers<AbortSignal | null>();
+    const cooperativeStarted = Promise.withResolvers<AbortSignal | null>();
+    const releaseStuck = Promise.withResolvers<void>();
+    let cooperativeSettled = false;
+    const opts = serverOpts(tmpDir, {
+      taskTerminalQuiesceTimeoutMs: 100,
+      runTurnImpl: (async (params: RunTurnParams) => {
+        const mode = params.sessionId ? modeBySession.get(params.sessionId) : undefined;
+        if (!mode) {
+          kickoffCompleted.resolve();
+          return { text: "kickoff complete", responseMessages: [] };
+        }
+        if (mode === "stuck") {
+          stuckStarted.resolve(params.abortSignal ?? null);
+          await releaseStuck.promise;
+          return { text: "stuck turn eventually settled", responseMessages: [] };
+        }
+        cooperativeStarted.resolve(params.abortSignal ?? null);
+        await waitForCondition(
+          () => params.abortSignal?.aborted === true,
+          "cooperative sibling was not aborted",
+        );
+        await delay(10);
+        cooperativeSettled = true;
+        return { text: "cooperative turn settled after abort", responseMessages: [] };
+      }) as never,
+    });
+    const { server, url } = await startAgentServer(opts);
+    const rpc = await connectJsonRpc(url);
+
+    try {
+      const created = await createTask(rpc, tmpDir, "sibling-timeout");
+      const primaryThreadId = created.threads[0]?.sessionId;
+      if (!primaryThreadId) throw new Error("Expected primary task thread");
+      await kickoffCompleted.promise;
+
+      const focused = await rpc.sendRequest("task/thread/create", {
+        cwd: tmpDir,
+        taskId: created.id,
+        expectedRevision: created.revision,
+        title: "Cooperative sibling",
+      });
+      expect(focused.error).toBeUndefined();
+      const cooperativeThreadId = focused.result.thread.id;
+      modeBySession.set(primaryThreadId, "stuck");
+      modeBySession.set(cooperativeThreadId, "cooperative");
+
+      const stuckTurn = await rpc.sendRequest("turn/start", {
+        threadId: primaryThreadId,
+        input: [{ type: "text", text: "start stuck turn" }],
+      });
+      expect(stuckTurn.error).toBeUndefined();
+      const cooperativeTurn = await rpc.sendRequest("turn/start", {
+        threadId: cooperativeThreadId,
+        input: [{ type: "text", text: "start cooperative turn" }],
+      });
+      expect(cooperativeTurn.error).toBeUndefined();
+      const stuckSignal = await stuckStarted.promise;
+      const cooperativeSignal = await cooperativeStarted.promise;
+
+      const latest = await readTask(rpc, tmpDir, created.id);
+      const cancelPromise = rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Cancel while one task thread remains non-cooperative.",
+      });
+      await waitForCondition(() => stuckSignal?.aborted === true, "stuck turn was not aborted");
+      await waitForCondition(
+        () => cooperativeSignal?.aborted === true,
+        "cooperative turn was not aborted",
+      );
+
+      const timedOutCancel = await cancelPromise;
+      expect(cooperativeSettled).toBe(true);
+      expect(timedOutCancel.result).toBeUndefined();
+      expect(timedOutCancel.error).toEqual(
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: expect.stringContaining(
+            "Timed out waiting for turn settlement after cancellation.",
+          ),
+        }),
+      );
+      expect(await readTask(rpc, tmpDir, created.id)).toMatchObject({
+        id: created.id,
+        status: "working",
+      });
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "cancelled",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      releaseStuck.resolve();
+      await waitForTurnCompleted(rpc, primaryThreadId, stuckTurn.result.turn.id);
+      await waitForTurnCompleted(rpc, cooperativeThreadId, cooperativeTurn.result.turn.id);
+      rpc.close();
+    } finally {
+      rpc.close();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
   test("self-origin terminal directive waits for provider turn settlement before terminal notification", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     const evidencePath = path.join(tmpDir, "self-terminal-evidence.txt");

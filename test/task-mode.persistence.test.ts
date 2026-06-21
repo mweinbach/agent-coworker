@@ -10,7 +10,10 @@ import type { TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
 
 async function createHarness(
   options: {
-    quiesceTaskThreads?: (task: TaskRecord, reason: "completed" | "cancelled" | "failed") => void;
+    quiesceTaskThreads?: (
+      task: TaskRecord,
+      reason: "completed" | "cancelled" | "failed",
+    ) => void | Promise<void>;
   } = {},
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-mode-test-"));
@@ -4312,8 +4315,9 @@ describe("task mode persistence", () => {
       });
       await appendStarted.promise;
       const terminalPromise = transitionToStatus(harness, created.task.id, "completed");
-      await terminalAttempted.promise;
+      await flushAsyncWork();
       releaseAppend.resolve();
+      await terminalAttempted.promise;
 
       const [directiveResult] = await Promise.all([directivePromise, terminalPromise]);
       const final = harness.coordinator.get(created.task.id, harness.workspacePath);
@@ -4823,6 +4827,64 @@ describe("task mode persistence", () => {
         }),
       ]);
       expect(harness.coordinator.get(terminal.id, harness.workspacePath)?.threads).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/thread/create cannot advance the revision while terminal quiescence is pending", async () => {
+    const quiesceReached = deferred();
+    const releaseQuiesce = deferred();
+    const harness = await createHarness({
+      quiesceTaskThreads: async () => {
+        quiesceReached.resolve();
+        await releaseQuiesce.promise;
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const terminalPromise = harness.coordinator.transition({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        status: "cancelled",
+        summary: "Cancel with pending quiescence",
+        sessionId: "task-session-1",
+      });
+      await quiesceReached.promise;
+
+      const threadPromise = harness.coordinator.addThread({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        title: "Late focused lane",
+        createdBy: "user",
+      });
+      await flushAsyncWork();
+
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)).toMatchObject({
+        revision: created.task.revision,
+        status: "working",
+        threads: expect.arrayContaining([expect.objectContaining({ sessionId: "task-session-1" })]),
+      });
+
+      releaseQuiesce.resolve();
+      const terminal = await terminalPromise;
+      expect(terminal.status).toBe("cancelled");
+      await expect(threadPromise).rejects.toThrow(/Task revision conflict|cancelled/);
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)).toMatchObject({
+        status: "cancelled",
+        revision: terminal.revision,
+        threads: [expect.objectContaining({ sessionId: "task-session-1" })],
+      });
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "cancelled",
+        ),
+      ).toHaveLength(1);
     } finally {
       harness.sessionDb.close();
     }

@@ -137,6 +137,7 @@ export async function executeToolCall(
       toolCallId: toolCall.id,
       workingDirectory: params.config.workingDirectory,
       toolOutputOverflowChars: params.config.toolOutputOverflowChars,
+      assertCanMutate: params.assertCanMutate,
       log: params.log,
     });
     const emittedOutput = overflow?.output ?? result;

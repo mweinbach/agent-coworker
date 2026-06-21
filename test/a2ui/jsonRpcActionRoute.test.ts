@@ -404,6 +404,84 @@ describe("cowork/session/a2ui/action route", () => {
     );
   });
 
+  test("isolates concurrent active-turn action steer errors by request id", async () => {
+    const sentSteers: Array<{
+      text: string;
+      turnId: string;
+      clientMessageId?: string;
+      steerRequestId?: string;
+    }> = [];
+    let predicateMatchedUnrelatedError = false;
+
+    const session: SessionMock = {
+      id: "t1",
+      activeTurnId: "turn-live",
+      validateA2uiAction: () => ({ ok: true, componentType: "Button" }),
+      sendSteerMessage: (
+        text,
+        turnId,
+        cmid,
+        _attachments,
+        _inputParts,
+        _references,
+        steerRequestId,
+      ) => {
+        sentSteers.push({ text, turnId, clientMessageId: cmid, steerRequestId });
+      },
+    };
+
+    const h = createHarness({
+      activeTurnId: "turn-live",
+      session,
+      capture: async (_binding, action, predicate) => {
+        await Promise.resolve(action());
+        const own = sentSteers.at(-1);
+        if (!own?.steerRequestId) throw new Error("Action did not send a correlated steer");
+        const unrelatedError = {
+          type: "error",
+          sessionId: session.id,
+          code: "validation_failed",
+          message: "Unrelated action failed",
+          steerRequestId: "other-request",
+        } as SessionEvent;
+        predicateMatchedUnrelatedError = predicate(unrelatedError);
+        if (predicateMatchedUnrelatedError) return unrelatedError;
+        return {
+          type: "error",
+          sessionId: session.id,
+          code: "validation_failed",
+          message: "Matching action failed",
+          steerRequestId: own.steerRequestId,
+        } as SessionEvent;
+      },
+    });
+
+    await h.router(
+      {} as any,
+      {
+        id: "a",
+        method: "cowork/session/a2ui/action",
+        params: {
+          threadId: "t1",
+          surfaceId: "s1",
+          componentId: "buy",
+          eventType: "click",
+        },
+      } as any,
+    );
+
+    expect(predicateMatchedUnrelatedError).toBe(false);
+    expect(h.sent).toEqual([
+      {
+        id: "a",
+        error: expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: "Matching action failed",
+        }),
+      },
+    ]);
+  });
+
   test("rejects invalid params with invalidParams error", async () => {
     const h = createHarness({ activeTurnId: null });
     await h.router(

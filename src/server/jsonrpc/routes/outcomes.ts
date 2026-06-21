@@ -33,6 +33,15 @@ export async function captureBindingOutcome<T extends SessionEvent>(
   );
 }
 
+export async function captureBindingCorrelatedOutcome<T extends SessionEvent>(
+  context: JsonRpcRouteContext,
+  binding: SessionBinding,
+  action: () => Promise<void> | void,
+  predicate: (event: SessionEvent) => event is T,
+): Promise<T> {
+  return await context.events.capture(binding, async () => await action(), predicate);
+}
+
 export async function captureBindingMutationOutcome<T extends SessionEvent>(
   context: JsonRpcRouteContext,
   binding: SessionBinding,

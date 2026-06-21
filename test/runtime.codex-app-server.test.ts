@@ -6,7 +6,12 @@ import { z } from "zod";
 
 import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
 import { canonicalizeRoot } from "../src/platform/sandbox/policy";
-import { __internal as codexAppServerClientInternal } from "../src/providers/codexAppServerClient";
+import {
+  type CodexAppServerClient,
+  type CodexAppServerJsonRpcNotification,
+  type CodexAppServerJsonRpcRawMessage,
+  __internal as codexAppServerClientInternal,
+} from "../src/providers/codexAppServerClient";
 import { createRuntime } from "../src/runtime";
 import { handleServerRequest } from "../src/runtime/codexAppServer/serverRequests";
 import { VERSION } from "../src/version";
@@ -1247,35 +1252,130 @@ rl.on("line", (line) => {
         const abortController = new AbortController();
         const nativeEntered = Promise.withResolvers<void>();
         const releaseNativeDrain = Promise.withResolvers<void>();
-        mockInterrupts.splice(0);
-        const baseClient = createMockClient();
+        const turnStartResponse = Promise.withResolvers<unknown>();
+        const notificationListeners = new Set<
+          (notification: CodexAppServerJsonRpcNotification) => void
+        >();
+        const rawListeners = new Set<(message: CodexAppServerJsonRpcRawMessage) => void>();
+        const unhandledRejections: unknown[] = [];
+        const onUnhandledRejection = (error: unknown) => {
+          unhandledRejections.push(error);
+        };
+        const interruptCalls: Array<{ threadId: string; turnId?: string }> = [];
         let interrupted = false;
         let turnStartParams: { approvalPolicy?: string; sandboxPolicy?: unknown } | null = null;
-        codexAppServerClientInternal.setClientFactoryForTests(async () => ({
-          ...baseClient,
-          request: async (method: string, params?: unknown, timeoutMs?: number) => {
-            if (method !== "turn/start") {
-              return await baseClient.request(method, params, timeoutMs);
+        let nextRequestId = 1;
+        let turnStartRequested = false;
+        let turnStartReleased = false;
+        let turnPromise: Promise<unknown> | undefined;
+
+        const emitRaw = (message: CodexAppServerJsonRpcRawMessage) => {
+          for (const listener of rawListeners) listener(message);
+        };
+        const emitNotification = (notification: CodexAppServerJsonRpcNotification) => {
+          emitRaw({
+            direction: "server_notification",
+            message: notification as Record<string, unknown>,
+          });
+          for (const listener of notificationListeners) listener(notification);
+        };
+        const rejectTurnStart = () => {
+          if (turnStartReleased || !turnStartRequested) return;
+          turnStartReleased = true;
+          turnStartResponse.reject(new Error("late yolo turn/start rejection"));
+        };
+        const client: CodexAppServerClient = {
+          command: { command: "mock-codex-app-server", args: [], source: "override" },
+          isClosed: () => false,
+          getLastCloseInfo: () => null,
+          request: async (method: string, params?: unknown) => {
+            const id = nextRequestId++;
+            emitRaw({
+              direction: "client_request",
+              message: { id, method, ...(params !== undefined ? { params } : {}) },
+            });
+            if (method === "initialize") {
+              const result = { userAgent: "mock" };
+              emitRaw({ direction: "server_response", message: { id, result } });
+              return result;
             }
-            turnStartParams = params as { approvalPolicy?: string; sandboxPolicy?: unknown };
-            nativeEntered.resolve();
-            await releaseNativeDrain.promise;
-            if (!interrupted) {
-              await fs.writeFile(nativeWritePath, `${nativeKind} side effect escaped`, "utf8");
+            if (method === "model/list") {
+              const result = {
+                data: [
+                  { id: "gpt-5.4", model: "gpt-5.4", displayName: "GPT-5.4", isDefault: true },
+                ],
+                nextCursor: null,
+              };
+              emitRaw({ direction: "server_response", message: { id, result } });
+              return result;
             }
-            return {
-              turn: { id: `turn_${nativeKind}`, status: "inProgress", items: [], error: null },
-            };
+            if (method === "thread/start") {
+              const record = params as {
+                model?: string;
+                approvalPolicy?: string;
+                sandbox?: string;
+              };
+              const result = {
+                thread: { id: "thread_1", modelProvider: "openai", turns: [] },
+                model: record.model ?? "gpt-5.4",
+                modelProvider: "openai",
+                cwd: dir,
+                approvalPolicy: record.approvalPolicy,
+                sandbox: record.sandbox,
+                reasoningEffort: "high",
+              };
+              emitRaw({ direction: "server_response", message: { id, result } });
+              return result;
+            }
+            if (method === "turn/start") {
+              turnStartRequested = true;
+              turnStartParams = params as { approvalPolicy?: string; sandboxPolicy?: unknown };
+              nativeEntered.resolve();
+              await releaseNativeDrain.promise;
+              if (!interrupted) {
+                await fs.writeFile(nativeWritePath, `${nativeKind} side effect escaped`, "utf8");
+              }
+              emitNotification({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread_1",
+                  turn: {
+                    id: `turn_${nativeKind}`,
+                    threadId: "thread_1",
+                    status: "cancelled",
+                    items: [],
+                    error: null,
+                  },
+                },
+              });
+              return await turnStartResponse.promise;
+            }
+            return {};
           },
           interruptTurn: async (params) => {
             interrupted = true;
-            await baseClient.interruptTurn(params);
+            interruptCalls.push(params);
           },
-        }));
+          notify: () => {},
+          onNotification: (listener) => {
+            notificationListeners.add(listener);
+            return () => notificationListeners.delete(listener);
+          },
+          onServerRequest: () => () => {},
+          onJsonRpcMessage: (listener) => {
+            rawListeners.add(listener);
+            return () => rawListeners.delete(listener);
+          },
+          onClose: () => () => {},
+          close: async () => {},
+        };
+
+        process.on("unhandledRejection", onUnhandledRejection);
+        codexAppServerClientInternal.setClientFactoryForTests(async () => client);
 
         try {
           const runtime = createRuntime(makeConfig(dir));
-          const turnPromise = runtime.runTurn({
+          turnPromise = runtime.runTurn({
             config: makeConfig(dir),
             system: "You are Codex.",
             messages: [{ role: "user", content: `Run native ${nativeKind}` }],
@@ -1291,7 +1391,7 @@ rl.on("line", (line) => {
           abortController.abort();
           await new Promise((resolve) => setTimeout(resolve, 0));
           expect(interrupted).toBe(true);
-          expect(mockInterrupts).toEqual([expect.objectContaining({ threadId: "thread_1" })]);
+          expect(interruptCalls).toEqual([{ threadId: "thread_1" }]);
           const settledBeforeNativeRequestSettled = await Promise.race([
             turnPromise.then(
               () => true,
@@ -1305,6 +1405,12 @@ rl.on("line", (line) => {
           await expect(turnPromise).rejects.toThrow(/Cancelled by user/);
           await expect(fs.access(nativeWritePath)).rejects.toThrow();
         } finally {
+          releaseNativeDrain.resolve();
+          rejectTurnStart();
+          await turnPromise?.catch(() => {});
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          expect(unhandledRejections).toEqual([]);
+          process.off("unhandledRejection", onUnhandledRejection);
           await fs.rm(dir, { recursive: true, force: true });
         }
       },

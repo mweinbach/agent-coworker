@@ -379,10 +379,14 @@ export function createCodexTurnNotificationRouter(
     }
 
     if (notification.method === "turn/completed") {
-      if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
       const turn = asRecord(payload?.turn);
       const completedTurnId = asString(turn?.id);
-      if (expectedTurnId && completedTurnId !== expectedTurnId) return;
+      if (expectedTurnId) {
+        if (completedTurnId !== expectedTurnId) return;
+        if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
+      } else if (expectedThreadId && payloadThreadId !== expectedThreadId) {
+        return;
+      }
       flushPendingUsage(expectedTurnId ?? completedTurnId);
       if (turn?.status === "failed") {
         const error = asRecord(turn.error);

@@ -557,13 +557,13 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       }),
     ),
     "task/cancel": createTaskHandler(context, "task/cancel", async (params) => {
+      const workspacePath = await resolveTaskWorkspacePath(context, params, "task/cancel");
       const preparedTerminalLock = context.tasks.prepareTerminalRouteLock({
         taskId: params.taskId,
         expectedRevision: params.expectedRevision,
         status: "cancelled",
       });
       try {
-        const workspacePath = await resolveTaskWorkspacePath(context, params, "task/cancel");
         const task = await context.tasks.transition({
           taskId: params.taskId,
           workspacePath,

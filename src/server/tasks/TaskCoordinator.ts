@@ -201,6 +201,11 @@ type DeferredTerminalCommitHook = {
   onCommitted: (task: TaskRecord) => Promise<void> | void;
 };
 
+type ArtifactRevisionOutcomeOptions = {
+  deferTerminalUntilOriginSettled?: boolean;
+  deferredTerminalCommitHook?: DeferredTerminalCommitHook;
+};
+
 const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ["planning", "working", "cancelled", "failed"],
   planning: ["working", "blocked", "cancelled", "failed"],
@@ -1907,7 +1912,9 @@ export class TaskCoordinator {
         throw new Error("Active revision targets a different artifact path");
       }
       const finalized = options.finishActiveRevisionInCurrentLock
-        ? await this.handleThreadOutcomeLocked(input.sessionId as string, "completed")
+        ? await this.handleThreadOutcomeLocked(input.sessionId as string, "completed", undefined, {
+            deferTerminalUntilOriginSettled: true,
+          })
         : await this.handleThreadOutcome(input.sessionId as string, "completed");
       if (!finalized) throw new Error("Active artifact revision could not be finalized");
       return finalized.task;
@@ -2545,6 +2552,7 @@ export class TaskCoordinator {
     sessionId: string,
     outcome: "completed" | "cancelled" | "error",
     _failure?: unknown,
+    options: ArtifactRevisionOutcomeOptions = {},
   ): Promise<{
     task: TaskRecord;
     detail: TaskArtifactDetail;
@@ -2600,6 +2608,10 @@ export class TaskCoordinator {
     const hasPendingSettlementBeforeOutcome =
       this.hasCompletedArtifactRevisionAwaitingSettlement(task);
     const isFinalActiveRevision = !this.hasActiveArtifactRevisionOtherThan(task, revision.id);
+    const shouldDeferSelfOriginTerminal =
+      options.deferTerminalUntilOriginSettled === true &&
+      !task.reviewRequired &&
+      this.isTaskThreadSession(task, sessionId);
     if (isTerminalTask(task)) {
       const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
         revisionId: revision.id,
@@ -2643,7 +2655,11 @@ export class TaskCoordinator {
           },
           reviewStatus: "draft",
         });
-        if (hasPendingSettlementBeforeOutcome && isFinalActiveRevision) {
+        if (
+          hasPendingSettlementBeforeOutcome &&
+          isFinalActiveRevision &&
+          !shouldDeferSelfOriginTerminal
+        ) {
           const settledTask = await this.finalizeArtifactRevisionAndProposeCompletionAtomically({
             task,
             priorTaskStatus,
@@ -2711,6 +2727,7 @@ export class TaskCoordinator {
         priorTaskStatus,
         outcome: "completed",
         sessionId,
+        ...options,
       });
       const settledDetail =
         this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ?? updatedDetail;
@@ -2718,7 +2735,10 @@ export class TaskCoordinator {
     }
 
     const restoreFailureRollback =
-      hasPendingSettlementBeforeOutcome && isFinalActiveRevision && outcome === "cancelled"
+      hasPendingSettlementBeforeOutcome &&
+      isFinalActiveRevision &&
+      outcome === "cancelled" &&
+      !shouldDeferSelfOriginTerminal
         ? await this.artifactStore.captureFile(resolvedPath)
         : null;
     await this.artifactStore.restoreFile({
@@ -2770,6 +2790,7 @@ export class TaskCoordinator {
       outcome,
       sessionId,
       detail: outcome === "cancelled" ? "Revision cancelled" : "Revision thread failed",
+      ...options,
     });
     return { task: settledTask, detail: updatedDetail, revision: failedRevision };
   }
@@ -3007,6 +3028,8 @@ export class TaskCoordinator {
     outcome: "completed" | "cancelled" | "error";
     sessionId: string;
     detail?: string;
+    deferTerminalUntilOriginSettled?: boolean;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     const latest = this.options.sessionDb.getTask(input.task.id) ?? input.task;
     if (isTerminalTask(latest)) return latest;
@@ -3060,6 +3083,8 @@ export class TaskCoordinator {
               : "Artifact revision cancelled",
           sessionId: input.sessionId,
           defaultPendingQuestions: false,
+          deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+          deferredTerminalCommitHook: input.deferredTerminalCommitHook,
         });
       } catch (error) {
         if (error instanceof AtomicTaskCompletionSettlementError) throw error;

@@ -7,6 +7,7 @@ import type {
   JsonRpcLiteId,
   JsonRpcLiteRequest,
 } from "../src/server/jsonrpc/protocol";
+import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
 import type { JsonRpcRouteContext } from "../src/server/jsonrpc/routes/types";
 import { jsonRpcTaskResultSchemas } from "../src/server/jsonrpc/schema.tasks";
@@ -72,10 +73,13 @@ function makeHarness(
       task: TaskRecord;
       retryStatus: "queued" | "steered" | "failed";
     }>;
+    transition?: (input: unknown) => Promise<TaskRecord>;
+    prepareTerminalRouteLock?: (input: unknown) => { consumed: boolean; release: () => void };
     resolveQuestions?: (input: unknown) => Promise<{
       task: TaskRecord;
       resumeStatus: "queued" | "steered" | "not_needed" | "failed";
     }>;
+    resolveWorkspacePath?: (params: unknown, method: string) => string;
   } = {},
 ) {
   const results: Array<{ id: JsonRpcLiteId; result: unknown }> = [];
@@ -116,6 +120,13 @@ function makeHarness(
       list: () => [summary],
       get: () => task,
       updateBrief: overrides.updateBrief ?? (async () => task),
+      transition: overrides.transition ?? (async () => task),
+      prepareTerminalRouteLock:
+        overrides.prepareTerminalRouteLock ??
+        (() => ({
+          consumed: false,
+          release: () => {},
+        })),
       retryTask:
         overrides.retryTask ??
         (async () => ({
@@ -135,7 +146,7 @@ function makeHarness(
       getPersisted: () => null,
     },
     utils: {
-      resolveWorkspacePath: () => "C:\\workspace",
+      resolveWorkspacePath: overrides.resolveWorkspacePath ?? (() => "C:\\workspace"),
       buildThreadFromSession: () => ({
         id: "session-1",
         title: "New thread",
@@ -253,6 +264,48 @@ describe("task JSON-RPC routes", () => {
           code: -32600,
           message: "task/updateBrief requires turns permission",
           data: { category: "permission_denied", permission: "turns" },
+        },
+      },
+    ]);
+  });
+
+  test("task/cancel validates the workspace before publishing pending terminal locks", async () => {
+    const lockInputs: unknown[] = [];
+    const releaseCalls: unknown[] = [];
+    const harness = makeHarness({
+      resolveWorkspacePath: () => {
+        throw new Error("task/cancel cwd must match an authorized project workspace");
+      },
+      prepareTerminalRouteLock: (input) => {
+        lockInputs.push(input);
+        return {
+          consumed: false,
+          release: () => {
+            releaseCalls.push(input);
+          },
+        };
+      },
+      transition: async () => {
+        throw new Error("transition should not run for an unauthorized workspace");
+      },
+    });
+
+    await invoke(harness.context, "task/cancel", {
+      cwd: "C:\\unauthorized",
+      taskId: "task-1",
+      expectedRevision: 0,
+      reason: "wrong workspace",
+    });
+
+    expect(lockInputs).toEqual([]);
+    expect(releaseCalls).toEqual([]);
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toEqual([
+      {
+        id: 1,
+        error: {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: "task/cancel cwd must match an authorized project workspace",
         },
       },
     ]);

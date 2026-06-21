@@ -4663,6 +4663,100 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("active artifact revision completion defers self-origin terminal quiescence until the revision tool returns", async () => {
+    const quiesceEntered = deferred();
+    const releaseQuiesce = deferred();
+    const harness = await createHarness({
+      quiesceTaskThreads: async () => {
+        quiesceEntered.resolve();
+        await releaseQuiesce.promise;
+      },
+    });
+    try {
+      const { task, artifactPath } = await createIndependentlyReviewedTask(harness, {
+        reviewRequired: false,
+        reviewRounds: 0,
+      });
+      const artifact = task.artifacts[0];
+      if (!artifact) throw new Error("Expected task artifact");
+
+      const revisionRun = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        artifactId: artifact.id,
+        instruction: "Revise report for final delivery.",
+        title: "Revise report",
+      });
+      await fs.writeFile(artifactPath, "# Report\n\nRevision is complete.\n");
+
+      const registered = harness.coordinator.registerArtifact({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: revisionRun.task.revision,
+        sessionId: revisionRun.revision.sessionId,
+        path: artifactPath,
+        title: "Report",
+        kind: "markdown",
+        artifactId: artifact.id,
+        baseVersionId: revisionRun.revision.baseVersionId,
+      });
+
+      await quiesceEntered.promise;
+      const returned = await expectSettlesWithin(
+        registered,
+        1_000,
+        "active artifact revision registerArtifact",
+      );
+      expect(returned.status).toBe("awaiting_review");
+      expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe(
+        "awaiting_review",
+      );
+
+      await expect(
+        harness.coordinator.requestChanges({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: returned.revision,
+          feedback: "Do not mutate while terminalization is pending.",
+          sessionId: "reviewer",
+        }),
+      ).rejects.toMatchObject({
+        code: "task_locked",
+        data: expect.objectContaining({
+          taskId: task.id,
+          taskStatus: "completed",
+        }),
+      });
+
+      releaseQuiesce.resolve();
+      const completed = await expectSettlesWithin(
+        (async () => {
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            await flushAsyncWork();
+            const latest = harness.coordinator.get(task.id, harness.workspacePath);
+            if (latest?.status === "completed") return latest;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          throw new Error("deferred active-revision completion did not finalize");
+        })(),
+        1_000,
+        "deferred active-revision completion",
+      );
+
+      expect(completed.status).toBe("completed");
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "completed",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("records self-origin terminal directive receipts only after deferred terminal commit", async () => {
     let allowQuiesce = false;
     let quiesceCalls = 0;

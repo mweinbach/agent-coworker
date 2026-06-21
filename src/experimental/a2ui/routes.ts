@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { JSONRPC_ERROR_CODES } from "../../server/jsonrpc/protocol";
 import {
+  captureBindingCorrelatedOutcome,
   captureBindingOutcome,
   type JsonRpcSessionError,
   sendSessionMutationError,
@@ -75,7 +76,7 @@ export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       const activeTurnId = runtime.turns.activeTurnId;
       if (activeTurnId) {
         const steerRequestId = crypto.randomUUID();
-        const outcome = await captureBindingOutcome(
+        const outcome = await captureBindingCorrelatedOutcome(
           context,
           binding,
           () =>

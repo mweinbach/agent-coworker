@@ -40,6 +40,7 @@ import type {
   MCPServerConfig,
   ModelMessage,
   ServerErrorCode,
+  ServerErrorData,
   ServerErrorSource,
 } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
@@ -412,7 +413,7 @@ export class AgentSession {
       state: this.state,
       deps: this.deps,
       emit,
-      emitError: (code, source, message) => this.emitError(code, source, message),
+      emitError: (code, source, message, data) => this.emitError(code, source, message, data),
       emitTelemetry: (name, status, attributes, durationMs) =>
         this.emitTelemetry(name, status, attributes, durationMs),
       formatError: (err) => this.formatErrorMessage(err),
@@ -1820,8 +1821,13 @@ export class AgentSession {
     return this.runtimeSupport.waitForPromptResponse(requestId, bucket);
   }
 
-  private emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
-    this.runtimeSupport.emitError(code, source, message);
+  private emitError(
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: ServerErrorData,
+  ) {
+    this.runtimeSupport.emitError(code, source, message, data);
   }
 
   private guardBusy(): boolean {

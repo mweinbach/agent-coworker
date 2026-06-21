@@ -699,6 +699,43 @@ describe("bash tool", () => {
     expect(res.stdout).toContain("approved filesystem access");
   });
 
+  test("rechecks the mutation gate before an approved sandbox escalation retry", async () => {
+    const dir = await tmpDir();
+    const approveFn = mock(async () => true);
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: false, requireBackend: false },
+      }),
+    });
+    ctx.approveCommand = approveFn;
+    let gateCalls = 0;
+    ctx.assertCanMutate = async () => {
+      gateCalls += 1;
+      if (gateCalls > 1) {
+        throw new Error("task locked before bash retry");
+      }
+    };
+    let runnerCalls = 0;
+    bashInternal.setRunShellCommandForTests(async () => {
+      runnerCalls += 1;
+      return {
+        stdout: "",
+        stderr: "bash: cannot create file: Read-only file system",
+        exitCode: 1,
+        sandbox: "linux-bwrap",
+      };
+    });
+
+    const t: any = createBashTool(ctx);
+    await expect(t.execute({ command: "touch x" })).rejects.toThrow("task locked");
+    expect(approveFn).toHaveBeenCalledWith(
+      "touch x",
+      expect.objectContaining({ reason: "sandbox_denied" }),
+    );
+    expect(gateCalls).toBe(2);
+    expect(runnerCalls).toBe(1);
+  });
+
   test("approved network escalation only enables network within the workspace sandbox", async () => {
     const dir = await tmpDir();
     const approveFn = mock(async () => true);

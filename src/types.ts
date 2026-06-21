@@ -739,6 +739,33 @@ export const SERVER_ERROR_CODES = [
 
 export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];
 
+export type TaskLockErrorData =
+  | {
+      category: "task_locked";
+      source: "session";
+      lockKind: "terminal_task_thread";
+      taskId: string;
+      taskStatus: "completed" | "cancelled" | "failed";
+    }
+  | {
+      category: "task_locked";
+      source: "session";
+      lockKind: "active_source_chat";
+      taskId: string;
+      taskStatus:
+        | "draft"
+        | "planning"
+        | "working"
+        | "blocked"
+        | "awaiting_review"
+        | "completed"
+        | "failed"
+        | "cancelled";
+      taskTitle: string;
+    };
+
+export type ServerErrorData = TaskLockErrorData;
+
 export interface ObservabilityConfig {
   provider: "langfuse";
   baseUrl: string;

@@ -36,6 +36,7 @@ import type {
   ModelMessage,
   ReferencedPluginContext,
   ServerErrorCode,
+  ServerErrorData,
   ServerErrorSource,
   TodoItem,
   TurnReference,
@@ -332,7 +333,12 @@ export type SessionContext = {
   state: SessionRuntimeState;
   deps: SessionDependencies;
   emit: (evt: SessionEvent) => void;
-  emitError: (code: ServerErrorCode, source: ServerErrorSource, message: string) => void;
+  emitError: (
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: ServerErrorData,
+  ) => void;
   emitTelemetry: (
     name: string,
     status: "ok" | "error",

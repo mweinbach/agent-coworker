@@ -1,5 +1,5 @@
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
-import type { ServerErrorCode, ServerErrorSource } from "../../types";
+import type { ServerErrorCode, ServerErrorData, ServerErrorSource } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 import { resolveCoworkHomedir } from "../../utils/coworkHome";
 import type { SessionEvent } from "../protocol";
@@ -18,13 +18,19 @@ export class SessionRuntimeSupport {
     },
   ) {}
 
-  emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
+  emitError(
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: ServerErrorData,
+  ) {
     this.opts.emit({
       type: "error",
       sessionId: this.opts.sessionId,
       message,
       code,
       source,
+      ...(data ? { data } : {}),
     });
   }
 

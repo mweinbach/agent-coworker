@@ -1,5 +1,5 @@
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
-import type { ServerErrorCode, ServerErrorSource } from "../../types";
+import type { ServerErrorCode, ServerErrorData, ServerErrorSource } from "../../types";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import { McpManager } from "./McpManager";
@@ -46,7 +46,12 @@ export type AgentSessionManagerHost = {
   formatErrorMessage(err: unknown): string;
   log(line: string): void;
   queuePersistSessionSnapshot(reason: string): void;
-  emitError(code: ServerErrorCode, source: ServerErrorSource, message: string): void;
+  emitError(
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: ServerErrorData,
+  ): void;
 };
 
 export class AgentSessionManagerRegistry {

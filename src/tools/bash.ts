@@ -585,6 +585,7 @@ export function createBashTool(ctx: ToolContext) {
             category === "network"
               ? { ...policy, network: true }
               : { kind: "danger-full-access", network: policy.network };
+          await ctx.assertCanMutate?.("bash");
           result = await runner({ ...baseArgs, policy: retryPolicy });
         }
       }

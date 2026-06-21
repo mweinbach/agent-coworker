@@ -30,6 +30,7 @@ import type {
   PluginUpdateCheckResult,
   SandboxDenialCategory,
   ServerErrorCode,
+  ServerErrorData,
   ServerErrorSource,
   SkillCatalogSnapshot,
   SkillEntry,
@@ -557,5 +558,6 @@ export type SessionEvent =
       message: string;
       code: ServerErrorCode;
       source: ServerErrorSource;
+      data?: ServerErrorData;
     }
   | { type: "pong"; sessionId: string };

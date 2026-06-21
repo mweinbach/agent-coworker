@@ -233,6 +233,7 @@ async function terminalTask(
 async function expectTaskLocked(
   response: Awaited<ReturnType<JsonRpcConnection["sendRequest"]>>,
   message?: string,
+  data?: Record<string, unknown>,
 ) {
   expect(response.result).toBeUndefined();
   expect(response.error).toEqual(
@@ -241,10 +242,11 @@ async function expectTaskLocked(
       message: expect.stringContaining(
         message ?? "cannot accept new turns until it is reopened or retried",
       ),
-      data: {
+      data: expect.objectContaining({
         category: "task_locked",
         source: "session",
-      },
+        ...data,
+      }),
     }),
   );
 }
@@ -272,7 +274,11 @@ describe("server JSON-RPC task terminal turn locks", () => {
           threadId,
           input: [{ type: "text", text: "late write" }],
         });
-        await expectTaskLocked(locked);
+        await expectTaskLocked(locked, undefined, {
+          lockKind: "terminal_task_thread",
+          taskId: task.id,
+          taskStatus: status,
+        });
 
         rpc.close();
         await stopTestServer(running.server);
@@ -287,7 +293,11 @@ describe("server JSON-RPC task terminal turn locks", () => {
           threadId,
           input: [{ type: "text", text: "late write after restart" }],
         });
-        await expectTaskLocked(lockedAfterRestart);
+        await expectTaskLocked(lockedAfterRestart, undefined, {
+          lockKind: "terminal_task_thread",
+          taskId: task.id,
+          taskStatus: status,
+        });
       } finally {
         rpc.close();
         await stopTestServer(running.server);
@@ -776,13 +786,19 @@ describe("server JSON-RPC task terminal turn locks", () => {
         (message) => message.method === "task/created",
       );
       const taskId = createdNotification.params.task.id;
+      const activeTaskStatus = createdNotification.params.task.status;
       await waitForTurnCompleted(sourceRpc, sourceThreadId, promotionTurn.result.turn.id);
 
       const lockedSource = await sourceRpc.sendRequest("turn/start", {
         threadId: sourceThreadId,
         input: [{ type: "text", text: "source write while task is active" }],
       });
-      await expectTaskLocked(lockedSource, "Chat is locked by active task");
+      await expectTaskLocked(lockedSource, "Chat is locked by active task", {
+        lockKind: "active_source_chat",
+        taskId,
+        taskStatus: activeTaskStatus,
+        taskTitle: "Source chat terminal lock",
+      });
 
       const ordinaryTurn = await ordinaryRpc.sendRequest("turn/start", {
         threadId: ordinaryThreadId,

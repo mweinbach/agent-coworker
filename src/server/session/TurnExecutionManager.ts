@@ -1,5 +1,5 @@
 import type { TaskRecord, TaskStatus } from "../../shared/tasks";
-import type { TurnReference } from "../../types";
+import type { TaskLockErrorData, TurnReference } from "../../types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
@@ -17,11 +17,45 @@ import {
   getTurnAttachmentValidationMessage,
 } from "./turnExecution/userMessageAttachments";
 
+type TerminalTaskStatus = Extract<TaskStatus, "completed" | "cancelled" | "failed">;
+
 const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
 
-function terminalTaskLockMessage(task: Pick<TaskRecord, "id" | "status">): string | null {
-  if (!TERMINAL_TASK_STATUSES.has(task.status)) return null;
-  return `Task ${task.id} is ${task.status} and cannot accept new turns until it is reopened or retried.`;
+function isTerminalTaskStatus(status: TaskStatus): status is TerminalTaskStatus {
+  return TERMINAL_TASK_STATUSES.has(status);
+}
+
+type TaskLockError = {
+  message: string;
+  data: TaskLockErrorData;
+};
+
+function terminalTaskLock(task: Pick<TaskRecord, "id" | "status">): TaskLockError | null {
+  if (!isTerminalTaskStatus(task.status)) return null;
+  return {
+    message: `Task ${task.id} is ${task.status} and cannot accept new turns until it is reopened or retried.`,
+    data: {
+      category: "task_locked",
+      source: "session",
+      lockKind: "terminal_task_thread",
+      taskId: task.id,
+      taskStatus: task.status,
+    },
+  };
+}
+
+function activeSourceChatLock(task: Pick<TaskRecord, "id" | "status" | "title">): TaskLockError {
+  return {
+    message: `Chat is locked by active task ${task.id}: ${task.title}`,
+    data: {
+      category: "task_locked",
+      source: "session",
+      lockKind: "active_source_chat",
+      taskId: task.id,
+      taskStatus: task.status,
+      taskTitle: task.title,
+    },
+  };
 }
 
 export class TurnExecutionManager {
@@ -95,20 +129,17 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
-    const taskThreadLockMessage = this.getTaskThreadLockMessage();
-    if (taskThreadLockMessage) {
-      this.context.emitError("task_locked", "session", taskThreadLockMessage);
+    const taskThreadLock = this.getTaskThreadLock();
+    if (taskThreadLock) {
+      this.context.emitError("task_locked", "session", taskThreadLock.message, taskThreadLock.data);
       return;
     }
     const activeTask = this.context.deps.sessionDb?.getActiveTaskForSourceSession?.(
       this.context.id,
     );
     if (activeTask) {
-      this.context.emitError(
-        "task_locked",
-        "session",
-        `Chat is locked by active task ${activeTask.id}: ${activeTask.title}`,
-      );
+      const lock = activeSourceChatLock(activeTask);
+      this.context.emitError("task_locked", "session", lock.message, lock.data);
       return;
     }
     return await this.steerCoordinator.sendSteerMessage(
@@ -129,20 +160,17 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
-    const taskThreadLockMessage = this.getTaskThreadLockMessage();
-    if (taskThreadLockMessage) {
-      this.context.emitError("task_locked", "session", taskThreadLockMessage);
+    const taskThreadLock = this.getTaskThreadLock();
+    if (taskThreadLock) {
+      this.context.emitError("task_locked", "session", taskThreadLock.message, taskThreadLock.data);
       return;
     }
     const activeTask = this.context.deps.sessionDb?.getActiveTaskForSourceSession?.(
       this.context.id,
     );
     if (activeTask) {
-      this.context.emitError(
-        "task_locked",
-        "session",
-        `Chat is locked by active task ${activeTask.id}: ${activeTask.title}`,
-      );
+      const lock = activeSourceChatLock(activeTask);
+      this.context.emitError("task_locked", "session", lock.message, lock.data);
       return;
     }
     return await this.userMessageTurnRunner.sendUserMessage(
@@ -177,8 +205,8 @@ export class TurnExecutionManager {
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
   }
 
-  private getTaskThreadLockMessage(): string | null {
+  private getTaskThreadLock(): TaskLockError | null {
     const task = this.context.deps.sessionDb?.getTaskForThread?.(this.context.id);
-    return task ? terminalTaskLockMessage(task) : null;
+    return task ? terminalTaskLock(task) : null;
   }
 }

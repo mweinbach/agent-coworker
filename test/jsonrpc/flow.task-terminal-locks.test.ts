@@ -304,7 +304,11 @@ describe("server JSON-RPC task terminal turn locks", () => {
     const releaseManual = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {
-        runTurnImpl: (async (params: { abortSignal?: AbortSignal }) => {
+        runTurnImpl: (async (params: {
+          abortSignal?: AbortSignal;
+          onModelRawEvent?: (rawEvent: unknown) => Promise<void> | void;
+          onModelStreamPart?: (rawPart: unknown) => Promise<void> | void;
+        }) => {
           if (!holdNextTurn) {
             kickoffCompleted.resolve();
             return { text: "kickoff complete", responseMessages: [] };
@@ -314,6 +318,18 @@ describe("server JSON-RPC task terminal turn locks", () => {
           if (!params.abortSignal?.aborted) {
             await fs.writeFile(lateWritePath, "late write escaped", "utf8");
           }
+          await params.onModelRawEvent?.({
+            format: "openai-responses-v1",
+            event: {
+              type: "response.output_text.delta",
+              delta: "late raw output escaped",
+            },
+          });
+          await params.onModelStreamPart?.({
+            type: "text-delta",
+            id: "late-stream",
+            text: "late streamed output escaped",
+          });
           return {
             text: "late assistant output escaped",
             responseMessages: [],
@@ -395,6 +411,8 @@ describe("server JSON-RPC task terminal turn locks", () => {
         const persistedThread = JSON.stringify(read.result);
         expect(persistedThread).toContain(turnId);
         expect(persistedThread).not.toContain("late assistant output escaped");
+        expect(persistedThread).not.toContain("late streamed output escaped");
+        expect(persistedThread).not.toContain("late raw output escaped");
 
         await productAnalyticsInternal.flushProductAnalyticsQueueForTests();
         expect(productEvents.map((event) => event.event)).toContain("turn_started");

@@ -56,6 +56,8 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
   } = deps;
 
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
+    const abortSignal = context.state.abortController?.signal;
+    const isTurnAborted = () => abortSignal?.aborted === true;
     const harnessContext = context.deps.harnessContextStore.get(context.id);
     const taskContext = context.deps.getTaskContextImpl?.(context.id) ?? null;
     const applyTaskDirective = context.deps.applyTaskDirectiveImpl;
@@ -218,7 +220,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           turnId,
         },
       },
-      abortSignal: context.state.abortController?.signal,
+      abortSignal,
       includeRawChunks,
       costTracker: context.state.costTracker ?? undefined,
       toolEnv: context.deps.toolEnv,
@@ -275,6 +277,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         });
       },
       onModelRawEvent: async (rawEvent) => {
+        if (isTurnAborted()) return;
         const index = tracker.rawStreamEventIndex++;
         const eventPayload = {
           type: "model_stream_raw" as const,
@@ -301,6 +304,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         });
       },
       onModelStreamPart: async (rawPart) => {
+        if (isTurnAborted()) return;
         if (isStartStepPart(rawPart)) {
           tracker.startedStepCount += 1;
           setAcceptingSteers(tracker.startedStepCount < context.state.maxSteps);

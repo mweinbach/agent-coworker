@@ -1982,24 +1982,33 @@ export class SessionTaskRepository {
   ): TaskCheckpoint {
     this.db.transaction(() => {
       if (options?.rejectTerminal) this.assertTaskAcceptsMutation(checkpoint.taskId);
-      this.db
-        .query(
-          "INSERT INTO task_checkpoints(checkpoint_id, task_id, thread_id, task_revision, reason, agent_summary, context_digest, task_snapshot_json, artifact_manifest_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          checkpoint.id,
-          checkpoint.taskId,
-          checkpoint.threadId,
-          checkpoint.taskRevision,
-          checkpoint.reason,
-          checkpoint.agentSummary,
-          checkpoint.contextDigest,
-          JSON.stringify(checkpoint.taskSnapshot),
-          JSON.stringify(checkpoint.artifactManifest),
-          checkpoint.createdAt,
-        );
+      this.insertCheckpoint(checkpoint);
     })();
     return checkpoint;
+  }
+
+  recordDirectiveReceiptWithCheckpoint(input: {
+    taskId: string;
+    idempotencyKey: string;
+    resultRevision: number;
+    receiptCreatedAt: string;
+    checkpoint: TaskCheckpoint;
+    checkpointOptions?: { rejectTerminal?: boolean };
+  }): TaskCheckpoint | null {
+    let createdCheckpoint: TaskCheckpoint | null = null;
+    this.db.transaction(() => {
+      if (this.getDirectiveReceipt(input.taskId, input.idempotencyKey) !== null) return;
+      if (input.checkpointOptions?.rejectTerminal) this.assertTaskAcceptsMutation(input.taskId);
+      this.insertCheckpoint(input.checkpoint);
+      this.recordDirectiveReceipt(
+        input.taskId,
+        input.idempotencyKey,
+        input.resultRevision,
+        input.receiptCreatedAt,
+      );
+      createdCheckpoint = input.checkpoint;
+    })();
+    return createdCheckpoint;
   }
 
   getDirectiveReceipt(taskId: string, idempotencyKey: string): number | null {
@@ -2022,6 +2031,25 @@ export class SessionTaskRepository {
         "INSERT OR IGNORE INTO task_directive_receipts(task_id, idempotency_key, result_revision, created_at) VALUES(?, ?, ?, ?)",
       )
       .run(taskId, idempotencyKey, resultRevision, createdAt);
+  }
+
+  private insertCheckpoint(checkpoint: TaskCheckpoint): void {
+    this.db
+      .query(
+        "INSERT INTO task_checkpoints(checkpoint_id, task_id, thread_id, task_revision, reason, agent_summary, context_digest, task_snapshot_json, artifact_manifest_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        checkpoint.id,
+        checkpoint.taskId,
+        checkpoint.threadId,
+        checkpoint.taskRevision,
+        checkpoint.reason,
+        checkpoint.agentSummary,
+        checkpoint.contextDigest,
+        JSON.stringify(checkpoint.taskSnapshot),
+        JSON.stringify(checkpoint.artifactManifest),
+        checkpoint.createdAt,
+      );
   }
 
   private bumpRevision(taskId: string, expectedRevision: number, updatedAt: string): void {

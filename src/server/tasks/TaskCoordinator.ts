@@ -185,6 +185,11 @@ type ReplacementWorkItemInput = {
   expectedOutputs?: string[];
 };
 
+type DeferredTerminalCommitHook = {
+  markDeferred: () => void;
+  onCommitted: (task: TaskRecord) => Promise<void> | void;
+};
+
 const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ["planning", "working", "cancelled", "failed"],
   planning: ["working", "blocked", "cancelled", "failed"],
@@ -596,14 +601,19 @@ export class TaskCoordinator {
     status: "completed" | "cancelled" | "failed";
     sessionId: string;
     run: () => Promise<TaskRecord>;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): TaskRecord {
+    input.deferredTerminalCommitHook?.markDeferred();
     const releasePendingLocks = registerPendingTerminalTaskLocks(input.task, input.status);
     void (async () => {
       try {
         await this.options.quiesceTaskThreads?.(input.task, input.status, {
           originSessionId: input.sessionId,
         });
-        await input.run();
+        const finalized = await input.run();
+        if (isTerminalTask(finalized) && finalized.status === input.status) {
+          await input.deferredTerminalCommitHook?.onCommitted(finalized);
+        }
       } catch {
         // The pending lock is released below so the task remains non-terminal
         // rather than advertising a terminal lifecycle state that was not
@@ -2007,6 +2017,7 @@ export class TaskCoordinator {
     expectedRevision: number;
     sessionId?: string;
     deferTerminalUntilOriginSettled?: boolean;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(current, input.expectedRevision);
@@ -2032,6 +2043,7 @@ export class TaskCoordinator {
           task: current,
           status: "completed",
           sessionId: input.sessionId,
+          deferredTerminalCommitHook: input.deferredTerminalCommitHook,
           run: async () => {
             const latest = this.requireTask(current.id, current.workspacePath);
             if (isTerminalTask(latest)) return latest;
@@ -2074,6 +2086,7 @@ export class TaskCoordinator {
         task: current,
         status: "completed",
         sessionId: input.sessionId,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
         run: async () => {
           const latest = this.requireTask(current.id, current.workspacePath);
           if (isTerminalTask(latest)) return latest;
@@ -2975,6 +2988,7 @@ export class TaskCoordinator {
     sessionId?: string;
     deferTerminalUntilOriginSettled?: boolean;
     validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
@@ -2986,6 +3000,7 @@ export class TaskCoordinator {
         expectedRevision,
         sessionId: input.sessionId,
         deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
       });
     }
     if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
@@ -3007,6 +3022,7 @@ export class TaskCoordinator {
         task,
         status: input.status,
         sessionId: input.sessionId,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
         run: async () => {
           const latest = this.requireTask(task.id, task.workspacePath);
           if (isTerminalTask(latest)) return latest;
@@ -3411,6 +3427,7 @@ export class TaskCoordinator {
     sessionId?: string;
     defaultPendingQuestions?: boolean;
     deferTerminalUntilOriginSettled?: boolean;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
@@ -3432,6 +3449,17 @@ export class TaskCoordinator {
     }
     const currentMaterial = await this.validateCompletionProposalTask(task);
     const settlementRevisionIds = this.pendingArtifactRevisionSettlementIds(task);
+    if (task.status === "awaiting_review" && settlementRevisionIds.length === 0) {
+      if (task.reviewRequired) return task;
+      return await this.acceptTaskLocked({
+        taskId: task.id,
+        workspacePath: task.workspacePath,
+        expectedRevision: task.revision,
+        sessionId: input.sessionId,
+        deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+      });
+    }
     if (settlementRevisionIds.length > 0) {
       if (
         !task.reviewRequired &&
@@ -3442,6 +3470,7 @@ export class TaskCoordinator {
           task,
           status: "completed",
           sessionId: input.sessionId,
+          deferredTerminalCommitHook: input.deferredTerminalCommitHook,
           run: async () => {
             const latest = this.requireTask(task.id, task.workspacePath);
             if (isTerminalTask(latest)) return latest;
@@ -3505,6 +3534,7 @@ export class TaskCoordinator {
       detail: input.caveats?.filter(Boolean).join("\n") || undefined,
       sessionId: input.sessionId,
       deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+      deferredTerminalCommitHook: input.deferredTerminalCommitHook,
       validateUpdatedTask: currentMaterial
         ? async (updatedTask) => {
             await this.assertLiveArtifactEvidenceUnchanged(updatedTask, currentMaterial);
@@ -3518,6 +3548,7 @@ export class TaskCoordinator {
       expectedRevision: ready.revision,
       sessionId: input.sessionId,
       deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+      deferredTerminalCommitHook: input.deferredTerminalCommitHook,
     });
   }
 
@@ -3534,40 +3565,7 @@ export class TaskCoordinator {
     let checkpoint: TaskCheckpoint;
     try {
       checkpoint = await this.options.sessionDb.createTaskCheckpoint(
-        {
-          id: crypto.randomUUID(),
-          taskId: task.id,
-          threadId: thread?.id ?? null,
-          taskRevision: task.revision,
-          reason: nonEmpty(reason, "Checkpoint reason"),
-          agentSummary,
-          contextDigest: JSON.stringify({
-            objective: task.objective,
-            status: task.status,
-            workItems: task.workItems.map((item) => ({
-              id: item.id,
-              title: item.title,
-              status: item.status,
-            })),
-            decisions: task.decisions
-              .filter((item) => item.status === "active")
-              .map((item) => ({ question: item.question, resolution: item.resolution })),
-            questions: task.questions
-              .filter((item) => item.status === "pending")
-              .map((item) => ({ question: item.question, blocking: item.blocking })),
-            blockers: task.blockers
-              .filter((item) => item.status === "active")
-              .map((item) => item.description),
-          }),
-          taskSnapshot: taskSnapshot(task),
-          artifactManifest: task.artifacts.map((item) => ({
-            id: item.id,
-            path: item.path,
-            title: item.title,
-            kind: item.kind,
-          })),
-          createdAt: nowIso(),
-        },
+        this.buildTaskCheckpoint(task, thread?.id ?? null, reason, agentSummary),
         { rejectTerminal: options?.allowTerminal !== true },
       );
     } catch (error) {
@@ -3575,11 +3573,57 @@ export class TaskCoordinator {
         return this.options.sessionDb.getTask(task.id);
       throw error;
     }
+    this.notifyTaskCheckpoint(task, checkpoint);
+    return this.options.sessionDb.getTask(task.id);
+  }
+
+  private buildTaskCheckpoint(
+    task: TaskRecord,
+    threadId: string | null,
+    reason: string,
+    agentSummary = "",
+  ): TaskCheckpoint {
+    return {
+      id: crypto.randomUUID(),
+      taskId: task.id,
+      threadId,
+      taskRevision: task.revision,
+      reason: nonEmpty(reason, "Checkpoint reason"),
+      agentSummary,
+      contextDigest: JSON.stringify({
+        objective: task.objective,
+        status: task.status,
+        workItems: task.workItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          status: item.status,
+        })),
+        decisions: task.decisions
+          .filter((item) => item.status === "active")
+          .map((item) => ({ question: item.question, resolution: item.resolution })),
+        questions: task.questions
+          .filter((item) => item.status === "pending")
+          .map((item) => ({ question: item.question, blocking: item.blocking })),
+        blockers: task.blockers
+          .filter((item) => item.status === "active")
+          .map((item) => item.description),
+      }),
+      taskSnapshot: taskSnapshot(task),
+      artifactManifest: task.artifacts.map((item) => ({
+        id: item.id,
+        path: item.path,
+        title: item.title,
+        kind: item.kind,
+      })),
+      createdAt: nowIso(),
+    };
+  }
+
+  private notifyTaskCheckpoint(task: TaskRecord, checkpoint: TaskCheckpoint): void {
     this.options.notify?.({
       method: "task/checkpointCreated",
       params: { cwd: task.workspacePath, taskId: task.id, checkpoint },
     });
-    return this.options.sessionDb.getTask(task.id);
   }
 
   async applyDirective(sessionId: string, directive: TaskDirective): Promise<TaskDirectiveResult> {
@@ -3621,6 +3665,41 @@ export class TaskCoordinator {
     };
     let updated: TaskRecord;
     let continuation: TaskDirectiveResult["continuation"] = "continue";
+    let directiveCommitDeferred = false;
+    const recordDirectiveReceipt = async (task: TaskRecord) => {
+      await this.options.sessionDb.recordTaskDirectiveReceipt(
+        current.id,
+        directive.idempotencyKey,
+        task.revision,
+        nowIso(),
+      );
+    };
+    const recordDeferredDirectiveCommit = async (task: TaskRecord) => {
+      const committedThread =
+        task.threads.find((candidate) => candidate.sessionId === sessionId) ?? null;
+      const checkpoint = this.buildTaskCheckpoint(
+        task,
+        committedThread?.id ?? null,
+        `directive ${directive.type}`,
+        "",
+      );
+      const createdCheckpoint =
+        await this.options.sessionDb.recordTaskDirectiveReceiptWithCheckpoint({
+          taskId: current.id,
+          idempotencyKey: directive.idempotencyKey,
+          resultRevision: task.revision,
+          receiptCreatedAt: nowIso(),
+          checkpoint,
+          checkpointOptions: { rejectTerminal: false },
+        });
+      if (createdCheckpoint) this.notifyTaskCheckpoint(task, createdCheckpoint);
+    };
+    const deferredTerminalCommitHook: DeferredTerminalCommitHook = {
+      markDeferred: () => {
+        directiveCommitDeferred = true;
+      },
+      onCommitted: recordDeferredDirectiveCommit,
+    };
     switch (directive.type) {
       case "update_plan": {
         updated = await this.updatePlanLocked({
@@ -3764,6 +3843,7 @@ export class TaskCoordinator {
           caveats: directive.caveats,
           sessionId,
           deferTerminalUntilOriginSettled: true,
+          deferredTerminalCommitHook,
         });
         break;
       case "create_thread":
@@ -3777,15 +3857,12 @@ export class TaskCoordinator {
         });
         break;
     }
-    await this.options.sessionDb.recordTaskDirectiveReceipt(
-      current.id,
-      directive.idempotencyKey,
-      updated.revision,
-      nowIso(),
-    );
-    await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
-      allowTerminal: true,
-    });
+    if (!directiveCommitDeferred) {
+      await recordDirectiveReceipt(updated);
+      await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
+        allowTerminal: true,
+      });
+    }
     return { task: this.withDirectiveReviewState(updated), continuation };
   }
 

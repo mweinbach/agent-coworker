@@ -1177,6 +1177,21 @@ export class SessionDb {
     );
   }
 
+  async recordTaskDirectiveReceiptWithCheckpoint(input: {
+    taskId: string;
+    idempotencyKey: string;
+    resultRevision: number;
+    receiptCreatedAt: string;
+    checkpoint: TaskCheckpoint;
+    checkpointOptions?: { rejectTerminal?: boolean };
+  }): Promise<TaskCheckpoint | null> {
+    return await this.writeCoordinator.runExclusive(
+      "record_task_directive_receipt_with_checkpoint",
+      async () => this.taskRepository.recordDirectiveReceiptWithCheckpoint(input),
+      { taskId: input.taskId },
+    );
+  }
+
   async persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): Promise<void> {
     await this.writeCoordinator.runExclusive(
       "persist_session_snapshot",

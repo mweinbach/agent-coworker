@@ -6,7 +6,7 @@ import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
-import type { TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
+import type { TaskCheckpoint, TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
 
 async function createHarness(
   options: {
@@ -4208,6 +4208,145 @@ describe("task mode persistence", () => {
         .get(task.id, harness.workspacePath)
         ?.activity.filter((item) => item.kind === "progress_reported");
       expect(progress).toHaveLength(1);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("records self-origin terminal directive receipts only after deferred terminal commit", async () => {
+    let allowQuiesce = false;
+    let quiesceCalls = 0;
+    const harness = await createHarness({
+      quiesceTaskThreads: async (_task, reason) => {
+        expect(reason).toBe("completed");
+        quiesceCalls += 1;
+        if (!allowQuiesce) throw new Error("settlement timeout");
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "task-session-1",
+        sourceSessionId: "source-chat-1",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: `deferred-receipt-${crypto.randomUUID()}`,
+          title: "Deferred receipt task",
+          objective: "Complete only after deferred terminal commit succeeds.",
+          context: "The self-origin terminal directive must not receipt before commit.",
+          requirements: [
+            { kind: "acceptance_criterion", text: "Terminal directive retries remain possible." },
+          ],
+          workItems: [{ key: "deliver", title: "Deliver" }],
+          reviewRequired: false,
+          reviewRounds: 0,
+        },
+      });
+      const workItem = created.task.workItems[0];
+      if (!workItem) throw new Error("Expected work item");
+      const marked = await harness.coordinator.applyDirective("task-session-1", {
+        type: "mark_work_item",
+        idempotencyKey: "deferred-receipt-mark",
+        expectedRevision: created.task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "The no-review delivery is complete.",
+      });
+      const proposalKey = "deferred-receipt-propose";
+      const proposeCheckpointNotifications = () =>
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/checkpointCreated" &&
+            (notification.params.checkpoint as TaskCheckpoint | undefined)?.reason ===
+              "directive propose_completion",
+        );
+
+      const first = await harness.coordinator.applyDirective("task-session-1", {
+        type: "propose_completion",
+        idempotencyKey: proposalKey,
+        expectedRevision: marked.task.revision,
+        summary: "Complete after deferred quiescence",
+      });
+      await flushAsyncWork();
+
+      expect(first.task.status).toBe("awaiting_review");
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)?.status).toBe(
+        "awaiting_review",
+      );
+      expect(harness.sessionDb.getTaskDirectiveReceipt(created.task.id, proposalKey)).toBeNull();
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "completed",
+        ),
+      ).toHaveLength(0);
+      expect(
+        harness.coordinator.get(created.task.id, harness.workspacePath)?.latestCheckpoint?.reason,
+      ).not.toBe("directive propose_completion");
+      expect(proposeCheckpointNotifications()).toHaveLength(0);
+
+      allowQuiesce = true;
+      const retry = await harness.coordinator.applyDirective("task-session-1", {
+        type: "propose_completion",
+        idempotencyKey: proposalKey,
+        expectedRevision: first.task.revision,
+        summary: "Retry completion after quiescence recovers",
+      });
+      expect(retry.task.status).toBe("awaiting_review");
+      expect(harness.sessionDb.getTaskDirectiveReceipt(created.task.id, proposalKey)).toBeNull();
+      expect(proposeCheckpointNotifications()).toHaveLength(0);
+
+      const completed = await expectSettlesWithin(
+        (async () => {
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            await flushAsyncWork();
+            const latest = harness.coordinator.get(created.task.id, harness.workspacePath);
+            if (latest?.status === "completed") return latest;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          throw new Error("deferred terminal commit did not complete");
+        })(),
+        1_000,
+        "deferred terminal commit",
+      );
+      const receipt = harness.sessionDb.getTaskDirectiveReceipt(created.task.id, proposalKey);
+      expect(receipt).toBe(completed.revision);
+      expect(quiesceCalls).toBe(3);
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "completed",
+        ),
+      ).toHaveLength(1);
+      const terminalCheckpoint =
+        harness.coordinator.get(created.task.id, harness.workspacePath)?.latestCheckpoint ?? null;
+      expect(terminalCheckpoint?.reason).toBe("directive propose_completion");
+      expect(terminalCheckpoint?.taskRevision).toBe(completed.revision);
+      expect(terminalCheckpoint?.taskSnapshot.status).toBe("completed");
+      expect(proposeCheckpointNotifications()).toHaveLength(1);
+
+      const replay = await harness.coordinator.applyDirective("task-session-1", {
+        type: "propose_completion",
+        idempotencyKey: proposalKey,
+        expectedRevision: first.task.revision,
+        summary: "Replay after completed commit",
+      });
+      expect(replay.task.status).toBe("completed");
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "completed",
+        ),
+      ).toHaveLength(1);
+      expect(harness.sessionDb.getTaskDirectiveReceipt(created.task.id, proposalKey)).toBe(
+        completed.revision,
+      );
+      expect(proposeCheckpointNotifications()).toHaveLength(1);
     } finally {
       harness.sessionDb.close();
     }

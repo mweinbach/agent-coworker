@@ -25,7 +25,11 @@ import {
   createUserContentMaterializationTransaction,
   type UserMessageContentBuildOptions,
 } from "./userMessageAttachments";
-import { isTaskLockAbortError, makeTaskLockAbortError } from "./userMessageTurnHelpers";
+import {
+  getTaskLockAbortSessionError,
+  isTaskLockAbortError,
+  makeTaskLockAbortError,
+} from "./userMessageTurnHelpers";
 
 const MAX_PENDING_STEER_COUNT = 32;
 
@@ -70,6 +74,7 @@ export type SteerCoordinatorDeps = {
   ) => Promise<string | Array<Record<string, unknown>>>;
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
   getTaskLock?: () => TaskLockError | null;
+  trackLiveSteerSettlement?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export type SteerCoordinator = {
@@ -144,10 +149,45 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     context.emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
-  const assertCanMaterializeSteerContent = () => {
-    if (emitTaskLockIfPresent() || context.state.abortController?.signal.aborted) {
-      throw makeTaskLockAbortError();
+  const admitSteerForTurn = (turnId: string): boolean => {
+    if (emitTaskLockIfPresent()) return false;
+    if (!context.state.running) {
+      context.emitError("validation_failed", "session", "No active turn to steer.");
+      return false;
     }
+    if (context.state.currentTurnId !== turnId) {
+      context.emitError("validation_failed", "session", "Active turn mismatch.");
+      return false;
+    }
+    if (!context.state.acceptingSteers) {
+      context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
+      return false;
+    }
+    return true;
+  };
+  const makeAssertCanMaterializeSteerContent = (opts?: { turnId?: string }) => {
+    return () => {
+      const taskLock = deps.getTaskLock?.() ?? null;
+      if (taskLock) {
+        throw makeTaskLockAbortError(taskLock.message, {
+          code: "task_locked",
+          source: "session",
+          message: taskLock.message,
+          data: taskLock.data,
+        });
+      }
+      const turnEnded =
+        opts?.turnId !== undefined &&
+        (!context.state.running || context.state.currentTurnId !== opts.turnId);
+      if (context.state.abortController?.signal.aborted || turnEnded) {
+        const message = "Turn was interrupted before the steer could be accepted.";
+        throw makeTaskLockAbortError(message, {
+          code: "validation_failed",
+          source: "session",
+          message,
+        });
+      }
+    };
   };
 
   const mergeReferencedPlugins = (incoming: ReferencedPluginContext[]) => {
@@ -218,54 +258,73 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       context.emitError(classified.code, classified.source, context.formatError(error));
       return;
     }
-    if (emitTaskLockIfPresent()) return;
+    if (!admitSteerForTurn(currentTurnId)) return;
     const activeSteerHandler = context.state.activeSteerHandler;
     if (activeSteerHandler) {
       const materialization = createUserContentMaterializationTransaction();
-      try {
-        const resolvedReferences = await resolveSteerReferences(references);
-        assertCanMaterializeSteerContent();
-        const content = await deps.buildUserMessageContent(text, attachments, inputParts, {
-          assertCanMaterialize: assertCanMaterializeSteerContent,
-          materialization,
-        });
-        const deliveryContent = prependReferenceContextToContent(
-          content,
-          renderSteerReferenceContext(resolvedReferences),
-        );
-        if (emitTaskLockIfPresent()) {
+      const assertCanMaterializeSteerContent = makeAssertCanMaterializeSteerContent({
+        turnId: currentTurnId,
+      });
+      const liveSteerTransaction = async () => {
+        try {
+          const resolvedReferences = await resolveSteerReferences(references);
+          assertCanMaterializeSteerContent();
+          const content = await deps.buildUserMessageContent(text, attachments, inputParts, {
+            assertCanMaterialize: assertCanMaterializeSteerContent,
+            materialization,
+          });
+          const deliveryContent = prependReferenceContextToContent(
+            content,
+            renderSteerReferenceContext(resolvedReferences),
+          );
+          assertCanMaterializeSteerContent();
+          await activeSteerHandler({
+            text,
+            expectedTurnId: currentTurnId,
+            content: deliveryContent,
+          });
+          // Persist the model-facing content (with any forced-skill text folded in)
+          // as plain text — accepted by all providers, unlike synthetic tool calls.
+          historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);
+          materialization.commit();
+          context.emit({
+            type: "user_message",
+            sessionId: context.id,
+            text: displayText,
+            ...(clientMessageId ? { clientMessageId } : {}),
+          });
+          mergeReferencedPlugins(resolvedReferences.plugins);
+          context.queuePersistSessionSnapshot("session.steer_committed");
+          context.emit({
+            type: "steer_accepted",
+            sessionId: context.id,
+            turnId: currentTurnId,
+            text,
+            ...(clientMessageId ? { clientMessageId } : {}),
+          });
+        } catch (error) {
           await materialization.rollback();
-          return;
+          const sessionError = getTaskLockAbortSessionError(error);
+          if (sessionError) {
+            context.emitError(
+              sessionError.code,
+              sessionError.source,
+              sessionError.message,
+              sessionError.data,
+            );
+          }
+          if (isTaskLockAbortError(error)) return;
+          const classified = deps.classifyTurnError(error);
+          context.emitError(classified.code, classified.source, context.formatError(error));
         }
-        await activeSteerHandler({ text, expectedTurnId: currentTurnId, content: deliveryContent });
-        // Persist the model-facing content (with any forced-skill text folded in)
-        // as plain text — accepted by all providers, unlike synthetic tool calls.
-        historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);
-        materialization.commit();
-        context.emit({
-          type: "user_message",
-          sessionId: context.id,
-          text: displayText,
-          ...(clientMessageId ? { clientMessageId } : {}),
-        });
-        mergeReferencedPlugins(resolvedReferences.plugins);
-        context.queuePersistSessionSnapshot("session.steer_committed");
-        context.emit({
-          type: "steer_accepted",
-          sessionId: context.id,
-          turnId: currentTurnId,
-          text,
-          ...(clientMessageId ? { clientMessageId } : {}),
-        });
-      } catch (error) {
-        await materialization.rollback();
-        if (isTaskLockAbortError(error)) return;
-        const classified = deps.classifyTurnError(error);
-        context.emitError(classified.code, classified.source, context.formatError(error));
+      };
+      if (deps.trackLiveSteerSettlement) {
+        await deps.trackLiveSteerSettlement(liveSteerTransaction);
+      } else {
+        await liveSteerTransaction();
       }
       return;
     }
-    if (emitTaskLockIfPresent()) return;
     const nextPendingSteerAttachmentBase64Size =
       context.state.pendingSteers.reduce(
         (total, steer) =>
@@ -320,6 +379,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     const steerMessages: ModelMessage[] = [];
     const pluginBatches: ReferencedPluginContext[][] = [];
     const materialization = createUserContentMaterializationTransaction();
+    const assertCanMaterializeSteerContent = makeAssertCanMaterializeSteerContent();
     try {
       for (const steer of drained) {
         const resolvedReferences = await resolveSteerReferences(steer.references);
@@ -339,12 +399,33 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       }
     } catch (error) {
       await materialization.rollback();
+      const sessionError = getTaskLockAbortSessionError(error);
+      if (sessionError) {
+        context.emitError(
+          sessionError.code,
+          sessionError.source,
+          sessionError.message,
+          sessionError.data,
+        );
+      }
       if (!isTaskLockAbortError(error)) throw error;
       context.state.pendingSteers.splice(0);
       return { messages: [], committedCount: 0 };
     }
-    if (emitTaskLockIfPresent()) {
+    try {
+      assertCanMaterializeSteerContent();
+    } catch (error) {
       await materialization.rollback();
+      const sessionError = getTaskLockAbortSessionError(error);
+      if (sessionError) {
+        context.emitError(
+          sessionError.code,
+          sessionError.source,
+          sessionError.message,
+          sessionError.data,
+        );
+      }
+      if (!isTaskLockAbortError(error)) throw error;
       context.state.pendingSteers.splice(0);
       return { messages: [], committedCount: 0 };
     }

@@ -36,6 +36,7 @@ import {
   type UserMessageAttachmentHelpers,
 } from "./userMessageAttachments";
 import {
+  getTaskLockAbortSessionError,
   isAbortLikeError,
   makeTaskLockAbortError,
   makeTurnId,
@@ -55,6 +56,7 @@ export type UserMessageTurnRunnerDeps = {
   buildUserMessageContent: UserMessageAttachmentHelpers["buildUserMessageContent"];
   validateUploadedFileAttachments: UserMessageAttachmentHelpers["validateUploadedFileAttachments"];
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
+  waitForLiveSteerSettlement?: () => Promise<void>;
   getA2uiSurfaceManager?: () => {
     applyUnknown: (
       value: unknown,
@@ -78,6 +80,25 @@ export type UserMessageTurnRunner = {
   ) => Promise<void>;
 };
 
+export type UserMessageTurnFinalizerCheckpoint = {
+  phase: "steer_admission_closed";
+  sessionId: string;
+  turnId: string;
+};
+
+type UserMessageTurnFinalizerCheckpointHook = (
+  checkpoint: UserMessageTurnFinalizerCheckpoint,
+) => void | Promise<void>;
+
+let userMessageTurnFinalizerCheckpointHook: UserMessageTurnFinalizerCheckpointHook | null = null;
+
+async function runUserMessageTurnFinalizerCheckpoint(
+  checkpoint: UserMessageTurnFinalizerCheckpoint,
+): Promise<void> {
+  const hook = userMessageTurnFinalizerCheckpointHook;
+  if (hook) await hook(checkpoint);
+}
+
 export function createUserMessageTurnRunner(
   deps: UserMessageTurnRunnerDeps,
 ): UserMessageTurnRunner {
@@ -94,6 +115,7 @@ export function createUserMessageTurnRunner(
     buildUserMessageContent,
     validateUploadedFileAttachments,
     onAdvancedMemoryChanged,
+    waitForLiveSteerSettlement,
     getA2uiSurfaceManager,
   } = deps;
 
@@ -131,13 +153,30 @@ export function createUserMessageTurnRunner(
     context.emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
-  const assertCanMaterializeUserContent = () => {
-    if (emitTaskLockIfPresent() || context.state.abortController?.signal.aborted) {
-      context.state.pendingSteers.splice(0);
-      context.state.currentTurnOutcome = "cancelled";
-      context.state.acceptingSteers = false;
-      throw makeTaskLockAbortError();
-    }
+  const makeAssertCanMaterializeUserContent = () => {
+    return () => {
+      const taskLock = getSessionTaskLock(context.deps.sessionDb, context.id);
+      const interrupted = context.state.abortController?.signal.aborted === true;
+      if (taskLock || interrupted) {
+        context.state.pendingSteers.splice(0);
+        context.state.currentTurnOutcome = "cancelled";
+        context.state.acceptingSteers = false;
+        if (taskLock) {
+          throw makeTaskLockAbortError(taskLock.message, {
+            code: "task_locked",
+            source: "session",
+            message: taskLock.message,
+            data: taskLock.data,
+          });
+        }
+        const message = "Turn was interrupted before it could be started.";
+        throw makeTaskLockAbortError(message, {
+          code: "validation_failed",
+          source: "session",
+          message,
+        });
+      }
+    };
   };
 
   const sendUserMessage = async (
@@ -242,6 +281,7 @@ export function createUserMessageTurnRunner(
       }
       const modelFacingText = skillInjectionText ? `${text}\n\n${skillInjectionText}` : text;
       const materialization = createUserContentMaterializationTransaction();
+      const assertCanMaterializeUserContent = makeAssertCanMaterializeUserContent();
       try {
         assertCanMaterializeUserContent();
         const userMessageContent = await buildUserMessageContent(
@@ -262,6 +302,15 @@ export function createUserMessageTurnRunner(
         materialization.commit();
       } catch (error) {
         await materialization.rollback();
+        const sessionError = getTaskLockAbortSessionError(error);
+        if (sessionError) {
+          context.emitError(
+            sessionError.code,
+            sessionError.source,
+            sessionError.message,
+            sessionError.data,
+          );
+        }
         throw error;
       }
       context.emit({
@@ -528,7 +577,23 @@ export function createUserMessageTurnRunner(
       persistAggregatedUsage();
       context.state.acceptingSteers = false;
       context.state.activeSteerHandler = null;
+      const pendingSteersRejected = context.state.pendingSteers.length > 0;
       context.state.pendingSteers.splice(0);
+      if (userMessageTurnFinalizerCheckpointHook) {
+        await runUserMessageTurnFinalizerCheckpoint({
+          phase: "steer_admission_closed",
+          sessionId: context.id,
+          turnId,
+        });
+      }
+      await waitForLiveSteerSettlement?.();
+      if (pendingSteersRejected) {
+        context.emitError(
+          "validation_failed",
+          "session",
+          "Active turn ended before pending steers could be accepted.",
+        );
+      }
       context.state.turnReferencedPlugins = undefined;
       if (turnAnnounced) {
         metadataManager.updateSessionInfo({
@@ -566,3 +631,20 @@ export function createUserMessageTurnRunner(
 
   return { sendUserMessage };
 }
+
+export const __internal = {
+  setUserMessageTurnFinalizerCheckpointHookForTests(
+    hook: UserMessageTurnFinalizerCheckpointHook | null,
+  ): () => void {
+    const previous = userMessageTurnFinalizerCheckpointHook;
+    userMessageTurnFinalizerCheckpointHook = hook;
+    return () => {
+      if (userMessageTurnFinalizerCheckpointHook === hook) {
+        userMessageTurnFinalizerCheckpointHook = previous;
+      }
+    };
+  },
+  resetUserMessageTurnFinalizerCheckpointHookForTests(): void {
+    userMessageTurnFinalizerCheckpointHook = null;
+  },
+};

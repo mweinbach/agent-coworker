@@ -410,6 +410,7 @@ describe("SteerCoordinator", () => {
 
   test("rolls back live steer inline attachments when the task lock closes after write", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "steer-live-rollback-"));
+    const uploadsDir = path.join(dir, "deep", "nested", "uploads");
     const events: Array<Record<string, unknown>> = [];
     const state = {
       allMessages: [],
@@ -423,7 +424,7 @@ describe("SteerCoordinator", () => {
         provider: "google",
         model: "gemini-3-flash-preview",
         workingDirectory: dir,
-        uploadsDirectory: path.join(dir, "uploads"),
+        uploadsDirectory: uploadsDir,
       },
     };
     const context = {
@@ -487,7 +488,8 @@ describe("SteerCoordinator", () => {
       expect(state.messages).toEqual([]);
       expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
       expect(events.filter((event) => event.type === "persist")).toHaveLength(0);
-      await expect(fs.readdir(path.join(dir, "uploads"))).rejects.toThrow();
+      await expect(fs.readdir(uploadsDir)).rejects.toThrow();
+      await expect(fs.stat(path.join(dir, "deep"))).rejects.toThrow();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -495,6 +497,7 @@ describe("SteerCoordinator", () => {
 
   test("rolls back queued steer inline attachments on a final task lock", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "steer-queued-rollback-"));
+    const uploadsDir = path.join(dir, "deep", "nested", "uploads");
     const events: Array<Record<string, unknown>> = [];
     const state = {
       allMessages: [],
@@ -525,7 +528,7 @@ describe("SteerCoordinator", () => {
         provider: "google",
         model: "gemini-3-flash-preview",
         workingDirectory: dir,
-        uploadsDirectory: path.join(dir, "uploads"),
+        uploadsDirectory: uploadsDir,
       },
     };
     const context = {
@@ -582,7 +585,8 @@ describe("SteerCoordinator", () => {
       expect(state.messages).toEqual([]);
       expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
       expect(events.filter((event) => event.type === "persist")).toHaveLength(0);
-      await expect(fs.readdir(path.join(dir, "uploads"))).rejects.toThrow();
+      await expect(fs.readdir(uploadsDir)).rejects.toThrow();
+      await expect(fs.stat(path.join(dir, "deep"))).rejects.toThrow();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

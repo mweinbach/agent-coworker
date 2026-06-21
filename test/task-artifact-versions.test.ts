@@ -3,11 +3,16 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { getSessionTaskLock } from "../src/server/session/taskLocks";
 import { SessionDb } from "../src/server/sessionDb";
 import { ArtifactVersionStore } from "../src/server/tasks/ArtifactVersionStore";
 import { ArtifactConflictError, TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
-import type { TaskRecord, TaskStatus } from "../src/shared/tasks";
+import type {
+  TaskArtifact,
+  TaskArtifactVersion,
+  TaskRecord,
+  TaskStatus,
+} from "../src/shared/tasks";
 
 const TERMINAL_TASK_STATUSES = [
   "completed",
@@ -220,31 +225,66 @@ async function createTaskWithArtifact(
     reviewRounds?: number;
     workItemId?: string;
     artifactFilename?: string;
+    sourceSessionId?: string;
   } = {},
 ) {
   const workItemId = options.workItemId ?? "deliver-report";
   const artifactPath = path.join(harness.workspacePath, options.artifactFilename ?? "report.md");
   await fs.writeFile(artifactPath, "version one\n");
-  let task = await harness.coordinator.create({
-    workspacePath: harness.workspacePath,
-    title: "Artifact review",
-    objective: "Produce and review a report.",
-    sessionId: `main-session-${crypto.randomUUID()}`,
-    reviewRequired: options.reviewRequired,
-    reviewRounds: options.reviewRounds,
-  });
-  task = await harness.coordinator.replaceWorkItems({
-    taskId: task.id,
-    workspacePath: harness.workspacePath,
-    expectedRevision: task.revision,
-    items: [
-      {
-        id: workItemId,
-        title: "Deliver report",
-        expectedOutputs: [path.basename(artifactPath)],
-      },
-    ],
-  });
+  let task =
+    options.sourceSessionId !== undefined
+      ? (
+          await harness.coordinator.createPlanned({
+            workspacePath: harness.workspacePath,
+            sessionId: `main-session-${crypto.randomUUID()}`,
+            sourceSessionId: options.sourceSessionId,
+            creationOrigin: "chat_tool",
+            workspaceDisposition: "existing_project",
+            creation: {
+              idempotencyKey: `artifact-review-${crypto.randomUUID()}`,
+              title: "Artifact review",
+              objective: "Produce and review a report.",
+              context: "Created by a source chat for read-isolation coverage.",
+              requirements: [],
+              workItems: [
+                {
+                  key: workItemId,
+                  title: "Deliver report",
+                  expectedOutputs: [path.basename(artifactPath)],
+                },
+              ],
+              decisions: [],
+              reviewRequired: options.reviewRequired,
+              reviewRounds: options.reviewRounds,
+            },
+          })
+        ).task
+      : await harness.coordinator.create({
+          workspacePath: harness.workspacePath,
+          title: "Artifact review",
+          objective: "Produce and review a report.",
+          sessionId: `main-session-${crypto.randomUUID()}`,
+          reviewRequired: options.reviewRequired,
+          reviewRounds: options.reviewRounds,
+        });
+  if (options.sourceSessionId === undefined) {
+    task = await harness.coordinator.replaceWorkItems({
+      taskId: task.id,
+      workspacePath: harness.workspacePath,
+      expectedRevision: task.revision,
+      items: [
+        {
+          id: workItemId,
+          title: "Deliver report",
+          expectedOutputs: [path.basename(artifactPath)],
+        },
+      ],
+    });
+  }
+  const linkedWorkItemId =
+    options.sourceSessionId === undefined
+      ? workItemId
+      : (task.workItems.find((item) => item.title === "Deliver report")?.id ?? workItemId);
   task = await harness.coordinator.registerArtifact({
     taskId: task.id,
     workspacePath: harness.workspacePath,
@@ -252,7 +292,7 @@ async function createTaskWithArtifact(
     path: artifactPath,
     title: "Report",
     kind: "markdown",
-    workItemId,
+    workItemId: linkedWorkItemId,
   });
   const artifact = task.artifacts[0];
   if (!artifact) throw new Error("Expected registered artifact");
@@ -263,6 +303,30 @@ async function createTaskWithArtifact(
   });
   if (!detail) throw new Error("Expected artifact detail");
   return { task, artifact, detail, artifactPath };
+}
+
+async function makeDraftArtifactVersion(input: {
+  harness: Pick<Awaited<ReturnType<typeof createHarness>>, "artifactStore">;
+  artifact: TaskArtifact;
+  artifactPath: string;
+  parentVersion: TaskArtifactVersion;
+  changeSummary: string;
+}): Promise<TaskArtifactVersion> {
+  const stored = await input.harness.artifactStore.captureFile(input.artifactPath);
+  return {
+    id: crypto.randomUUID(),
+    artifactId: input.artifact.id,
+    version: input.parentVersion.version + 1,
+    parentVersionId: input.parentVersion.id,
+    sha256: stored.sha256,
+    sizeBytes: stored.sizeBytes,
+    mediaType: "text/markdown",
+    createdBy: "test",
+    createdAt: new Date().toISOString(),
+    changeSummary: input.changeSummary,
+    provenance: {},
+    reviewStatus: "draft",
+  };
 }
 
 async function createTaskWithTwoArtifacts(
@@ -2098,6 +2162,179 @@ describe("task artifact versions", () => {
       harness.sessionDb.close();
     }
   });
+
+  for (const mode of ["preview", "finalize"] as const) {
+    for (const phase of ["prepare", "ready", "accepted"] as const) {
+      test(`${mode} artifact completion keeps concurrent reads committed while ${phase} validation awaits`, async () => {
+        const harness = await createHarness();
+        try {
+          const sourceSessionId = `source-${crypto.randomUUID()}`;
+          let { task, artifact, detail, artifactPath } = await createTaskWithArtifact(harness, {
+            reviewRequired: false,
+            sourceSessionId,
+          });
+          const parentVersion = detail.versions.at(-1);
+          if (!parentVersion) throw new Error("Expected initial artifact version");
+          if (task.status !== "working") {
+            task = await harness.coordinator.transition({
+              taskId: task.id,
+              workspacePath: harness.workspacePath,
+              expectedRevision: task.revision,
+              status: "working",
+              summary: "Start read-isolation artifact revision.",
+            });
+          }
+          const started = await harness.coordinator.startArtifactRevision({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            artifactId: artifact.id,
+            expectedRevision: task.revision,
+            instruction: "Revise report for committed-reader isolation.",
+          });
+          task = started.task;
+          await fs.writeFile(artifactPath, "version two for read isolation\n");
+          const version = await makeDraftArtifactVersion({
+            harness,
+            artifact,
+            artifactPath,
+            parentVersion,
+            changeSummary: "Read-isolation version",
+          });
+          const committedRevision = task.revision;
+          const committedVersionCount = detail.versions.length;
+          const threadSessionId = task.threads[0]?.sessionId;
+          if (!threadSessionId) throw new Error("Expected task thread session");
+          const reached = createDeferred<void>();
+          const release = createDeferred<void>();
+          const ownerSnapshots: TaskRecord[] = [];
+          let reachedResolved = false;
+          const maybePause = async (candidatePhase: typeof phase, callbackTask: TaskRecord) => {
+            if (candidatePhase !== phase) return;
+            ownerSnapshots.push(callbackTask);
+            ownerSnapshots.push(harness.sessionDb.getTask(task.id) ?? callbackTask);
+            if (!reachedResolved) {
+              reachedResolved = true;
+              reached.resolve();
+            }
+            await release.promise;
+          };
+          const prepareCompletion = async (preparedTask: TaskRecord) => {
+            await maybePause("prepare", preparedTask);
+            return {
+              ready: true as const,
+              validateReadyTask: async (readyTask: TaskRecord) => {
+                await maybePause("ready", readyTask);
+              },
+              validateAcceptedTask: async (acceptedTask: TaskRecord) => {
+                await maybePause("accepted", acceptedTask);
+              },
+            };
+          };
+
+          const operation =
+            mode === "preview"
+              ? harness.sessionDb.previewArtifactRevisionCompletionReadiness({
+                  taskId: task.id,
+                  revision: {
+                    outcome: "completed",
+                    revisionId: started.revision.id,
+                    version,
+                  },
+                  updatedAt: new Date().toISOString(),
+                  summary: "Preview read isolation",
+                  threadId: task.threads[0]?.id ?? null,
+                  reviewRequired: false,
+                  prepareCompletion,
+                })
+              : harness.sessionDb.finalizeArtifactRevisionAndProposeTaskCompletion({
+                  taskId: task.id,
+                  revision: {
+                    outcome: "completed",
+                    revisionId: started.revision.id,
+                    version,
+                  },
+                  updatedAt: new Date().toISOString(),
+                  summary: "Finalize read isolation",
+                  threadId: task.threads[0]?.id ?? null,
+                  settlementRevisionIds: [],
+                  reviewRequired: false,
+                  prepareCompletion,
+                });
+
+          await reached.promise;
+          const outsideTask = harness.sessionDb.getTask(task.id);
+          expect(outsideTask).toMatchObject({
+            id: task.id,
+            status: "working",
+            revision: committedRevision,
+          });
+          expect(harness.sessionDb.getTaskForThread(threadSessionId)).toMatchObject({
+            id: task.id,
+            status: "working",
+            revision: committedRevision,
+          });
+          expect(harness.sessionDb.getActiveTaskForSourceSession(sourceSessionId)).toMatchObject({
+            id: task.id,
+            status: "working",
+            revision: committedRevision,
+          });
+          expect(
+            harness.sessionDb.getTaskArtifactDetail(task.id, artifact.id)?.versions,
+          ).toHaveLength(committedVersionCount);
+          expect(harness.sessionDb.getTaskArtifactRevision(started.revision.id)).toMatchObject({
+            status: "active",
+          });
+          expect(getSessionTaskLock(harness.sessionDb, threadSessionId)).toBeNull();
+
+          const ownerTask = ownerSnapshots.at(-1);
+          expect(ownerTask?.revision).toBeGreaterThan(committedRevision);
+          if (phase === "prepare") {
+            expect(ownerTask?.status).toBe("working");
+            expect(
+              ownerTask?.workItems.find((item) => item.id === started.revision.workItemId)?.status,
+            ).toBe("review");
+          } else if (phase === "ready") {
+            expect(ownerTask?.status).toBe("awaiting_review");
+          } else {
+            expect(ownerTask?.status).toBe("completed");
+          }
+
+          release.resolve();
+          const result = await operation;
+          if (mode === "preview") {
+            expect(result).toEqual({ completion: "ready" });
+            expect(harness.sessionDb.getTask(task.id)).toMatchObject({
+              status: "working",
+              revision: committedRevision,
+            });
+            expect(
+              harness.sessionDb.getTaskArtifactDetail(task.id, artifact.id)?.versions,
+            ).toHaveLength(committedVersionCount);
+            expect(harness.sessionDb.getTaskArtifactRevision(started.revision.id)).toMatchObject({
+              status: "active",
+            });
+          } else {
+            expect(result.completion).toBe("committed");
+            expect(result.task).toMatchObject({ status: "completed" });
+            expect(harness.sessionDb.getTask(task.id)).toMatchObject({
+              status: "completed",
+              revision: result.task.revision,
+            });
+            expect(
+              harness.sessionDb.getTaskArtifactDetail(task.id, artifact.id)?.versions,
+            ).toHaveLength(committedVersionCount + 1);
+            expect(getSessionTaskLock(harness.sessionDb, threadSessionId)?.data).toMatchObject({
+              lockKind: "terminal_task_thread",
+              taskId: task.id,
+              taskStatus: "completed",
+            });
+          }
+        } finally {
+          harness.sessionDb.close();
+        }
+      });
+    }
+  }
 
   for (const terminalStatus of TERMINAL_TASK_STATUSES) {
     test(`closes active artifact revisions safely when the parent task becomes ${terminalStatus}`, async () => {

@@ -115,6 +115,7 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
+  loadAgentPromptImpl?: typeof loadAgentPromptFn;
   preloadSystemPrompt?: boolean;
   taskTerminalQuiesceTimeoutMs?: number;
 }
@@ -392,7 +393,7 @@ export async function createAgentServerRuntime(
     sessionDb,
     taskCoordinator: tasks,
     threadJournal,
-    loadAgentPrompt: lazyLoadAgentPrompt,
+    loadAgentPrompt: opts.loadAgentPromptImpl ?? lazyLoadAgentPrompt,
     setConfig: (nextConfig) => {
       config = nextConfig;
     },

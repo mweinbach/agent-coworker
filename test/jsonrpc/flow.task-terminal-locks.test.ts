@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { createRunTurn, type RunTurnParams } from "../../src/agent";
 import { JSONRPC_ERROR_CODES } from "../../src/server/jsonrpc/protocol";
+import { __internal as runUserMessageTurnInternal } from "../../src/server/session/turnExecution/runUserMessageTurn";
+import { __internal as attachmentMaterializationInternal } from "../../src/server/session/turnExecution/userMessageAttachments";
 import { startAgentServer } from "../../src/server/startServer";
 import type { TaskRecord, TaskStatus } from "../../src/shared/tasks";
 import {
@@ -277,6 +279,19 @@ async function expectTaskLocked(
   );
 }
 
+function expectInvalidRequest(
+  response: Awaited<ReturnType<JsonRpcConnection["sendRequest"]>>,
+  message: string,
+) {
+  expect(response.result).toBeUndefined();
+  expect(response.error).toEqual(
+    expect.objectContaining({
+      code: JSONRPC_ERROR_CODES.invalidRequest,
+      message: expect.stringContaining(message),
+    }),
+  );
+}
+
 describe("server JSON-RPC task terminal turn locks", () => {
   for (const status of TERMINAL_TASK_STATUSES) {
     test(`turn/start rejects ${status} task-owned threads with structured task_locked errors after restart`, async () => {
@@ -509,6 +524,123 @@ describe("server JSON-RPC task terminal turn locks", () => {
       expect(nonSourceRunCalls).toBe(nonSourceRunCallsBeforeAgentRoutes);
       rpc.close();
     } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("delayed source-chat agent spawn rechecks the source task lock before child work starts", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    let sourceThreadIdForProvider: string | null = null;
+    let promoteNextTurn = true;
+    let nonSourceRunCalls = 0;
+    let childRunCalls = 0;
+    const promptLoadEntered = Promise.withResolvers<void>();
+    const releasePromptLoad = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        loadAgentPromptImpl: (async () => {
+          promptLoadEntered.resolve();
+          await releasePromptLoad.promise;
+          return "Child system prompt";
+        }) as never,
+        runTurnImpl: (async (params: RunTurnParams) => {
+          if (params.agentRole) {
+            childRunCalls += 1;
+            return { text: "child response should not run", responseMessages: [] };
+          }
+          if (params.sessionId !== sourceThreadIdForProvider) {
+            nonSourceRunCalls += 1;
+            return { text: "task kickoff or child response", responseMessages: [] };
+          }
+          if (promoteNextTurn) {
+            promoteNextTurn = false;
+            const result = await params.createTask?.({
+              idempotencyKey: "source-spawn-toctou-lock",
+              title: "Source spawn TOCTOU lock",
+              objective: "Prove source-chat child spawn rechecks the task lock after awaits.",
+              context: "Created while a source-chat agent spawn is paused in prompt loading.",
+              requirements: [
+                {
+                  kind: "acceptance_criterion",
+                  text: "Delayed source-chat agent spawn cannot start child work after promotion.",
+                },
+              ],
+              workItems: [
+                {
+                  key: "verify",
+                  title: "Verify source spawn lock",
+                  expectedOutputs: ["source-spawn-toctou-lock.txt"],
+                },
+              ],
+              decisions: [],
+              reviewRequired: false,
+              reviewRounds: 0,
+            });
+            if (!result) throw new Error("createTask tool path was not registered");
+            return { text: "promotion complete", responseMessages: [] };
+          }
+          return { text: "source chat response", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const sourceThreadId = started.result.thread.id;
+      sourceThreadIdForProvider = sourceThreadId;
+
+      const spawn = rpc.sendRequest("cowork/session/agent/spawn", {
+        threadId: sourceThreadId,
+        message: "spawn is paused before it can start a child run",
+      });
+      await promptLoadEntered.promise;
+
+      const promotionTurn = await rpc.sendRequest("turn/start", {
+        threadId: sourceThreadId,
+        input: [{ type: "text", text: "promote while spawn is paused" }],
+      });
+      expect(promotionTurn.error).toBeUndefined();
+      const createdNotification = await rpc.waitFor((message) => message.method === "task/created");
+      const taskId = createdNotification.params.task.id;
+      await waitForTurnCompleted(rpc, sourceThreadId, promotionTurn.result.turn.id);
+
+      await expectTaskLocked(
+        await rpc.sendRequest("cowork/session/agent/input/send", {
+          threadId: sourceThreadId,
+          agentId: "not-started",
+          message: "probe source lock before delayed spawn resumes",
+        }),
+        "Chat is locked by active task",
+        {
+          lockKind: "active_source_chat",
+          taskId,
+          taskStatus: "working",
+          taskTitle: "Source spawn TOCTOU lock",
+        },
+      );
+
+      releasePromptLoad.resolve();
+      await expectTaskLocked(await spawn, "Chat is locked by active task", {
+        lockKind: "active_source_chat",
+        taskId,
+        taskStatus: "working",
+        taskTitle: "Source spawn TOCTOU lock",
+      });
+      expect(childRunCalls).toBe(0);
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            (message.method === "cowork/session/agentSpawned" ||
+              message.method === "cowork/session/agentStatus") &&
+            message.params.sessionId === sourceThreadId,
+          250,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+      rpc.close();
+    } finally {
+      releasePromptLoad.resolve();
       await stopTestServer(server);
     }
   }, 20_000);
@@ -1165,6 +1297,94 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const afterCancel = await readTask(rpc, tmpDir, created.id);
       expect(afterCancel.status).toBe("cancelled");
     } finally {
+      rpc.close();
+      await stopTestServer(running.server);
+    }
+  }, 20_000);
+
+  test("terminal quiescence blocks interrupt replacement child generations", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const replacementWritePath = path.join(tmpDir, "child-replacement-after-terminal.txt");
+    const childAgentId = Promise.withResolvers<string>();
+    const childStarted = Promise.withResolvers<AbortSignal | null>();
+    const releaseOldChild = Promise.withResolvers<void>();
+    const parentSpawnedChild = Promise.withResolvers<void>();
+    let childRuns = 0;
+    const runTurnImpl = (async (params: RunTurnParams) => {
+      if (params.agentRole) {
+        childRuns += 1;
+        if (params.sessionId) childAgentId.resolve(params.sessionId);
+        if (childRuns === 1) {
+          childStarted.resolve(params.abortSignal ?? null);
+          await releaseOldChild.promise;
+          return { text: "old child settled", responseMessages: [] };
+        }
+        await fs.writeFile(replacementWritePath, "replacement child should not run", "utf8");
+        return { text: "replacement child ran", responseMessages: [] };
+      }
+
+      if (!params.agentControl || !params.sessionId) {
+        throw new Error("Expected task thread run to receive agent control");
+      }
+      await params.agentControl.spawn({
+        parentSessionId: params.sessionId,
+        parentConfig: params.config,
+        message: "hold child turn for interrupt replacement race",
+        role: "worker",
+        contextMode: "none",
+        parentDepth: params.spawnDepth ?? 0,
+      });
+      parentSpawnedChild.resolve();
+      return { text: "parent spawned interrupt child", responseMessages: [] };
+    }) as never;
+    const running = await startAgentServer(
+      serverOpts(tmpDir, { runTurnImpl, taskTerminalQuiesceTimeoutMs: 500 }),
+    );
+    const rpc = await connectJsonRpc(running.url);
+
+    try {
+      const created = await createTask(rpc, tmpDir, "child-agent-interrupt-replacement");
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await parentSpawnedChild.promise;
+      const agentId = await childAgentId.promise;
+      const childSignal = await childStarted.promise;
+
+      const replacement = rpc.sendRequest("cowork/session/agent/input/send", {
+        threadId,
+        agentId,
+        message: "replacement generation must not start after terminal cancellation",
+        interrupt: true,
+      });
+      await waitForCondition(
+        () => childSignal?.aborted === true,
+        "interrupt send did not abort the old child turn",
+      );
+
+      const latest = await readTask(rpc, tmpDir, created.id);
+      const cancel = rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Cancel while interrupt replacement is waiting for the old child.",
+      });
+      await delay(75);
+      expect(await readTask(rpc, tmpDir, created.id)).toMatchObject({ status: "working" });
+
+      releaseOldChild.resolve();
+      await expectTaskLocked(await replacement, "finalizing cancelled", {
+        lockKind: "terminal_task_thread",
+        taskId: created.id,
+        taskStatus: "cancelled",
+      });
+      const cancelled = await cancel;
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      expect(childRuns).toBe(1);
+      await expect(fs.access(replacementWritePath)).rejects.toThrow();
+      rpc.close();
+    } finally {
+      releaseOldChild.resolve();
       rpc.close();
       await stopTestServer(running.server);
     }
@@ -2071,6 +2291,718 @@ describe("server JSON-RPC task terminal turn locks", () => {
       );
       rpc.close();
     } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("turn/start returns a cancellation outcome when interrupted during attachment materialization", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const uploadsDir = path.join(tmpDir, "deep", "nested", "uploads");
+    const materializationEntered = Promise.withResolvers<void>();
+    const releaseMaterialization = Promise.withResolvers<void>();
+    const restoreHook =
+      attachmentMaterializationInternal.setUserContentMaterializationCheckpointHookForTests(
+        async (checkpoint) => {
+          if (
+            checkpoint.phase === "inline_file_written" &&
+            checkpoint.filename === "interrupted.txt"
+          ) {
+            materializationEntered.resolve();
+            await releaseMaterialization.promise;
+          }
+        },
+      );
+    let providerCalls = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: { AGENT_UPLOADS_DIR: uploadsDir },
+        runTurnImpl: (async () => {
+          providerCalls += 1;
+          return { text: "provider should not run", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const threadId = started.result.thread.id;
+
+      const turnStart = rpc.sendRequest("turn/start", {
+        threadId,
+        input: [
+          {
+            type: "file",
+            filename: "interrupted.txt",
+            contentBase64: Buffer.from("pre-announcement input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+      });
+      await materializationEntered.promise;
+
+      const interrupted = await rpc.sendRequest("turn/interrupt", { threadId });
+      expect(interrupted.error).toBeUndefined();
+      releaseMaterialization.resolve();
+
+      expectInvalidRequest(await turnStart, "Turn was interrupted before it could be started.");
+      expect(providerCalls).toBe(0);
+      await expect(fs.readdir(uploadsDir)).rejects.toThrow();
+      await expect(fs.stat(path.join(tmpDir, "deep"))).rejects.toThrow();
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      expect(JSON.stringify(read.result)).not.toContain("pre-announcement input");
+      rpc.close();
+    } finally {
+      restoreHook();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("turn/steer returns a cancellation outcome when interrupted during live materialization", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const uploadsDir = path.join(tmpDir, "deep", "nested", "uploads");
+    const materializationEntered = Promise.withResolvers<void>();
+    const releaseMaterialization = Promise.withResolvers<void>();
+    const turnEntered = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    const restoreHook =
+      attachmentMaterializationInternal.setUserContentMaterializationCheckpointHookForTests(
+        async (checkpoint) => {
+          if (
+            checkpoint.phase === "inline_file_written" &&
+            checkpoint.filename === "steer-interrupted.txt"
+          ) {
+            materializationEntered.resolve();
+            await releaseMaterialization.promise;
+          }
+        },
+      );
+    let handlerCalls = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: { AGENT_UPLOADS_DIR: uploadsDir },
+        runTurnImpl: (async (params: RunTurnParams) => {
+          params.registerSteerHandler?.(async () => {
+            handlerCalls += 1;
+          });
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              releaseTurn.resolve();
+            },
+            { once: true },
+          );
+          turnEntered.resolve();
+          await releaseTurn.promise;
+          return { text: "interrupted", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const threadId = started.result.thread.id;
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start a steerable turn" }],
+      });
+      expect(turn.error).toBeUndefined();
+      const turnId = turn.result.turn.id;
+      await turnEntered.promise;
+
+      const steer = rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [
+          {
+            type: "file",
+            filename: "steer-interrupted.txt",
+            contentBase64: Buffer.from("live steer input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+      });
+      await materializationEntered.promise;
+
+      const interrupted = await rpc.sendRequest("turn/interrupt", { threadId });
+      expect(interrupted.error).toBeUndefined();
+      releaseMaterialization.resolve();
+
+      expectInvalidRequest(await steer, "Turn was interrupted before the steer could be accepted.");
+      await waitForTurnCompleted(rpc, threadId, turnId);
+      expect(handlerCalls).toBe(0);
+      await expect(fs.readdir(uploadsDir)).rejects.toThrow();
+      await expect(fs.stat(path.join(tmpDir, "deep"))).rejects.toThrow();
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      expect(JSON.stringify(read.result)).not.toContain("live steer input");
+      rpc.close();
+    } finally {
+      restoreHook();
+      releaseTurn.resolve();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("terminal cancellation waits for live steer materialization settlement before commit", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const uploadsDir = path.join(tmpDir, "deep", "nested", "uploads");
+    const materializationEntered = Promise.withResolvers<void>();
+    const releaseMaterialization = Promise.withResolvers<void>();
+    const turnEntered = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    const restoreHook =
+      attachmentMaterializationInternal.setUserContentMaterializationCheckpointHookForTests(
+        async (checkpoint) => {
+          if (
+            checkpoint.phase === "inline_file_written" &&
+            checkpoint.filename === "leased-steer.txt"
+          ) {
+            materializationEntered.resolve();
+            await releaseMaterialization.promise;
+          }
+        },
+      );
+    let runCalls = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: { AGENT_UPLOADS_DIR: uploadsDir },
+        runTurnImpl: (async (params: RunTurnParams) => {
+          runCalls += 1;
+          if (runCalls === 1) {
+            return { text: "task kickoff complete", responseMessages: [] };
+          }
+          params.registerSteerHandler?.(async () => {
+            throw new Error("materialization-blocked steer should not reach handler");
+          });
+          turnEntered.resolve();
+          await releaseTurn.promise;
+          return { text: "task turn released", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const task = await createTask(rpc, tmpDir, "live-steer-materialization-lease");
+      const threadId = task.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected task thread");
+      await waitForThreadReadToContain(rpc, threadId, "task kickoff complete");
+
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start live steer lease turn" }],
+      });
+      expect(turn.error).toBeUndefined();
+      const turnId = turn.result.turn.id;
+      await turnEntered.promise;
+
+      const steer = rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [
+          {
+            type: "file",
+            filename: "leased-steer.txt",
+            contentBase64: Buffer.from("leased live steer").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+      });
+      await materializationEntered.promise;
+
+      const latest = await readTask(rpc, tmpDir, task.id);
+      const cancel = rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Cancel while live steer materialization is admitted.",
+      });
+
+      await expectTaskLocked(
+        await rpc.sendRequest("turn/steer", {
+          threadId,
+          turnId,
+          input: [{ type: "text", text: "subsequent steer is rejected" }],
+        }),
+        "finalizing cancelled",
+        {
+          lockKind: "terminal_task_thread",
+          taskId: task.id,
+          taskStatus: "cancelled",
+        },
+      );
+      releaseTurn.resolve();
+      await delay(80);
+      expect(await readTask(rpc, tmpDir, task.id)).toMatchObject({ status: "working" });
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === task.id &&
+            message.params.task?.status === "cancelled",
+          80,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      releaseMaterialization.resolve();
+      await expectTaskLocked(await steer, "finalizing cancelled", {
+        lockKind: "terminal_task_thread",
+        taskId: task.id,
+        taskStatus: "cancelled",
+      });
+      const cancelled = await cancel;
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      await expect(fs.readdir(uploadsDir)).rejects.toThrow();
+      await expect(fs.stat(path.join(tmpDir, "deep"))).rejects.toThrow();
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      expect(JSON.stringify(read.result)).not.toContain("leased live steer");
+      rpc.close();
+    } finally {
+      restoreHook();
+      releaseTurn.resolve();
+      releaseMaterialization.resolve();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("terminal cancellation waits for live steer handler and local commit settlement", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const turnEntered = Promise.withResolvers<void>();
+    const handlerEntered = Promise.withResolvers<void>();
+    const releaseHandler = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    let runCalls = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          runCalls += 1;
+          if (runCalls === 1) {
+            return { text: "task kickoff complete", responseMessages: [] };
+          }
+          params.registerSteerHandler?.(async () => {
+            handlerEntered.resolve();
+            await releaseHandler.promise;
+          });
+          turnEntered.resolve();
+          await releaseTurn.promise;
+          return { text: "task turn released", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const task = await createTask(rpc, tmpDir, "live-steer-handler-lease");
+      const threadId = task.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected task thread");
+      await waitForThreadReadToContain(rpc, threadId, "task kickoff complete");
+
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start live handler lease turn" }],
+      });
+      expect(turn.error).toBeUndefined();
+      const turnId = turn.result.turn.id;
+      await turnEntered.promise;
+
+      const steer = rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "provider acknowledged steer" }],
+      });
+      await handlerEntered.promise;
+      const latest = await readTask(rpc, tmpDir, task.id);
+      const cancel = rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Cancel while a live steer handler is admitted.",
+      });
+      releaseTurn.resolve();
+      await delay(80);
+      expect(await readTask(rpc, tmpDir, task.id)).toMatchObject({ status: "working" });
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === task.id &&
+            message.params.task?.status === "cancelled",
+          80,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      releaseHandler.resolve();
+      const steerResult = await steer;
+      expect(steerResult.error).toBeUndefined();
+      expect(steerResult.result.turnId).toBe(turnId);
+      const cancelled = await cancel;
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      const serialized = JSON.stringify(read.result);
+      expect(serialized).toContain("provider acknowledged steer");
+      rpc.close();
+    } finally {
+      releaseTurn.resolve();
+      releaseHandler.resolve();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("turn/steer rechecks admission after attachment validation before queueing", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const validationEntered = Promise.withResolvers<void>();
+    const releaseValidation = Promise.withResolvers<void>();
+    const turnEntered = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    const finalizerClosed = Promise.withResolvers<void>();
+    const releaseFinalizer = Promise.withResolvers<void>();
+    const restoreAttachmentHook =
+      attachmentMaterializationInternal.setUserContentMaterializationCheckpointHookForTests(
+        async (checkpoint) => {
+          if (
+            checkpoint.phase === "attachments_validated" &&
+            checkpoint.filenames.includes("post-validation-orphan.txt")
+          ) {
+            validationEntered.resolve();
+            await releaseValidation.promise;
+          }
+        },
+      );
+    const restoreFinalizerHook =
+      runUserMessageTurnInternal.setUserMessageTurnFinalizerCheckpointHookForTests(
+        async (checkpoint) => {
+          if (checkpoint.phase === "steer_admission_closed") {
+            finalizerClosed.resolve();
+            await releaseFinalizer.promise;
+          }
+        },
+      );
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => {
+          turnEntered.resolve();
+          await releaseTurn.promise;
+          return { text: "turn finished before delayed steer admission", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const threadId = started.result.thread.id;
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start queued steer validation race" }],
+      });
+      expect(turn.error).toBeUndefined();
+      const turnId = turn.result.turn.id;
+      await turnEntered.promise;
+
+      const steer = rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [
+          {
+            type: "file",
+            filename: "post-validation-orphan.txt",
+            contentBase64: Buffer.from("stale steer after validation").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ],
+      });
+      await validationEntered.promise;
+      releaseTurn.resolve();
+      await finalizerClosed.promise;
+      releaseValidation.resolve();
+
+      expectInvalidRequest(await steer, "Active turn no longer accepts steering.");
+      releaseFinalizer.resolve();
+      await waitForTurnCompleted(rpc, threadId, turnId);
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      const serialized = JSON.stringify(read.result);
+      expect(serialized).not.toContain("stale steer after validation");
+      expect(serialized).not.toContain("post-validation-orphan.txt");
+      rpc.close();
+    } finally {
+      restoreAttachmentHook();
+      restoreFinalizerHook();
+      releaseTurn.resolve();
+      releaseValidation.resolve();
+      releaseFinalizer.resolve();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("turn finalizer rejects a second live steer while an admitted handler transaction settles", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const turnEntered = Promise.withResolvers<void>();
+    const handlerAEntered = Promise.withResolvers<void>();
+    const releaseHandlerA = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    const finalizerClosed = Promise.withResolvers<void>();
+    const releaseFinalizer = Promise.withResolvers<void>();
+    const restoreFinalizerHook =
+      runUserMessageTurnInternal.setUserMessageTurnFinalizerCheckpointHookForTests(
+        async (checkpoint) => {
+          if (checkpoint.phase === "steer_admission_closed") {
+            finalizerClosed.resolve();
+            await releaseFinalizer.promise;
+          }
+        },
+      );
+    let handlerBCalls = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          params.registerSteerHandler?.(async (steer) => {
+            if (steer.text === "admitted steer A") {
+              handlerAEntered.resolve();
+              await releaseHandlerA.promise;
+              return;
+            }
+            if (steer.text === "late steer B") {
+              handlerBCalls += 1;
+            }
+          });
+          turnEntered.resolve();
+          await releaseTurn.promise;
+          return { text: "provider turn finished", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const threadId = started.result.thread.id;
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start A/B live steer race" }],
+      });
+      expect(turn.error).toBeUndefined();
+      const turnId = turn.result.turn.id;
+      await turnEntered.promise;
+
+      const steerA = rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "admitted steer A" }],
+      });
+      await handlerAEntered.promise;
+      releaseTurn.resolve();
+      await finalizerClosed.promise;
+
+      expectInvalidRequest(
+        await rpc.sendRequest("turn/steer", {
+          threadId,
+          turnId,
+          input: [{ type: "text", text: "late steer B" }],
+        }),
+        "Active turn no longer accepts steering.",
+      );
+      expect(handlerBCalls).toBe(0);
+      releaseHandlerA.resolve();
+      await steerA;
+      releaseFinalizer.resolve();
+      await waitForTurnCompleted(rpc, threadId, turnId);
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      const serialized = JSON.stringify(read.result);
+      expect(serialized).toContain("admitted steer A");
+      expect(serialized).not.toContain("late steer B");
+      rpc.close();
+    } finally {
+      restoreFinalizerHook();
+      releaseTurn.resolve();
+      releaseHandlerA.resolve();
+      releaseFinalizer.resolve();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("turn finalizer rejects a second live steer after the provider unregisters its handler", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const turnEntered = Promise.withResolvers<void>();
+    const handlerAEntered = Promise.withResolvers<void>();
+    const releaseHandlerA = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    const finalizerClosed = Promise.withResolvers<void>();
+    const releaseFinalizer = Promise.withResolvers<void>();
+    const restoreFinalizerHook =
+      runUserMessageTurnInternal.setUserMessageTurnFinalizerCheckpointHookForTests(
+        async (checkpoint) => {
+          if (checkpoint.phase === "steer_admission_closed") {
+            finalizerClosed.resolve();
+            await releaseFinalizer.promise;
+          }
+        },
+      );
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          const unregister = params.registerSteerHandler?.(async (steer) => {
+            if (steer.text === "admitted steer before unregister") {
+              handlerAEntered.resolve();
+              await releaseHandlerA.promise;
+            }
+          });
+          turnEntered.resolve();
+          await releaseTurn.promise;
+          unregister?.();
+          return { text: "provider unregistered handler", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const threadId = started.result.thread.id;
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start handler unregister race" }],
+      });
+      expect(turn.error).toBeUndefined();
+      const turnId = turn.result.turn.id;
+      await turnEntered.promise;
+
+      const steerA = rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "admitted steer before unregister" }],
+      });
+      await handlerAEntered.promise;
+      releaseTurn.resolve();
+      await finalizerClosed.promise;
+
+      expectInvalidRequest(
+        await rpc.sendRequest("turn/steer", {
+          threadId,
+          turnId,
+          input: [{ type: "text", text: "late queued steer after unregister" }],
+        }),
+        "Active turn no longer accepts steering.",
+      );
+      releaseHandlerA.resolve();
+      await steerA;
+      releaseFinalizer.resolve();
+      await waitForTurnCompleted(rpc, threadId, turnId);
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      const serialized = JSON.stringify(read.result);
+      expect(serialized).toContain("admitted steer before unregister");
+      expect(serialized).not.toContain("late queued steer after unregister");
+      rpc.close();
+    } finally {
+      restoreFinalizerHook();
+      releaseTurn.resolve();
+      releaseHandlerA.resolve();
+      releaseFinalizer.resolve();
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("turn finalizer lets admitted live steer ACK resolve before deferred pending steer rejection", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const turnEntered = Promise.withResolvers<void>();
+    const releaseHandlerRegistration = Promise.withResolvers<void>();
+    const handlerRegistered = Promise.withResolvers<void>();
+    const handlerAEntered = Promise.withResolvers<void>();
+    const releaseHandlerA = Promise.withResolvers<void>();
+    const releaseProvider = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          turnEntered.resolve();
+          await releaseHandlerRegistration.promise;
+          const unregister = params.registerSteerHandler?.(async (steer) => {
+            if (steer.text === "live steer A") {
+              handlerAEntered.resolve();
+              await releaseHandlerA.promise;
+            }
+          });
+          handlerRegistered.resolve();
+          await releaseProvider.promise;
+          unregister?.();
+          throw new Error("provider exited after unregister");
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const threadId = started.result.thread.id;
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start deferred pending rejection race" }],
+      });
+      expect(turn.error).toBeUndefined();
+      const turnId = turn.result.turn.id;
+      await turnEntered.promise;
+
+      const queuedB = await rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "queued steer B before handler" }],
+      });
+      expect(queuedB.error).toBeUndefined();
+      expect(queuedB.result.turnId).toBe(turnId);
+
+      releaseHandlerRegistration.resolve();
+      await handlerRegistered.promise;
+      const steerA = rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "live steer A" }],
+      });
+      await handlerAEntered.promise;
+      releaseProvider.resolve();
+      releaseHandlerA.resolve();
+
+      const steerAResult = await steerA;
+      expect(steerAResult.error ?? steerAResult.result).toBeDefined();
+      if (steerAResult.error) {
+        expect(steerAResult.error.message).not.toBe(
+          "Active turn ended before pending steers could be accepted.",
+        );
+      } else {
+        expect(steerAResult.result.turnId).toBe(turnId);
+      }
+      await rpc.waitFor(
+        (message) =>
+          message.method === "item/started" &&
+          message.params.threadId === threadId &&
+          message.params.item?.type === "error" &&
+          message.params.item?.message ===
+            "Active turn ended before pending steers could be accepted.",
+      );
+      await waitForTurnCompleted(rpc, threadId, turnId);
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      const serialized = JSON.stringify(read.result);
+      expect(serialized).toContain("live steer A");
+      expect(serialized).not.toContain("queued steer B before handler");
+      rpc.close();
+    } finally {
+      releaseHandlerRegistration.resolve();
+      releaseProvider.resolve();
+      releaseHandlerA.resolve();
       await stopTestServer(server);
     }
   }, 20_000);

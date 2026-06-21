@@ -126,6 +126,7 @@ describe("AgentSession", () => {
 
     test("rolls back inline turn attachments when the task lock closes after write", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-"));
+      const uploadsDir = path.join(dir, "deep", "nested", "uploads");
       let taskLookupCount = 0;
       const sessionDb = {
         getActiveTaskForSourceSession: () => null,
@@ -143,7 +144,10 @@ describe("AgentSession", () => {
         persistSessionSnapshot: async () => {},
       };
       const { session, events } = makeSession({
-        config: makeConfig(dir),
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
         sessionDb: sessionDb as never,
       });
 
@@ -168,7 +172,57 @@ describe("AgentSession", () => {
         expect(events.some((event) => event.type === "user_message")).toBe(false);
         expect(events.some((event) => event.type === "session_busy")).toBe(false);
         expect(JSON.stringify((session as any).state.allMessages)).not.toContain("late input");
-        await expect(fs.readdir(path.join(dir, "uploads"))).rejects.toThrow();
+        await expect(fs.readdir(uploadsDir)).rejects.toThrow();
+        await expect(fs.stat(path.join(dir, "deep"))).rejects.toThrow();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("rolls back only newly-created nested upload directories", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-partial-"));
+      const preexistingDir = path.join(dir, "deep");
+      const uploadsDir = path.join(preexistingDir, "nested", "uploads");
+      await fs.mkdir(preexistingDir);
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount < 7
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+        sessionDb: sessionDb as never,
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-cancelled-content", undefined, [
+          {
+            filename: "late.txt",
+            contentBase64: Buffer.from("late input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ]);
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
+        const preexistingStat = await fs.stat(preexistingDir);
+        expect(preexistingStat.isDirectory()).toBe(true);
+        await expect(fs.stat(path.join(preexistingDir, "nested"))).rejects.toThrow();
+        await expect(fs.stat(uploadsDir)).rejects.toThrow();
       } finally {
         await fs.rm(dir, { recursive: true, force: true });
       }
@@ -234,6 +288,7 @@ describe("AgentSession", () => {
         );
         await expect(fs.stat(path.join(uploadsDir, "late_1.txt"))).rejects.toThrow();
         await expect(fs.stat(path.join(uploadsDir, "second.txt"))).rejects.toThrow();
+        await expect(fs.readdir(uploadsDir)).resolves.toEqual(["late.txt"]);
         expect(JSON.stringify((session as any).state.allMessages)).not.toContain("late input");
         expect(JSON.stringify((session as any).state.allMessages)).not.toContain("second input");
         expect(persistedReasons).toEqual([]);
@@ -2000,6 +2055,42 @@ describe("AgentSession", () => {
         clientMessageId: "msg-attachment",
       });
       await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("hello");
+    });
+
+    test("preserves newly-created nested upload directories after successful inline turn commit", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-nested-"));
+      const uploadsDir = path.join(dir, "deep", "nested", "uploads");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-attachment", undefined, [
+          {
+            filename: "photo.png",
+            contentBase64: "aGVsbG8=",
+            mimeType: "image/png",
+          },
+        ]);
+
+        const userEvt = events.find((e) => e.type === "user_message") as any;
+        expect(userEvt).toMatchObject({
+          text: "[photo.png]",
+          clientMessageId: "msg-attachment",
+        });
+        await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe(
+          "hello",
+        );
+        const uploadsStat = await fs.stat(uploadsDir);
+        expect(uploadsStat.isDirectory()).toBe(true);
+        const deepStat = await fs.stat(path.join(dir, "deep"));
+        expect(deepStat.isDirectory()).toBe(true);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     });
 
     test("keeps referenced skill context in ordered file turns", async () => {

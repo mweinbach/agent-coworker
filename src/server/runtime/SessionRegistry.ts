@@ -26,6 +26,7 @@ import type {
   SessionInfoState,
 } from "../session/SessionContext";
 import { SessionRuntime } from "../session/SessionRuntime";
+import { getSessionTaskLock } from "../session/taskLocks";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 import type { TaskCoordinator } from "../tasks/TaskCoordinator";
@@ -734,6 +735,22 @@ export class SessionRegistry {
       buildSession: (binding, persistedSessionId, overrides) =>
         this.buildSession(binding, persistedSessionId, overrides),
       loadAgentPrompt: this.options.loadAgentPrompt,
+      getParentTaskLock: (parentSessionId) =>
+        getSessionTaskLock(
+          {
+            getTaskForThread: (sessionId) => this.options.taskCoordinator.getForThread(sessionId),
+            getActiveTaskForSourceSession: (sessionId) =>
+              this.options.taskCoordinator.getActiveForSourceSession(sessionId),
+            getSessionRecord: (sessionId) => {
+              const liveParentSessionId =
+                this.sessionBindings.get(sessionId)?.runtime?.read.parentSessionId ?? null;
+              if (liveParentSessionId) return { parentSessionId: liveParentSessionId };
+              const persisted = this.options.sessionDb.getSessionRecord(sessionId);
+              return persisted ? { parentSessionId: persisted.parentSessionId } : null;
+            },
+          },
+          parentSessionId,
+        ),
       disposeBinding: (binding, reason) => this.disposeBinding(binding, reason),
       emitParentAgentStatus: (parentSessionId, agent) => {
         const parentBinding = this.sessionBindings.get(parentSessionId);

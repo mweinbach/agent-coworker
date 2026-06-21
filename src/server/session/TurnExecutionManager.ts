@@ -21,6 +21,7 @@ export class TurnExecutionManager {
   private readonly steerCoordinator: SteerCoordinator;
   private readonly userMessageTurnRunner: UserMessageTurnRunner;
   private activeTurnSettlement: Promise<void> | null = null;
+  private readonly activeSteerSettlements = new Set<Promise<void>>();
 
   constructor(
     private readonly context: SessionContext,
@@ -63,6 +64,7 @@ export class TurnExecutionManager {
       buildUserMessageContent: attachmentHelpers.buildUserMessageContent,
       classifyTurnError,
       getTaskLock: () => getSessionTaskLock(this.context.deps.sessionDb, this.context.id),
+      trackLiveSteerSettlement: async (operation) => await this.trackLiveSteerSettlement(operation),
     });
 
     this.userMessageTurnRunner = createUserMessageTurnRunner({
@@ -79,6 +81,7 @@ export class TurnExecutionManager {
       getA2uiSurfaceManager: this.deps.getA2uiSurfaceManager,
       triggerMemoryGeneration: this.deps.triggerMemoryGeneration,
       onAdvancedMemoryChanged: this.deps.onAdvancedMemoryChanged,
+      waitForLiveSteerSettlement: async () => await this.waitForLiveSteerSettlement(),
     });
   }
 
@@ -139,6 +142,21 @@ export class TurnExecutionManager {
       });
     this.activeTurnSettlement = trackedSettlement;
     return await turnPromise;
+  }
+
+  private trackLiveSteerSettlement<T>(operation: () => Promise<T>): Promise<T> {
+    const promise = Promise.resolve().then(operation);
+    let settlement!: Promise<void>;
+    settlement = promise
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        this.activeSteerSettlements.delete(settlement);
+      });
+    this.activeSteerSettlements.add(settlement);
+    return promise;
   }
 
   handleAskResponse(requestId: string, answer: string): boolean {
@@ -218,6 +236,30 @@ export class TurnExecutionManager {
     }
   }
 
+  private async waitForLiveSteerSettlement(timeoutMs?: number): Promise<void> {
+    const settlements = [...this.activeSteerSettlements];
+    if (settlements.length === 0) return;
+    if (timeoutMs === undefined) {
+      await Promise.allSettled(settlements);
+      return;
+    }
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      await Promise.race([
+        Promise.allSettled(settlements),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () =>
+              reject(new Error("Timed out waiting for live steer settlement after cancellation.")),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
   private async waitForChildAgentSettlement(
     settlement: Promise<void>,
     timeoutMs: number,
@@ -251,7 +293,10 @@ export class TurnExecutionManager {
     const childSettlement =
       opts?.includeSubagents === true ? this.cancelChildAgentSessions({ timeoutMs }) : null;
     this.cancelOwnTurn();
-    const waits = [this.waitForOwnTurnSettlement(timeoutMs)];
+    const waits = [
+      this.waitForOwnTurnSettlement(timeoutMs),
+      this.waitForLiveSteerSettlement(timeoutMs),
+    ];
     if (childSettlement) {
       waits.push(this.waitForChildAgentSettlement(childSettlement, timeoutMs));
     }

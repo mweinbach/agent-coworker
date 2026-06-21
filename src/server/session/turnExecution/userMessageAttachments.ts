@@ -225,16 +225,44 @@ export type UserMessageContentBuildOptions = {
   materialization?: UserContentMaterializationTransaction;
 };
 
+export type UserContentMaterializationCheckpoint =
+  | {
+      phase: "uploads_directory_ready";
+      path: string;
+    }
+  | {
+      phase: "inline_file_written";
+      path: string;
+      filename: string;
+    }
+  | {
+      phase: "attachments_validated";
+      filenames: string[];
+    };
+
+type UserContentMaterializationCheckpointHook = (
+  checkpoint: UserContentMaterializationCheckpoint,
+) => void | Promise<void>;
+
+let userContentMaterializationCheckpointHook: UserContentMaterializationCheckpointHook | null =
+  null;
+
+async function runUserContentMaterializationCheckpoint(
+  checkpoint: UserContentMaterializationCheckpoint,
+): Promise<void> {
+  await userContentMaterializationCheckpointHook?.(checkpoint);
+}
+
 export function createUserContentMaterializationTransaction(): UserContentMaterializationTransaction {
   const createdFiles: string[] = [];
-  const createdDirectories: string[] = [];
+  const createdDirectories = new Set<string>();
   let committed = false;
   return {
     trackCreatedFile: (filePath) => {
       if (!committed) createdFiles.push(filePath);
     },
     trackCreatedDirectory: (dirPath) => {
-      if (!committed) createdDirectories.push(dirPath);
+      if (!committed) createdDirectories.add(path.resolve(dirPath));
     },
     commit: () => {
       committed = true;
@@ -249,6 +277,50 @@ export function createUserContentMaterializationTransaction(): UserContentMateri
       }
     },
   };
+}
+
+async function directoryExists(dirPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(dirPath);
+    return stat.isDirectory();
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function getMissingDirectoryChain(dirPath: string): Promise<string[]> {
+  const missing: string[] = [];
+  let current = path.resolve(dirPath);
+
+  while (!(await directoryExists(current))) {
+    missing.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return missing.reverse();
+}
+
+async function ensureMaterializedDirectory(
+  dirPath: string,
+  materialization?: UserContentMaterializationTransaction,
+): Promise<void> {
+  for (const missingDir of await getMissingDirectoryChain(dirPath)) {
+    try {
+      await fs.mkdir(missingDir);
+      materialization?.trackCreatedDirectory(missingDir);
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "EEXIST") {
+        throw error;
+      }
+      const stat = await fs.stat(missingDir);
+      if (!stat.isDirectory()) {
+        throw error;
+      }
+    }
+  }
 }
 
 export function createUserMessageAttachmentHelpers(
@@ -328,10 +400,11 @@ export function createUserMessageAttachmentHelpers(
     const config = context.state.config;
     let resolvedUploadsDir = await resolveUploadsDirectory();
     assertCanMaterialize();
-    const firstCreatedUploadDir = await fs.mkdir(resolvedUploadsDir, { recursive: true });
-    if (firstCreatedUploadDir) {
-      materialization?.trackCreatedDirectory(path.resolve(firstCreatedUploadDir));
-    }
+    await ensureMaterializedDirectory(resolvedUploadsDir, materialization);
+    await runUserContentMaterializationCheckpoint({
+      phase: "uploads_directory_ready",
+      path: resolvedUploadsDir,
+    });
     resolvedUploadsDir = await resolveUploadsDirectory();
 
     const provider = config.provider;
@@ -441,6 +514,11 @@ export function createUserMessageAttachmentHelpers(
         } finally {
           await openedFile.close();
         }
+        await runUserContentMaterializationCheckpoint({
+          phase: "inline_file_written",
+          path: diskPath,
+          filename: finalName,
+        });
         assertCanMaterialize();
         contentReadPath = diskPath;
         multimodalData = decoded.toString("base64");
@@ -543,6 +621,12 @@ export function createUserMessageAttachmentHelpers(
 
     const uploadedAttachments = allAttachments.filter(isUploadedFileAttachment);
     if (uploadedAttachments.length === 0) {
+      if (allAttachments.length > 0) {
+        await runUserContentMaterializationCheckpoint({
+          phase: "attachments_validated",
+          filenames: allAttachments.map((attachment) => path.basename(attachment.filename)),
+        });
+      }
       return;
     }
 
@@ -570,6 +654,10 @@ export function createUserMessageAttachmentHelpers(
     if (validationMessage) {
       throw makeStructuredSessionError("validation_failed", validationMessage);
     }
+    await runUserContentMaterializationCheckpoint({
+      phase: "attachments_validated",
+      filenames: allAttachments.map((attachment) => path.basename(attachment.filename)),
+    });
   };
 
   return {
@@ -577,3 +665,20 @@ export function createUserMessageAttachmentHelpers(
     validateUploadedFileAttachments,
   };
 }
+
+export const __internal = {
+  setUserContentMaterializationCheckpointHookForTests(
+    hook: UserContentMaterializationCheckpointHook | null,
+  ): () => void {
+    const previous = userContentMaterializationCheckpointHook;
+    userContentMaterializationCheckpointHook = hook;
+    return () => {
+      if (userContentMaterializationCheckpointHook === hook) {
+        userContentMaterializationCheckpointHook = previous;
+      }
+    };
+  },
+  resetUserContentMaterializationCheckpointHookForTests(): void {
+    userContentMaterializationCheckpointHook = null;
+  },
+};

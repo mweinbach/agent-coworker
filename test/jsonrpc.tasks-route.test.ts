@@ -74,7 +74,6 @@ function makeHarness(
       retryStatus: "queued" | "steered" | "failed";
     }>;
     transition?: (input: unknown) => Promise<TaskRecord>;
-    prepareTerminalRouteLock?: (input: unknown) => { consumed: boolean; release: () => void };
     resolveQuestions?: (input: unknown) => Promise<{
       task: TaskRecord;
       resumeStatus: "queued" | "steered" | "not_needed" | "failed";
@@ -121,12 +120,6 @@ function makeHarness(
       get: () => task,
       updateBrief: overrides.updateBrief ?? (async () => task),
       transition: overrides.transition ?? (async () => task),
-      prepareTerminalRouteLock:
-        overrides.prepareTerminalRouteLock ??
-        (() => ({
-          consumed: false,
-          release: () => {},
-        })),
       retryTask:
         overrides.retryTask ??
         (async () => ({
@@ -269,23 +262,14 @@ describe("task JSON-RPC routes", () => {
     ]);
   });
 
-  test("task/cancel validates the workspace before publishing pending terminal locks", async () => {
-    const lockInputs: unknown[] = [];
-    const releaseCalls: unknown[] = [];
+  test("task/cancel validates the workspace before entering the coordinator transition", async () => {
+    const transitionInputs: unknown[] = [];
     const harness = makeHarness({
       resolveWorkspacePath: () => {
         throw new Error("task/cancel cwd must match an authorized project workspace");
       },
-      prepareTerminalRouteLock: (input) => {
-        lockInputs.push(input);
-        return {
-          consumed: false,
-          release: () => {
-            releaseCalls.push(input);
-          },
-        };
-      },
-      transition: async () => {
+      transition: async (input) => {
+        transitionInputs.push(input);
         throw new Error("transition should not run for an unauthorized workspace");
       },
     });
@@ -297,8 +281,7 @@ describe("task JSON-RPC routes", () => {
       reason: "wrong workspace",
     });
 
-    expect(lockInputs).toEqual([]);
-    expect(releaseCalls).toEqual([]);
+    expect(transitionInputs).toEqual([]);
     expect(harness.results).toEqual([]);
     expect(harness.errors).toEqual([
       {

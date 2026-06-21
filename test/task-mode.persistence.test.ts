@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
-import { getPendingTerminalTaskLock } from "../src/server/session/taskLocks";
+import { getPendingTerminalTaskLock, getSessionTaskLock } from "../src/server/session/taskLocks";
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
 import type { TaskCheckpoint, TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
@@ -1140,6 +1140,12 @@ describe("task mode persistence", () => {
     const pause = pauseNextTaskStatusWrite(harness);
     try {
       const created = await createWorkingTask(harness);
+      const taskSessionId = created.task.threads[0]?.sessionId;
+      const sourceSessionId = created.task.sourceSessionId;
+      if (!taskSessionId || !sourceSessionId) throw new Error("Expected task session bindings");
+      const childSessionId = "task-child-session-1";
+      const liveParentSessionId = (sessionId: string) =>
+        sessionId === childSessionId ? taskSessionId : null;
       const initialRevision = created.task.revision;
       const winningTransition = harness.coordinator.transition({
         taskId: created.task.id,
@@ -1158,6 +1164,23 @@ describe("task mode persistence", () => {
       });
       await flushAsyncWork();
       expect(getPendingTerminalTaskLock(created.task.id)).toBeNull();
+      expect(getSessionTaskLock(harness.sessionDb, taskSessionId)).toBeNull();
+      expect(getSessionTaskLock(harness.sessionDb, childSessionId, liveParentSessionId)).toBeNull();
+      expect(getSessionTaskLock(harness.sessionDb, sourceSessionId)?.data).toEqual({
+        category: "task_locked",
+        source: "session",
+        lockKind: "active_source_chat",
+        taskId: created.task.id,
+        taskStatus: "working",
+        taskTitle: created.task.title,
+      });
+      expect(
+        harness.notifications.some(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "cancelled",
+        ),
+      ).toBe(false);
 
       pause.release();
       const winner = await winningTransition;
@@ -1176,8 +1199,167 @@ describe("task mode persistence", () => {
       });
       expect(getPendingTerminalTaskLock(created.task.id)).toBeNull();
       expect(quiesced).toEqual([]);
+      expect(
+        harness.notifications.some(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "cancelled",
+        ),
+      ).toBe(false);
     } finally {
       pause.restore();
+      harness.sessionDb.close();
+    }
+  });
+
+  test("valid task/cancel publishes pending terminal locks only while owned quiescence runs", async () => {
+    const quiesceEntered = deferred();
+    const releaseQuiesce = deferred();
+    const harness = await createHarness({
+      quiesceTaskThreads: async (_task, reason) => {
+        expect(reason).toBe("cancelled");
+        quiesceEntered.resolve();
+        await releaseQuiesce.promise;
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const taskSessionId = created.task.threads[0]?.sessionId;
+      const sourceSessionId = created.task.sourceSessionId;
+      if (!taskSessionId || !sourceSessionId) throw new Error("Expected task session bindings");
+      const childSessionId = "task-child-session-2";
+      const liveParentSessionId = (sessionId: string) =>
+        sessionId === childSessionId ? taskSessionId : null;
+
+      const cancel = invokeTaskRoute(harness, "task/cancel", {
+        cwd: harness.workspacePath,
+        taskId: created.task.id,
+        expectedRevision: created.task.revision,
+        reason: "User stopped the task",
+      });
+      await quiesceEntered.promise;
+
+      expect(getPendingTerminalTaskLock(created.task.id)?.data).toEqual({
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: created.task.id,
+        taskStatus: "cancelled",
+      });
+      expect(getSessionTaskLock(harness.sessionDb, taskSessionId)?.data).toEqual({
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: created.task.id,
+        taskStatus: "cancelled",
+      });
+      expect(
+        getSessionTaskLock(harness.sessionDb, childSessionId, liveParentSessionId)?.data,
+      ).toEqual({
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: created.task.id,
+        taskStatus: "cancelled",
+      });
+      expect(getSessionTaskLock(harness.sessionDb, sourceSessionId)?.data).toEqual({
+        category: "task_locked",
+        source: "session",
+        lockKind: "active_source_chat",
+        taskId: created.task.id,
+        taskStatus: "cancelled",
+        taskTitle: created.task.title,
+      });
+      expect(
+        harness.notifications.some(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "cancelled",
+        ),
+      ).toBe(false);
+
+      releaseQuiesce.resolve();
+      const { errors, results } = await cancel;
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "cancelled" }),
+        }),
+      ]);
+      expect(getPendingTerminalTaskLock(created.task.id)).toBeNull();
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "cancelled",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      releaseQuiesce.resolve();
+      harness.sessionDb.close();
+    }
+  });
+
+  test("failed terminal quiescence releases pending locks without terminal side effects", async () => {
+    const harness = await createHarness({
+      quiesceTaskThreads: async () => {
+        throw new Error("quiesce failed before terminal commit");
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const taskSessionId = created.task.threads[0]?.sessionId;
+      const sourceSessionId = created.task.sourceSessionId;
+      if (!taskSessionId || !sourceSessionId) throw new Error("Expected task session bindings");
+      const childSessionId = "task-child-session-3";
+      const liveParentSessionId = (sessionId: string) =>
+        sessionId === childSessionId ? taskSessionId : null;
+
+      const { errors, results } = await invokeTaskRoute(harness, "task/cancel", {
+        cwd: harness.workspacePath,
+        taskId: created.task.id,
+        expectedRevision: created.task.revision,
+        reason: "User stopped the task",
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: "quiesce failed before terminal commit",
+        }),
+      ]);
+      expect(getPendingTerminalTaskLock(created.task.id)).toBeNull();
+      expect(getSessionTaskLock(harness.sessionDb, taskSessionId)).toBeNull();
+      expect(getSessionTaskLock(harness.sessionDb, childSessionId, liveParentSessionId)).toBeNull();
+      expect(getSessionTaskLock(harness.sessionDb, sourceSessionId)?.data).toEqual({
+        category: "task_locked",
+        source: "session",
+        lockKind: "active_source_chat",
+        taskId: created.task.id,
+        taskStatus: "working",
+        taskTitle: created.task.title,
+      });
+      expect(
+        harness.notifications.some(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "cancelled",
+        ),
+      ).toBe(false);
+
+      const recovered = await harness.coordinator.transition({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        status: "awaiting_review",
+        summary: "Recovered after failed quiescence",
+      });
+      expect(recovered.status).toBe("awaiting_review");
+    } finally {
       harness.sessionDb.close();
     }
   });

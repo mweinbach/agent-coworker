@@ -305,7 +305,9 @@ export function createCodexAppServerRuntime(): LlmRuntime {
             updatedAt: new Date().toISOString(),
           };
         }
-        const partialText = notificationRouter?.assistantText().trim();
+        const partialText = params.abortSignal?.aborted
+          ? ""
+          : notificationRouter?.assistantText().trim();
         if (partialText) {
           (contextualError as PartialTurnError).responseMessages = [
             { role: "assistant", content: partialText },

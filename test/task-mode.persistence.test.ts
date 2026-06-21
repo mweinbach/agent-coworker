@@ -869,6 +869,80 @@ describe("task mode persistence", () => {
     });
   }
 
+  test("direct task mutations wait behind pending terminal quiescence", async () => {
+    const quiesceEntered = deferred();
+    const releaseQuiesce = deferred();
+    const harness = await createHarness({
+      quiesceTaskThreads: async () => {
+        quiesceEntered.resolve();
+        await releaseQuiesce.promise;
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const workItem = created.task.workItems[0];
+      if (!workItem) throw new Error("Expected work item");
+      const terminalTransition = harness.coordinator.transition({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        status: "cancelled",
+        summary: "Cancel while direct mutations are racing",
+      });
+      await quiesceEntered.promise;
+
+      const staleMark = harness.coordinator.markWorkItem({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "This mutation must not win the terminal race.",
+      });
+      const staleDecision = harness.coordinator.recordDecision({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        question: "Can direct mutations bypass terminal quiescence?",
+        resolution: "No.",
+        source: "user",
+      });
+
+      await flushAsyncWork();
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)).toMatchObject({
+        status: "working",
+        revision: created.task.revision,
+      });
+
+      releaseQuiesce.resolve();
+      const cancelled = await terminalTransition;
+      const settled = await Promise.allSettled([staleMark, staleDecision]);
+
+      expect(cancelled.status).toBe("cancelled");
+      expect(settled).toEqual([
+        expect.objectContaining({ status: "rejected" }),
+        expect.objectContaining({ status: "rejected" }),
+      ]);
+      for (const result of settled) {
+        if (result.status !== "rejected") throw new Error("Expected stale mutation rejection");
+        expect(result.reason).toBeInstanceOf(Error);
+        expect((result.reason as Error).message).toBe(
+          `Task revision conflict: expected ${created.task.revision}, current ${cancelled.revision}`,
+        );
+      }
+      const latest = harness.coordinator.get(created.task.id, harness.workspacePath);
+      expect(latest?.status).toBe("cancelled");
+      expect(latest?.workItems.find((item) => item.id === workItem.id)).toMatchObject({
+        status: workItem.status,
+        completionEvidence: workItem.completionEvidence,
+      });
+      expect(latest?.decisions).toHaveLength(0);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("queued stale task/cancel returns a structured revision conflict", async () => {
     const quiesced: string[] = [];
     const harness = await createHarness({
@@ -2135,7 +2209,7 @@ describe("task mode persistence", () => {
             }),
           ],
         }),
-      ).rejects.toThrow("Work item is owned by another task thread");
+      ).rejects.toThrow(/Work item is owned by another task thread|Work item must be claimed/);
 
       const after = harness.coordinator.get(task.id, harness.workspacePath);
       expect(after).toMatchObject({ revision: terminal.revision });
@@ -4157,7 +4231,7 @@ describe("task mode persistence", () => {
     }
   });
 
-  test("completion rejects when material mutation wins a completion race", async () => {
+  test("completion serializes material mutation races through the task queue", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });
     try {
@@ -4171,15 +4245,27 @@ describe("task mode persistence", () => {
         summary: "Ready while a mutation races",
       });
       await pause.reached;
-      const mutated = await harness.coordinator.updateBrief({
+      const mutation = harness.coordinator.updateBrief({
         taskId: task.id,
         workspacePath: harness.workspacePath,
         expectedRevision: task.revision,
         objective: "Mutated while completion was waiting.",
       });
-      expect(mutated.revision).toBeGreaterThan(task.revision);
+      await flushAsyncWork();
+      await expect(
+        Promise.race([
+          mutation.then(
+            () => "settled",
+            () => "settled",
+          ),
+          new Promise((resolve) => setTimeout(() => resolve("pending"), 25)),
+        ]),
+      ).resolves.toBe("pending");
       pause.release();
-      await expect(completion).rejects.toThrow("revision conflict");
+      await expect(completion).resolves.toMatchObject({ status: "awaiting_review" });
+      await expect(mutation).rejects.toThrow(
+        `Task revision conflict: expected ${task.revision}, current ${task.revision + 1}`,
+      );
       pause.restore();
     } finally {
       harness.sessionDb.close();

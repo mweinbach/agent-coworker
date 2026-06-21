@@ -129,6 +129,16 @@ export function createUserMessageTurnRunner(
     context.emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
+  const makeAbortError = (): Error & { code: "ABORT_ERR" } =>
+    Object.assign(new Error("Cancelled by task lock"), { code: "ABORT_ERR" as const });
+  const assertCanMaterializeUserContent = () => {
+    if (emitTaskLockIfPresent() || context.state.abortController?.signal.aborted) {
+      context.state.pendingSteers.splice(0);
+      context.state.currentTurnOutcome = "cancelled";
+      context.state.acceptingSteers = false;
+      throw makeAbortError();
+    }
+  };
 
   const sendUserMessage = async (
     text: string,
@@ -222,12 +232,6 @@ export function createUserMessageTurnRunner(
     });
     try {
       context.emit({
-        type: "user_message",
-        sessionId: context.id,
-        text: visibleText,
-        clientMessageId,
-      });
-      context.emit({
         type: "session_busy",
         sessionId: context.id,
         busy: true,
@@ -266,12 +270,21 @@ export function createUserMessageTurnRunner(
         }
       }
       const modelFacingText = skillInjectionText ? `${text}\n\n${skillInjectionText}` : text;
+      assertCanMaterializeUserContent();
       const userMessageContent = await buildUserMessageContent(
         modelFacingText,
         attachments,
         inputParts,
+        { assertCanMaterialize: assertCanMaterializeUserContent },
       );
+      assertCanMaterializeUserContent();
       historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
+      context.emit({
+        type: "user_message",
+        sessionId: context.id,
+        text: visibleText,
+        clientMessageId,
+      });
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;

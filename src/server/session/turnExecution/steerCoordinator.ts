@@ -61,6 +61,7 @@ export type SteerCoordinatorDeps = {
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    options?: { assertCanMaterialize?: () => void },
   ) => Promise<string | Array<Record<string, unknown>>>;
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
   getTaskLock?: () => TaskLockError | null;
@@ -138,6 +139,17 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     context.emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
+  const makeTaskLockAbortError = (): Error & { code: "ABORT_ERR" } =>
+    Object.assign(new Error("Cancelled by task lock"), { code: "ABORT_ERR" as const });
+  const isTaskLockAbortError = (error: unknown): boolean =>
+    error instanceof Error &&
+    (error.message === "Cancelled by task lock" ||
+      (error as { code?: unknown }).code === "ABORT_ERR");
+  const assertCanMaterializeSteerContent = () => {
+    if (emitTaskLockIfPresent() || context.state.abortController?.signal.aborted) {
+      throw makeTaskLockAbortError();
+    }
+  };
 
   const mergeReferencedPlugins = (incoming: ReferencedPluginContext[]) => {
     if (incoming.length === 0) return;
@@ -211,8 +223,11 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     const activeSteerHandler = context.state.activeSteerHandler;
     if (activeSteerHandler) {
       try {
-        const content = await deps.buildUserMessageContent(text, attachments, inputParts);
         const resolvedReferences = await resolveSteerReferences(references);
+        assertCanMaterializeSteerContent();
+        const content = await deps.buildUserMessageContent(text, attachments, inputParts, {
+          assertCanMaterialize: assertCanMaterializeSteerContent,
+        });
         const deliveryContent = prependReferenceContextToContent(
           content,
           renderSteerReferenceContext(resolvedReferences),
@@ -239,6 +254,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
           ...(clientMessageId ? { clientMessageId } : {}),
         });
       } catch (error) {
+        if (isTaskLockAbortError(error)) return;
         const classified = deps.classifyTurnError(error);
         context.emitError(classified.code, classified.source, context.formatError(error));
       }
@@ -298,19 +314,27 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
 
     const steerMessages: ModelMessage[] = [];
     const pluginBatches: ReferencedPluginContext[][] = [];
-    for (const steer of drained) {
-      const resolvedReferences = await resolveSteerReferences(steer.references);
-      pluginBatches.push(resolvedReferences.plugins);
-      const referenceContext = renderSteerReferenceContext(resolvedReferences);
-      let content: ModelMessage["content"] = await deps.buildUserMessageContent(
-        steer.text,
-        steer.attachments,
-        steer.inputParts,
-      );
-      if (referenceContext) {
-        content = prependReferenceContextToContent(content, referenceContext);
+    try {
+      for (const steer of drained) {
+        const resolvedReferences = await resolveSteerReferences(steer.references);
+        assertCanMaterializeSteerContent();
+        pluginBatches.push(resolvedReferences.plugins);
+        const referenceContext = renderSteerReferenceContext(resolvedReferences);
+        let content: ModelMessage["content"] = await deps.buildUserMessageContent(
+          steer.text,
+          steer.attachments,
+          steer.inputParts,
+          { assertCanMaterialize: assertCanMaterializeSteerContent },
+        );
+        if (referenceContext) {
+          content = prependReferenceContextToContent(content, referenceContext);
+        }
+        steerMessages.push({ role: "user", content });
       }
-      steerMessages.push({ role: "user", content });
+    } catch (error) {
+      if (!isTaskLockAbortError(error)) throw error;
+      context.state.pendingSteers.splice(0);
+      return { messages: [], committedCount: 0 };
     }
     if (emitTaskLockIfPresent()) {
       context.state.pendingSteers.splice(0);

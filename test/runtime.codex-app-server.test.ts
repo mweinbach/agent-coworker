@@ -1252,6 +1252,134 @@ rl.on("line", (line) => {
     );
   }
 
+  test.serial("does not attach partial assistant text after Codex turn abort", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-abort-partial-"));
+    const abortController = new AbortController();
+    const notificationListeners = new Set<(notification: Record<string, unknown>) => void>();
+    const rawListeners = new Set<(message: Record<string, unknown>) => void>();
+    let interrupted = false;
+
+    const emitNotification = (notification: Record<string, unknown>) => {
+      for (const listener of rawListeners) {
+        listener({ direction: "server_notification", message: notification });
+      }
+      for (const listener of notificationListeners) listener(notification);
+    };
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => ({
+      command: { command: "mock-codex-app-server", args: [], source: "override" },
+      isClosed: () => false,
+      getLastCloseInfo: () => null,
+      request: async (method: string, params?: unknown) => {
+        if (method === "initialize") return { userAgent: "mock" };
+        if (method === "model/list") {
+          return {
+            data: [{ id: "gpt-5.4", model: "gpt-5.4", displayName: "GPT-5.4", isDefault: true }],
+            nextCursor: null,
+          };
+        }
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread_1", modelProvider: "openai", turns: [] },
+            model: "gpt-5.4",
+            modelProvider: "openai",
+            cwd: dir,
+          };
+        }
+        if (method === "turn/start") {
+          const threadId = (params as { threadId?: string } | undefined)?.threadId ?? "thread_1";
+          const turnId = "turn_partial";
+          queueMicrotask(() => {
+            emitNotification({
+              method: "item/started",
+              params: {
+                threadId,
+                turnId,
+                item: {
+                  type: "agentMessage",
+                  id: "item_partial",
+                  text: "",
+                  phase: null,
+                  memoryCitation: null,
+                },
+              },
+            });
+            emitNotification({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId,
+                turnId,
+                itemId: "item_partial",
+                delta: "partial text must not reach history",
+              },
+            });
+            abortController.abort();
+            emitNotification({
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: {
+                  id: turnId,
+                  threadId,
+                  status: "completed",
+                  items: [
+                    {
+                      type: "agentMessage",
+                      id: "item_partial",
+                      text: "partial text must not reach history",
+                    },
+                  ],
+                  error: null,
+                },
+              },
+            });
+          });
+          return { turn: { id: turnId, status: "inProgress", items: [], error: null } };
+        }
+        return {};
+      },
+      notify: () => {},
+      interruptTurn: async () => {
+        interrupted = true;
+      },
+      onNotification: (listener: (notification: Record<string, unknown>) => void) => {
+        notificationListeners.add(listener);
+        return () => notificationListeners.delete(listener);
+      },
+      onServerRequest: () => () => {},
+      onJsonRpcMessage: (listener: (message: Record<string, unknown>) => void) => {
+        rawListeners.add(listener);
+        return () => rawListeners.delete(listener);
+      },
+      onClose: () => () => {},
+      close: async () => {},
+    }));
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      let caught: unknown;
+      try {
+        await runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Abort after partial" }],
+          tools: {},
+          maxSteps: 1,
+          abortSignal: abortController.signal,
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain("Cancelled by user");
+      expect((caught as { responseMessages?: unknown }).responseMessages).toBeUndefined();
+      expect(interrupted).toBe(true);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("declines native Codex approvals when the lifecycle mutation gate is closed", async () => {
     let approvals = 0;
     const response = await handleServerRequest(

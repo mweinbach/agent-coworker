@@ -208,6 +208,7 @@ export type UserMessageAttachmentHelpers = {
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    options?: { assertCanMaterialize?: () => void },
   ) => Promise<string | Array<Record<string, unknown>>>;
   validateUploadedFileAttachments: (attachments?: readonly FileAttachment[]) => Promise<void>;
 };
@@ -277,13 +278,17 @@ export function createUserMessageAttachmentHelpers(
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    options?: { assertCanMaterialize?: () => void },
   ): Promise<string | Array<Record<string, unknown>>> => {
+    const assertCanMaterialize = options?.assertCanMaterialize ?? (() => {});
+    assertCanMaterialize();
     if (!attachments || attachments.length === 0) {
       return text;
     }
 
     const config = context.state.config;
     let resolvedUploadsDir = await resolveUploadsDirectory();
+    assertCanMaterialize();
     await fs.mkdir(resolvedUploadsDir, { recursive: true });
     resolvedUploadsDir = await resolveUploadsDirectory();
 
@@ -380,6 +385,7 @@ export function createUserMessageAttachmentHelpers(
             `Invalid base64 attachment: ${safeName}`,
           );
         }
+        assertCanMaterialize();
         await fs.writeFile(diskPath, decoded);
         contentReadPath = diskPath;
         multimodalData = decoded.toString("base64");
@@ -421,6 +427,7 @@ export function createUserMessageAttachmentHelpers(
       }
 
       if (!multimodalData && contentPartType) {
+        assertCanMaterialize();
         multimodalData = (await fs.readFile(contentReadPath)).toString("base64");
       }
 

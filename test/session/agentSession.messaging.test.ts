@@ -124,6 +124,55 @@ describe("AgentSession", () => {
       );
     });
 
+    test("rechecks task locks before materializing turn content attachments", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-"));
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount <= 2
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+        sessionDb: sessionDb as never,
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-cancelled-content", undefined, [
+          {
+            filename: "late.txt",
+            contentBase64: Buffer.from("late input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ]);
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+            message:
+              "Task task-cancelled is cancelled and cannot accept new turns until it is reopened or retried.",
+          }),
+        );
+        expect(events.some((event) => event.type === "user_message")).toBe(false);
+        expect(JSON.stringify((session as any).state.allMessages)).not.toContain("late input");
+        await expect(fs.readdir(path.join(dir, "uploads"))).rejects.toThrow();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
     for (const status of TERMINAL_TASK_STATUSES) {
       test(`locks ${status} task threads against new user turns`, async () => {
         const { session, events } = makeSession({

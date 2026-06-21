@@ -896,7 +896,7 @@ export class TaskCoordinator {
     };
     let updated = await this.options.sessionDb.addTaskThread(thread, input.expectedRevision);
     if (workItemId) {
-      updated = await this.claimWorkItem({
+      updated = await this.claimWorkItemLocked({
         taskId: task.id,
         workspacePath: task.workspacePath,
         workItemId,
@@ -909,6 +909,25 @@ export class TaskCoordinator {
   }
 
   async updateBrief(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    title?: string;
+    objective?: string;
+    requirements?: Array<{
+      kind: TaskRequirementKind;
+      text: string;
+      permanence?: "fixed" | "temporary";
+      source?: "user" | "agent" | "policy";
+    }>;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.updateBriefLocked(input),
+    );
+  }
+
+  private async updateBriefLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -941,6 +960,18 @@ export class TaskCoordinator {
   }
 
   async replaceWorkItems(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    items: ReplacementWorkItemInput[];
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.replaceWorkItemsLocked(input),
+    );
+  }
+
+  private async replaceWorkItemsLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -1158,6 +1189,19 @@ export class TaskCoordinator {
     threadId: string;
     expectedRevision: number;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.claimWorkItemLocked(input),
+    );
+  }
+
+  private async claimWorkItemLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    workItemId: string;
+    threadId: string;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1176,6 +1220,21 @@ export class TaskCoordinator {
   }
 
   async markWorkItem(input: {
+    taskId: string;
+    workspacePath: string;
+    workItemId: string;
+    expectedRevision: number;
+    status: WorkItemStatus;
+    completionEvidence?: string;
+    threadId?: string | null;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.markWorkItemLocked(input),
+    );
+  }
+
+  private async markWorkItemLocked(input: {
     taskId: string;
     workspacePath: string;
     workItemId: string;
@@ -1224,6 +1283,23 @@ export class TaskCoordinator {
     confidence?: number;
     supersedes?: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.recordDecisionLocked(input),
+    );
+  }
+
+  private async recordDecisionLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    question: string;
+    resolution: string;
+    source: "user" | "agent" | "policy";
+    scope?: "task" | "project";
+    confidence?: number;
+    supersedes?: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1253,6 +1329,19 @@ export class TaskCoordinator {
   }
 
   async requestInput(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    sessionId: string;
+    questions: Extract<TaskDirective, { type: "request_input" }>["questions"];
+  }): Promise<TaskDirectiveResult> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.requestInputLocked(input),
+    );
+  }
+
+  private async requestInputLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -1391,6 +1480,18 @@ export class TaskCoordinator {
     expectedRevision: number;
     answers: TaskQuestionAnswerInput[];
   }): Promise<{ task: TaskRecord; resumeStatus: TaskQuestionResumeStatus }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.resolveQuestionsLocked(input),
+    );
+  }
+
+  private async resolveQuestionsLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    answers: TaskQuestionAnswerInput[];
+  }): Promise<{ task: TaskRecord; resumeStatus: TaskQuestionResumeStatus }> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1510,6 +1611,20 @@ export class TaskCoordinator {
   }
 
   async reportProgress(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    summary: string;
+    detail?: string;
+    workItemId?: string;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.reportProgressLocked(input),
+    );
+  }
+
+  private async reportProgressLocked(input: {
     taskId: string;
     workspacePath: string;
     sessionId?: string;
@@ -1814,6 +1929,20 @@ export class TaskCoordinator {
     expectedSha256?: string;
     createdBy?: string;
   }): Promise<TaskArtifactDetail> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.ensureArtifactBaselineLocked(input),
+    );
+  }
+
+  private async ensureArtifactBaselineLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    artifactId: string;
+    expectedRevision: number;
+    expectedSha256?: string;
+    createdBy?: string;
+  }): Promise<TaskArtifactDetail> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     const detail = this.requireArtifactDetail(input);
     if (detail.versions.length > 0) return detail;
@@ -1864,7 +1993,7 @@ export class TaskCoordinator {
     assertTaskAcceptsMutation(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
-      detail = await this.ensureArtifactBaseline({
+      detail = await this.ensureArtifactBaselineLocked({
         ...input,
         createdBy: input.createdBy,
       });
@@ -2122,12 +2251,24 @@ export class TaskCoordinator {
     expectedRevision: number;
     feedback: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.requestChangesLocked(input),
+    );
+  }
+
+  private async requestChangesLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    feedback: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     if (task.status !== "awaiting_review") {
       throw new Error("Task must be awaiting review before changes can be requested");
     }
-    return await this.transition({
+    return await this.transitionLocked({
       taskId: task.id,
       workspacePath: task.workspacePath,
       expectedRevision: input.expectedRevision,
@@ -2138,6 +2279,15 @@ export class TaskCoordinator {
   }
 
   async reopenTask(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    reason?: string;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(input.taskId, async () => await this.reopenTaskLocked(input));
+  }
+
+  private async reopenTaskLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -2177,7 +2327,7 @@ export class TaskCoordinator {
     assertTaskAcceptsNewThreads(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
-      detail = await this.ensureArtifactBaseline({
+      detail = await this.ensureArtifactBaselineLocked({
         taskId: input.taskId,
         workspacePath: input.workspacePath,
         artifactId: input.artifactId,
@@ -3734,7 +3884,7 @@ export class TaskCoordinator {
         break;
       }
       case "mark_work_item":
-        updated = await this.markWorkItem({
+        updated = await this.markWorkItemLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           workItemId: directive.workItemId,
@@ -3745,7 +3895,7 @@ export class TaskCoordinator {
         });
         break;
       case "record_decision":
-        updated = await this.recordDecision({
+        updated = await this.recordDecisionLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -3758,7 +3908,7 @@ export class TaskCoordinator {
         });
         break;
       case "report_progress":
-        updated = await this.reportProgress({
+        updated = await this.reportProgressLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           sessionId,
@@ -3778,7 +3928,7 @@ export class TaskCoordinator {
         });
         break;
       case "request_input": {
-        const result = await this.requestInput({
+        const result = await this.requestInputLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
+import { getPendingTerminalTaskLock } from "../src/server/session/taskLocks";
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
 import type { TaskCheckpoint, TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
@@ -1156,6 +1157,7 @@ describe("task mode persistence", () => {
         reason: "Client is stale",
       });
       await flushAsyncWork();
+      expect(getPendingTerminalTaskLock(created.task.id)).toBeNull();
 
       pause.release();
       const winner = await winningTransition;
@@ -1172,6 +1174,7 @@ describe("task mode persistence", () => {
         status: "awaiting_review",
         revision: winner.revision,
       });
+      expect(getPendingTerminalTaskLock(created.task.id)).toBeNull();
       expect(quiesced).toEqual([]);
     } finally {
       pause.restore();

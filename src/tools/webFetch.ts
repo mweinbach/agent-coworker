@@ -11,6 +11,7 @@ import { resolveSafeWebUrl } from "../utils/webSafety";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { fetchExaContents, resolveExaApiKey } from "./exa";
+import { cleanupCreatedDirectories, prepareMutationDirectory } from "./mutationGuard";
 import { fetchParallelContents, resolveParallelApiKey } from "./parallel";
 
 const MAX_REDIRECTS = 5;
@@ -250,6 +251,7 @@ async function finalizeDownloadedFile(
   tempPath: string,
   downloadDir: string,
   fileName: string,
+  assertCanMutate?: () => Promise<void> | void,
 ): Promise<string> {
   // Claim the final path exclusively at finalize time so a late writer cannot
   // be overwritten by an atomic rename onto an existing destination. Bound the
@@ -259,7 +261,14 @@ async function finalizeDownloadedFile(
   for (let suffix = 1; suffix <= maxSuffix; suffix += 1) {
     const candidatePath = downloadCandidatePath(downloadDir, fileName, suffix);
     try {
+      await assertCanMutate?.();
       await fs.copyFile(tempPath, candidatePath, fsConstants.COPYFILE_EXCL);
+      try {
+        await assertCanMutate?.();
+      } catch (error) {
+        await fs.rm(candidatePath, { force: true }).catch(() => {});
+        throw error;
+      }
       await removeTemporaryDownloadFile(tempPath);
       return candidatePath;
     } catch (error) {
@@ -371,6 +380,7 @@ async function downloadResponseToFile(opts: {
   fileName: string;
   tempPath: string;
   maxBytes: number;
+  assertCanMutate?: () => Promise<void> | void;
 }): Promise<{ bytesWritten: number; finalPath: string }> {
   const declaredLength = parseContentLength(opts.response);
   if (declaredLength !== null && declaredLength > opts.maxBytes) {
@@ -390,15 +400,18 @@ async function downloadResponseToFile(opts: {
       if (bytes.length > opts.maxBytes) {
         throw new DownloadSizeLimitError(opts.maxBytes);
       }
+      await opts.assertCanMutate?.();
       await fs.writeFile(opts.tempPath, bytes);
       const finalPath = await finalizeDownloadedFile(
         opts.tempPath,
         opts.downloadDir,
         opts.fileName,
+        opts.assertCanMutate,
       );
       return { bytesWritten: bytes.length, finalPath };
     }
 
+    await opts.assertCanMutate?.();
     const fileHandle = await fs.open(opts.tempPath, "w");
     const reader = opts.response.body.getReader();
     let bytesWritten = 0;
@@ -414,6 +427,7 @@ async function downloadResponseToFile(opts: {
           throw new DownloadSizeLimitError(opts.maxBytes);
         }
 
+        await opts.assertCanMutate?.();
         await fileHandle.write(value);
       }
     } catch (error) {
@@ -428,7 +442,12 @@ async function downloadResponseToFile(opts: {
       await fileHandle.close().catch(() => {});
     }
 
-    const finalPath = await finalizeDownloadedFile(opts.tempPath, opts.downloadDir, opts.fileName);
+    const finalPath = await finalizeDownloadedFile(
+      opts.tempPath,
+      opts.downloadDir,
+      opts.fileName,
+      opts.assertCanMutate,
+    );
     return { bytesWritten, finalPath };
   } catch (error) {
     await removeTemporaryDownloadFile(opts.tempPath);
@@ -851,14 +870,24 @@ export function createWebFetchTool(ctx: ToolContext) {
           "write",
           ctx.agentTargetPaths,
         );
-        await fs.mkdir(allowedDownloadDir, { recursive: true });
-        const { bytesWritten, finalPath } = await downloadResponseToFile({
-          response,
-          downloadDir: allowedDownloadDir,
-          fileName: path.basename(allowedTargetPath),
-          tempPath: allowedTempPath,
-          maxBytes: maxDownloadBytes,
-        });
+        const createdDirs = await prepareMutationDirectory(ctx, "webFetch", allowedDownloadDir);
+        let bytesWritten: number;
+        let finalPath: string;
+        try {
+          const downloadResult = await downloadResponseToFile({
+            response,
+            downloadDir: allowedDownloadDir,
+            fileName: path.basename(allowedTargetPath),
+            tempPath: allowedTempPath,
+            maxBytes: maxDownloadBytes,
+            assertCanMutate: () => ctx.assertCanMutate?.("webFetch"),
+          });
+          bytesWritten = downloadResult.bytesWritten;
+          finalPath = downloadResult.finalPath;
+        } catch (error) {
+          await cleanupCreatedDirectories(createdDirs);
+          throw error;
+        }
 
         const out = `File downloaded ${finalPath}`;
         ctx.log(

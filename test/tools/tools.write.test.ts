@@ -55,6 +55,27 @@ describe("write tool", () => {
     expect(written).toBe("deep");
   });
 
+  test("cleans parent directories if the mutation gate closes after mkdir", async () => {
+    const dir = await tmpDir();
+    let gateChecks = 0;
+    const t: any = createWriteTool(
+      makeCtx(dir, {
+        assertCanMutate: () => {
+          gateChecks += 1;
+          if (gateChecks > 1) throw new Error("terminal task write gate closed");
+        },
+      }),
+    );
+    const nestedDir = path.join(dir, "terminal", "race");
+    const p = path.join(nestedDir, "blocked.txt");
+
+    await expect(t.execute({ filePath: p, content: "blocked" })).rejects.toThrow(
+      /write gate closed/,
+    );
+    await expect(fs.access(p)).rejects.toThrow();
+    await expect(fs.access(nestedDir)).rejects.toThrow();
+  });
+
   test("overwrites existing file", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "exist.txt");

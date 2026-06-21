@@ -2655,15 +2655,60 @@ export class TaskCoordinator {
     detail?: string;
   }): Promise<TaskRecord> {
     const settlementRevisionIds = this.pendingArtifactRevisionSettlementIds(input.task);
-    let currentMaterial: TaskReviewMaterial | null = null;
     const updatedAt = nowIso();
     const thread = input.task.threads.find((candidate) => candidate.sessionId === input.sessionId);
-    const willCompleteTask = !input.task.reviewRequired;
-    const terminalRelease = willCompleteTask
-      ? await this.prepareTerminalTaskWrite(input.task, "completed", {
+    let terminalRelease: (() => void) | null = null;
+    const buildPrepareCompletion = () => async (preparedTask: TaskRecord) => {
+      let currentMaterial: TaskReviewMaterial | null = null;
+      try {
+        currentMaterial = await this.validateCompletionProposalTask(preparedTask);
+      } catch (error) {
+        return { ready: false as const, error };
+      }
+      return {
+        ready: true as const,
+        validateReadyTask: currentMaterial
+          ? async (readyTask: TaskRecord) => {
+              if (!currentMaterial) return;
+              await this.assertLiveArtifactEvidenceUnchanged(readyTask, currentMaterial);
+            }
+          : undefined,
+        validateAcceptedTask: currentMaterial
+          ? async (acceptedTask: TaskRecord) => {
+              if (!currentMaterial) return;
+              await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, currentMaterial);
+            }
+          : undefined,
+      };
+    };
+    if (!input.task.reviewRequired) {
+      const preflight = await this.options.sessionDb.previewArtifactRevisionCompletionReadiness({
+        taskId: input.task.id,
+        revision:
+          input.outcome.type === "completed"
+            ? {
+                outcome: "completed",
+                revisionId: input.outcome.revisionId,
+                version: input.outcome.version,
+              }
+            : {
+                outcome: "cancelled",
+                revisionId: input.outcome.revisionId,
+                detail: input.outcome.detail,
+              },
+        updatedAt,
+        summary: input.summary,
+        detail: input.detail ?? null,
+        threadId: thread?.id ?? null,
+        reviewRequired: input.task.reviewRequired,
+        prepareCompletion: buildPrepareCompletion(),
+      });
+      if (preflight.completion === "ready") {
+        terminalRelease = await this.prepareTerminalTaskWrite(input.task, "completed", {
           originSessionId: input.sessionId,
-        })
-      : null;
+        });
+      }
+    }
     let result: {
       task: TaskRecord;
       completion: "committed" | "not_ready";
@@ -2690,28 +2735,7 @@ export class TaskCoordinator {
         threadId: thread?.id ?? null,
         settlementRevisionIds,
         reviewRequired: input.task.reviewRequired,
-        prepareCompletion: async (preparedTask) => {
-          try {
-            currentMaterial = await this.validateCompletionProposalTask(preparedTask);
-          } catch (error) {
-            return { ready: false, error };
-          }
-          return {
-            ready: true,
-            validateReadyTask: currentMaterial
-              ? async (readyTask) => {
-                  if (!currentMaterial) return;
-                  await this.assertLiveArtifactEvidenceUnchanged(readyTask, currentMaterial);
-                }
-              : undefined,
-            validateAcceptedTask: currentMaterial
-              ? async (acceptedTask) => {
-                  if (!currentMaterial) return;
-                  await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, currentMaterial);
-                }
-              : undefined,
-          };
-        },
+        prepareCompletion: buildPrepareCompletion(),
       });
     } catch (error) {
       terminalRelease?.();

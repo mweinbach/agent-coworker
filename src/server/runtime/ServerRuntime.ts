@@ -338,8 +338,10 @@ export async function createAgentServerRuntime(
     },
     quiesceTaskThreads: async (task, reason) => {
       const waits: Promise<void>[] = [];
-      for (const thread of task.threads) {
-        const binding = registry.sessionBindings.get(thread.sessionId);
+      const sessionIds = new Set(task.threads.map((thread) => thread.sessionId));
+      if (task.sourceSessionId) sessionIds.add(task.sourceSessionId);
+      for (const sessionId of sessionIds) {
+        const binding = registry.sessionBindings.get(sessionId);
         const runtime = binding?.runtime;
         if (!runtime) continue;
         const disposeRuntime = () => {

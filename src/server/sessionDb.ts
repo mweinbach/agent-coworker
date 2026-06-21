@@ -759,6 +759,101 @@ export class SessionDb {
     );
   }
 
+  async previewArtifactRevisionCompletionReadiness(input: {
+    taskId: string;
+    revision:
+      | {
+          outcome: "completed";
+          revisionId: string;
+          version: TaskArtifactVersion;
+        }
+      | {
+          outcome: "cancelled";
+          revisionId: string;
+          detail?: string;
+        };
+    updatedAt: string;
+    summary: string;
+    detail?: string | null;
+    threadId?: string | null;
+    reviewRequired: boolean;
+    prepareCompletion: (task: TaskRecord) => Promise<
+      | {
+          ready: true;
+          validateReadyTask?: (task: TaskRecord) => Promise<void>;
+          validateAcceptedTask?: (task: TaskRecord) => Promise<void>;
+        }
+      | { ready: false; error: unknown }
+    >;
+  }): Promise<{ completion: "ready" | "not_ready"; error?: unknown }> {
+    return await this.writeCoordinator.runExclusive(
+      "preview_artifact_revision_completion_readiness",
+      async () => {
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          if (input.revision.outcome === "completed") {
+            this.taskRepository.completeArtifactRevisionInOpenTransaction({
+              revisionId: input.revision.revisionId,
+              version: input.revision.version,
+              updatedAt: input.updatedAt,
+            });
+          } else {
+            this.taskRepository.failArtifactRevisionInOpenTransaction({
+              revisionId: input.revision.revisionId,
+              status: "cancelled",
+              updatedAt: input.updatedAt,
+              detail: input.revision.detail,
+            });
+          }
+          let task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          const prepared = await input.prepareCompletion(task);
+          if (!prepared.ready) {
+            this.db.exec("ROLLBACK");
+            return { completion: "not_ready" as const, error: prepared.error };
+          }
+          this.taskRepository.setStatusInOpenTransaction({
+            taskId: input.taskId,
+            expectedRevision: task.revision,
+            status: "awaiting_review",
+            summary: input.summary,
+            detail: input.detail ?? null,
+            updatedAt: input.updatedAt,
+            threadId: input.threadId ?? null,
+          });
+          task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await prepared.validateReadyTask?.(task);
+          if (!input.reviewRequired) {
+            this.taskRepository.acceptAllArtifactVersionsInOpenTransaction({
+              taskId: input.taskId,
+              expectedRevision: task.revision,
+              updatedAt: input.updatedAt,
+            });
+            task = this.getTask(input.taskId);
+            if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+            await prepared.validateAcceptedTask?.(task);
+          }
+          this.db.exec("ROLLBACK");
+          return { completion: "ready" as const };
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back artifact revision completion readiness preview: ${String(
+                rollbackError,
+              )}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
+      { taskId: input.taskId, revisionId: input.revision.revisionId },
+    );
+  }
+
   async finalizeArtifactRevisionAndProposeTaskCompletion(input: {
     taskId: string;
     revision:

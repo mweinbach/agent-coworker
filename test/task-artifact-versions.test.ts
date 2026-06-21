@@ -44,6 +44,10 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
 }
 
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class PausingArtifactVersionStore extends ArtifactVersionStore {
   readonly captureCalls: string[] = [];
   readonly restoreCalls: string[] = [];
@@ -1952,6 +1956,146 @@ describe("task artifact versions", () => {
       }
     } finally {
       if (!closed) harness.sessionDb.close();
+    }
+  });
+
+  test("does not quiesce no-review task threads when final revision cancellation is not ready", async () => {
+    const quiesced: string[] = [];
+    const harness = await createPausingHarness({
+      quiesceTaskThreads: (task, reason) => {
+        quiesced.push(`${reason}:${task.id}:${task.revision}`);
+      },
+    });
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: false });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start no-review deferred settlement.",
+      });
+      task = await harness.coordinator.replaceWorkItems({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        items: [
+          ...task.workItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            status: item.status,
+            expectedOutputs: item.expectedOutputs,
+          })),
+          {
+            id: "deliver-extra",
+            title: "Deliver extra output",
+            expectedOutputs: ["extra.md"],
+          },
+        ],
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report before final sibling cancels.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: reportRevision.task.revision,
+        instruction: "Cancel notes instead of completing the task.",
+      });
+
+      await fs.writeFile(reportPath, "report version two before notes cancellation\n");
+      const reportClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!reportClosed) throw new Error("Expected completed report revision");
+      expect(reportClosed.task.status).toBe("working");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+      expect(quiesced).toEqual([]);
+
+      await fs.writeFile(notesPath, "notes version two that should be discarded\n");
+      const notesClosed = await harness.coordinator.handleThreadOutcome(
+        notesRevision.revision.sessionId,
+        "cancelled",
+      );
+      if (!notesClosed) throw new Error("Expected cancelled notes revision");
+
+      expect(notesClosed.revision.status).toBe("cancelled");
+      expect(notesClosed.task.status).toBe("working");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+      expect(quiesced).toEqual([]);
+      expect(await fs.readFile(notesPath, "utf8")).toBe("notes version one\n");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("quiesces no-review final artifact completion outside SessionDb write locks", async () => {
+    let harness!: Awaited<ReturnType<typeof createPausingHarness>>;
+    let quiesceDbProbe = false;
+    harness = await createPausingHarness({
+      quiesceTaskThreads: async (task, reason) => {
+        expect(reason).toBe("completed");
+        await harness.sessionDb.runTaskMutationExclusive("quiesce_db_probe", task.id, () => {
+          quiesceDbProbe = true;
+        });
+      },
+    });
+    try {
+      let { task, reportArtifact, notesArtifact, reportPath, notesPath } =
+        await createTaskWithTwoArtifacts(harness, { reviewRequired: false });
+      task = await harness.coordinator.transition({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        status: "working",
+        summary: "Start no-review ready settlement.",
+      });
+      const reportRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: reportArtifact.id,
+        expectedRevision: task.revision,
+        instruction: "Revise report before final sibling completes.",
+      });
+      const notesRevision = await harness.coordinator.startArtifactRevision({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        artifactId: notesArtifact.id,
+        expectedRevision: reportRevision.task.revision,
+        instruction: "Complete notes and the no-review task.",
+      });
+
+      await fs.writeFile(reportPath, "report version two before final completion\n");
+      const reportClosed = await harness.coordinator.handleThreadOutcome(
+        reportRevision.revision.sessionId,
+        "completed",
+      );
+      if (!reportClosed) throw new Error("Expected completed report revision");
+      expect(reportClosed.task.status).toBe("working");
+      expect(quiesceDbProbe).toBe(false);
+
+      await fs.writeFile(notesPath, "notes version two completing the task\n");
+      const finalOutcome = await Promise.race([
+        harness.coordinator.handleThreadOutcome(notesRevision.revision.sessionId, "completed"),
+        delay(2_000).then(() => "timeout" as const),
+      ]);
+      expect(finalOutcome).not.toBe("timeout");
+      if (finalOutcome === "timeout" || !finalOutcome) {
+        throw new Error("Expected final artifact completion outcome");
+      }
+
+      expect(finalOutcome.revision.status).toBe("completed");
+      expect(finalOutcome.task.status).toBe("completed");
+      expect(quiesceDbProbe).toBe(true);
+    } finally {
+      harness.sessionDb.close();
     }
   });
 

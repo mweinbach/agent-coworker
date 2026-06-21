@@ -71,12 +71,14 @@ function pendingTerminalTaskLock(
 }
 
 export function registerPendingTerminalTaskLocks(
-  task: Pick<TaskRecord, "id" | "title" | "threads">,
+  task: Pick<TaskRecord, "id" | "title" | "threads" | "sourceSessionId">,
   status: TerminalTaskStatus,
 ): () => void {
   const taskLock = pendingTerminalTaskLock(task, status);
   pendingTerminalTaskLocks.set(task.id, taskLock);
-  const locks = task.threads.map((thread) => {
+  const sessionIds = new Set(task.threads.map((thread) => thread.sessionId));
+  if (task.sourceSessionId) sessionIds.add(task.sourceSessionId);
+  const locks = Array.from(sessionIds).map((sessionId) => {
     const lock: TaskLockError = {
       message: `Task ${task.id} is finalizing ${status} and cannot accept new turns until it is reopened or retried.`,
       data: {
@@ -87,8 +89,8 @@ export function registerPendingTerminalTaskLocks(
         taskStatus: status,
       },
     };
-    pendingTerminalSessionLocks.set(thread.sessionId, lock);
-    return { sessionId: thread.sessionId, lock };
+    pendingTerminalSessionLocks.set(sessionId, lock);
+    return { sessionId, lock };
   });
   return () => {
     if (pendingTerminalTaskLocks.get(task.id) === taskLock) {

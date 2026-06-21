@@ -1666,6 +1666,143 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }
   }, 20_000);
 
+  test("terminal transition waits for promoted source chat turn settlement before committing", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const sourceWritePath = path.join(tmpDir, "source-chat-settled-before-terminal.txt");
+    let sourceThreadIdForProvider: string | null = null;
+    let promoteNextSourceTurn = true;
+    const createdFromTool = Promise.withResolvers<TaskRecord>();
+    const sourceAbortObserved = Promise.withResolvers<AbortSignal | null>();
+    const sourceWriteCompleted = Promise.withResolvers<void>();
+    const releaseSourceTurn = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          if (params.sessionId !== sourceThreadIdForProvider) {
+            return { text: "task thread kickoff", responseMessages: [] };
+          }
+          if (promoteNextSourceTurn) {
+            promoteNextSourceTurn = false;
+            const result = await params.createTask?.({
+              idempotencyKey: "source-chat-terminal-quiesce",
+              title: "Source chat terminal quiesce",
+              objective: "Prove source-chat turns settle before terminal task state commits.",
+              context: "Created through the real chat createTask path while the source turn waits.",
+              requirements: [
+                {
+                  kind: "acceptance_criterion",
+                  text: "Terminal transitions quiesce the promoted source chat.",
+                },
+              ],
+              workItems: [
+                {
+                  key: "verify",
+                  title: "Verify source quiescence",
+                  expectedOutputs: ["source-chat-settled-before-terminal.txt"],
+                },
+              ],
+              decisions: [],
+              reviewRequired: false,
+              reviewRounds: 0,
+            });
+            if (!result) throw new Error("createTask tool path was not registered");
+            createdFromTool.resolve(result.task);
+            await waitForCondition(
+              () => params.abortSignal?.aborted === true,
+              "source chat turn was not aborted by terminal quiescence",
+            );
+            sourceAbortObserved.resolve(params.abortSignal ?? null);
+            await releaseSourceTurn.promise;
+            await fs.writeFile(
+              sourceWritePath,
+              "source side effect settled before terminal",
+              "utf8",
+            );
+            sourceWriteCompleted.resolve();
+            return { text: "source turn settled", responseMessages: [] };
+          }
+          return { text: "source chat after terminal", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const sourceThreadId = started.result.thread.id;
+      sourceThreadIdForProvider = sourceThreadId;
+
+      const promotionTurn = await rpc.sendRequest("turn/start", {
+        threadId: sourceThreadId,
+        input: [{ type: "text", text: "promote this chat and keep the source turn open" }],
+      });
+      expect(promotionTurn.error).toBeUndefined();
+      const sourceTurnId = promotionTurn.result.turn.id;
+      const createdNotification = await rpc.waitFor((message) => message.method === "task/created");
+      const taskId = createdNotification.params.task.id;
+      const created = await createdFromTool.promise;
+      expect(created.id).toBe(taskId);
+
+      const latest = await readTask(rpc, tmpDir, taskId);
+      const cancelPromise = rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId,
+        expectedRevision: latest.revision,
+        reason: "Cancel while the promoted source chat turn is still draining.",
+      });
+      const sourceSignal = await sourceAbortObserved.promise;
+      expect(sourceSignal?.aborted).toBe(true);
+
+      await expectTaskLocked(
+        await rpc.sendRequest("turn/steer", {
+          threadId: sourceThreadId,
+          turnId: sourceTurnId,
+          input: [{ type: "text", text: "blocked while source terminal quiesce is pending" }],
+        }),
+        "finalizing cancelled",
+        {
+          lockKind: "terminal_task_thread",
+          taskId,
+          taskStatus: "cancelled",
+        },
+      );
+
+      await delay(120);
+      expect(await readTask(rpc, tmpDir, taskId)).toMatchObject({
+        id: taskId,
+        status: "working",
+        revision: latest.revision,
+      });
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === taskId &&
+            message.params.task?.status === "cancelled",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      releaseSourceTurn.resolve();
+      await sourceWriteCompleted.promise;
+      const sourceCompleted = await waitForTurnCompleted(rpc, sourceThreadId, sourceTurnId);
+      expect(sourceCompleted.params.turn).toMatchObject({
+        id: sourceTurnId,
+        status: "interrupted",
+      });
+      const cancelled = await cancelPromise;
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      await expect(fs.readFile(sourceWritePath, "utf8")).resolves.toBe(
+        "source side effect settled before terminal",
+      );
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
   test("queued source chat steers are rejected if createTask locks the source before drain", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     let sourceProviderPasses = 0;

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { StatusPill } from "@/components/ui/status-pill";
+import { radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ToolCallCardProps = {
@@ -22,7 +23,7 @@ function stateTone(state: string): "warning" | "success" | "danger" | "neutral" 
     case "input-available":
       return "neutral";
     case "approval-requested":
-      return "warning";
+      return "primary";
     case "output-available":
       return "success";
     case "output-error":
@@ -112,7 +113,7 @@ export function ToolCallCard({ name, state, args, result, approval }: ToolCallCa
     <View
       style={{
         gap: 10,
-        borderRadius: 22,
+        borderRadius: radius.lg,
         borderCurve: "continuous",
         borderWidth: 1,
         borderColor: theme.border,
@@ -125,11 +126,9 @@ export function ToolCallCard({ name, state, args, result, approval }: ToolCallCa
         <Text
           selectable
           style={{
-            color: theme.warning,
-            fontSize: 11,
-            fontWeight: "700",
-            letterSpacing: 0.6,
-            textTransform: "uppercase",
+            color: theme.text,
+            fontSize: 13,
+            fontWeight: "600",
           }}
         >
           {name}

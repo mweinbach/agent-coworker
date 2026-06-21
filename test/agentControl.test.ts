@@ -419,6 +419,86 @@ describe("AgentControl.spawn", () => {
     expect(rejected[0]?.reason?.message).toMatch(/active child agents/);
   });
 
+  test("releases a reserved spawn slot when setup fails before binding registration", async () => {
+    const parentConfig = makeConfig();
+    let nextId = 0;
+    let promptLoads = 0;
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: { isAgentOf: () => false, persistenceStatus: "active" },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    const makeUniqueChild = () => {
+      const id = `child-${nextId++}`;
+      return {
+        id,
+        sessionKind: "agent",
+        parentSessionId: "root-1",
+        role: "worker",
+        persistenceStatus: "active",
+        isBusy: false,
+        currentTurnOutcome: "completed",
+        isAgentOf: (parent: string) => parent === "root-1",
+        beginDisconnectedReplayBuffer: () => {},
+        sendUserMessage: async () => {},
+        getSessionInfoEvent: () => ({ mode: "collaborative", depth: 1, executionState: "running" }),
+        getLatestAssistantText: () => null,
+        getPublicConfig: () => parentConfig,
+        getCompactUsageSnapshot: () => null,
+        getLastTurnUsage: () => null,
+      } as any;
+    };
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        const session = makeUniqueChild();
+        binding.session = session;
+        return { session, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => {
+        promptLoads += 1;
+        if (promptLoads === 1) {
+          throw new Error("prompt load failed");
+        }
+        return "child system prompt";
+      },
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "first attempt fails before a child is registered",
+      }),
+    ).rejects.toThrow("prompt load failed");
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 16 }, () =>
+        control.spawn({ parentSessionId: "root-1", parentConfig, role: "worker", message: "go" }),
+      ),
+    );
+    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "one too many after the failed attempt",
+      }),
+    ).rejects.toThrow(/active child agents/);
+  });
+
   test("cancelAll waits for pending child spawn registration before settling", async () => {
     const parentConfig = makeConfig();
     const childSession = makeChildSession(parentConfig);

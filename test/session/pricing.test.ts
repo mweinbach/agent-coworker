@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  getOpenCodeModelPricing,
+  getOpenCodeProviderConfig,
+} from "../../src/providers/opencodeShared";
+import {
   calculateTokenCost,
   calculateTokenCostBreakdown,
   formatCost,
@@ -212,39 +216,66 @@ describe("pricing", () => {
       expect(glm!.inputPerMillion).toBe(1);
       expect(glm!.outputPerMillion).toBe(3.2);
       expect(glm!.cachedInputPerMillion).toBe(0.2);
+      expect(glm!.cacheWriteInputPerMillion).toBe(0);
 
       const kimi = resolveModelPricing("opencode-zen", "kimi-k2.5");
       expect(kimi).not.toBeNull();
       expect(kimi!.inputPerMillion).toBe(0.6);
       expect(kimi!.outputPerMillion).toBe(3);
       expect(kimi!.cachedInputPerMillion).toBe(0.08);
+      expect(kimi!.cacheWriteInputPerMillion).toBe(0);
 
-      const nemotron = resolveModelPricing("opencode-zen", "nemotron-3-super-free");
+      const nemotron = resolveModelPricing("opencode-zen", "nemotron-3-ultra-free");
       expect(nemotron).not.toBeNull();
       expect(nemotron!.inputPerMillion).toBe(0);
       expect(nemotron!.outputPerMillion).toBe(0);
 
-      const mimo = resolveModelPricing("opencode-zen", "mimo-v2-flash-free");
+      const mimo = resolveModelPricing("opencode-zen", "mimo-v2.5-free");
       expect(mimo).not.toBeNull();
       expect(mimo!.inputPerMillion).toBe(0);
       expect(mimo!.outputPerMillion).toBe(0);
+
+      const qwen = resolveModelPricing("opencode-zen", "qwen3.6-plus-free");
+      expect(qwen).not.toBeNull();
+      expect(qwen!.inputPerMillion).toBe(0);
+      expect(qwen!.outputPerMillion).toBe(0);
 
       const bigPickle = resolveModelPricing("opencode-zen", "big-pickle");
       expect(bigPickle).not.toBeNull();
       expect(bigPickle!.inputPerMillion).toBe(0);
       expect(bigPickle!.outputPerMillion).toBe(0);
 
-      const minimaxFree = resolveModelPricing("opencode-zen", "minimax-m2.5-free");
+      const minimaxFree = resolveModelPricing("opencode-zen", "minimax-m3-free");
       expect(minimaxFree).not.toBeNull();
       expect(minimaxFree!.inputPerMillion).toBe(0);
       expect(minimaxFree!.outputPerMillion).toBe(0);
+
+      const northMiniCode = resolveModelPricing("opencode-zen", "north-mini-code-free");
+      expect(northMiniCode).not.toBeNull();
+      expect(northMiniCode!.inputPerMillion).toBe(0);
+      expect(northMiniCode!.outputPerMillion).toBe(0);
 
       const minimax = resolveModelPricing("opencode-zen", "minimax-m2.5");
       expect(minimax).not.toBeNull();
       expect(minimax!.inputPerMillion).toBe(0.3);
       expect(minimax!.outputPerMillion).toBe(1.2);
       expect(minimax!.cachedInputPerMillion).toBe(0.06);
-      expect(minimax!.cacheWriteInputPerMillion).toBe(0.375);
+      expect(minimax!.cacheWriteInputPerMillion).toBe(0);
+    });
+
+    it("keeps opencode-zen session pricing aligned with runtime pricing", () => {
+      for (const modelId of getOpenCodeProviderConfig("opencode-zen").availableModels) {
+        const runtimePricing = getOpenCodeModelPricing("opencode-zen", modelId);
+        const sessionPricing = resolveModelPricing("opencode-zen", modelId);
+
+        expect(runtimePricing).not.toBeNull();
+        expect(sessionPricing).toEqual({
+          inputPerMillion: runtimePricing!.input,
+          outputPerMillion: runtimePricing!.output,
+          cachedInputPerMillion: runtimePricing!.cacheRead,
+          cacheWriteInputPerMillion: runtimePricing!.cacheWrite,
+        });
+      }
     });
 
     it("resolves exact match for codex-cli gpt-5.4 pricing", () => {

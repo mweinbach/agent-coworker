@@ -4,16 +4,37 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  checkJsonRpcMethodDrift,
+  extractDocumentedJsonRpcMethods,
   extractInlineRepoPaths,
   extractMarkdownLinks,
   protocolVersionNeedle,
   resolveDocReferencePath,
 } from "../packages/harness/src/check_docs";
+import {
+  jsonRpcNotificationSchemas,
+  jsonRpcRequestSchemas,
+  jsonRpcServerRequestSchemas,
+} from "../src/server/jsonrpc/schema";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..");
+}
+
+function registeredJsonRpcMethods(): string[] {
+  return [
+    ...new Set([
+      ...Object.keys(jsonRpcRequestSchemas),
+      ...Object.keys(jsonRpcNotificationSchemas),
+      ...Object.keys(jsonRpcServerRequestSchemas),
+    ]),
+  ].sort();
+}
+
+function protocolDocForMethods(methods: string[]): string {
+  return methods.map((method) => `- \`${method}\``).join("\n");
 }
 
 describe("docs checker parity", () => {
@@ -61,6 +82,60 @@ describe("docs checker parity", () => {
     expect(
       extractInlineRepoPaths("Use `bun test`, `camelCase`, and `SessionEvent` in prose."),
     ).toEqual([]);
+  });
+
+  test("extractDocumentedJsonRpcMethods returns only backtick-quoted protocol methods", () => {
+    expect(
+      extractDocumentedJsonRpcMethods(
+        [
+          "Use `thread/start`, `turn/start`, and `cowork/workspace/bootstrap`.",
+          "Ignore `initialize` because it is not namespaced.",
+          "Ignore plain text thread/stop because it is not backtick quoted.",
+          "Ignore `src/server/jsonrpc/schema.ts` because it is a path.",
+        ].join("\n"),
+      ),
+    ).toEqual(new Set(["thread/start", "turn/start", "cowork/workspace/bootstrap"]));
+  });
+
+  test("checkJsonRpcMethodDrift accepts docs that mention every registered method", () => {
+    const checks = checkJsonRpcMethodDrift(protocolDocForMethods(registeredJsonRpcMethods()));
+
+    expect(checks).toEqual([]);
+  });
+
+  test("checkJsonRpcMethodDrift reports registered methods missing from docs", () => {
+    const registered = registeredJsonRpcMethods();
+    const [missingMethod, ...documentedMethods] = registered;
+    if (!missingMethod) {
+      throw new Error("Expected at least one registered JSON-RPC method");
+    }
+
+    const checks = checkJsonRpcMethodDrift(protocolDocForMethods(documentedMethods));
+
+    expect(checks).toEqual([
+      {
+        ok: false,
+        message: `JSON-RPC method registered in schema but missing from docs/websocket-protocol.md: ${missingMethod}`,
+      },
+    ]);
+  });
+
+  test("checkJsonRpcMethodDrift reports documented methods missing from the schema registry", () => {
+    const checks = checkJsonRpcMethodDrift(
+      [
+        protocolDocForMethods(registeredJsonRpcMethods()),
+        "- `thread/notInSchema`",
+        "- `item/fileChange/requestApproval`",
+      ].join("\n"),
+    );
+
+    expect(checks).toEqual([
+      {
+        ok: false,
+        message:
+          "docs/websocket-protocol.md mentions JSON-RPC method not in the schema registry: thread/notInSchema",
+      },
+    ]);
   });
 
   test("extractMarkdownLinks keeps top-level repo docs", () => {

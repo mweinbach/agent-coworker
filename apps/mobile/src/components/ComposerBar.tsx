@@ -9,7 +9,7 @@ import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
 
 import { SFSymbol } from "@/components/ui/sf-symbol";
-import { palette } from "@/theme/tokens";
+import { alpha, palette } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ComposerBarProps = {
@@ -24,7 +24,10 @@ type ComposerBarProps = {
 function glassFallbackColors(isDark: boolean) {
   const colors = isDark ? palette.dark : palette.light;
   return {
-    fill: isDark ? "rgba(238, 240, 220, 0.1)" : "rgba(248, 249, 242, 0.58)",
+    // Frosted fallback when Liquid Glass is unavailable — derived from palette
+    // (a light text-tinted wash on dark, a translucent panel on light) rather
+    // than bare rgba literals.
+    fill: isDark ? alpha(colors.textBase, 0.1) : alpha(colors.panelBg, 0.58),
     border: colors.glassBorder,
     shadow: isDark
       ? "0 12px 26px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.12)"

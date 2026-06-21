@@ -1324,13 +1324,28 @@ describe("desktop task mode UI", () => {
         expect(remountedPendingButtons.every((button) => button.disabled)).toBe(true);
 
         await act(async () => {
-          for (const button of remountedPendingButtons) button.click();
+          useAppStore.setState((state) => ({
+            tasksById: {
+              ...state.tasksById,
+              [task.id]: taskRecord({ status: "completed", revision: 5 }),
+            },
+          }));
+          renderShell(true);
+        });
+        const revisionDriftPendingButtons = Array.from(container.querySelectorAll("button")).filter(
+          (button) => button.textContent?.trim() === "Reopening...",
+        ) as HTMLButtonElement[];
+        expect(revisionDriftPendingButtons).toHaveLength(2);
+        expect(revisionDriftPendingButtons.every((button) => button.disabled)).toBe(true);
+
+        await act(async () => {
+          for (const button of revisionDriftPendingButtons) button.click();
           await Promise.resolve();
         });
         expect(reopenRequestCount()).toBe(1);
 
         await act(async () => {
-          reopenResult.resolve({ task: taskRecord({ status: "working", revision: 5 }) });
+          reopenResult.resolve({ task: taskRecord({ status: "working", revision: 6 }) });
           await reopenResult.promise;
           await Promise.resolve();
         });

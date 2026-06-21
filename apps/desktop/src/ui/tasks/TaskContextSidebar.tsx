@@ -119,10 +119,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const canReopen = ["completed", "cancelled"].includes(task.status);
   const lifecycleAction = task.status === "failed" ? "retry" : canReopen ? "reopen" : null;
   const lifecycleRequest = taskLifecycleRequestByTaskId[task.id];
-  const lifecyclePending =
-    lifecycleAction !== null &&
-    lifecycleRequest?.action === lifecycleAction &&
-    lifecycleRequest.expectedRevision === task.revision;
+  const lifecyclePending = lifecycleAction !== null && lifecycleRequest?.action === lifecycleAction;
   const lifecyclePendingLabel = lifecycleAction === "retry" ? "Retrying..." : "Reopening...";
 
   const retry = async () => {

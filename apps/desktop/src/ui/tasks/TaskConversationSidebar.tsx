@@ -75,9 +75,7 @@ export function TaskConversationSidebar() {
       : "reopen"
     : null;
   const terminalActionPending =
-    terminalActionKind !== null &&
-    lifecycleRequest?.action === terminalActionKind &&
-    lifecycleRequest.expectedRevision === task.revision;
+    terminalActionKind !== null && lifecycleRequest?.action === terminalActionKind;
 
   const restoreTaskWrites = async () => {
     if (!terminal || !terminalActionKind || terminalActionPending) return;

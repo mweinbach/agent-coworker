@@ -610,6 +610,7 @@ describe("desktop task actions", () => {
       action: "retry",
       expectedRevision: 7,
     });
+    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 8 });
     await expect(actions.retryTask("task-1")).resolves.toBe(false);
     expect(requestJsonRpc).toHaveBeenCalledTimes(2);
 
@@ -622,13 +623,13 @@ describe("desktop task actions", () => {
     expect(harness.state.notifications).toHaveLength(0);
 
     retryResult.resolve({
-      task: taskRecord({ status: "working", revision: 8 }),
+      task: taskRecord({ status: "working", revision: 9 }),
       retryStatus: "queued",
     });
     await expect(retry).resolves.toBe(true);
     expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
-    expect(harness.state.tasksById["task-1"]?.revision).toBe(8);
+    expect(harness.state.tasksById["task-1"]?.revision).toBe(9);
     expect(harness.state.notifications).toHaveLength(0);
   });
 

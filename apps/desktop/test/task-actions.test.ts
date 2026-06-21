@@ -581,13 +581,16 @@ describe("desktop task actions", () => {
     expect(harness.state.tasksById["task-1"]?.revision).toBe(8);
   });
 
-  test("deduplicates overlapping terminal lifecycle requests by task", async () => {
+  test("deduplicates current lifecycle requests and replaces stale revisions", async () => {
     const harness = createHarness();
     const actions = createTaskActions(harness.set as never, harness.get as never, deps);
     Object.assign(harness.state, actions);
     harness.state.tasksById["task-1"] = taskRecord({ status: "completed", revision: 7 });
     const reopenResult = Promise.withResolvers<{ task: TaskRecord }>();
-    requestJsonRpc.mockImplementationOnce(async () => await reopenResult.promise);
+    const retryResult = Promise.withResolvers<{ task: TaskRecord; retryStatus: "queued" }>();
+    requestJsonRpc
+      .mockImplementationOnce(async () => await reopenResult.promise)
+      .mockImplementationOnce(async () => await retryResult.promise);
 
     const first = actions.reopenTask("task-1");
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
@@ -597,24 +600,38 @@ describe("desktop task actions", () => {
 
     const duplicateReopen = actions.reopenTask("task-1");
     harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 7 });
-    const staleRetry = actions.retryTask("task-1");
+    const sameRevisionRetry = actions.retryTask("task-1");
     await expect(duplicateReopen).resolves.toBeUndefined();
-    await expect(staleRetry).resolves.toBe(false);
+    await expect(sameRevisionRetry).resolves.toBe(false);
     expect(requestJsonRpc).toHaveBeenCalledTimes(1);
     expect(harness.state.notifications).toHaveLength(0);
 
+    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 8 });
+    const freshRetry = actions.retryTask("task-1");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
+    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
+      action: "retry",
+      expectedRevision: 8,
+    });
+
     reopenResult.reject(new Error("Task revision conflict"));
     await expect(first).resolves.toBeUndefined();
-    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
-    expect(harness.state.notifications).toHaveLength(1);
+    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
+      action: "retry",
+      expectedRevision: 8,
+    });
+    expect(harness.state.notifications).toHaveLength(0);
 
-    requestJsonRpc.mockImplementationOnce(async () => ({
-      task: taskRecord({ status: "working", revision: 8 }),
+    retryResult.resolve({
+      task: taskRecord({ status: "working", revision: 9 }),
       retryStatus: "queued",
-    }));
-    await expect(actions.retryTask("task-1")).resolves.toBe(true);
+    });
+    await expect(freshRetry).resolves.toBe(true);
     expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
+    expect(harness.state.tasksById["task-1"]?.revision).toBe(9);
+    expect(harness.state.notifications).toHaveLength(0);
   });
 
   test("does not recurse when project creation is cancelled", async () => {

@@ -395,7 +395,10 @@ export function createTaskActions(
             requestId: makeId(),
           }
         : null;
-    if (lifecycleRequest && get().taskLifecycleRequestByTaskId?.[taskId]) return false;
+    const existingLifecycleRequest = get().taskLifecycleRequestByTaskId?.[taskId];
+    if (lifecycleRequest && existingLifecycleRequest?.expectedRevision === task.revision) {
+      return false;
+    }
     if (lifecycleRequest) {
       set((state) => ({
         taskLifecycleRequestByTaskId: {
@@ -404,19 +407,25 @@ export function createTaskActions(
         },
       }));
     }
+    const lifecycleRequestIsCurrent = () =>
+      !lifecycleRequest ||
+      get().taskLifecycleRequestByTaskId?.[taskId]?.requestId === lifecycleRequest.requestId;
     try {
       await ensureTaskTransport(get, set, workspaceId, deps);
+      if (!lifecycleRequestIsCurrent()) return false;
       const result = await deps.requestJsonRpc(get, set, workspaceId, method, {
         cwd: workspace.path,
         taskId,
         expectedRevision: task.revision,
         ...extra,
       });
+      if (!lifecycleRequestIsCurrent()) return false;
       const parsed = taskRecordSchema.safeParse(result?.task);
       if (!parsed.success) throw new Error(`Invalid ${method} response`);
       upsertTask(set, get, parsed.data, deps);
       return true;
     } catch (error) {
+      if (!lifecycleRequestIsCurrent()) return false;
       notifyError(set, "Unable to update task", error);
       return false;
     } finally {

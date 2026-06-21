@@ -1343,6 +1343,60 @@ describe("desktop task mode UI", () => {
     },
   );
 
+  test.serial("ignores stale opposite lifecycle requests in both task sidebars", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      root = createRoot(container);
+      const failedTask = taskRecord({ status: "failed", revision: 5 });
+      const retryTask = mock(async () => true);
+      resetStore(failedTask);
+      useAppStore.setState({
+        retryTask,
+        taskLifecycleRequestByTaskId: {
+          [failedTask.id]: {
+            action: "reopen",
+            expectedRevision: 4,
+            requestId: "stale-reopen",
+          },
+        },
+      } as never);
+
+      await act(async () => {
+        root?.render(
+          createElement(
+            "div",
+            null,
+            createElement(TaskContextSidebar),
+            createElement(TaskConversationSidebar),
+          ),
+        );
+      });
+
+      const retryButtons = Array.from(container.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "Retry task",
+      ) as HTMLButtonElement[];
+      expect(retryButtons).toHaveLength(2);
+      expect(retryButtons.every((button) => !button.disabled)).toBe(true);
+      expect(retryButtons.every((button) => button.getAttribute("aria-busy") === null)).toBe(true);
+      expect(container.textContent).not.toContain("Reopening...");
+
+      await act(async () => {
+        retryButtons[0]?.click();
+        await Promise.resolve();
+      });
+      expect(retryTask).toHaveBeenCalledTimes(1);
+      expect(retryTask).toHaveBeenCalledWith(failedTask.id);
+    } finally {
+      if (root) await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
+
   test.serial("rebinds the message overlay observer when a task becomes read-only", async () => {
     const observedElements: Element[] = [];
     let disconnectCount = 0;

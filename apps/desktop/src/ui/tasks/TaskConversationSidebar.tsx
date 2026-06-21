@@ -69,12 +69,20 @@ export function TaskConversationSidebar() {
   if (!task) return null;
 
   const terminalNoticeId = `task-terminal-lock-${task.id}`;
+  const terminalActionKind: LifecycleAction | null = terminal
+    ? task.status === "failed"
+      ? "retry"
+      : "reopen"
+    : null;
+  const terminalActionPending =
+    terminalActionKind !== null &&
+    lifecycleRequest?.action === terminalActionKind &&
+    lifecycleRequest.expectedRevision === task.revision;
 
   const restoreTaskWrites = async () => {
-    if (!terminal || lifecycleRequest) return;
-    const action: LifecycleAction = task.status === "failed" ? "retry" : "reopen";
+    if (!terminal || !terminalActionKind || terminalActionPending) return;
     try {
-      if (action === "retry") {
+      if (terminalActionKind === "retry") {
         await retryTask(task.id);
       } else {
         await reopenTask(task.id);
@@ -84,14 +92,7 @@ export function TaskConversationSidebar() {
     }
   };
 
-  const terminalActionKind: LifecycleAction | null = terminal
-    ? task.status === "failed"
-      ? "retry"
-      : "reopen"
-    : null;
-  const terminalActionPending = terminalActionKind !== null && lifecycleRequest !== undefined;
-  const terminalPendingLabel =
-    lifecycleRequest?.action === "retry" ? "Retrying..." : "Reopening...";
+  const terminalPendingLabel = terminalActionKind === "retry" ? "Retrying..." : "Reopening...";
   const terminalAction = terminal
     ? {
         label: task.status === "failed" ? "Retry task" : "Reopen task",

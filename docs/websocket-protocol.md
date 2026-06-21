@@ -1567,7 +1567,8 @@ the specific blocked capability widened.
 ```
 "invalid_json" | "invalid_payload" | "missing_type" | "unknown_type"
 | "unknown_session" | "busy" | "validation_failed" | "permission_denied"
-| "provider_error" | "backup_error" | "observability_error" | "internal_error"
+| "provider_error" | "task_locked" | "backup_error" | "observability_error"
+| "internal_error"
 ```
 
 ### ServerErrorSource

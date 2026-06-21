@@ -1,4 +1,5 @@
 import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
+import type { TaskStatus } from "../../../shared/tasks";
 import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
@@ -23,6 +24,8 @@ type TurnStreamTracker = {
   rawStreamEventIndex: number;
   lastStreamError: unknown;
 };
+
+const TERMINAL_TASK_MUTATION_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
 
 export type RunTurnInvocationDeps = {
   context: SessionContext;
@@ -204,6 +207,17 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       enableMcp: context.state.config.enableMcp,
       sessionId: context.id,
       onAdvancedMemoryChanged,
+      assertCanMutate: (toolName) => {
+        if (isTurnAborted()) {
+          throw new Error(`Tool ${toolName} blocked because the turn was cancelled.`);
+        }
+        const latestTask = taskContext ? context.deps.getTaskContextImpl?.(context.id) : null;
+        if (latestTask && TERMINAL_TASK_MUTATION_STATUSES.has(latestTask.status)) {
+          throw new Error(
+            `Tool ${toolName} blocked because task ${latestTask.id} is ${latestTask.status}. Reopen or retry the task before mutating files or tools.`,
+          );
+        }
+      },
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,
       agentRole: context.state.sessionInfo.role,

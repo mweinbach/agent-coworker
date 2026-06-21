@@ -289,6 +289,14 @@ export function createUserMessageTurnRunner(
             throw error;
           }
 
+          if (context.state.abortController?.signal.aborted) {
+            context.state.pendingSteers.splice(0);
+            context.state.currentTurnOutcome = "cancelled";
+            context.state.acceptingSteers = false;
+            continueSameTurn = false;
+            continue;
+          }
+
           log(
             `[warn] stored ${context.state.config.provider} continuation handle was rejected; retrying from local transcript`,
           );

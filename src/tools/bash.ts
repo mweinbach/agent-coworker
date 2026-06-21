@@ -547,6 +547,7 @@ export function createBashTool(ctx: ToolContext) {
           }),
       };
 
+      await ctx.assertCanMutate?.("bash");
       let result = await runner({ ...baseArgs, policy });
       if (result.sandboxWarning) {
         ctx.log(`tool> bash sandbox unavailable: ${result.sandboxWarning}`);

@@ -46,7 +46,9 @@ export function createWriteTool(ctx: ToolContext) {
         "write",
         ctx.agentTargetPaths,
       );
+      await ctx.assertCanMutate?.("write");
       await fs.mkdir(path.dirname(abs), { recursive: true });
+      await ctx.assertCanMutate?.("write");
       if (resolvedMode === "append") {
         await fs.appendFile(abs, content, "utf-8");
       } else {

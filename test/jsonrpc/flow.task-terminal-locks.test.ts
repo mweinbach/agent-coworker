@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { RunTurnParams } from "../../src/agent";
+import { createRunTurn, type RunTurnParams } from "../../src/agent";
 import { JSONRPC_ERROR_CODES } from "../../src/server/jsonrpc/protocol";
 import { startAgentServer } from "../../src/server/startServer";
 import type { TaskRecord, TaskStatus } from "../../src/shared/tasks";
@@ -433,6 +433,176 @@ describe("server JSON-RPC task terminal turn locks", () => {
           }),
         );
       });
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("terminal transition blocks in-flight mutating tools before writes escape", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const guardedWritePath = path.join(tmpDir, "guarded-tool-write.txt");
+    let holdNextTurn = false;
+    let toolMutationResult: string | null = null;
+    const kickoffCompleted = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<AbortSignal | null>();
+    const releaseManual = Promise.withResolvers<void>();
+    const runTurnImpl = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async (params) => {
+          if (!holdNextTurn) {
+            kickoffCompleted.resolve();
+            return { text: "kickoff complete", responseMessages: [] };
+          }
+          manualStarted.resolve(params.abortSignal ?? null);
+          await releaseManual.promise;
+          try {
+            await params.tools.write.execute({
+              filePath: guardedWritePath,
+              content: "tool write escaped terminal task cancellation",
+            });
+            toolMutationResult = "wrote";
+          } catch (error) {
+            toolMutationResult = error instanceof Error ? error.message : String(error);
+          }
+          return {
+            text: `tool mutation result: ${toolMutationResult}`,
+            responseMessages: [],
+            usage: {
+              promptTokens: 3,
+              completionTokens: 2,
+              totalTokens: 5,
+            },
+          };
+        },
+      }),
+    });
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await createTask(rpc, tmpDir, "running-tool-race");
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await kickoffCompleted.promise;
+      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+
+      holdNextTurn = true;
+      const started = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start tool write race" }],
+      });
+      expect(started.error).toBeUndefined();
+      const turnId = started.result.turn.id;
+      const signal = await manualStarted.promise;
+
+      const latest = await readTask(rpc, tmpDir, created.id);
+      const cancelled = await rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Close the task while a mutating tool is in flight.",
+      });
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      expect(signal?.aborted).toBe(true);
+
+      releaseManual.resolve();
+      const completed = await waitForTurnCompleted(rpc, threadId, turnId);
+      expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+      expect(toolMutationResult).toMatch(/blocked because the turn was cancelled/);
+      await expect(fs.access(guardedWritePath)).rejects.toThrow();
+
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      expect(JSON.stringify(read.result)).not.toContain("tool write escaped");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("terminal abort does not launch provider continuation fallback retry", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    let holdNextTurn = false;
+    let activeTurnCalls = 0;
+    let retryProviderState: unknown;
+    const kickoffCompleted = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<AbortSignal | null>();
+    const releaseManual = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          if (!holdNextTurn) {
+            kickoffCompleted.resolve();
+            return {
+              text: "kickoff complete",
+              responseMessages: [],
+              providerState: {
+                provider: "google",
+                model: "gemini-test",
+                interactionId: "interaction_stale",
+                updatedAt: "2026-06-20T00:00:00.000Z",
+              },
+            };
+          }
+          activeTurnCalls += 1;
+          if (activeTurnCalls === 1) {
+            manualStarted.resolve(params.abortSignal ?? null);
+            await releaseManual.promise;
+            throw new Error("Invalid previous_interaction_id: interaction not found");
+          }
+          retryProviderState = params.providerState;
+          return {
+            text: "fallback retry escaped after terminal cancellation",
+            responseMessages: [],
+          };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await createTask(rpc, tmpDir, "continuation-abort-race");
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await kickoffCompleted.promise;
+      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+
+      holdNextTurn = true;
+      const started = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start continuation fallback race" }],
+      });
+      expect(started.error).toBeUndefined();
+      const turnId = started.result.turn.id;
+      const signal = await manualStarted.promise;
+
+      const latest = await readTask(rpc, tmpDir, created.id);
+      const cancelled = await rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Close the task before invalid continuation fallback retry.",
+      });
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      expect(signal?.aborted).toBe(true);
+
+      releaseManual.resolve();
+      const completed = await waitForTurnCompleted(rpc, threadId, turnId);
+      expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+      expect(activeTurnCalls).toBe(1);
+      expect(retryProviderState).toBeUndefined();
+
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      expect(JSON.stringify(read.result)).not.toContain("fallback retry escaped");
       rpc.close();
     } finally {
       await stopTestServer(server);

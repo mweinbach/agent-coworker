@@ -155,6 +155,9 @@ export interface RunTurnParams {
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
 
+  /** Server-authoritative write gate for mutating tool side effects. */
+  assertCanMutate?: (toolName: string) => void | Promise<void>;
+
   /**
    * Apply an A2UI v0.9 envelope to the session's surface state, returning a
    * per-envelope outcome. Plumbed into the `a2ui` tool's ToolContext when
@@ -493,6 +496,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
       onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
+      assertCanMutate: params.assertCanMutate,
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);

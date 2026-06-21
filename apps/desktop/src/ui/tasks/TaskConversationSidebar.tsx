@@ -1,5 +1,5 @@
 import { MessageSquarePlusIcon, RotateCcwIcon } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import type { TaskStatus } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
@@ -44,10 +44,6 @@ function terminalConversationCopy(status: TaskStatus): { title: string; detail: 
 
 type LifecycleAction = "reopen" | "retry";
 
-function lifecycleActionKey(taskId: string, action: LifecycleAction): string {
-  return `${taskId}:${action}`;
-}
-
 export function TaskConversationSidebar() {
   const selectedThreadId = useAppStore((state) => state.selectedThreadId);
   const task = useAppStore((state) =>
@@ -57,14 +53,14 @@ export function TaskConversationSidebar() {
   const createTaskThread = useAppStore((state) => state.createTaskThread);
   const reopenTask = useAppStore((state) => state.reopenTask);
   const retryTask = useAppStore((state) => state.retryTask);
+  const taskLifecycleRequestByTaskId = useAppStore((state) => state.taskLifecycleRequestByTaskId);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [threadTitle, setThreadTitle] = useState("");
   const [creating, setCreating] = useState(false);
-  const [pendingLifecycleActions, setPendingLifecycleActions] = useState<Record<string, true>>({});
-  const lifecycleActionInFlightRef = useRef(new Set<string>());
 
   const terminal = task ? isTerminalTaskStatus(task.status) : false;
   const terminalCopy = task && terminal ? terminalConversationCopy(task.status) : null;
+  const lifecycleRequest = task ? taskLifecycleRequestByTaskId[task.id] : undefined;
 
   useEffect(() => {
     if (terminal && dialogOpen) setDialogOpen(false);
@@ -75,12 +71,8 @@ export function TaskConversationSidebar() {
   const terminalNoticeId = `task-terminal-lock-${task.id}`;
 
   const restoreTaskWrites = async () => {
-    if (!terminal) return;
+    if (!terminal || lifecycleRequest) return;
     const action: LifecycleAction = task.status === "failed" ? "retry" : "reopen";
-    const key = lifecycleActionKey(task.id, action);
-    if (lifecycleActionInFlightRef.current.has(key)) return;
-    lifecycleActionInFlightRef.current.add(key);
-    setPendingLifecycleActions((current) => ({ ...current, [key]: true }));
     try {
       if (action === "retry") {
         await retryTask(task.id);
@@ -89,13 +81,6 @@ export function TaskConversationSidebar() {
       }
     } catch (error) {
       console.error("Task lifecycle action failed", error);
-    } finally {
-      lifecycleActionInFlightRef.current.delete(key);
-      setPendingLifecycleActions((current) => {
-        const next = { ...current };
-        delete next[key];
-        return next;
-      });
     }
   };
 
@@ -104,14 +89,13 @@ export function TaskConversationSidebar() {
       ? "retry"
       : "reopen"
     : null;
-  const terminalActionPending =
-    terminalActionKind !== null
-      ? pendingLifecycleActions[lifecycleActionKey(task.id, terminalActionKind)] === true
-      : false;
+  const terminalActionPending = terminalActionKind !== null && lifecycleRequest !== undefined;
+  const terminalPendingLabel =
+    lifecycleRequest?.action === "retry" ? "Retrying..." : "Reopening...";
   const terminalAction = terminal
     ? {
         label: task.status === "failed" ? "Retry task" : "Reopen task",
-        pendingLabel: task.status === "failed" ? "Retrying..." : "Reopening...",
+        pendingLabel: terminalPendingLabel,
         pending: terminalActionPending,
         icon: <RotateCcwIcon data-icon="inline-start" />,
         pendingIcon: <Spinner data-icon="inline-start" />,

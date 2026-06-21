@@ -3,6 +3,7 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { TaskArtifactDetail, TaskQuestion, TaskRecord } from "../../../src/shared/tasks";
+import { createTaskActions, type TaskActionDependencies } from "../src/app/store.actions/tasks";
 import type { SandboxApprovalPrompt } from "../src/app/types";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -220,6 +221,7 @@ function resetStore(task: TaskRecord | null) {
     selectedThreadId: task?.threads[0]?.sessionId ?? null,
     selectedTaskId: task?.id ?? null,
     newTaskWorkspaceId: "ws-1",
+    taskLifecycleRequestByTaskId: {},
     taskSummariesByWorkspaceId: task
       ? {
           "ws-1": [
@@ -296,6 +298,36 @@ function resetStore(task: TaskRecord | null) {
     acceptTaskArtifactVersion: async () => artifactDetail(),
     startTaskArtifactRevision: async () => artifactDetail(),
   } as never);
+}
+
+function installTaskLifecycleActions(
+  handler: (method: string, params: Record<string, unknown>) => Promise<unknown> | unknown,
+) {
+  const requestJsonRpc = mock(
+    async (_get: unknown, _set: unknown, _workspaceId: unknown, method: string, params?: unknown) =>
+      await handler(
+        method,
+        params && typeof params === "object" && !Array.isArray(params)
+          ? (params as Record<string, unknown>)
+          : {},
+      ),
+  );
+  const deps = {
+    ensureControlSocket: () => {},
+    ensureServerRunning: async () => {},
+    ensureThreadRuntime: () => {},
+    registerWorkspaceJsonRpcRouter: () => () => {},
+    requestJsonRpc,
+    syncDesktopStateCache: () => {},
+    persistNow: async () => {},
+  } as unknown as TaskActionDependencies;
+  const taskActions = createTaskActions(
+    useAppStore.setState as never,
+    useAppStore.getState as never,
+    deps,
+  );
+  useAppStore.setState({ ...taskActions } as never);
+  return requestJsonRpc;
 }
 
 function setNativeValue(
@@ -746,15 +778,20 @@ describe("desktop task mode UI", () => {
 
   test.serial("makes terminal task conversations read-only while preserving feed", async () => {
     const harness = setupJsdom();
-    const reopenTask = mock(async () => {});
+    const reopenResult = Promise.withResolvers<{ task: TaskRecord }>();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
       const root = createRoot(container);
       resetStore(taskRecord({ status: "completed" }));
+      const requestJsonRpc = installTaskLifecycleActions(async (method) => {
+        if (method === "task/reopen") return await reopenResult.promise;
+        throw new Error(`Unexpected ${method}`);
+      });
+      const reopenRequestCount = () =>
+        requestJsonRpc.mock.calls.filter((call) => call[3] === "task/reopen").length;
       useAppStore.setState({
-        reopenTask,
         threads: [
           {
             id: "task-session-1",
@@ -831,8 +868,19 @@ describe("desktop task mode UI", () => {
         reopenButton?.click();
         await Promise.resolve();
       });
-      expect(reopenTask).toHaveBeenCalledTimes(1);
-      expect(reopenTask).toHaveBeenCalledWith("task-1");
+      expect(reopenRequestCount()).toBe(1);
+      expect(
+        requestJsonRpc.mock.calls.find((call) => call[3] === "task/reopen")?.[4],
+      ).toMatchObject({
+        taskId: "task-1",
+        expectedRevision: 4,
+      });
+
+      await act(async () => {
+        reopenResult.resolve({ task: taskRecord({ status: "working", revision: 5 }) });
+        await reopenResult.promise;
+        await Promise.resolve();
+      });
 
       await act(async () => root.unmount());
     } finally {
@@ -842,16 +890,20 @@ describe("desktop task mode UI", () => {
 
   test.serial("shows failed task conversations as retry-only with pending state", async () => {
     const harness = setupJsdom();
-    const retryResult = Promise.withResolvers<boolean>();
-    const retryTask = mock(async () => await retryResult.promise);
+    const retryResult = Promise.withResolvers<{ task: TaskRecord }>();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
       const root = createRoot(container);
       resetStore(taskRecord({ status: "failed" }));
+      const requestJsonRpc = installTaskLifecycleActions(async (method) => {
+        if (method === "task/retry") return await retryResult.promise;
+        throw new Error(`Unexpected ${method}`);
+      });
+      const retryRequestCount = () =>
+        requestJsonRpc.mock.calls.filter((call) => call[3] === "task/retry").length;
       useAppStore.setState({
-        retryTask,
         threads: [
           {
             id: "task-session-1",
@@ -888,15 +940,21 @@ describe("desktop task mode UI", () => {
         retryButton?.click();
         await Promise.resolve();
       });
-      expect(retryTask).toHaveBeenCalledTimes(1);
-      expect(retryTask).toHaveBeenCalledWith("task-1");
+      expect(retryRequestCount()).toBe(1);
+      expect(requestJsonRpc.mock.calls.find((call) => call[3] === "task/retry")?.[4]).toMatchObject(
+        {
+          taskId: "task-1",
+          expectedRevision: 4,
+        },
+      );
       expect(retryButton?.disabled).toBe(true);
       expect(retryButton?.getAttribute("aria-busy")).toBe("true");
       expect(retryButton?.textContent).toContain("Retrying...");
 
       await act(async () => {
-        retryResult.resolve(true);
+        retryResult.resolve({ task: taskRecord({ status: "working", revision: 5 }) });
         await retryResult.promise;
+        await Promise.resolve();
       });
 
       await act(async () => root.unmount());
@@ -907,11 +965,8 @@ describe("desktop task mode UI", () => {
 
   test.serial("keys terminal conversation reopen pending state by selected task", async () => {
     const harness = setupJsdom();
-    const firstReopen = Promise.withResolvers<void>();
-    const secondReopen = Promise.withResolvers<void>();
-    const reopenTask = mock(async (taskId: string) => {
-      await (taskId === "task-1" ? firstReopen.promise : secondReopen.promise);
-    });
+    const firstReopen = Promise.withResolvers<{ task: TaskRecord }>();
+    const secondReopen = Promise.withResolvers<{ task: TaskRecord }>();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -935,8 +990,13 @@ describe("desktop task mode UI", () => {
         ],
       });
       resetStore(firstTask);
+      const requestJsonRpc = installTaskLifecycleActions(async (method, params) => {
+        if (method !== "task/reopen") throw new Error(`Unexpected ${method}`);
+        return await (params.taskId === "task-1" ? firstReopen.promise : secondReopen.promise);
+      });
+      const reopenRequestCount = () =>
+        requestJsonRpc.mock.calls.filter((call) => call[3] === "task/reopen").length;
       useAppStore.setState({
-        reopenTask,
         tasksById: { "task-1": firstTask, "task-2": secondTask },
         threads: [taskThreadSummary(firstTask), taskThreadSummary(secondTask)],
         threadRuntimeById: {},
@@ -951,8 +1011,13 @@ describe("desktop task mode UI", () => {
         firstButton?.click();
         await Promise.resolve();
       });
-      expect(reopenTask).toHaveBeenCalledTimes(1);
-      expect(reopenTask).toHaveBeenCalledWith("task-1");
+      expect(reopenRequestCount()).toBe(1);
+      expect(
+        requestJsonRpc.mock.calls.find((call) => call[3] === "task/reopen")?.[4],
+      ).toMatchObject({
+        taskId: "task-1",
+        expectedRevision: 4,
+      });
       expect(container.textContent).toContain("Reopening...");
 
       await act(async () => {
@@ -972,22 +1037,28 @@ describe("desktop task mode UI", () => {
         secondButton?.click();
         await Promise.resolve();
       });
-      expect(reopenTask).toHaveBeenCalledTimes(2);
-      expect(reopenTask).toHaveBeenLastCalledWith("task-2");
+      expect(reopenRequestCount()).toBe(2);
+      expect(
+        requestJsonRpc.mock.calls.filter((call) => call[3] === "task/reopen")[1]?.[4],
+      ).toMatchObject({
+        taskId: "task-2",
+        expectedRevision: 4,
+      });
       expect(container.textContent).toContain("Reopening...");
 
       await act(async () => {
-        firstReopen.resolve();
+        firstReopen.resolve({ task: { ...firstTask, status: "working", revision: 5 } });
         await firstReopen.promise;
         await Promise.resolve();
       });
       expect(container.textContent).toContain("Reopening...");
 
       await act(async () => {
-        secondReopen.resolve();
+        secondReopen.resolve({ task: { ...secondTask, status: "working", revision: 5 } });
         await secondReopen.promise;
+        await Promise.resolve();
       });
-      expect(container.textContent).toContain("Reopen task");
+      expect(container.textContent).not.toContain("Reopening...");
 
       await act(async () => root.unmount());
     } finally {
@@ -997,11 +1068,8 @@ describe("desktop task mode UI", () => {
 
   test.serial("keys terminal conversation retry pending state by selected task", async () => {
     const harness = setupJsdom();
-    const firstRetry = Promise.withResolvers<boolean>();
-    const secondRetry = Promise.withResolvers<boolean>();
-    const retryTask = mock(async (taskId: string) => {
-      return await (taskId === "task-1" ? firstRetry.promise : secondRetry.promise);
-    });
+    const firstRetry = Promise.withResolvers<{ task: TaskRecord }>();
+    const secondRetry = Promise.withResolvers<{ task: TaskRecord }>();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -1025,8 +1093,13 @@ describe("desktop task mode UI", () => {
         ],
       });
       resetStore(firstTask);
+      const requestJsonRpc = installTaskLifecycleActions(async (method, params) => {
+        if (method !== "task/retry") throw new Error(`Unexpected ${method}`);
+        return await (params.taskId === "task-1" ? firstRetry.promise : secondRetry.promise);
+      });
+      const retryRequestCount = () =>
+        requestJsonRpc.mock.calls.filter((call) => call[3] === "task/retry").length;
       useAppStore.setState({
-        retryTask,
         tasksById: { "task-1": firstTask, "task-2": secondTask },
         threads: [taskThreadSummary(firstTask), taskThreadSummary(secondTask)],
         threadRuntimeById: {},
@@ -1041,8 +1114,13 @@ describe("desktop task mode UI", () => {
         firstButton?.click();
         await Promise.resolve();
       });
-      expect(retryTask).toHaveBeenCalledTimes(1);
-      expect(retryTask).toHaveBeenCalledWith("task-1");
+      expect(retryRequestCount()).toBe(1);
+      expect(requestJsonRpc.mock.calls.find((call) => call[3] === "task/retry")?.[4]).toMatchObject(
+        {
+          taskId: "task-1",
+          expectedRevision: 4,
+        },
+      );
       expect(container.textContent).toContain("Retrying...");
 
       await act(async () => {
@@ -1062,22 +1140,28 @@ describe("desktop task mode UI", () => {
         secondButton?.click();
         await Promise.resolve();
       });
-      expect(retryTask).toHaveBeenCalledTimes(2);
-      expect(retryTask).toHaveBeenLastCalledWith("task-2");
+      expect(retryRequestCount()).toBe(2);
+      expect(
+        requestJsonRpc.mock.calls.filter((call) => call[3] === "task/retry")[1]?.[4],
+      ).toMatchObject({
+        taskId: "task-2",
+        expectedRevision: 4,
+      });
       expect(container.textContent).toContain("Retrying...");
 
       await act(async () => {
-        firstRetry.resolve(true);
+        firstRetry.resolve({ task: { ...firstTask, status: "working", revision: 5 } });
         await firstRetry.promise;
         await Promise.resolve();
       });
       expect(container.textContent).toContain("Retrying...");
 
       await act(async () => {
-        secondRetry.resolve(true);
+        secondRetry.resolve({ task: { ...secondTask, status: "working", revision: 5 } });
         await secondRetry.promise;
+        await Promise.resolve();
       });
-      expect(container.textContent).toContain("Retry task");
+      expect(container.textContent).not.toContain("Retrying...");
 
       await act(async () => root.unmount());
     } finally {
@@ -1128,6 +1212,136 @@ describe("desktop task mode UI", () => {
       harness.restore();
     }
   });
+
+  test.serial(
+    "shares terminal lifecycle pending state across task sidebars and remounts",
+    async () => {
+      const harness = setupJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+        const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+        root = createRoot(container);
+        const task = taskRecord({ status: "completed" });
+        resetStore(task);
+        const reopenResult = Promise.withResolvers<{ task: TaskRecord }>();
+        const requestJsonRpc = mock(
+          async (
+            _get: unknown,
+            _set: unknown,
+            _workspaceId: unknown,
+            method: string,
+            _params?: unknown,
+          ) => {
+            if (method === "task/artifact/read") return { detail: artifactDetail() };
+            if (method === "task/reopen") return await reopenResult.promise;
+            throw new Error(`Unexpected ${method}`);
+          },
+        );
+        const deps = {
+          ensureControlSocket: () => {},
+          ensureServerRunning: async () => {},
+          ensureThreadRuntime: () => {},
+          registerWorkspaceJsonRpcRouter: () => () => {},
+          requestJsonRpc,
+          syncDesktopStateCache: () => {},
+          persistNow: async () => {},
+        } as unknown as TaskActionDependencies;
+        const taskActions = createTaskActions(
+          useAppStore.setState as never,
+          useAppStore.getState as never,
+          deps,
+        );
+        useAppStore.setState({
+          ...taskActions,
+          threads: [taskThreadSummary(task)],
+          threadRuntimeById: {
+            "task-session-1": {
+              status: "connected",
+              sessionId: "task-session-1",
+              sessionKind: "chat",
+              title: "Main",
+              config: { provider: "openai", model: "gpt-5.2" },
+              sessionConfig: null,
+              busy: false,
+              busySince: null,
+              feed: [],
+              agents: [],
+              pendingSteer: null,
+              pendingTurnStart: null,
+              transcriptOnly: false,
+            },
+          },
+        } as never);
+
+        const renderShell = (showConversation: boolean) =>
+          root?.render(
+            createElement(
+              "div",
+              null,
+              createElement(TaskContextSidebar),
+              showConversation ? createElement(TaskConversationSidebar) : null,
+            ),
+          );
+
+        await act(async () => renderShell(true));
+
+        const reopenButtons = () =>
+          Array.from(container.querySelectorAll("button")).filter((button) =>
+            button.textContent?.includes("Reopen task"),
+          ) as HTMLButtonElement[];
+        const reopenRequestCount = () =>
+          requestJsonRpc.mock.calls.filter((call) => call[3] === "task/reopen").length;
+        expect(reopenButtons()).toHaveLength(2);
+
+        await act(async () => {
+          reopenButtons()[0]?.click();
+          await Promise.resolve();
+        });
+        expect(reopenRequestCount()).toBe(1);
+        expect(useAppStore.getState().taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
+          action: "reopen",
+          expectedRevision: 4,
+        });
+
+        const buttons = Array.from(container.querySelectorAll("button"));
+        const pendingReopenButtons = buttons.filter(
+          (button) => button.textContent?.trim() === "Reopening...",
+        );
+        expect(pendingReopenButtons).toHaveLength(2);
+        expect(
+          pendingReopenButtons.every((button) => button.getAttribute("aria-busy") === "true"),
+        ).toBe(true);
+
+        await act(async () => renderShell(false));
+        await act(async () => renderShell(true));
+        const remountedPendingButtons = Array.from(container.querySelectorAll("button")).filter(
+          (button) => button.textContent?.trim() === "Reopening...",
+        ) as HTMLButtonElement[];
+        expect(remountedPendingButtons).toHaveLength(2);
+        expect(remountedPendingButtons.every((button) => button.disabled)).toBe(true);
+
+        await act(async () => {
+          for (const button of remountedPendingButtons) button.click();
+          await Promise.resolve();
+        });
+        expect(reopenRequestCount()).toBe(1);
+
+        await act(async () => {
+          reopenResult.resolve({ task: taskRecord({ status: "working", revision: 5 }) });
+          await reopenResult.promise;
+          await Promise.resolve();
+        });
+        expect(useAppStore.getState().taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
+        expect(container.textContent).not.toContain("Reopen task");
+      } finally {
+        if (root) await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("rebinds the message overlay observer when a task becomes read-only", async () => {
     const observedElements: Element[] = [];

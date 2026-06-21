@@ -56,6 +56,19 @@ const defaultTaskActionDependencies: TaskActionDependencies = {
   persistNow,
 };
 
+type TaskLifecycleMethod =
+  | "task/accept"
+  | "task/requestChanges"
+  | "task/cancel"
+  | "task/reopen"
+  | "task/retry";
+
+function terminalLifecycleActionForMethod(method: TaskLifecycleMethod): "reopen" | "retry" | null {
+  if (method === "task/reopen") return "reopen";
+  if (method === "task/retry") return "retry";
+  return null;
+}
+
 function workspacePlatform(): NodeJS.Platform {
   return getDesktopPlatformInfo().rawPlatform as NodeJS.Platform;
 }
@@ -365,7 +378,7 @@ export function createTaskActions(
 > {
   const mutateLifecycle = async (
     taskId: string,
-    method: "task/accept" | "task/requestChanges" | "task/cancel" | "task/reopen" | "task/retry",
+    method: TaskLifecycleMethod,
     extra: Record<string, unknown> = {},
   ): Promise<boolean> => {
     const task = get().tasksById[taskId];
@@ -373,6 +386,24 @@ export function createTaskActions(
     const workspaceId = workspaceIdForTask(get, task);
     const workspace = workspaceId ? get().workspaces.find((item) => item.id === workspaceId) : null;
     if (!workspaceId || !workspace) return false;
+    const terminalAction = terminalLifecycleActionForMethod(method);
+    const lifecycleRequest =
+      terminalAction !== null
+        ? {
+            action: terminalAction,
+            expectedRevision: task.revision,
+            requestId: makeId(),
+          }
+        : null;
+    if (lifecycleRequest && get().taskLifecycleRequestByTaskId?.[taskId]) return false;
+    if (lifecycleRequest) {
+      set((state) => ({
+        taskLifecycleRequestByTaskId: {
+          ...(state.taskLifecycleRequestByTaskId ?? {}),
+          [taskId]: lifecycleRequest,
+        },
+      }));
+    }
     try {
       await ensureTaskTransport(get, set, workspaceId, deps);
       const result = await deps.requestJsonRpc(get, set, workspaceId, method, {
@@ -388,6 +419,16 @@ export function createTaskActions(
     } catch (error) {
       notifyError(set, "Unable to update task", error);
       return false;
+    } finally {
+      if (lifecycleRequest) {
+        set((state) => {
+          const current = state.taskLifecycleRequestByTaskId?.[taskId];
+          if (current?.requestId !== lifecycleRequest.requestId) return {};
+          const next = { ...(state.taskLifecycleRequestByTaskId ?? {}) };
+          delete next[taskId];
+          return { taskLifecycleRequestByTaskId: next };
+        });
+      }
     }
   };
 

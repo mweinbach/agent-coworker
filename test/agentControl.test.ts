@@ -72,6 +72,9 @@ function makeChildSession(config: AgentConfig) {
     cancel: mock(() => {
       session.isBusy = false;
     }),
+    cancelAndWaitForSettlement: mock(async (_opts?: { timeoutMs?: number }) => {
+      session.cancel();
+    }),
     isAgentOf: (parentSessionId: string) => parentSessionId === session.parentSessionId,
     getSessionInfoEvent: () => ({
       type: "session_info",
@@ -1318,7 +1321,46 @@ describe("AgentControl persisted child control", () => {
     expect(summary.executionState).toBe("closed");
   });
 
-  test("cancelAll continues cancelling siblings after one child throws", () => {
+  test("cancelAll waits for child sessions to settle after cancellation", async () => {
+    const config = makeConfig();
+    const childSettled = Promise.withResolvers<void>();
+    const childSession = makeChildSession(config);
+    childSession.cancelAndWaitForSettlement = mock(async (opts?: { timeoutMs?: number }) => {
+      expect(opts?.timeoutMs).toBe(75);
+      await childSettled.promise;
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map([["child-1", { session: childSession, socket: null }]]) as Map<
+        string,
+        SessionBinding
+      >,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: (() => {
+        throw new Error("unused");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const cancelled = control.cancelAll("root-1", { timeoutMs: 75 });
+    await Promise.resolve();
+
+    expect(childSession.cancelAndWaitForSettlement).toHaveBeenCalledTimes(1);
+    await expect(
+      Promise.race([
+        cancelled.then(() => "settled"),
+        new Promise((resolve) => setTimeout(() => resolve("pending"), 25)),
+      ]),
+    ).resolves.toBe("pending");
+
+    childSettled.resolve();
+    await expect(cancelled).resolves.toBeUndefined();
+  });
+
+  test("cancelAll continues cancelling siblings after one child throws", async () => {
     const config = makeConfig();
     const firstChild = makeChildSession(config);
     firstChild.id = "child-err";
@@ -1344,7 +1386,7 @@ describe("AgentControl persisted child control", () => {
       emitParentLog,
     });
 
-    expect(() => control.cancelAll("root-1")).not.toThrow();
+    await expect(control.cancelAll("root-1")).rejects.toThrow("cancel exploded");
     expect(firstChild.cancel).toHaveBeenCalledTimes(1);
     expect(secondChild.cancel).toHaveBeenCalledTimes(1);
     expect(emitParentLog).toHaveBeenCalledWith(

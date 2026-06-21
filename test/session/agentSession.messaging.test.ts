@@ -1379,6 +1379,49 @@ describe("AgentSession", () => {
       expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id);
     });
 
+    test("waits for child agent settlement during terminal cancellation", async () => {
+      const childSettled = Promise.withResolvers<void>();
+      const cancelAgentSessionsImpl = mock(
+        async (_parentSessionId: string, opts?: { timeoutMs?: number }) => {
+          expect(opts?.timeoutMs).toBe(500);
+          await childSettled.promise;
+        },
+      );
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      mockRunTurn.mockImplementationOnce(async (params: any) => {
+        await new Promise((_, reject) => {
+          params.abortSignal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+
+        throw new Error("unreachable");
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await waitForCondition(() => session.isBusy);
+
+      const settled = session.cancelAndWaitForSettlement({
+        includeSubagents: true,
+        timeoutMs: 500,
+      });
+      await sendPromise;
+
+      await expect(
+        Promise.race([
+          settled.then(() => "settled"),
+          new Promise((resolve) => setTimeout(() => resolve("pending"), 25)),
+        ]),
+      ).resolves.toBe("pending");
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id, { timeoutMs: 500 });
+
+      childSettled.resolve();
+      await expect(settled).resolves.toBeUndefined();
+    });
+
     test("can cancel child agents explicitly even when the root session is idle", () => {
       const cancelAgentSessionsImpl = mock(() => {});
       const { session } = makeSession({ cancelAgentSessionsImpl });

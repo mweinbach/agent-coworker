@@ -149,13 +149,22 @@ export class TurnExecutionManager {
     return this.deps.interactionManager.handleApprovalResponse(requestId, approved);
   }
 
-  cancel(opts?: { includeSubagents?: boolean }) {
-    if (
-      opts?.includeSubagents === true &&
-      (this.context.state.sessionInfo.sessionKind ?? "root") === "root"
-    ) {
-      this.context.deps.cancelAgentSessionsImpl?.(this.context.id);
+  private cancelChildAgentSessions(opts?: { timeoutMs?: number }): Promise<void> | null {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      return null;
     }
+    try {
+      const settlement =
+        opts === undefined
+          ? this.context.deps.cancelAgentSessionsImpl?.(this.context.id)
+          : this.context.deps.cancelAgentSessionsImpl?.(this.context.id, opts);
+      return settlement ? Promise.resolve(settlement) : null;
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  private cancelOwnTurn() {
     if (!this.context.state.running) return;
     if (this.context.state.abortController) {
       this.context.state.abortController.abort();
@@ -163,13 +172,18 @@ export class TurnExecutionManager {
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
   }
 
-  async cancelAndWaitForSettlement(opts?: {
-    includeSubagents?: boolean;
-    timeoutMs?: number;
-  }): Promise<void> {
-    this.cancel({ includeSubagents: opts?.includeSubagents });
+  cancel(opts?: { includeSubagents?: boolean }) {
+    if (opts?.includeSubagents === true) {
+      this.cancelChildAgentSessions()?.catch(() => {
+        // Explicit user cancellation is best-effort; terminal lifecycle
+        // quiescence uses cancelAndWaitForSettlement to fail closed instead.
+      });
+    }
+    this.cancelOwnTurn();
+  }
+
+  private async waitForOwnTurnSettlement(timeoutMs: number): Promise<void> {
     const settlement = this.activeTurnSettlement;
-    const timeoutMs = opts?.timeoutMs ?? 30_000;
     if (!settlement) {
       if (!this.context.state.running) return;
       await new Promise<void>((resolve, reject) => {
@@ -202,5 +216,49 @@ export class TurnExecutionManager {
     } finally {
       if (timeout) clearTimeout(timeout);
     }
+  }
+
+  private async waitForChildAgentSettlement(
+    settlement: Promise<void>,
+    timeoutMs: number,
+  ): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    settlement.catch(() => {
+      // The race below owns reporting. This prevents an unhandled rejection if
+      // the timeout wins but the child settles later with an error.
+    });
+    try {
+      await Promise.race([
+        settlement,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () =>
+              reject(new Error("Timed out waiting for child agent settlement after cancellation.")),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  async cancelAndWaitForSettlement(opts?: {
+    includeSubagents?: boolean;
+    timeoutMs?: number;
+  }): Promise<void> {
+    const timeoutMs = opts?.timeoutMs ?? 30_000;
+    const childSettlement =
+      opts?.includeSubagents === true ? this.cancelChildAgentSessions({ timeoutMs }) : null;
+    this.cancelOwnTurn();
+    const waits = [this.waitForOwnTurnSettlement(timeoutMs)];
+    if (childSettlement) {
+      waits.push(this.waitForChildAgentSettlement(childSettlement, timeoutMs));
+    }
+    const settled = await Promise.allSettled(waits);
+    const rejection = settled.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (rejection) throw rejection.reason;
   }
 }

@@ -898,6 +898,96 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }
   }, 20_000);
 
+  test("terminal quiescence waits for child-agent settlement before committing task status", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const childWritePath = path.join(tmpDir, "child-agent-before-terminal.txt");
+    const childStarted = Promise.withResolvers<AbortSignal | null>();
+    const releaseChild = Promise.withResolvers<void>();
+    const childSettled = Promise.withResolvers<void>();
+    const parentSpawnedChild = Promise.withResolvers<void>();
+    const runTurnImpl = (async (params: RunTurnParams) => {
+      if (params.agentRole) {
+        childStarted.resolve(params.abortSignal ?? null);
+        await releaseChild.promise;
+        await fs.writeFile(childWritePath, "child settled before terminal commit", "utf8");
+        childSettled.resolve();
+        return {
+          text: "child settled",
+          responseMessages: [],
+        };
+      }
+
+      if (!params.agentControl || !params.sessionId) {
+        throw new Error("Expected task thread run to receive agent control");
+      }
+      await params.agentControl.spawn({
+        parentSessionId: params.sessionId,
+        parentConfig: params.config,
+        message: "hold child turn until terminal quiescence cancels it",
+        role: "worker",
+        contextMode: "none",
+        parentDepth: params.spawnDepth ?? 0,
+      });
+      parentSpawnedChild.resolve();
+      return {
+        text: "parent spawned child",
+        responseMessages: [],
+      };
+    }) as never;
+    const opts = serverOpts(tmpDir, { runTurnImpl, taskTerminalQuiesceTimeoutMs: 500 });
+    const running = await startAgentServer(opts);
+    const rpc = await connectJsonRpc(running.url);
+
+    try {
+      const created = await createTask(rpc, tmpDir, "child-agent-settlement");
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await parentSpawnedChild.promise;
+      const childSignal = await childStarted.promise;
+
+      const latest = await readTask(rpc, tmpDir, created.id);
+      const cancelPromise = rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Cancel waits for child-agent settlement.",
+      });
+      await waitForCondition(
+        () => childSignal?.aborted === true,
+        "task cancel did not abort the child agent turn",
+      );
+
+      await expect(
+        Promise.race([cancelPromise.then(() => "settled"), delay(75).then(() => "pending")]),
+      ).resolves.toBe("pending");
+      const stillWorking = await readTask(rpc, tmpDir, created.id);
+      expect(stillWorking.status).toBe("working");
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "cancelled",
+          75,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+      await expect(fs.access(childWritePath)).rejects.toThrow();
+
+      releaseChild.resolve();
+      await childSettled.promise;
+      const cancelled = await cancelPromise;
+
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      await fs.access(childWritePath);
+      const afterCancel = await readTask(rpc, tmpDir, created.id);
+      expect(afterCancel.status).toBe("cancelled");
+    } finally {
+      rpc.close();
+      await stopTestServer(running.server);
+    }
+  }, 20_000);
+
   test("terminal transition timeout waits for cooperative sibling quiescence before failing closed", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     const modeBySession = new Map<string, "stuck" | "cooperative">();

@@ -520,8 +520,8 @@ export class SessionRegistry {
       inspectAgentImpl: async (agentOpts) => await this.getAgentControl().inspect(agentOpts),
       resumeAgentImpl: async (agentOpts) => await this.getAgentControl().resume(agentOpts),
       closeAgentImpl: async (agentOpts) => await this.getAgentControl().close(agentOpts),
-      cancelAgentSessionsImpl: (parentSessionId) =>
-        this.getAgentControl().cancelAll(parentSessionId),
+      cancelAgentSessionsImpl: async (parentSessionId, cancelOpts) =>
+        await this.getAgentControl().cancelAll(parentSessionId, cancelOpts),
       deleteSessionImpl: async (opts) => {
         if (this.options.taskCoordinator.isTaskThread(opts.targetSessionId)) {
           throw new Error("Task threads must be managed through the task lifecycle");

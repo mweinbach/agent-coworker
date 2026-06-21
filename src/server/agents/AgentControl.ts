@@ -511,12 +511,22 @@ export class AgentControl {
     return this.publish(opts.parentSessionId, binding.session, { executionState: "closed" });
   }
 
-  cancelAll(parentSessionId: string): void {
+  async cancelAll(parentSessionId: string, opts?: { timeoutMs?: number }): Promise<void> {
+    const waits: Promise<void>[] = [];
     for (const binding of this.deps.sessionBindings.values()) {
       const session = binding.session;
       if (!session?.isAgentOf(parentSessionId)) continue;
       try {
-        session.cancel();
+        waits.push(
+          session.cancelAndWaitForSettlement({ timeoutMs: opts?.timeoutMs }).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            this.deps.emitParentLog(
+              parentSessionId,
+              `Failed to cancel child agent ${session.id}: ${message}`,
+            );
+            throw error;
+          }),
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.deps.emitParentLog(
@@ -525,5 +535,10 @@ export class AgentControl {
         );
       }
     }
+    const settled = await Promise.allSettled(waits);
+    const rejection = settled.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (rejection) throw rejection.reason;
   }
 }

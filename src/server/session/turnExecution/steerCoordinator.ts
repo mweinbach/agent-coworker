@@ -85,6 +85,7 @@ export type SteerCoordinator = {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    steerRequestId?: string,
   ) => Promise<void>;
   commitPendingSteers: () => Promise<{ messages: ModelMessage[]; committedCount: number }>;
   drainPendingSteers: (
@@ -143,24 +144,60 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
 
   const log = (line: string) => context.emit({ type: "log", sessionId: context.id, line });
 
-  const emitTaskLockIfPresent = (): boolean => {
+  const emitSessionError = (
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: TaskLockError["data"],
+    steerRequestId?: string,
+  ) => {
+    context.emit({
+      type: "error",
+      sessionId: context.id,
+      code,
+      source,
+      message,
+      ...(data ? { data } : {}),
+      ...(steerRequestId ? { steerRequestId } : {}),
+    });
+  };
+
+  const emitTaskLockIfPresent = (steerRequestId?: string): boolean => {
     const taskLock = deps.getTaskLock?.() ?? null;
     if (!taskLock) return false;
-    context.emitError("task_locked", "session", taskLock.message, taskLock.data);
+    emitSessionError("task_locked", "session", taskLock.message, taskLock.data, steerRequestId);
     return true;
   };
-  const admitSteerForTurn = (turnId: string): boolean => {
-    if (emitTaskLockIfPresent()) return false;
+  const admitSteerForTurn = (turnId: string, steerRequestId?: string): boolean => {
+    if (emitTaskLockIfPresent(steerRequestId)) return false;
     if (!context.state.running) {
-      context.emitError("validation_failed", "session", "No active turn to steer.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "No active turn to steer.",
+        undefined,
+        steerRequestId,
+      );
       return false;
     }
     if (context.state.currentTurnId !== turnId) {
-      context.emitError("validation_failed", "session", "Active turn mismatch.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn mismatch.",
+        undefined,
+        steerRequestId,
+      );
       return false;
     }
     if (!context.state.acceptingSteers) {
-      context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn no longer accepts steering.",
+        undefined,
+        steerRequestId,
+      );
       return false;
     }
     return true;
@@ -219,46 +256,89 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    steerRequestId?: string,
   ) => {
     if (!context.state.running) {
-      context.emitError("validation_failed", "session", "No active turn to steer.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "No active turn to steer.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     const currentTurnId = context.state.currentTurnId;
     if (!currentTurnId) {
-      context.emitError("validation_failed", "session", "Active turn is missing an id.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn is missing an id.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     if (expectedTurnId !== currentTurnId) {
-      context.emitError("validation_failed", "session", "Active turn mismatch.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn mismatch.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     if (!context.state.acceptingSteers) {
-      context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn no longer accepts steering.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     if (text.trim().length === 0 && (!attachments || attachments.length === 0)) {
-      context.emitError("validation_failed", "session", "Steer input must be non-empty.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Steer input must be non-empty.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
     const displayText = resolveUserInputDisplayText(text, attachments);
     const attachmentValidationMessage = deps.getTurnAttachmentValidationMessage(attachments);
     if (attachmentValidationMessage) {
-      context.emitError("validation_failed", "session", attachmentValidationMessage);
+      emitSessionError(
+        "validation_failed",
+        "session",
+        attachmentValidationMessage,
+        undefined,
+        steerRequestId,
+      );
       return;
     }
     try {
       await deps.validateUploadedFileAttachments(attachments);
     } catch (error) {
       const classified = deps.classifyTurnError(error);
-      context.emitError(classified.code, classified.source, context.formatError(error));
+      emitSessionError(
+        classified.code,
+        classified.source,
+        context.formatError(error),
+        undefined,
+        steerRequestId,
+      );
       return;
     }
-    if (!admitSteerForTurn(currentTurnId)) return;
+    if (!admitSteerForTurn(currentTurnId, steerRequestId)) return;
     const activeSteerHandler = context.state.activeSteerHandler;
     if (activeSteerHandler) {
       const materialization = createUserContentMaterializationTransaction();
@@ -301,21 +381,29 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
             turnId: currentTurnId,
             text,
             ...(clientMessageId ? { clientMessageId } : {}),
+            ...(steerRequestId ? { steerRequestId } : {}),
           });
         } catch (error) {
           await materialization.rollback();
           const sessionError = getTaskLockAbortSessionError(error);
           if (sessionError) {
-            context.emitError(
+            emitSessionError(
               sessionError.code,
               sessionError.source,
               sessionError.message,
               sessionError.data,
+              steerRequestId,
             );
           }
           if (isTaskLockAbortError(error)) return;
           const classified = deps.classifyTurnError(error);
-          context.emitError(classified.code, classified.source, context.formatError(error));
+          emitSessionError(
+            classified.code,
+            classified.source,
+            context.formatError(error),
+            undefined,
+            steerRequestId,
+          );
         }
       };
       if (deps.trackLiveSteerSettlement) {
@@ -332,18 +420,22 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
         0,
       ) + getAttachmentTotalBase64Size(getInlineAttachments(attachments));
     if (nextPendingSteerAttachmentBase64Size > MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE) {
-      context.emitError(
+      emitSessionError(
         "validation_failed",
         "session",
         "Pending steer attachments are too large. Wait for the current turn to consume queued steers.",
+        undefined,
+        steerRequestId,
       );
       return;
     }
     if (context.state.pendingSteers.length >= MAX_PENDING_STEER_COUNT) {
-      context.emitError(
+      emitSessionError(
         "validation_failed",
         "session",
         "Too many pending steers. Wait for the current turn to consume queued steers.",
+        undefined,
+        steerRequestId,
       );
       return;
     }
@@ -362,6 +454,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       turnId: currentTurnId,
       text,
       ...(clientMessageId ? { clientMessageId } : {}),
+      ...(steerRequestId ? { steerRequestId } : {}),
     });
   };
 

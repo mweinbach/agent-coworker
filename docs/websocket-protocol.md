@@ -2283,6 +2283,7 @@ Acknowledges that a `steer_message` was accepted for the active turn. The steer 
 | `turnId` | `string` | Active turn identifier |
 | `text` | `string` | Accepted steer text |
 | `clientMessageId` | `string?` | Echoed from the original `steer_message` if provided |
+| `steerRequestId` | `string?` | Server-generated JSON-RPC correlation id for matching concurrent `turn/steer` outcomes; clients should continue to use `clientMessageId` for optimistic UI reconciliation |
 
 ---
 
@@ -3738,6 +3739,7 @@ Structured error event. Can be emitted in response to any client message or duri
 | `code` | `ServerErrorCode` | Machine-readable error code (see [ServerErrorCode](#servererrorcode)) |
 | `source` | `ServerErrorSource` | Error origin (see [ServerErrorSource](#servererrorsource)) |
 | `data` | `ServerErrorData?` | Optional structured error payload, for example task lock data with `lockKind`, `taskId`, and `taskStatus` |
+| `steerRequestId` | `string?` | Server-generated JSON-RPC correlation id when the error is the direct outcome of a `turn/steer` request |
 
 ---
 

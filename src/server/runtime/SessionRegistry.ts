@@ -266,6 +266,10 @@ export class SessionRegistry {
     return "queued";
   }
 
+  async cancelAgentSessions(parentSessionId: string, opts?: { timeoutMs?: number }): Promise<void> {
+    await this.getAgentControl().cancelAll(parentSessionId, opts);
+  }
+
   async createTaskFromChat(
     sourceSessionId: string,
     rawInput: TaskCreationInput,

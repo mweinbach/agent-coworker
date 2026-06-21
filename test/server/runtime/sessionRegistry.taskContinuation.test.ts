@@ -103,4 +103,17 @@ describe("SessionRegistry task continuation", () => {
     expect(onFailure).toHaveBeenCalledTimes(1);
     expect(String(onFailure.mock.calls[0]?.[0])).toContain("turn failed to start");
   });
+
+  test("can cancel child agents by parent id when the parent runtime is not live", async () => {
+    const cancelAll = mock(async () => {});
+    const registry = {
+      getAgentControl: () => ({ cancelAll }),
+    } as unknown as SessionRegistry;
+
+    await SessionRegistry.prototype.cancelAgentSessions.call(registry, "parent-session-1", {
+      timeoutMs: 250,
+    });
+
+    expect(cancelAll).toHaveBeenCalledWith("parent-session-1", { timeoutMs: 250 });
+  });
 });

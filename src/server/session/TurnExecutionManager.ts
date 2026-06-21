@@ -92,10 +92,19 @@ export class TurnExecutionManager {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    steerRequestId?: string,
   ) {
     const taskLock = getSessionTaskLock(this.context.deps.sessionDb, this.context.id);
     if (taskLock) {
-      this.context.emitError("task_locked", "session", taskLock.message, taskLock.data);
+      this.context.emit({
+        type: "error",
+        sessionId: this.context.id,
+        code: "task_locked",
+        source: "session",
+        message: taskLock.message,
+        data: taskLock.data,
+        ...(steerRequestId ? { steerRequestId } : {}),
+      });
       return;
     }
     return await this.steerCoordinator.sendSteerMessage(
@@ -105,6 +114,7 @@ export class TurnExecutionManager {
       attachments,
       inputParts,
       references,
+      steerRequestId,
     );
   }
 

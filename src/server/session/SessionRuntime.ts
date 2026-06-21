@@ -158,6 +158,7 @@ export class SessionTurnService {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    steerRequestId?: string,
   ): Promise<void> {
     await this.session.sendSteerMessage(
       text,
@@ -166,6 +167,7 @@ export class SessionTurnService {
       attachments,
       inputParts,
       references,
+      steerRequestId,
     );
   }
 

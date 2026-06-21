@@ -15,6 +15,20 @@ import {
   JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
 } from "./flow.harness";
 
+async function expectStillPending(promise: Promise<unknown>, label: string): Promise<void> {
+  let settled = false;
+  promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  if (settled) throw new Error(`${label} settled before its correlated event`);
+}
+
 describe("server JSON-RPC flows", () => {
   test("turn/start rejects at the request layer when the thread is already running", async () => {
     const tmpDir = await makeTmpProject();
@@ -101,6 +115,150 @@ describe("server JSON-RPC flows", () => {
       await rpc.waitFor((message) => message.method === "turn/completed");
       rpc.close();
     } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/steer correlates concurrent live ACKs to the originating request", async () => {
+    const tmpDir = await makeTmpProject();
+    const handlerReady = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    const aEntered = Promise.withResolvers<void>();
+    const releaseA = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const unregister = params.registerSteerHandler?.(async (steer: any) => {
+            if (steer.text === "A") {
+              aEntered.resolve();
+              await releaseA.promise;
+              return;
+            }
+            if (steer.text === "B") {
+              return;
+            }
+            throw new Error(`unexpected steer ${steer.text}`);
+          });
+          handlerReady.resolve();
+          await releaseTurn.promise;
+          unregister?.();
+          return {
+            text: "done",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      const turnStart = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start turn" }],
+      });
+      const turnId = turnStart.result.turn.id;
+      await handlerReady.promise;
+
+      const aResponse = rpc.sendRequest("turn/steer", {
+        threadId: started.result.thread.id,
+        turnId,
+        input: [{ type: "text", text: "A" }],
+        clientMessageId: "client-A",
+      });
+      await aEntered.promise;
+
+      const bResponse = await rpc.sendRequest("turn/steer", {
+        threadId: started.result.thread.id,
+        turnId,
+        input: [{ type: "text", text: "B" }],
+        clientMessageId: "client-B",
+      });
+      expect(bResponse.result?.turnId).toBe(turnId);
+      await expectStillPending(aResponse, "steer A");
+
+      releaseA.resolve();
+      const resolvedA = await aResponse;
+      expect(resolvedA.result?.turnId).toBe(turnId);
+
+      releaseTurn.resolve();
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      rpc.close();
+    } finally {
+      releaseA.resolve();
+      releaseTurn.resolve();
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/steer correlates omitted-clientMessageId errors without rejecting sibling requests", async () => {
+    const tmpDir = await makeTmpProject();
+    const handlerReady = Promise.withResolvers<void>();
+    const releaseTurn = Promise.withResolvers<void>();
+    const bEntered = Promise.withResolvers<void>();
+    const releaseB = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const unregister = params.registerSteerHandler?.(async (steer: any) => {
+            if (steer.text === "B") {
+              bEntered.resolve();
+              await releaseB.promise;
+              return;
+            }
+            if (steer.text === "A") {
+              throw new Error("A provider failed");
+            }
+            throw new Error(`unexpected steer ${steer.text}`);
+          });
+          handlerReady.resolve();
+          await releaseTurn.promise;
+          unregister?.();
+          return {
+            text: "done",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      const turnStart = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start turn" }],
+      });
+      const turnId = turnStart.result.turn.id;
+      await handlerReady.promise;
+
+      const bResponse = rpc.sendRequest("turn/steer", {
+        threadId: started.result.thread.id,
+        turnId,
+        input: [{ type: "text", text: "B" }],
+      });
+      await bEntered.promise;
+
+      const aResponse = await rpc.sendRequest("turn/steer", {
+        threadId: started.result.thread.id,
+        turnId,
+        input: [{ type: "text", text: "A" }],
+      });
+      expect(aResponse.error?.message).toContain("A provider failed");
+      await expectStillPending(bResponse, "steer B");
+
+      releaseB.resolve();
+      const resolvedB = await bResponse;
+      expect(resolvedB.result?.turnId).toBe(turnId);
+
+      releaseTurn.resolve();
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      rpc.close();
+    } finally {
+      releaseB.resolve();
+      releaseTurn.resolve();
       await stopTestServer(server);
     }
   });

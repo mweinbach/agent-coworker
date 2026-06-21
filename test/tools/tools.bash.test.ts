@@ -386,6 +386,36 @@ describe("bash tool", () => {
     expect(result.errorCode).toBe("SANDBOX_REQUIRED");
   });
 
+  test("rechecks mutation authority after approving the unsandboxed fallback", async () => {
+    const calls: string[] = [];
+    const approve = mock(async () => true);
+    let gateCalls = 0;
+
+    await expect(
+      bashInternal.runShellCommandWithExec({
+        command: "touch after-approval",
+        cwd: "/tmp",
+        platform: "linux",
+        policy: { kind: "workspace-write", writableRoots: ["/tmp"], network: true },
+        requireBackend: false,
+        capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: null },
+        approveUnsandboxed: approve,
+        assertCanMutate: async () => {
+          gateCalls += 1;
+          throw new Error("task locked before unsandboxed fallback");
+        },
+        execRunner: async (file: string) => {
+          calls.push(file);
+          return { stdout: "should not run\n", stderr: "", exitCode: 0 };
+        },
+      }),
+    ).rejects.toThrow("task locked before unsandboxed fallback");
+
+    expect(approve).toHaveBeenCalled();
+    expect(gateCalls).toBe(1);
+    expect(calls).toEqual([]);
+  });
+
   test("labels an unsandboxed fallback approval as a sandbox escape", async () => {
     const dir = await tmpDir();
     const approveFn = mock(async () => false);

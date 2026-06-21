@@ -732,7 +732,11 @@ describe("server JSON-RPC task terminal turn locks", () => {
           turnId,
           input: [{ type: "text", text: "stale steer after cancellation" }],
         });
-        await expectTaskLocked(steer);
+        await expectTaskLocked(steer, "finalizing cancelled", {
+          lockKind: "terminal_task_thread",
+          taskId: created.id,
+          taskStatus: "cancelled",
+        });
 
         releaseManual.resolve();
         const cancelled = await cancelPromise;
@@ -2254,9 +2258,10 @@ describe("server JSON-RPC task terminal turn locks", () => {
         }),
         "finalizing cancelled",
         {
-          lockKind: "terminal_task_thread",
+          lockKind: "active_source_chat",
           taskId,
           taskStatus: "cancelled",
+          taskTitle: "Source chat terminal quiesce",
         },
       );
 

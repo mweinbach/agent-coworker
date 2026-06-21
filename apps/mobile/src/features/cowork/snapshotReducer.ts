@@ -12,6 +12,7 @@ const sessionErrorCodes = [
   "unknown_type",
   "unknown_session",
   "busy",
+  "task_locked",
   "validation_failed",
   "permission_denied",
   "provider_error",
@@ -133,6 +134,7 @@ function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem)
         message: item.message,
         code: normalizeErrorCode(item.code),
         source: normalizeErrorSource(item.source),
+        ...(item.data ? { data: item.data } : {}),
       };
     case "uiSurface":
       return {

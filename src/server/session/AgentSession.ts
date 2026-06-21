@@ -1755,6 +1755,7 @@ export class AgentSession {
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
     references?: import("../../types").TurnReference[],
+    steerRequestId?: string,
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {
@@ -1767,6 +1768,7 @@ export class AgentSession {
       attachments,
       inputParts,
       references,
+      steerRequestId,
     );
   }
 

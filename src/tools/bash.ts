@@ -213,6 +213,8 @@ type RunShellCommandOpts = {
    * access) or when a backend is available.
    */
   approveUnsandboxed?: () => Promise<boolean>;
+  /** Rechecked after an unsandboxed fallback approval and before execution. */
+  assertCanMutate?: () => Promise<void>;
   /** Injectable sandbox capabilities (for tests). */
   capabilities?: SandboxCapabilities;
   /** Injectable existence check for shell selection (for tests). */
@@ -362,17 +364,19 @@ async function runShellCommandWithExec(
     policy &&
     requiresSandboxEnforcement &&
     backendDoesNotEnforceScope &&
-    opts.approveUnsandboxed &&
-    !(await opts.approveUnsandboxed())
+    opts.approveUnsandboxed
   ) {
-    return {
-      stdout: "",
-      stderr: `Refusing to run: ${transformed?.warning ?? "OS sandbox backend does not enforce filesystem/network scope"} (declined).`,
-      exitCode: 1,
-      errorCode: "SANDBOX_REQUIRED",
-      sandbox: "none",
-      sandboxWarning: transformed?.warning,
-    };
+    if (!(await opts.approveUnsandboxed())) {
+      return {
+        stdout: "",
+        stderr: `Refusing to run: ${transformed?.warning ?? "OS sandbox backend does not enforce filesystem/network scope"} (declined).`,
+        exitCode: 1,
+        errorCode: "SANDBOX_REQUIRED",
+        sandbox: "none",
+        sandboxWarning: transformed?.warning,
+      };
+    }
+    await opts.assertCanMutate?.();
   }
 
   // A backend is present and either enforcing (Seatbelt/bwrap) or the unsandboxed
@@ -545,6 +549,9 @@ export function createBashTool(ctx: ToolContext) {
             detail:
               "No enforcing OS sandbox is available on this machine, so this command can only run with full filesystem and network access.",
           }),
+        assertCanMutate: async () => {
+          await ctx.assertCanMutate?.("bash");
+        },
       };
 
       await ctx.assertCanMutate?.("bash");

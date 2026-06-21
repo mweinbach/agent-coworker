@@ -11,6 +11,41 @@ const projectedToolStateSchema = z.enum([
   "output-denied",
 ]);
 
+const taskStatusSchema = z.enum([
+  "draft",
+  "planning",
+  "working",
+  "blocked",
+  "awaiting_review",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+const terminalTaskStatusSchema = z.enum(["completed", "cancelled", "failed"]);
+
+const serverErrorDataSchema = z.discriminatedUnion("lockKind", [
+  z
+    .object({
+      category: z.literal("task_locked"),
+      source: z.literal("session"),
+      lockKind: z.literal("terminal_task_thread"),
+      taskId: nonEmptyStringSchema,
+      taskStatus: terminalTaskStatusSchema,
+    })
+    .strict(),
+  z
+    .object({
+      category: z.literal("task_locked"),
+      source: z.literal("session"),
+      lockKind: z.literal("active_source_chat"),
+      taskId: nonEmptyStringSchema,
+      taskStatus: taskStatusSchema,
+      taskTitle: z.string(),
+    })
+    .strict(),
+]);
+
 const projectedItemSchema = z.discriminatedUnion("type", [
   z
     .object({
@@ -97,6 +132,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       message: z.string(),
       code: z.string(),
       source: z.string(),
+      data: serverErrorDataSchema.optional(),
     })
     .passthrough(),
   z
@@ -196,6 +232,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
         "unknown_type",
         "unknown_session",
         "busy",
+        "task_locked",
         "validation_failed",
         "permission_denied",
         "provider_error",
@@ -212,6 +249,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
         "observability",
         "permissions",
       ]),
+      data: serverErrorDataSchema.optional(),
     })
     .passthrough(),
   z
@@ -545,6 +583,7 @@ export type CoworkTurnCompletedNotification = z.infer<typeof coworkTurnCompleted
 export type ProjectedItem = z.infer<typeof projectedItemSchema>;
 export type SessionFeedItem = z.infer<typeof sessionFeedItemSchema>;
 export type SessionSnapshotLike = z.infer<typeof sessionSnapshotSchema>;
+export type ServerErrorData = z.infer<typeof serverErrorDataSchema>;
 
 // ---------------------------------------------------------------------------
 // Exported types — workspace control

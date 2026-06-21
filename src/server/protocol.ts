@@ -294,6 +294,7 @@ export type SessionEvent =
       turnId: string;
       text: string;
       clientMessageId?: string;
+      steerRequestId?: string;
     }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | {
@@ -559,5 +560,6 @@ export type SessionEvent =
       code: ServerErrorCode;
       source: ServerErrorSource;
       data?: ServerErrorData;
+      steerRequestId?: string;
     }
   | { type: "pong"; sessionId: string };

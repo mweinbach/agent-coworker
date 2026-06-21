@@ -2,6 +2,7 @@ import type { z } from "zod";
 import { taskCreationInputSchema } from "../../../shared/tasks";
 import type { AgentConfig } from "../../../types";
 import { ArtifactComparisonService, ArtifactPreviewService } from "../../artifacts";
+import { isTaskLockedError } from "../../session/taskLocks";
 import { ArtifactFingerprintConflictError } from "../../tasks/ArtifactVersionStore";
 import { ArtifactConflictError, buildArtifactRevisionPrompt } from "../../tasks/TaskCoordinator";
 import { JSONRPC_ERROR_CODES } from "../protocol";
@@ -80,6 +81,7 @@ function createTaskHandler<M extends TaskRequestMethod>(
               },
             }
           : {}),
+        ...(isTaskLockedError(error) ? { data: error.data } : {}),
       });
     }
   };

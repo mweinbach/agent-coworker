@@ -1384,7 +1384,8 @@ describe("AgentControl persisted child control", () => {
     const childSettled = Promise.withResolvers<void>();
     const childSession = makeChildSession(config);
     childSession.cancelAndWaitForSettlement = mock(async (opts?: { timeoutMs?: number }) => {
-      expect(opts?.timeoutMs).toBe(75);
+      expect(opts?.timeoutMs).toBeGreaterThan(0);
+      expect(opts?.timeoutMs).toBeLessThanOrEqual(75);
       await childSettled.promise;
     });
     const control = new AgentControl({

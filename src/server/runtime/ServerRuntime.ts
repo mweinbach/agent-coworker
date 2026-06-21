@@ -344,7 +344,14 @@ export async function createAgentServerRuntime(
       for (const sessionId of sessionIds) {
         const binding = registry.sessionBindings.get(sessionId);
         const runtime = binding?.runtime;
-        if (!runtime) continue;
+        if (!runtime) {
+          waits.push(
+            registry.cancelAgentSessions(sessionId, {
+              timeoutMs: taskTerminalQuiesceTimeoutMs,
+            }),
+          );
+          continue;
+        }
         const disposeRuntime = () => {
           try {
             runtime.lifecycle.dispose(`task ${task.id} ${reason}`, {

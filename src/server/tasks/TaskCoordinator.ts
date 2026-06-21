@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -37,6 +38,7 @@ import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspace
 import {
   getPendingTerminalTaskLock,
   isTerminalTaskStatus,
+  makeTaskLockedError,
   registerPendingTerminalTaskLocks,
 } from "../session/taskLocks";
 import type { SessionDb } from "../sessionDb";
@@ -213,7 +215,7 @@ function nonEmpty(value: string, name: string): string {
 
 function assertTaskAcceptsNewThreads(task: TaskRecord): void {
   const pendingLock = getPendingTerminalTaskLock(task.id);
-  if (pendingLock) throw new Error(pendingLock.message);
+  if (pendingLock) throw makeTaskLockedError(pendingLock);
   if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot create new focused threads until it is reopened or retried.`,
@@ -222,7 +224,7 @@ function assertTaskAcceptsNewThreads(task: TaskRecord): void {
 
 function assertTaskAcceptsMutation(task: TaskRecord): void {
   const pendingLock = getPendingTerminalTaskLock(task.id);
-  if (pendingLock) throw new Error(pendingLock.message);
+  if (pendingLock) throw makeTaskLockedError(pendingLock);
   if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot be changed until it is reopened or retried.`,
@@ -534,6 +536,7 @@ export class TaskCoordinator {
   private continuationDispatcher: TaskContinuationDispatcher | null = null;
   private readonly artifactStore: ArtifactVersionStore;
   private readonly taskMutationTails = new Map<string, Promise<void>>();
+  private readonly pendingTerminalMutationBypass = new AsyncLocalStorage<Set<string>>();
 
   constructor(private readonly options: TaskCoordinatorOptions) {
     this.artifactStore =
@@ -551,6 +554,20 @@ export class TaskCoordinator {
     this.continuationDispatcher = dispatcher;
   }
 
+  private allowsPendingTerminalMutation(taskId: string): boolean {
+    return this.pendingTerminalMutationBypass.getStore()?.has(taskId) === true;
+  }
+
+  private async runWithPendingTerminalMutationBypass<T>(
+    taskId: string,
+    callback: () => Promise<T> | T,
+  ): Promise<T> {
+    const existing = this.pendingTerminalMutationBypass.getStore();
+    const allowed = new Set(existing ?? []);
+    allowed.add(taskId);
+    return await this.pendingTerminalMutationBypass.run(allowed, callback);
+  }
+
   private async runTaskMutation<T>(
     taskId: string,
     callback: (context: { queued: boolean }) => Promise<T> | T,
@@ -565,6 +582,10 @@ export class TaskCoordinator {
 
     if (previous) await previous.catch(() => {});
     try {
+      const pendingLock = getPendingTerminalTaskLock(taskId);
+      if (pendingLock && !this.allowsPendingTerminalMutation(taskId)) {
+        throw makeTaskLockedError(pendingLock);
+      }
       return await callback({ queued: Boolean(previous) });
     } finally {
       releaseCurrent();
@@ -610,7 +631,7 @@ export class TaskCoordinator {
         await this.options.quiesceTaskThreads?.(input.task, input.status, {
           originSessionId: input.sessionId,
         });
-        const finalized = await input.run();
+        const finalized = await this.runWithPendingTerminalMutationBypass(input.task.id, input.run);
         if (isTerminalTask(finalized) && finalized.status === input.status) {
           await input.deferredTerminalCommitHook?.onCommitted(finalized);
         }

@@ -524,6 +524,43 @@ describe("AgentSession", () => {
       expect((session as any).state.providerState).toBeNull();
     });
 
+    test("treats foreign ABORT_ERR as provider failure when the session is not aborted", async () => {
+      const providerState = {
+        provider: "google" as const,
+        model: "gemini-3-flash-preview",
+        interactionId: "foreign-abort-partial",
+        updatedAt: "2026-06-21T09:30:00.000Z",
+      };
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async () => {
+        const error = Object.assign(new Error("Foreign provider ABORT_ERR"), {
+          code: "ABORT_ERR" as const,
+          responseMessages: [
+            { role: "assistant", content: [{ type: "text", text: "partial survives" }] },
+          ],
+          providerState,
+        });
+        throw error;
+      });
+
+      await session.sendUserMessage("trigger foreign abort code");
+
+      const history = (session as any).state.allMessages;
+      expect(JSON.stringify(history)).toContain("partial survives");
+      expect((session as any).state.providerState).toEqual(providerState);
+      expect((session as any).state.currentTurnOutcome).toBe("error");
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          message: "Foreign provider ABORT_ERR",
+        }),
+      );
+      expect(
+        events.some((event) => event.type === "session_busy" && (event as any).outcome === "error"),
+      ).toBe(true);
+    });
+
     test("records provider failure usage once when runTurn throws with usage", async () => {
       const { session, events } = makeSession();
 

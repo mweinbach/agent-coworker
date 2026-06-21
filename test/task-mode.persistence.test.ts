@@ -943,6 +943,176 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("self-origin deferred terminal completion rejects lifecycle mutations with structured pending locks", async () => {
+    const quiesceEntered = deferred();
+    const releaseQuiesce = deferred();
+    const harness = await createHarness({
+      quiesceTaskThreads: async () => {
+        quiesceEntered.resolve();
+        await releaseQuiesce.promise;
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await harness.coordinator.createPlanned({
+        workspacePath: harness.workspacePath,
+        sessionId: "task-session-1",
+        sourceSessionId: "source-chat-1",
+        creationOrigin: "chat_tool",
+        workspaceDisposition: "existing_project",
+        creation: {
+          idempotencyKey: `self-origin-lock-${crypto.randomUUID()}`,
+          title: "Self-origin lock task",
+          objective: "Complete only after the originating turn settles.",
+          context: "Lifecycle mutations must not bypass a pending terminal lock.",
+          requirements: [{ kind: "acceptance_criterion", text: "Finalization is serialized." }],
+          workItems: [{ key: "run", title: "Run" }],
+          reviewRequired: false,
+          reviewRounds: 0,
+        },
+      });
+      const workItem = created.task.workItems[0];
+      if (!workItem) throw new Error("Expected work item");
+      const done = await harness.coordinator.markWorkItem({
+        taskId: created.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: created.task.revision,
+        workItemId: workItem.id,
+        status: "done",
+        completionEvidence: "The no-review task is ready.",
+        threadId: created.task.threads[0]?.id,
+      });
+
+      const proposal = await harness.coordinator.proposeCompletion({
+        taskId: done.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: done.revision,
+        summary: "Finish after originating turn settles",
+        sessionId: "task-session-1",
+        deferTerminalUntilOriginSettled: true,
+      });
+      await quiesceEntered.promise;
+
+      expect(proposal.status).toBe("awaiting_review");
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)).toMatchObject({
+        status: "awaiting_review",
+        revision: proposal.revision,
+      });
+
+      const expectTaskLocked = async (operation: Promise<unknown>) => {
+        await expect(operation).rejects.toMatchObject({
+          code: "task_locked",
+          source: "session",
+          data: expect.objectContaining({
+            category: "task_locked",
+            lockKind: "terminal_task_thread",
+            taskId: created.task.id,
+            taskStatus: "completed",
+          }),
+        });
+      };
+
+      await expectTaskLocked(
+        harness.coordinator.requestChanges({
+          taskId: created.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: proposal.revision,
+          feedback: "Do something else first.",
+        }),
+      );
+      await expectTaskLocked(
+        harness.coordinator.transition({
+          taskId: created.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: proposal.revision,
+          status: "cancelled",
+          summary: "Cancel while completion finalizes",
+        }),
+      );
+      await expectTaskLocked(
+        harness.coordinator.acceptTask({
+          taskId: created.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: proposal.revision,
+        }),
+      );
+      await expectTaskLocked(
+        harness.coordinator.reopenTask({
+          taskId: created.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: proposal.revision,
+        }),
+      );
+      await expectTaskLocked(
+        harness.coordinator.retryTask({
+          taskId: created.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: proposal.revision,
+        }),
+      );
+      await expectTaskLocked(
+        harness.coordinator.recordDecision({
+          taskId: created.task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: proposal.revision,
+          question: "Can ordinary mutations bypass finalization?",
+          resolution: "No.",
+          source: "user",
+        }),
+      );
+
+      const routeOutcome = await invokeTaskRoute(harness, "task/requestChanges", {
+        taskId: created.task.id,
+        cwd: harness.workspacePath,
+        expectedRevision: proposal.revision,
+        feedback: "Route-level mutation should also fail.",
+      });
+      expect(routeOutcome.results).toEqual([]);
+      expect(routeOutcome.errors).toEqual([
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          data: expect.objectContaining({
+            category: "task_locked",
+            lockKind: "terminal_task_thread",
+            taskId: created.task.id,
+            taskStatus: "completed",
+          }),
+        }),
+      ]);
+
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)).toMatchObject({
+        status: "awaiting_review",
+        revision: proposal.revision,
+      });
+
+      releaseQuiesce.resolve();
+      const completed = await expectSettlesWithin(
+        (async () => {
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            await flushAsyncWork();
+            const latest = harness.coordinator.get(created.task.id, harness.workspacePath);
+            if (latest?.status === "completed") return latest;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          throw new Error("deferred completion did not finalize");
+        })(),
+        1_000,
+        "deferred completion",
+      );
+      expect(completed.status).toBe("completed");
+      expect(
+        harness.notifications.filter(
+          (notification) =>
+            notification.method === "task/updated" &&
+            (notification.params.task as TaskRecord | undefined)?.status === "completed",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      releaseQuiesce.resolve();
+      harness.sessionDb.close();
+    }
+  });
+
   test("queued stale task/cancel returns a structured revision conflict", async () => {
     const quiesced: string[] = [];
     const harness = await createHarness({

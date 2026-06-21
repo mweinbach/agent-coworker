@@ -18,6 +18,12 @@ export type TaskLockError = {
   data: TaskLockErrorData;
 };
 
+export type TaskLockedError = Error & {
+  code: "task_locked";
+  source: "session";
+  data: TaskLockErrorData;
+};
+
 const pendingTerminalSessionLocks = new Map<string, TaskLockError>();
 const pendingTerminalTaskLocks = new Map<string, TaskLockError>();
 
@@ -71,28 +77,57 @@ function pendingTerminalTaskLock(
   };
 }
 
+function pendingTerminalSourceChatLock(
+  task: Pick<TaskRecord, "id" | "title">,
+  status: TerminalTaskStatus,
+): TaskLockError {
+  return {
+    message: `Chat is locked while task ${task.id} is finalizing ${status}: ${task.title}`,
+    data: {
+      category: "task_locked",
+      source: "session",
+      lockKind: "active_source_chat",
+      taskId: task.id,
+      taskStatus: status,
+      taskTitle: task.title,
+    },
+  };
+}
+
+export function makeTaskLockedError(lock: TaskLockError): TaskLockedError {
+  return Object.assign(new Error(lock.message), {
+    code: "task_locked" as const,
+    source: "session" as const,
+    data: lock.data,
+  });
+}
+
+export function isTaskLockedError(error: unknown): error is TaskLockedError {
+  return (
+    error instanceof Error &&
+    (error as { code?: unknown; source?: unknown }).code === "task_locked" &&
+    (error as { source?: unknown }).source === "session"
+  );
+}
+
 export function registerPendingTerminalTaskLocks(
   task: Pick<TaskRecord, "id" | "title" | "threads" | "sourceSessionId">,
   status: TerminalTaskStatus,
 ): () => void {
   const taskLock = pendingTerminalTaskLock(task, status);
   pendingTerminalTaskLocks.set(task.id, taskLock);
-  const sessionIds = new Set(task.threads.map((thread) => thread.sessionId));
-  if (task.sourceSessionId) sessionIds.add(task.sourceSessionId);
-  const locks = Array.from(sessionIds).map((sessionId) => {
-    const lock: TaskLockError = {
-      message: `Task ${task.id} is finalizing ${status} and cannot accept new turns until it is reopened or retried.`,
-      data: {
-        category: "task_locked",
-        source: "session",
-        lockKind: "terminal_task_thread",
-        taskId: task.id,
-        taskStatus: status,
-      },
-    };
+  const locks: Array<{ sessionId: string; lock: TaskLockError }> = [];
+  const taskSessionIds = new Set(task.threads.map((thread) => thread.sessionId));
+  for (const sessionId of taskSessionIds) {
+    const lock = taskLock;
     pendingTerminalSessionLocks.set(sessionId, lock);
-    return { sessionId, lock };
-  });
+    locks.push({ sessionId, lock });
+  }
+  if (task.sourceSessionId && !taskSessionIds.has(task.sourceSessionId)) {
+    const lock = pendingTerminalSourceChatLock(task, status);
+    pendingTerminalSessionLocks.set(task.sourceSessionId, lock);
+    locks.push({ sessionId: task.sourceSessionId, lock });
+  }
   return () => {
     if (pendingTerminalTaskLocks.get(task.id) === taskLock) {
       pendingTerminalTaskLocks.delete(task.id);

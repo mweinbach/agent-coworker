@@ -581,7 +581,7 @@ describe("desktop task actions", () => {
     expect(harness.state.tasksById["task-1"]?.revision).toBe(8);
   });
 
-  test("deduplicates current lifecycle requests and replaces stale revisions", async () => {
+  test("deduplicates current lifecycle requests and replaces stale actions", async () => {
     const harness = createHarness();
     const actions = createTaskActions(harness.set as never, harness.get as never, deps);
     Object.assign(harness.state, actions);
@@ -597,40 +597,38 @@ describe("desktop task actions", () => {
       action: "reopen",
       expectedRevision: 7,
     });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(requestJsonRpc).toHaveBeenCalledTimes(1);
 
     const duplicateReopen = actions.reopenTask("task-1");
     harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 7 });
-    const sameRevisionRetry = actions.retryTask("task-1");
-    await expect(duplicateReopen).resolves.toBeUndefined();
-    await expect(sameRevisionRetry).resolves.toBe(false);
-    expect(requestJsonRpc).toHaveBeenCalledTimes(1);
-    expect(harness.state.notifications).toHaveLength(0);
-
-    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 8 });
-    const freshRetry = actions.retryTask("task-1");
+    const retry = actions.retryTask("task-1");
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await expect(duplicateReopen).resolves.toBeUndefined();
     expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
       action: "retry",
-      expectedRevision: 8,
+      expectedRevision: 7,
     });
+    await expect(actions.retryTask("task-1")).resolves.toBe(false);
+    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
 
     reopenResult.reject(new Error("Task revision conflict"));
     await expect(first).resolves.toBeUndefined();
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
       action: "retry",
-      expectedRevision: 8,
+      expectedRevision: 7,
     });
     expect(harness.state.notifications).toHaveLength(0);
 
     retryResult.resolve({
-      task: taskRecord({ status: "working", revision: 9 }),
+      task: taskRecord({ status: "working", revision: 8 }),
       retryStatus: "queued",
     });
-    await expect(freshRetry).resolves.toBe(true);
+    await expect(retry).resolves.toBe(true);
     expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
-    expect(harness.state.tasksById["task-1"]?.revision).toBe(9);
+    expect(harness.state.tasksById["task-1"]?.revision).toBe(8);
     expect(harness.state.notifications).toHaveLength(0);
   });
 

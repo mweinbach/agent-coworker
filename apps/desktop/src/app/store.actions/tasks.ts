@@ -396,7 +396,11 @@ export function createTaskActions(
           }
         : null;
     const existingLifecycleRequest = get().taskLifecycleRequestByTaskId?.[taskId];
-    if (lifecycleRequest && existingLifecycleRequest?.expectedRevision === task.revision) {
+    if (
+      lifecycleRequest &&
+      existingLifecycleRequest?.action === lifecycleRequest.action &&
+      existingLifecycleRequest.expectedRevision === task.revision
+    ) {
       return false;
     }
     if (lifecycleRequest) {

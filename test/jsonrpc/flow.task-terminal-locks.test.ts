@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { createRunTurn, type RunTurnParams } from "../../src/agent";
 import { JSONRPC_ERROR_CODES } from "../../src/server/jsonrpc/protocol";
+import { getPendingTerminalTaskLock } from "../../src/server/session/taskLocks";
 import { __internal as runUserMessageTurnInternal } from "../../src/server/session/turnExecution/runUserMessageTurn";
 import { __internal as attachmentMaterializationInternal } from "../../src/server/session/turnExecution/userMessageAttachments";
 import { startAgentServer } from "../../src/server/startServer";
@@ -1378,7 +1379,10 @@ describe("server JSON-RPC task terminal turn locks", () => {
         expectedRevision: latest.revision,
         reason: "Cancel while interrupt replacement is waiting for the old child.",
       });
-      await delay(75);
+      await waitForCondition(
+        () => getPendingTerminalTaskLock(created.id)?.data.taskStatus === "cancelled",
+        "task cancel did not publish its pending terminal lock",
+      );
       expect(await readTask(rpc, tmpDir, created.id)).toMatchObject({ status: "working" });
 
       releaseOldChild.resolve();

@@ -331,6 +331,12 @@ describe("desktop server manager startup mode", () => {
     expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
   });
 
+  test("buildServerEnv does not inherit the child-server default-skills skip flag", async () => {
+    await withProcessEnv({ COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1" }, () => {
+      expect(__internal.buildServerEnv().COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBeUndefined();
+    });
+  });
+
   test("buildServerEnv preserves explicit browser access tokens", () => {
     const previous = process.env.COWORK_BROWSER_ACCESS_TOKEN;
     try {

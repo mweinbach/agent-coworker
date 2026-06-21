@@ -129,6 +129,16 @@ describe("Cowork unified runtime", () => {
         origin: { kind: "bootstrap" },
       })}\n`,
     );
+    await writeFile(
+      path.join(home, ".cowork", "skills", "pdf", ".cowork-skill.json"),
+      `${JSON.stringify({
+        version: 1,
+        installationId: "bootstrap-codex-primary-runtime-pdf",
+        installedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        origin: { kind: "bootstrap" },
+      })}\n`,
+    );
     await writeFile(path.join(home, ".cowork", "plugins", "keep-me", "user.txt"));
     await writeFile(
       path.join(home, ".cache", "codex-runtimes", "codex-primary-runtime", "keep.txt"),
@@ -155,10 +165,9 @@ describe("Cowork unified runtime", () => {
       fs.stat(path.join(home, ".cache", "cowork", "artifact-runtime")),
     ).rejects.toThrow();
     await expect(fs.stat(path.join(home, ".cache", "cowork", "libreoffice"))).rejects.toThrow();
-    await expect(
-      fs.stat(path.join(home, ".cowork", "plugins", "workspace-tools")),
-    ).rejects.toThrow();
-    await expect(fs.stat(path.join(home, ".cowork", "skills", "documents"))).rejects.toThrow();
+    await fs.access(path.join(home, ".cowork", "plugins", "workspace-tools"));
+    await fs.access(path.join(home, ".cowork", "skills", "documents"));
+    await fs.access(path.join(home, ".cowork", "skills", "pdf"));
     await fs.access(path.join(home, ".cowork", "plugins", "keep-me", "user.txt"));
     await fs.access(
       path.join(home, ".cache", "codex-runtimes", "codex-primary-runtime", "keep.txt"),

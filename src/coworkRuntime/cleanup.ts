@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { coworkRuntimeRoot } from "./install";
 
-const LEGACY_SKILL_NAMES = ["documents", "presentations", "spreadsheets"] as const;
+const LEGACY_SKILL_NAMES = ["documents", "pdf", "presentations", "spreadsheets"] as const;
 const CLEANUP_MARKER = "legacy-cleanup-v2.json";
 
 async function readJson(filePath: string): Promise<Record<string, unknown> | null> {
@@ -15,17 +15,6 @@ async function readJson(filePath: string): Promise<Record<string, unknown> | nul
   } catch {
     return null;
   }
-}
-
-async function removeManagedWorkspaceToolsPlugin(home: string): Promise<string | null> {
-  const pluginRoot = path.join(home, ".cowork", "plugins", "workspace-tools");
-  const metadata = await readJson(path.join(pluginRoot, ".cowork-plugin", "install.json"));
-  const bootstrap = metadata?.bootstrap;
-  if (typeof bootstrap !== "object" || bootstrap === null || Array.isArray(bootstrap)) return null;
-  const record = bootstrap as Record<string, unknown>;
-  if (record.name !== "codex-primary-runtime" || record.pluginId !== "workspace-tools") return null;
-  await fs.rm(pluginRoot, { recursive: true, force: true });
-  return pluginRoot;
 }
 
 async function removeManagedRuntimeSkills(home: string): Promise<string[]> {
@@ -53,6 +42,15 @@ async function removeManagedRuntimeSkills(home: string): Promise<string[]> {
   return removed;
 }
 
+export async function cleanupLegacyCoworkProductivitySkills(opts: {
+  home: string;
+  log?: (line: string) => void;
+}): Promise<string[]> {
+  const removed = await removeManagedRuntimeSkills(path.resolve(opts.home));
+  for (const target of removed) opts.log?.(`Removed legacy Cowork skill at ${target}`);
+  return removed;
+}
+
 export async function cleanupLegacyCoworkRuntimes(opts: {
   home: string;
   log?: (line: string) => void;
@@ -73,10 +71,6 @@ export async function cleanupLegacyCoworkRuntimes(opts: {
       removed.push(target);
     }
   }
-
-  const pluginRoot = await removeManagedWorkspaceToolsPlugin(home);
-  if (pluginRoot) removed.push(pluginRoot);
-  removed.push(...(await removeManagedRuntimeSkills(home)));
 
   await fs.mkdir(path.dirname(markerPath), { recursive: true });
   await fs.writeFile(

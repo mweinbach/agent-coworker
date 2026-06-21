@@ -572,6 +572,7 @@ function buildServerEnv(
   const processEnv = withoutInheritedProductAnalyticsEnv(
     withoutInheritedCrashReportingEnv(inheritedEnv),
   );
+  delete processEnv.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP;
   return {
     ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",

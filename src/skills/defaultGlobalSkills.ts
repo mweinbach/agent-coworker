@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { cleanupLegacyCoworkProductivitySkills } from "../coworkRuntime/cleanup";
 import type { FetchLike } from "../extensions/source";
 import { buildPluginCatalogSnapshot, installPluginsFromSource } from "../plugins";
+import { readPluginInstallMetadata } from "../plugins/manifest";
 import { readPluginOverrides } from "../plugins/overrides";
 import {
   BUILT_IN_MARKETPLACE_REPO,
@@ -13,7 +14,7 @@ import {
   fetchRemotePluginMarketplace,
 } from "../plugins/remoteMarketplace";
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
-import type { AgentConfig } from "../types";
+import { type AgentConfig, isInstalledPluginCatalogEntry } from "../types";
 
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
 const INSTALL_STATE_VERSION = 1;
@@ -94,10 +95,36 @@ function isTruthy(value: string | undefined): boolean {
 export function shouldBootstrapDefaultGlobalSkills(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return (
-    isTruthy(env.COWORK_BOOTSTRAP_DEFAULT_SKILLS) &&
-    !isTruthy(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP)
-  );
+  if (isTruthy(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP)) return false;
+  const explicit = env.COWORK_BOOTSTRAP_DEFAULT_SKILLS;
+  return explicit === undefined || isTruthy(explicit);
+}
+
+async function findLegacyRuntimeOwnedPluginIds(
+  catalog: Awaited<ReturnType<typeof buildPluginCatalogSnapshot>>,
+): Promise<Set<string>> {
+  const legacyPluginIds = new Set<string>();
+  for (const plugin of catalog.plugins) {
+    if (!isInstalledPluginCatalogEntry(plugin) || plugin.scope !== "user") continue;
+    const metadata = await readPluginInstallMetadata(plugin.rootDir);
+    const bootstrapPluginId = metadata?.bootstrap?.pluginId ?? plugin.id;
+    if (metadata?.bootstrap?.name === "codex-primary-runtime" && bootstrapPluginId === plugin.id) {
+      legacyPluginIds.add(plugin.id);
+    }
+  }
+  return legacyPluginIds;
+}
+
+async function cleanupMigratedProductivitySkills(opts: {
+  homedir?: string;
+  recordedPluginIds: ReadonlySet<string>;
+  log?: (line: string) => void;
+}): Promise<void> {
+  if (!opts.recordedPluginIds.has("workspace-tools")) return;
+  await cleanupLegacyCoworkProductivitySkills({
+    home: path.resolve(opts.homedir ?? os.homedir()),
+    log: opts.log,
+  });
 }
 
 function bootstrapPromiseKey(opts: {
@@ -174,6 +201,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
   const marketplaceName = BUILT_IN_MARKETPLACE_REPO;
   const overrides = await readPluginOverrides(opts.config);
   const catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
+  const legacyRuntimeOwnedPluginIds = await findLegacyRuntimeOwnedPluginIds(catalog);
 
   if (!opts.force) {
     const state = await readState(stateFile);
@@ -183,10 +211,20 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       state.marketplace === marketplaceName &&
       requestedPluginIds.every((pluginId) => state.plugins.includes(pluginId)) &&
       requestedPluginIds.every((pluginId) =>
-        catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.scope === "user"),
+        catalog.plugins.some(
+          (plugin) =>
+            plugin.id === pluginId &&
+            plugin.scope === "user" &&
+            !legacyRuntimeOwnedPluginIds.has(pluginId),
+        ),
       ) &&
       requestedPluginIds.every((pluginId) => !isDefaultPluginRemoved(pluginId, overrides))
     ) {
+      await cleanupMigratedProductivitySkills({
+        homedir: opts.homedir,
+        recordedPluginIds: new Set(requestedPluginIds),
+        log: opts.log,
+      });
       return {
         status: "already_installed",
         pluginsDir: opts.config.userPluginsDir ?? "",
@@ -214,7 +252,8 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     }
     if (
       !opts.force &&
-      catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.scope === "user")
+      catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.scope === "user") &&
+      !legacyRuntimeOwnedPluginIds.has(pluginId)
     ) {
       skippedExisting.push(pluginId);
       recordedPluginIds.add(pluginId);
@@ -233,6 +272,11 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
         .filter((pluginId) => recordedPluginIds.has(pluginId)),
     };
     await fs.writeFile(stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+    await cleanupMigratedProductivitySkills({
+      homedir: opts.homedir,
+      recordedPluginIds,
+      log: opts.log,
+    });
 
     return {
       status: "already_installed",
@@ -278,6 +322,11 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       .filter((pluginId) => recordedPluginIds.has(pluginId)),
   };
   await fs.writeFile(stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+  await cleanupMigratedProductivitySkills({
+    homedir: opts.homedir,
+    recordedPluginIds,
+    log: opts.log,
+  });
 
   return {
     status: installed.length > 0 ? "installed" : "already_installed",

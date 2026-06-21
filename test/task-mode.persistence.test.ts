@@ -199,6 +199,8 @@ async function createClaimedWorkTask(harness: Awaited<ReturnType<typeof createHa
   });
   const workItem = created.task.workItems[0];
   if (!workItem) throw new Error("Expected work item");
+  const primaryThread = created.task.threads[0];
+  if (!primaryThread) throw new Error("Expected primary task thread");
   let task = await harness.coordinator.addThread({
     taskId: created.task.id,
     workspacePath: harness.workspacePath,
@@ -217,10 +219,10 @@ async function createClaimedWorkTask(harness: Awaited<ReturnType<typeof createHa
   const ownedItem = task.workItems.find((item) => item.id === workItem.id);
   const ownerThread = task.threads.find((thread) => thread.id === ownedItem?.assignedThreadId);
   const otherThread = task.threads.find(
-    (thread) => thread.id !== task.primaryThreadId && thread.id !== ownerThread?.id,
+    (thread) => thread.id !== primaryThread.id && thread.id !== ownerThread?.id,
   );
   if (!ownedItem || !ownerThread || !otherThread) throw new Error("Expected claimed task state");
-  return { task, workItem: ownedItem, ownerThread, otherThread };
+  return { task, workItem: ownedItem, primaryThread, ownerThread, otherThread };
 }
 
 function replacementWorkItem(
@@ -2105,9 +2107,7 @@ describe("task mode persistence", () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });
     try {
-      const { task, workItem, ownerThread } = await createClaimedWorkTask(harness);
-      const primaryThread = task.threads[0];
-      if (!primaryThread) throw new Error("Expected primary task thread");
+      const { task, workItem, primaryThread, ownerThread } = await createClaimedWorkTask(harness);
       const terminal = await harness.coordinator.markWorkItem({
         taskId: task.id,
         workspacePath: harness.workspacePath,

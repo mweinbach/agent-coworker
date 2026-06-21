@@ -1,5 +1,5 @@
 import { MessageSquarePlusIcon, RotateCcwIcon } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import type { TaskStatus } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
@@ -56,6 +56,7 @@ export function TaskConversationSidebar() {
   const [creating, setCreating] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const lifecycleActionInFlightRef = useRef(false);
 
   const terminal = task ? isTerminalTaskStatus(task.status) : false;
   const terminalCopy = task && terminal ? terminalConversationCopy(task.status) : null;
@@ -69,12 +70,14 @@ export function TaskConversationSidebar() {
   const terminalNoticeId = `task-terminal-lock-${task.id}`;
 
   const restoreTaskWrites = async () => {
-    if (!terminal || reopening || retrying) return;
+    if (!terminal || lifecycleActionInFlightRef.current) return;
+    lifecycleActionInFlightRef.current = true;
     if (task.status === "failed") {
       setRetrying(true);
       try {
         await retryTask(task.id);
       } finally {
+        lifecycleActionInFlightRef.current = false;
         setRetrying(false);
       }
       return;
@@ -83,6 +86,7 @@ export function TaskConversationSidebar() {
     try {
       await reopenTask(task.id);
     } finally {
+      lifecycleActionInFlightRef.current = false;
       setReopening(false);
     }
   };

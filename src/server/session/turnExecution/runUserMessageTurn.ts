@@ -225,6 +225,7 @@ export function createUserMessageTurnRunner(
       });
       context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: context.id,
+        turnId,
         provider: context.state.config.provider,
         model: context.state.config.model,
       });
@@ -361,6 +362,7 @@ export function createUserMessageTurnRunner(
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (context.state.abortController?.signal.aborted) {
           context.state.pendingSteers.splice(0);
+          context.state.currentTurnOutcome = "cancelled";
           continueSameTurn = false;
           context.state.acceptingSteers = false;
           continue;
@@ -375,24 +377,40 @@ export function createUserMessageTurnRunner(
 
       persistAggregatedUsage();
 
-      context.emitTelemetry(
-        "agent.turn.completed",
-        "ok",
-        {
-          sessionId: context.id,
+      const durationMs = Date.now() - turnStartedAt;
+      if (context.state.currentTurnOutcome === "completed") {
+        context.emitTelemetry(
+          "agent.turn.completed",
+          "ok",
+          {
+            sessionId: context.id,
+            turnId,
+            provider: context.state.config.provider,
+            model: context.state.config.model,
+          },
+          durationMs,
+        );
+        captureProductEvent("turn_completed", {
+          eventSource: "server",
           provider: context.state.config.provider,
           model: context.state.config.model,
-        },
-        Date.now() - turnStartedAt,
-      );
-      captureProductEvent("turn_completed", {
-        eventSource: "server",
-        provider: context.state.config.provider,
-        model: context.state.config.model,
-        status: "completed",
-        durationMs: Date.now() - turnStartedAt,
-        toolCount: tracker.startedStepCount,
-      });
+          status: "completed",
+          durationMs,
+          toolCount: tracker.startedStepCount,
+        });
+      } else if (context.state.currentTurnOutcome === "cancelled") {
+        context.emitTelemetry(
+          "agent.turn.aborted",
+          "ok",
+          {
+            sessionId: context.id,
+            turnId,
+            provider: context.state.config.provider,
+            model: context.state.config.model,
+          },
+          durationMs,
+        );
+      }
     } catch (err) {
       const actualErr =
         tracker.lastStreamError && context.formatError(err).includes("No output generated")
@@ -428,6 +446,7 @@ export function createUserMessageTurnRunner(
           "error",
           {
             sessionId: context.id,
+            turnId,
             provider: context.state.config.provider,
             model: context.state.config.model,
             error: msg,
@@ -449,6 +468,7 @@ export function createUserMessageTurnRunner(
           "ok",
           {
             sessionId: context.id,
+            turnId,
             provider: context.state.config.provider,
             model: context.state.config.model,
           },

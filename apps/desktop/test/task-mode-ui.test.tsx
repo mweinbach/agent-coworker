@@ -809,8 +809,10 @@ describe("desktop task mode UI", () => {
       expect(harness.dom.window.document.body.textContent).not.toContain("Add task thread");
       await act(async () => {
         reopenButton?.click();
+        reopenButton?.click();
         await Promise.resolve();
       });
+      expect(reopenTask).toHaveBeenCalledTimes(1);
       expect(reopenTask).toHaveBeenCalledWith("task-1");
 
       await act(async () => root.unmount());
@@ -864,8 +866,10 @@ describe("desktop task mode UI", () => {
 
       await act(async () => {
         retryButton?.click();
+        retryButton?.click();
         await Promise.resolve();
       });
+      expect(retryTask).toHaveBeenCalledTimes(1);
       expect(retryTask).toHaveBeenCalledWith("task-1");
       expect(retryButton?.disabled).toBe(true);
       expect(retryButton?.getAttribute("aria-busy")).toBe("true");

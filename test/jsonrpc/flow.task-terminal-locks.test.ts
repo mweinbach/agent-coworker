@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -6,6 +6,12 @@ import type { RunTurnParams } from "../../src/agent";
 import { JSONRPC_ERROR_CODES } from "../../src/server/jsonrpc/protocol";
 import { startAgentServer } from "../../src/server/startServer";
 import type { TaskRecord, TaskStatus } from "../../src/shared/tasks";
+import {
+  initProductAnalytics,
+  type ProductAnalyticsClient,
+  type ProductAnalyticsSdkModule,
+  __internal as productAnalyticsInternal,
+} from "../../src/telemetry/productAnalytics";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import { connectJsonRpc, type JsonRpcConnection } from "./flow.harness";
 
@@ -14,6 +20,29 @@ const TERMINAL_TASK_STATUSES = [
   "cancelled",
   "failed",
 ] as const satisfies readonly TaskStatus[];
+
+const observabilityEvents: Array<{
+  name: string;
+  status?: "ok" | "error";
+  attributes?: Record<string, string | number | boolean>;
+}> = [];
+
+mock.module("../../src/observability/otel", () => ({
+  emitObservabilityEvent: mock(
+    async (_config: unknown, event: (typeof observabilityEvents)[number]) => {
+      observabilityEvents.push(event);
+      return {
+        emitted: true,
+        healthChanged: false,
+        health: {
+          status: "ready",
+          reason: "test",
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    },
+  ),
+}));
 
 async function makeCanonicalTmpProject(): Promise<string> {
   return await fs.realpath(await makeTmpProject());
@@ -83,6 +112,52 @@ async function waitForTurnCompleted(rpc: JsonRpcConnection, threadId: string, tu
       (turnId === undefined || message.params.turn.id === turnId),
     5_000,
   );
+}
+
+async function waitForThreadReadToContain(
+  rpc: JsonRpcConnection,
+  threadId: string,
+  text: string,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+    expect(read.error).toBeUndefined();
+    if (JSON.stringify(read.result).includes(text)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for thread/read to contain ${JSON.stringify(text)}`);
+}
+
+async function withProductAnalyticsCapture<T>(
+  run: (events: Array<{ event: string; properties?: Record<string, unknown> }>) => Promise<T>,
+): Promise<T> {
+  const events: Array<{ event: string; properties?: Record<string, unknown> }> = [];
+  class FakePostHog implements ProductAnalyticsClient {
+    capture(event: { event: string; properties?: Record<string, unknown> }): void {
+      events.push({ event: event.event, properties: event.properties });
+    }
+  }
+
+  await productAnalyticsInternal.resetProductAnalyticsForTests();
+  await initProductAnalytics({
+    enabled: true,
+    apiKey: "phc_terminal_lock_test",
+    anonymousId: "terminal-lock-test",
+    environment: "test",
+    eventSource: "server",
+    platform: "test",
+    arch: "test",
+    loadSdk: async (): Promise<ProductAnalyticsSdkModule> => ({ PostHog: FakePostHog }),
+  });
+
+  try {
+    const result = await run(events);
+    await productAnalyticsInternal.flushProductAnalyticsQueueForTests();
+    return result;
+  } finally {
+    await productAnalyticsInternal.resetProductAnalyticsForTests();
+  }
 }
 
 async function completeTask(
@@ -220,7 +295,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }, 20_000);
   }
 
-  test("terminal transition aborts a running task turn before late output or tool writes escape", async () => {
+  test("terminal transition aborts a running task turn before late output, telemetry, or tool writes escape", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     const lateWritePath = path.join(tmpDir, "late-tool-write.txt");
     let holdNextTurn = false;
@@ -250,45 +325,74 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await kickoffCompleted.promise;
+      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      observabilityEvents.length = 0;
 
-      holdNextTurn = true;
-      const started = await rpc.sendRequest("turn/start", {
-        threadId,
-        input: [{ type: "text", text: "start long task turn" }],
+      await withProductAnalyticsCapture(async (productEvents) => {
+        holdNextTurn = true;
+        const started = await rpc.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "start long task turn" }],
+        });
+        expect(started.error).toBeUndefined();
+        const turnId = started.result.turn.id;
+        const signal = await manualStarted.promise;
+
+        const latest = await readTask(rpc, tmpDir, created.id);
+        const cancelled = await rpc.sendRequest("task/cancel", {
+          cwd: tmpDir,
+          taskId: latest.id,
+          expectedRevision: latest.revision,
+          reason: "Close the task while a turn is running.",
+        });
+        expect(cancelled.error).toBeUndefined();
+        expect(cancelled.result.task.status).toBe("cancelled");
+        expect(signal?.aborted).toBe(true);
+
+        const steer = await rpc.sendRequest("turn/steer", {
+          threadId,
+          turnId,
+          input: [{ type: "text", text: "stale steer after cancellation" }],
+        });
+        await expectTaskLocked(steer);
+
+        releaseManual.resolve();
+        const completed = await waitForTurnCompleted(rpc, threadId, turnId);
+        expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+        await expect(
+          rpc.waitFor(
+            (message) =>
+              message.method === "item/agentMessage/delta" && message.params.threadId === threadId,
+            250,
+          ),
+        ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+        await expect(fs.access(lateWritePath)).rejects.toThrow();
+
+        const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+        expect(read.error).toBeUndefined();
+        const persistedThread = JSON.stringify(read.result);
+        expect(persistedThread).toContain(turnId);
+        expect(persistedThread).not.toContain("late assistant output escaped");
+
+        await productAnalyticsInternal.flushProductAnalyticsQueueForTests();
+        expect(productEvents.map((event) => event.event)).toContain("turn_started");
+        expect(productEvents.filter((event) => event.event === "turn_completed")).toEqual([]);
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(observabilityEvents).toContainEqual(
+          expect.objectContaining({
+            name: "agent.turn.aborted",
+            status: "ok",
+            attributes: expect.objectContaining({ sessionId: threadId, turnId }),
+          }),
+        );
+        expect(observabilityEvents).not.toContainEqual(
+          expect.objectContaining({
+            name: "agent.turn.completed",
+            attributes: expect.objectContaining({ sessionId: threadId, turnId }),
+          }),
+        );
       });
-      expect(started.error).toBeUndefined();
-      const turnId = started.result.turn.id;
-      const signal = await manualStarted.promise;
-
-      const latest = await readTask(rpc, tmpDir, created.id);
-      const cancelled = await rpc.sendRequest("task/cancel", {
-        cwd: tmpDir,
-        taskId: latest.id,
-        expectedRevision: latest.revision,
-        reason: "Close the task while a turn is running.",
-      });
-      expect(cancelled.error).toBeUndefined();
-      expect(cancelled.result.task.status).toBe("cancelled");
-      expect(signal?.aborted).toBe(true);
-
-      const steer = await rpc.sendRequest("turn/steer", {
-        threadId,
-        turnId,
-        input: [{ type: "text", text: "stale steer after cancellation" }],
-      });
-      await expectTaskLocked(steer);
-
-      releaseManual.resolve();
-      const completed = await waitForTurnCompleted(rpc, threadId, turnId);
-      expect(completed.params.turn.status).toBe("interrupted");
-      await expect(
-        rpc.waitFor(
-          (message) =>
-            message.method === "item/agentMessage/delta" && message.params.threadId === threadId,
-          250,
-        ),
-      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
-      await expect(fs.access(lateWritePath)).rejects.toThrow();
       rpc.close();
     } finally {
       await stopTestServer(server);

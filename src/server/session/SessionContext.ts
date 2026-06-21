@@ -7,6 +7,7 @@ import type {
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
+import type { logoutProviderAuth } from "../../providers/authRegistry";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { RuntimeSteerHandler } from "../../runtime/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../../session/costTracker";
@@ -220,6 +221,7 @@ export type SessionDependencies = {
   loadSystemPromptWithSkillsImpl: typeof loadSystemPromptWithSkills;
   getProviderCatalogImpl: typeof getProviderCatalog;
   getProviderStatusesImpl: typeof getProviderStatuses;
+  logoutProviderAuthImpl?: typeof logoutProviderAuth;
   sessionBackupFactory: SessionBackupFactory;
   harnessContextStore: HarnessContextStore;
   runTurnImpl: typeof runTurn;

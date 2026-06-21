@@ -243,6 +243,7 @@ export function makeSession(
     };
     getProviderCatalogImpl: (opts: any) => Promise<any>;
     getProviderStatusesImpl: (opts: any) => Promise<any>;
+    logoutProviderAuthImpl: (opts: any) => Promise<any>;
     sessionBackupFactory: (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
     persistModelSelectionImpl: (selection: {
       provider: AgentConfig["provider"];
@@ -323,6 +324,7 @@ export function makeSession(
     loadSystemPromptWithSkillsImpl: overrides?.loadSystemPromptWithSkillsImpl,
     getProviderCatalogImpl: overrides?.getProviderCatalogImpl as any,
     getProviderStatusesImpl,
+    logoutProviderAuthImpl: overrides?.logoutProviderAuthImpl,
     sessionBackupFactory,
     persistModelSelectionImpl: overrides?.persistModelSelectionImpl,
     persistProjectConfigPatchImpl: overrides?.persistProjectConfigPatchImpl,

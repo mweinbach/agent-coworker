@@ -15,6 +15,7 @@ import type { EditableMCPServerConfigSource, MCPRegistryServer } from "../../mcp
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
+import type { logoutProviderAuth } from "../../providers/authRegistry";
 import { closePooledCodexAppServerClient } from "../../providers/codexAppServerClient";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import {
@@ -170,6 +171,7 @@ export class AgentSession {
     loadSystemPromptWithSkillsImpl?: typeof loadSystemPromptWithSkills;
     getProviderCatalogImpl?: typeof getProviderCatalog;
     getProviderStatusesImpl?: typeof getProviderStatuses;
+    logoutProviderAuthImpl?: typeof logoutProviderAuth;
     sessionBackupFactory?: SessionBackupFactory;
     harnessContextStore?: HarnessContextStore;
     runTurnImpl?: typeof runTurn;
@@ -341,6 +343,7 @@ export class AgentSession {
         opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills,
       getProviderCatalogImpl: opts.getProviderCatalogImpl ?? lazyGetProviderCatalog,
       getProviderStatusesImpl: opts.getProviderStatusesImpl ?? lazyGetProviderStatuses,
+      logoutProviderAuthImpl: opts.logoutProviderAuthImpl,
       sessionBackupFactory:
         opts.sessionBackupFactory ??
         (async (factoryOpts: SessionBackupInitOptions): Promise<SessionBackupHandle> =>

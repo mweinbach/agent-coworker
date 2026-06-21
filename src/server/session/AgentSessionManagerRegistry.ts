@@ -194,6 +194,7 @@ export class AgentSessionManagerRegistry {
         getGlobalAuthPaths: () => this.host.getGlobalAuthPaths(),
         runProviderConnect: async (providerOpts) =>
           await this.host.runProviderConnect(providerOpts),
+        logoutProviderAuth: this.host.deps.logoutProviderAuthImpl,
       });
     }
     return this.providerAuthManager;

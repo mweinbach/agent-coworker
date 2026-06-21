@@ -1106,4 +1106,32 @@ rl.on("line", (line) => {
 
     expect(response).toEqual({ decision: "accept" });
   });
+
+  test("declines native Codex approvals when the lifecycle mutation gate is closed", async () => {
+    let approvals = 0;
+    const response = await handleServerRequest(
+      {
+        id: "command-approval-locked",
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        params: { command: "touch escaped.txt" },
+      },
+      {
+        shellPolicy: "full",
+        yolo: true,
+        assertCanMutate: async (toolName: string) => {
+          expect(toolName).toBe("codex:commandExecution");
+          throw new Error("task locked");
+        },
+        approveCommand: async () => {
+          approvals += 1;
+          return true;
+        },
+        log: () => {},
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(approvals).toBe(0);
+  });
 });

@@ -79,6 +79,7 @@ export interface RuntimeRunTurnParams {
   askUser?: (question: string, options?: string[]) => Promise<string>;
   approveCommand?: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
+  assertCanMutate?: (toolName: string) => void | Promise<void>;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;

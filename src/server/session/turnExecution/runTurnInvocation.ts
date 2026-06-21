@@ -1,9 +1,9 @@
 import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
-import type { TaskStatus } from "../../../shared/tasks";
 import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
 import type { SessionContext } from "../SessionContext";
+import { getSessionTaskLock } from "../taskLocks";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
 
@@ -24,8 +24,6 @@ type TurnStreamTracker = {
   rawStreamEventIndex: number;
   lastStreamError: unknown;
 };
-
-const TERMINAL_TASK_MUTATION_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
 
 export type RunTurnInvocationDeps = {
   context: SessionContext;
@@ -61,6 +59,22 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
     const abortSignal = context.state.abortController?.signal;
     const isTurnAborted = () => abortSignal?.aborted === true;
+    const assertCanMutate = (toolName: string) => {
+      if (isTurnAborted()) {
+        throw new Error(`Tool ${toolName} blocked because the turn was cancelled.`);
+      }
+      const taskLock = getSessionTaskLock(context.deps.sessionDb, context.id);
+      if (taskLock?.data.lockKind === "terminal_task_thread") {
+        throw new Error(
+          `Tool ${toolName} blocked because task ${taskLock.data.taskId} is ${taskLock.data.taskStatus}. Reopen or retry the task before mutating files or tools.`,
+        );
+      }
+      if (taskLock?.data.lockKind === "active_source_chat") {
+        throw new Error(
+          `Tool ${toolName} blocked because source chat is locked by active task ${taskLock.data.taskId}: ${taskLock.data.taskTitle}. Continue in the task thread or wait until the task reaches a terminal state.`,
+        );
+      }
+    };
     const harnessContext = context.deps.harnessContextStore.get(context.id);
     const taskContext = context.deps.getTaskContextImpl?.(context.id) ?? null;
     const applyTaskDirective = context.deps.applyTaskDirectiveImpl;
@@ -117,6 +131,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
                 includeHarnessContext,
                 forkContext,
               }) => {
+                assertCanMutate("spawnAgent");
                 const createAgentSession = context.deps.createAgentSessionImpl;
                 if (!createAgentSession) {
                   throw new Error("Child-agent spawning is unavailable.");
@@ -146,6 +161,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
               list: async () =>
                 await (context.deps.listAgentSessionsImpl?.(context.id) ?? Promise.resolve([])),
               sendInput: async ({ agentId, message, interrupt }) => {
+                assertCanMutate("sendAgentInput");
                 if (!context.deps.sendAgentInputImpl) {
                   throw new Error("Child-agent input is unavailable.");
                 }
@@ -179,6 +195,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
                 });
               },
               resume: async ({ agentId }) => {
+                assertCanMutate("resumeAgent");
                 if (!context.deps.resumeAgentImpl) {
                   throw new Error("Child-agent resume is unavailable.");
                 }
@@ -207,17 +224,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       enableMcp: context.state.config.enableMcp,
       sessionId: context.id,
       onAdvancedMemoryChanged,
-      assertCanMutate: (toolName) => {
-        if (isTurnAborted()) {
-          throw new Error(`Tool ${toolName} blocked because the turn was cancelled.`);
-        }
-        const latestTask = taskContext ? context.deps.getTaskContextImpl?.(context.id) : null;
-        if (latestTask && TERMINAL_TASK_MUTATION_STATUSES.has(latestTask.status)) {
-          throw new Error(
-            `Tool ${toolName} blocked because task ${latestTask.id} is ${latestTask.status}. Reopen or retry the task before mutating files or tools.`,
-          );
-        }
-      },
+      assertCanMutate,
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,
       agentRole: context.state.sessionInfo.role,

@@ -537,6 +537,112 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }
   }, 20_000);
 
+  test("terminal transition blocks in-flight MCP tool execution before side effects escape", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const mcpWritePath = path.join(tmpDir, "mcp-tool-write.txt");
+    let holdNextTurn = false;
+    let mcpMutationResult: string | null = null;
+    let mcpExecuteCalls = 0;
+    const kickoffCompleted = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<AbortSignal | null>();
+    const releaseManual = Promise.withResolvers<void>();
+    const runTurnImpl = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async (params) => {
+          if (!holdNextTurn) {
+            kickoffCompleted.resolve();
+            return { text: "kickoff complete", responseMessages: [] };
+          }
+          manualStarted.resolve(params.abortSignal ?? null);
+          await releaseManual.promise;
+          try {
+            await params.tools.mcp__local__mutate.execute({});
+            mcpMutationResult = "wrote";
+          } catch (error) {
+            mcpMutationResult = error instanceof Error ? error.message : String(error);
+          }
+          return {
+            text: `mcp mutation result: ${mcpMutationResult}`,
+            responseMessages: [],
+            usage: {
+              promptTokens: 4,
+              completionTokens: 2,
+              totalTokens: 6,
+            },
+          };
+        },
+      }),
+      loadMCPServers: async () => [
+        { name: "local", transport: { type: "stdio", command: "mcp-local", args: [] } },
+      ],
+      loadMCPTools: async () => ({
+        tools: {
+          mcp__local__mutate: {
+            description: "Mutates the workspace if not lifecycle-gated.",
+            inputSchema: { type: "object", properties: {} },
+            execute: async () => {
+              mcpExecuteCalls += 1;
+              await fs.writeFile(mcpWritePath, "mcp side effect escaped", "utf8");
+              return "mcp write escaped";
+            },
+          },
+        },
+        errors: [],
+        close: async () => {},
+      }),
+    });
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: { AGENT_ENABLE_MCP: "true" },
+        runTurnImpl,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await createTask(rpc, tmpDir, "mcp-tool-race");
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await kickoffCompleted.promise;
+      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+
+      holdNextTurn = true;
+      const started = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start mcp tool race" }],
+      });
+      expect(started.error).toBeUndefined();
+      const turnId = started.result.turn.id;
+      const signal = await manualStarted.promise;
+
+      const latest = await readTask(rpc, tmpDir, created.id);
+      const cancelled = await rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Close the task while an MCP tool is in flight.",
+      });
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
+      expect(signal?.aborted).toBe(true);
+
+      releaseManual.resolve();
+      const completed = await waitForTurnCompleted(rpc, threadId, turnId);
+      expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+      expect(mcpMutationResult).toMatch(/blocked because the turn was cancelled/);
+      expect(mcpExecuteCalls).toBe(0);
+      await expect(fs.access(mcpWritePath)).rejects.toThrow();
+
+      const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
+      expect(read.error).toBeUndefined();
+      expect(JSON.stringify(read.result)).not.toContain("mcp side effect escaped");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
   test("terminal abort does not launch provider continuation fallback retry", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     let holdNextTurn = false;
@@ -825,6 +931,97 @@ describe("server JSON-RPC task terminal turn locks", () => {
       await waitForTurnCompleted(sourceRpc, sourceThreadId, releasedSourceTurn.result.turn.id);
       sourceRpc.close();
       ordinaryRpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("source chat promotion blocks later tool mutations in the same assistant step", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const leakedWritePath = path.join(tmpDir, "source-chat-after-createTask.txt");
+    let shouldPromote = true;
+    let writeAfterPromotionResult: string | null = null;
+    const runTurnImpl = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async (params) => {
+          if (!shouldPromote) {
+            return { text: "task kickoff complete", responseMessages: [] };
+          }
+          shouldPromote = false;
+          await params.tools.createTask.execute({
+            idempotencyKey: "source-chat-same-step-tool-gate",
+            title: "Source chat same-step gate",
+            objective: "Prove createTask locks later same-step tool mutations.",
+            context: "Created through the real createTask tool during the source chat turn.",
+            requirements: [
+              {
+                kind: "acceptance_criterion",
+                text: "No source-chat write can run after task promotion in the same assistant step.",
+              },
+            ],
+            workItems: [
+              {
+                key: "verify",
+                title: "Verify same-step source lock",
+                expectedOutputs: ["same-step-lock.txt"],
+              },
+            ],
+            decisions: [],
+            reviewRequired: false,
+            reviewRounds: 0,
+          });
+          try {
+            await params.tools.write.execute({
+              filePath: leakedWritePath,
+              content: "source chat write escaped after createTask",
+            });
+            writeAfterPromotionResult = "wrote";
+          } catch (error) {
+            writeAfterPromotionResult = error instanceof Error ? error.message : String(error);
+          }
+          return {
+            text: `same-step source mutation result: ${writeAfterPromotionResult}`,
+            responseMessages: [],
+          };
+        },
+      }),
+    });
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const sourceThreadId = started.result.thread.id;
+
+      const promotionTurn = await rpc.sendRequest("turn/start", {
+        threadId: sourceThreadId,
+        input: [{ type: "text", text: "promote and then try to write" }],
+      });
+      expect(promotionTurn.error).toBeUndefined();
+      const createdNotification = await rpc.waitFor((message) => message.method === "task/created");
+      const taskId = createdNotification.params.task.id;
+      await waitForTurnCompleted(rpc, sourceThreadId, promotionTurn.result.turn.id);
+
+      expect(writeAfterPromotionResult).toMatch(/source chat is locked by active task/);
+      await expect(fs.access(leakedWritePath)).rejects.toThrow();
+
+      const lockedSource = await rpc.sendRequest("turn/start", {
+        threadId: sourceThreadId,
+        input: [{ type: "text", text: "source write while same-step task is active" }],
+      });
+      await expectTaskLocked(lockedSource, "Chat is locked by active task", {
+        lockKind: "active_source_chat",
+        taskId,
+        taskStatus: "working",
+        taskTitle: "Source chat same-step gate",
+      });
+      rpc.close();
     } finally {
       await stopTestServer(server);
     }

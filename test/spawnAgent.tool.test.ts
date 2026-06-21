@@ -193,6 +193,48 @@ describe("spawnAgent tool", () => {
     });
   });
 
+  test("checks the mutation gate before spawning child work", async () => {
+    const spawn = mock(async () => makeSummary());
+    const assertCanMutate = mock(async () => {
+      throw new Error("task locked");
+    });
+    const tool: any = createSpawnAgentTool(
+      makeCtx({
+        assertCanMutate,
+        agentControl: {
+          spawn,
+          list: async () => [],
+          sendInput: async () => {},
+          wait: async () => ({
+            timedOut: false,
+            mode: "any" as const,
+            agents: [],
+            readyAgentIds: [],
+          }),
+          inspect: async () => ({
+            agent: makeSummary(),
+            latestAssistantText: null,
+            parsedReport: null,
+            reportRequired: true,
+            reportFound: false,
+            reportValid: false,
+            reportBlockCount: 0,
+            reportDiagnostic:
+              "No assistant message available to inspect for an <agent_report> footer.",
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+          resume: async () => makeSummary(),
+          close: async () => makeSummary(),
+        },
+      }),
+    );
+
+    await expect(tool.execute({ message: "Investigate" })).rejects.toThrow("task locked");
+    expect(assertCanMutate).toHaveBeenCalledWith("spawnAgent");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   test("rejects empty targetPaths entries", async () => {
     const tool: any = createSpawnAgentTool(
       makeCtx({

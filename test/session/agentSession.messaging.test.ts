@@ -66,7 +66,11 @@ describe("AgentSession", () => {
   describe("sendUserMessage", () => {
     test("locks a source chat while its promoted task is active", async () => {
       const sessionDb = {
-        getActiveTaskForSourceSession: () => ({ id: "task-1", title: "Managed delivery" }),
+        getActiveTaskForSourceSession: () => ({
+          id: "task-1",
+          title: "Managed delivery",
+          status: "working" as const,
+        }),
         persistSessionMutation: async () => 0,
         persistSessionSnapshot: async () => {},
       };
@@ -81,6 +85,42 @@ describe("AgentSession", () => {
           code: "task_locked",
           message: "Chat is locked by active task task-1: Managed delivery",
         }),
+      );
+    });
+
+    test("rechecks task locks after async preflight before starting the turn", async () => {
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount === 1
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+
+      await session.sendUserMessage("turn accepted just before task cancellation");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          message:
+            "Task task-cancelled is cancelled and cannot accept new turns until it is reopened or retried.",
+        }),
+      );
+      expect(events.some((event) => event.type === "user_message")).toBe(false);
+      expect(events.some((event) => event.type === "session_busy" && event.busy === true)).toBe(
+        false,
       );
     });
 

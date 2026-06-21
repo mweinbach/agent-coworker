@@ -202,6 +202,37 @@ function mergeToolSets(
   return merged;
 }
 
+function wrapToolSetWithMutationGate(
+  tools: Record<string, any>,
+  assertCanMutate: RunTurnParams["assertCanMutate"],
+): Record<string, any> {
+  if (!assertCanMutate) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [
+      name,
+      wrapToolWithMutationGate(name, tool, assertCanMutate),
+    ]),
+  );
+}
+
+function wrapToolWithMutationGate(
+  name: string,
+  tool: unknown,
+  assertCanMutate: NonNullable<RunTurnParams["assertCanMutate"]>,
+): unknown {
+  if ((typeof tool !== "object" && typeof tool !== "function") || tool === null) return tool;
+  const record = tool as Record<string, unknown>;
+  if (typeof record.execute !== "function") return tool;
+  const execute = record.execute as (...args: unknown[]) => unknown;
+  return {
+    ...record,
+    execute: async (...args: unknown[]) => {
+      await assertCanMutate(name);
+      return await execute.call(tool, ...args);
+    },
+  };
+}
+
 function mergePrepareStepOverrides(
   base: RuntimeStepOverride | undefined,
   next: RuntimeStepOverride | undefined,
@@ -536,9 +567,10 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           allowProfileMcp: !!params.agentProfile,
         })
       : mergedTools;
-    const tools = params.agentProfile
+    const filteredTools = params.agentProfile
       ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
       : roleFilteredTools;
+    const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate);
     const mcpToolNames = Object.keys(tools)
       .filter((name) => name.startsWith("mcp__"))
       .sort();
@@ -727,6 +759,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           askUser,
           approveCommand,
           updateTodos,
+          assertCanMutate: params.assertCanMutate,
           onModelStreamPart: params.onModelStreamPart,
           onModelRawEvent: params.onModelRawEvent,
           onModelError: params.onModelError,

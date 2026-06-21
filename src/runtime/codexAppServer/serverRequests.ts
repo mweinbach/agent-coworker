@@ -172,6 +172,16 @@ export async function handleServerRequest(
     method === "item/commandExecution/requestApproval" ||
     method === "item/fileChange/requestApproval"
   ) {
+    try {
+      await params.assertCanMutate?.(
+        method === "item/fileChange/requestApproval"
+          ? "codex:fileChange"
+          : "codex:commandExecution",
+      );
+    } catch (error) {
+      params.log?.(`[codex-app-server] Native tool approval declined: ${compactToolError(error)}`);
+      return { decision: "decline" };
+    }
     const isNoProjectWriteFileApproval =
       params.shellPolicy === "no_project_write" && method === "item/fileChange/requestApproval";
     const approved =

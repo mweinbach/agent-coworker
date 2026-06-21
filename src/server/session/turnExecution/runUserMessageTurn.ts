@@ -9,6 +9,7 @@ import type { InteractionManager } from "../InteractionManager";
 import type { SessionBackupController } from "../SessionBackupController";
 import type { SessionContext } from "../SessionContext";
 import type { SessionMetadataManager } from "../SessionMetadataManager";
+import { getSessionTaskLock } from "../taskLocks";
 import { isInvalidProviderManagedContinuationError } from "./continuationPolicy";
 import {
   getPartialTurnProviderState,
@@ -122,6 +123,13 @@ export function createUserMessageTurnRunner(
     context.queuePersistSessionSnapshot("session.todos_updated");
   };
 
+  const emitTaskLockIfPresent = (): boolean => {
+    const taskLock = getSessionTaskLock(context.deps.sessionDb, context.id);
+    if (!taskLock) return false;
+    context.emitError("task_locked", "session", taskLock.message, taskLock.data);
+    return true;
+  };
+
   const sendUserMessage = async (
     text: string,
     clientMessageId?: string,
@@ -155,6 +163,9 @@ export function createUserMessageTurnRunner(
     } catch (error) {
       const classified = classifyTurnError(error);
       context.emitError(classified.code, classified.source, context.formatError(error));
+      return;
+    }
+    if (emitTaskLockIfPresent()) {
       return;
     }
     const visibleText = displayText ?? resolveUserInputDisplayText(text, attachments);

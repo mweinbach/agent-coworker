@@ -93,11 +93,27 @@ export function mix(a: string, b: string, percentA: number): string {
 }
 
 /**
- * Returns the input color with the given alpha (0-1).
+ * Returns the input color with the given alpha (0-1). Use this for opaque
+ * inputs where the target alpha is absolute (e.g. a 6%-opacity wash off a
+ * solid text color).
  */
 export function alpha(input: string, a: number): string {
   const c = parseColor(input);
   return formatColor({ ...c, a: clamp(a, 0, 1) });
+}
+
+/**
+ * Multiplies the input's existing alpha by `factor`, preserving its RGB
+ * channels. Mirrors desktop's `color-mix(in srgb, <translucent> P%, transparent)`,
+ * which — because CSS color-mix interpolates with premultiplied alpha — keeps
+ * the color and only scales the alpha. Use this for already-translucent inputs
+ * (e.g. deriving border-subtle/-strong from a translucent border-base); plain
+ * `alpha()` would discard the base alpha and `mix(..., "transparent")` would
+ * darken the RGB toward black.
+ */
+export function scaleAlpha(input: string, factor: number): string {
+  const c = parseColor(input);
+  return formatColor({ ...c, a: clamp(c.a * factor, 0, 1) });
 }
 
 /**
@@ -118,11 +134,11 @@ export const palette = {
     accentForegroundBase: "#ffffff",
     inverseText: "#ffffff",
     dangerBase: "#bb3e3e",
-    successBase: "#1ea155",
+    successBase: "#3ab665",
     successForegroundBase: "#ffffff",
-    warningBase: "#d99422",
+    warningBase: "#ecaa0b",
     warningForegroundBase: "#232a18",
-    borderBase: "rgba(62, 74, 40, 0.12)",
+    borderBase: "rgba(62, 74, 40, 0.18)",
     glassBorder: "rgba(62, 74, 40, 0.18)",
     shadowSurfaceBase: "0 1px 3px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.4)",
     shadowOverlayBase: "0 12px 30px rgba(0, 0, 0, 0.1)",
@@ -134,12 +150,12 @@ export const palette = {
     textBase: "#eef0dc",
     mutedBase: "#c7ceaf",
     accentBase: "#a8b963",
-    accentForegroundBase: "#121a10",
+    accentForegroundBase: "#ffffff",
     inverseText: "#ffffff",
     dangerBase: "#e86060",
-    successBase: "#3fbb74",
+    successBase: "#5ecc7e",
     successForegroundBase: "#121a10",
-    warningBase: "#e0a131",
+    warningBase: "#f3b01d",
     warningForegroundBase: "#1a2012",
     borderBase: "rgba(238, 241, 220, 0.14)",
     glassBorder: "rgba(238, 241, 220, 0.16)",
@@ -217,13 +233,13 @@ function buildSemanticTokens(p: PalettePrimitives, isDark: boolean): SemanticTok
     textPrimary: p.textBase,
     textSecondary: alpha(p.textBase, 0.88),
     textMuted: p.mutedBase,
-    textSubtle: alpha(p.mutedBase, 0.78),
+    textSubtle: alpha(p.mutedBase, 0.92),
     textInverse: p.inverseText,
     textLink: p.accentBase,
 
     borderDefault: p.borderBase,
-    borderSubtle: alpha(p.borderBase, 0.76),
-    borderStrong: alpha(p.borderBase, 0.92),
+    borderSubtle: scaleAlpha(p.borderBase, 0.76),
+    borderStrong: scaleAlpha(p.borderBase, 0.92),
 
     accent: p.accentBase,
     accentForeground: p.accentForegroundBase,
@@ -237,7 +253,7 @@ function buildSemanticTokens(p: PalettePrimitives, isDark: boolean): SemanticTok
     warningSoft: alpha(p.warningBase, 0.16),
     danger: p.dangerBase,
     dangerForeground: p.inverseText,
-    dangerSoft: alpha(p.dangerBase, isDark ? 0.16 : 0.12),
+    dangerSoft: alpha(p.dangerBase, isDark ? 0.14 : 0.12),
 
     shadowSurface: p.shadowSurfaceBase,
     shadowOverlay: p.shadowOverlayBase,
@@ -296,6 +312,7 @@ export const radius = {
   sm: 5,
   md: 8,
   lg: 10,
+  xl: 12,
   field: 7,
   card: 16,
   pill: 999,

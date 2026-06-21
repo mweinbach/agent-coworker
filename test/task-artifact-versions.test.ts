@@ -3,7 +3,10 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getSessionTaskLock } from "../src/server/session/taskLocks";
+import {
+  getSessionTaskLock,
+  registerPendingTerminalTaskLocks,
+} from "../src/server/session/taskLocks";
 import { SessionDb } from "../src/server/sessionDb";
 import { ArtifactVersionStore } from "../src/server/tasks/ArtifactVersionStore";
 import { ArtifactConflictError, TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
@@ -31,6 +34,11 @@ type Deferred<T> = {
 type CapturedTaskNotification = {
   method: string;
   params: Record<string, unknown>;
+};
+
+type ScheduledArtifactSettlementRetry = {
+  callback: () => Promise<void>;
+  delayMs: number;
 };
 
 function createDeferred<T>(): Deferred<T> {
@@ -106,6 +114,11 @@ async function createHarness(
       task: TaskRecord,
       reason: "completed" | "cancelled" | "failed",
     ) => Promise<void> | void;
+    artifactSettlementRetryDelayMs?: (attempt: number) => number;
+    scheduleArtifactSettlementRetry?: (
+      callback: () => Promise<void>,
+      delayMs: number,
+    ) => { cancel?: () => void } | undefined;
   } = {},
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-artifact-version-test-"));
@@ -123,6 +136,12 @@ async function createHarness(
     sessionDb,
     artifactStore,
     ...(options.quiesceTaskThreads ? { quiesceTaskThreads: options.quiesceTaskThreads } : {}),
+    ...(options.artifactSettlementRetryDelayMs
+      ? { artifactSettlementRetryDelayMs: options.artifactSettlementRetryDelayMs }
+      : {}),
+    ...(options.scheduleArtifactSettlementRetry
+      ? { scheduleArtifactSettlementRetry: options.scheduleArtifactSettlementRetry }
+      : {}),
     notify: (notification) => {
       notifications.push({ method: notification.method, params: notification.params });
     },
@@ -399,6 +418,53 @@ async function createTaskWithTwoArtifacts(
   const notesArtifact = task.artifacts.find((artifact) => artifact.path === canonicalNotesPath);
   if (!reportArtifact || !notesArtifact) throw new Error("Expected registered artifacts");
   return { task, reportArtifact, notesArtifact, reportPath, notesPath };
+}
+
+async function createPendingArtifactSettlementAfterQuiescenceFailure(
+  harness: Pick<
+    Awaited<ReturnType<typeof createHarness>>,
+    "workspacePath" | "coordinator" | "sessionDb"
+  >,
+) {
+  const artifacts = await createTaskWithTwoArtifacts(harness, { reviewRequired: false });
+  let task = await harness.coordinator.transition({
+    taskId: artifacts.task.id,
+    workspacePath: harness.workspacePath,
+    expectedRevision: artifacts.task.revision,
+    status: "working",
+    summary: "Start retryable artifact settlement.",
+  });
+  const reportRevision = await harness.coordinator.startArtifactRevision({
+    taskId: task.id,
+    workspacePath: harness.workspacePath,
+    artifactId: artifacts.reportArtifact.id,
+    expectedRevision: task.revision,
+    instruction: "Revise report before settlement retry.",
+  });
+  const notesRevision = await harness.coordinator.startArtifactRevision({
+    taskId: task.id,
+    workspacePath: harness.workspacePath,
+    artifactId: artifacts.notesArtifact.id,
+    expectedRevision: reportRevision.task.revision,
+    instruction: "Complete notes after the report revision.",
+  });
+
+  await fs.writeFile(artifacts.reportPath, "report version two before settlement retry\n");
+  const firstClosed = await harness.coordinator.handleThreadOutcome(
+    reportRevision.revision.sessionId,
+    "completed",
+  );
+  if (!firstClosed) throw new Error("Expected report revision completion");
+  await fs.writeFile(artifacts.notesPath, "notes version two before settlement retry\n");
+  const finalClosed = await harness.coordinator.handleThreadOutcome(
+    notesRevision.revision.sessionId,
+    "completed",
+  );
+  if (!finalClosed) throw new Error("Expected notes revision completion");
+  task = finalClosed.task;
+  expect(task.status).toBe("working");
+  expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(true);
+  return { ...artifacts, task, reportRevision, notesRevision };
 }
 
 async function startParallelArtifactRevisionsFromEarlyPhase(
@@ -4204,7 +4270,7 @@ describe("task artifact versions", () => {
     { label: "no-review", reviewRequired: false },
     { label: "review-required", reviewRequired: true },
   ] as const) {
-    test(`preserves final completed artifact after ${scenario.label} atomic settlement failure`, async () => {
+    test(`restores final completed artifact after ${scenario.label} atomic settlement failure`, async () => {
       const harness = await createHarness();
       let cleanupTrigger: (() => void) | null = null;
       try {
@@ -4259,26 +4325,23 @@ describe("task artifact versions", () => {
           workspacePath: harness.workspacePath,
           artifactId: reportArtifact.id,
         });
+        const preAttemptNotesContent = await fs.readFile(notesPath, "utf8");
 
         cleanupTrigger = installSettlementFailureTrigger(harness.sessionDb.dbPath);
-        await fs.writeFile(notesPath, "notes version two survives atomic failure\n");
-        const failedSettlement = await harness.coordinator.handleThreadOutcome(
-          notesRevision.revision.sessionId,
-          "completed",
-        );
-        if (!failedSettlement) throw new Error("Expected completed notes revision");
+        await fs.writeFile(notesPath, "notes version two rolls back after atomic failure\n");
+        await expect(
+          harness.coordinator.handleThreadOutcome(notesRevision.revision.sessionId, "completed"),
+        ).rejects.toThrow("injected settlement failure");
 
-        expect(await fs.readFile(notesPath, "utf8")).toBe(
-          "notes version two survives atomic failure\n",
-        );
+        expect(await fs.readFile(notesPath, "utf8")).toBe(preAttemptNotesContent);
         const afterFailureTask = harness.sessionDb.getTask(task.id);
         expect(afterFailureTask).not.toBeNull();
         if (!afterFailureTask) throw new Error("Expected task after failed completed settlement");
-        expect(afterFailureTask.status).toBe("working");
+        expect(afterFailureTask.status).toBe("blocked");
         const afterFailureNotesRevision = harness.sessionDb.getTaskArtifactRevision(
           notesRevision.revision.id,
         );
-        expect(afterFailureNotesRevision?.status).toBe("completed");
+        expect(afterFailureNotesRevision?.status).toBe("error");
         const afterFailureNotesDetail = harness.coordinator.getArtifactDetail({
           taskId: task.id,
           workspacePath: harness.workspacePath,
@@ -4289,12 +4352,13 @@ describe("task artifact versions", () => {
           workspacePath: harness.workspacePath,
           artifactId: reportArtifact.id,
         });
-        expect(afterFailureNotesDetail?.latestVersionId).not.toBe(
+        expect(afterFailureNotesDetail?.latestVersionId).toBe(
           preAttemptNotesDetail?.latestVersionId,
         );
         expect(afterFailureNotesDetail?.acceptedVersionId).toBe(
           preAttemptNotesDetail?.acceptedVersionId,
         );
+        expect(afterFailureNotesDetail?.versions).toEqual(preAttemptNotesDetail?.versions);
         expect(afterFailureReportDetail?.latestVersionId).toBe(
           preAttemptReportDetail?.latestVersionId,
         );
@@ -4312,14 +4376,7 @@ describe("task artifact versions", () => {
             task.id,
             notesRevision.revision.workItemId,
           ),
-        ).toBe(true);
-
-        cleanupTrigger();
-        cleanupTrigger = null;
-        expect(await harness.coordinator.reconcilePendingArtifactRevisionSettlements()).toBe(1);
-        const settled = harness.sessionDb.getTask(task.id);
-        expect(settled?.status).toBe(scenario.reviewRequired ? "awaiting_review" : "completed");
-        expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(false);
+        ).toBe(false);
       } finally {
         cleanupTrigger?.();
         harness.sessionDb.close();
@@ -4330,11 +4387,16 @@ describe("task artifact versions", () => {
   test("keeps final completed artifact pending after terminal quiescence failure", async () => {
     let failQuiesce = true;
     let quiesceCalls = 0;
+    const scheduledRetries: ScheduledArtifactSettlementRetry[] = [];
     const harness = await createHarness({
       quiesceTaskThreads: async (_task, reason) => {
         quiesceCalls += 1;
         expect(reason).toBe("completed");
         if (failQuiesce) throw new Error("quiesce unavailable");
+      },
+      scheduleArtifactSettlementRetry: (callback, delayMs) => {
+        scheduledRetries.push({ callback, delayMs });
+        return undefined;
       },
     });
     try {
@@ -4448,20 +4510,25 @@ describe("task artifact versions", () => {
           notesRevision.revision.workItemId,
         ),
       ).toBe(true);
+      expect(scheduledRetries.map((retry) => retry.delayMs)).toEqual([0]);
+      await delay(5);
+      expect(harness.sessionDb.getTask(task.id)?.status).toBe("working");
+      expect(scheduledRetries).toHaveLength(1);
 
       failQuiesce = false;
       const beforeRetryTerminalNotifications = terminalNotificationCount();
-      const retried = await harness.coordinator.handleThreadOutcome(
-        notesRevision.revision.sessionId,
-        "completed",
-      );
-      if (!retried) throw new Error("Expected retry settlement");
+      const scheduledRetry = scheduledRetries.shift();
+      if (!scheduledRetry) throw new Error("Expected scheduled settlement retry");
+      await scheduledRetry.callback();
+      const retriedTask = harness.sessionDb.getTask(task.id);
+      if (!retriedTask) throw new Error("Expected retry settlement");
       expect(quiesceCalls).toBe(2);
-      expect(retried.task.status).toBe("completed");
+      expect(retriedTask.status).toBe("completed");
       expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(task.id)).toBe(false);
       expect(terminalNotificationCount()).toBe(beforeRetryTerminalNotifications + 1);
+      expect(scheduledRetries).toHaveLength(0);
 
-      const afterRetryActivity = taskActivityFingerprint(retried.task);
+      const afterRetryActivity = taskActivityFingerprint(retriedTask);
       const afterRetryTerminalNotifications = terminalNotificationCount();
       const replay = await harness.coordinator.handleThreadOutcome(
         notesRevision.revision.sessionId,
@@ -4472,6 +4539,153 @@ describe("task artifact versions", () => {
       expect(taskActivityFingerprint(replay.task)).toEqual(afterRetryActivity);
       expect(terminalNotificationCount()).toBe(afterRetryTerminalNotifications);
       expect(quiesceCalls).toBe(2);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("backs off retryable task locks before settling pending artifact output", async () => {
+    let failQuiesce = true;
+    let releaseTerminalLock: (() => void) | null = null;
+    const scheduledRetries: ScheduledArtifactSettlementRetry[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: async (_task, reason) => {
+        expect(reason).toBe("completed");
+        if (failQuiesce) throw new Error("quiesce unavailable");
+      },
+      artifactSettlementRetryDelayMs: (attempt) => attempt * 10 + 5,
+      scheduleArtifactSettlementRetry: (callback, delayMs) => {
+        scheduledRetries.push({ callback, delayMs });
+        return { cancel: () => {} };
+      },
+    });
+    try {
+      const pending = await createPendingArtifactSettlementAfterQuiescenceFailure(harness);
+      expect(scheduledRetries.map((retry) => retry.delayMs)).toEqual([5]);
+      failQuiesce = false;
+
+      releaseTerminalLock = registerPendingTerminalTaskLocks(pending.task, "cancelled");
+      const lockedRetry = scheduledRetries.shift();
+      if (!lockedRetry) throw new Error("Expected locked settlement retry");
+      await lockedRetry.callback();
+      expect(harness.sessionDb.getTask(pending.task.id)?.status).toBe("working");
+      expect(scheduledRetries.map((retry) => retry.delayMs)).toEqual([15]);
+
+      releaseTerminalLock();
+      releaseTerminalLock = null;
+      const successfulRetry = scheduledRetries.shift();
+      if (!successfulRetry) throw new Error("Expected rescheduled settlement retry");
+      await successfulRetry.callback();
+      expect(harness.sessionDb.getTask(pending.task.id)?.status).toBe("completed");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(pending.task.id)).toBe(
+        false,
+      );
+      expect(scheduledRetries).toHaveLength(0);
+    } finally {
+      releaseTerminalLock?.();
+      harness.sessionDb.close();
+    }
+  });
+
+  test("stops automatic settlement retries when normal readiness is blocked", async () => {
+    let failQuiesce = true;
+    const scheduledRetries: ScheduledArtifactSettlementRetry[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: async (_task, reason) => {
+        expect(reason).toBe("completed");
+        if (failQuiesce) throw new Error("quiesce unavailable");
+      },
+      scheduleArtifactSettlementRetry: (callback, delayMs) => {
+        scheduledRetries.push({ callback, delayMs });
+        return { cancel: () => {} };
+      },
+    });
+    try {
+      const pending = await createPendingArtifactSettlementAfterQuiescenceFailure(harness);
+      failQuiesce = false;
+      const blocked = await harness.coordinator.reportBlocker({
+        taskId: pending.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: pending.task.revision,
+        description: "A required dependency is still unavailable.",
+        blocking: true,
+      });
+      expect(blocked.status).toBe("blocked");
+
+      const retry = scheduledRetries.shift();
+      if (!retry) throw new Error("Expected scheduled settlement retry");
+      await retry.callback();
+      expect(harness.sessionDb.getTask(pending.task.id)?.status).toBe("blocked");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(pending.task.id)).toBe(
+        true,
+      );
+      expect(scheduledRetries).toHaveLength(0);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("rejects non-retryable settlement failures without spinning", async () => {
+    let failQuiesce = true;
+    let cleanupTrigger: (() => void) | null = null;
+    const scheduledRetries: ScheduledArtifactSettlementRetry[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: async (_task, reason) => {
+        expect(reason).toBe("completed");
+        if (failQuiesce) throw new Error("quiesce unavailable");
+      },
+      scheduleArtifactSettlementRetry: (callback, delayMs) => {
+        scheduledRetries.push({ callback, delayMs });
+        return { cancel: () => {} };
+      },
+    });
+    try {
+      const pending = await createPendingArtifactSettlementAfterQuiescenceFailure(harness);
+      failQuiesce = false;
+      cleanupTrigger = installSettlementFailureTrigger(harness.sessionDb.dbPath);
+      const retry = scheduledRetries.shift();
+      if (!retry) throw new Error("Expected scheduled settlement retry");
+      await expect(retry.callback()).rejects.toThrow("injected settlement failure");
+      expect(harness.sessionDb.getTask(pending.task.id)?.status).toBe("working");
+      expect(harness.sessionDb.hasPendingTaskArtifactRevisionSettlement(pending.task.id)).toBe(
+        true,
+      );
+      expect(scheduledRetries).toHaveLength(0);
+    } finally {
+      cleanupTrigger?.();
+      harness.sessionDb.close();
+    }
+  });
+
+  test("does not resurrect a terminal task when a pending retry fires late", async () => {
+    let failQuiesce = true;
+    const scheduledRetries: ScheduledArtifactSettlementRetry[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: async (_task, reason) => {
+        if (reason === "completed" && failQuiesce) throw new Error("quiesce unavailable");
+      },
+      scheduleArtifactSettlementRetry: (callback, delayMs) => {
+        scheduledRetries.push({ callback, delayMs });
+        return { cancel: () => {} };
+      },
+    });
+    try {
+      const pending = await createPendingArtifactSettlementAfterQuiescenceFailure(harness);
+      failQuiesce = false;
+      const cancelled = await harness.coordinator.transition({
+        taskId: pending.task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: pending.task.revision,
+        status: "cancelled",
+        summary: "Cancel before the delayed settlement retry.",
+      });
+      expect(cancelled.status).toBe("cancelled");
+
+      const retry = scheduledRetries.shift();
+      if (!retry) throw new Error("Expected scheduled settlement retry");
+      await retry.callback();
+      expect(harness.sessionDb.getTask(pending.task.id)?.status).toBe("cancelled");
+      expect(scheduledRetries).toHaveLength(0);
     } finally {
       harness.sessionDb.close();
     }

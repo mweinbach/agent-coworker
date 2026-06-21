@@ -37,6 +37,7 @@ import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import {
   getPendingTerminalTaskLock,
+  isTaskLockedError,
   isTerminalTaskStatus,
   makeTaskLockedError,
   registerPendingTerminalTaskLocks,
@@ -85,9 +86,9 @@ type ArtifactSettlementRetryHandle = {
 };
 
 type ArtifactSettlementRetryScheduler = (
-  callback: () => void,
+  callback: () => Promise<void>,
   delayMs: number,
-) => ArtifactSettlementRetryHandle | void;
+) => ArtifactSettlementRetryHandle | undefined;
 
 type ArtifactSettlementRetryState = {
   attempts: number;
@@ -2555,13 +2556,20 @@ export class TaskCoordinator {
           const priorTaskStatus =
             this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(closedRevision.id) ??
             closedTask.status;
-          const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
-            task: closedTask,
-            priorTaskStatus,
-            outcome: closedRevision.status,
-            sessionId,
-            detail: closedRevision.status === "cancelled" ? "Revision cancelled" : undefined,
-          });
+          let settledTask: TaskRecord;
+          try {
+            settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+              task: closedTask,
+              priorTaskStatus,
+              outcome: closedRevision.status,
+              sessionId,
+              detail: closedRevision.status === "cancelled" ? "Revision cancelled" : undefined,
+            });
+          } catch (error) {
+            if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
+            this.schedulePendingArtifactSettlementRetry(closedTask.id);
+            return { task: closedTask, detail: closedDetail, revision: closedRevision };
+          }
           const settledRevision =
             this.options.sessionDb.getTaskArtifactRevision(closedRevision.id) ?? closedRevision;
           const settledDetail =
@@ -2848,24 +2856,90 @@ export class TaskCoordinator {
   }
 
   private schedulePendingArtifactSettlementRetry(taskId: string): void {
-    if (this.pendingArtifactSettlementRetryTasks.has(taskId)) return;
-    this.pendingArtifactSettlementRetryTasks.add(taskId);
+    const state = this.pendingArtifactSettlementRetryTasks.get(taskId) ?? {
+      attempts: 0,
+      running: false,
+      cancel: null,
+    };
+    if (state.cancel || state.running) {
+      this.pendingArtifactSettlementRetryTasks.set(taskId, state);
+      return;
+    }
+    const delayMs = this.artifactSettlementRetryDelayMs(state.attempts);
+    const handle = this.registerArtifactSettlementRetryTimer(async () => {
+      state.cancel = null;
+      await this.runPendingArtifactSettlementRetry(taskId);
+    }, delayMs);
+    state.cancel = handle.cancel ?? (() => {});
+    this.pendingArtifactSettlementRetryTasks.set(taskId, state);
+  }
+
+  private artifactSettlementRetryDelayMs(attempt: number): number {
+    const configured = this.options.artifactSettlementRetryDelayMs?.(attempt);
+    if (configured !== undefined) return Math.max(0, configured);
+    return DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS[
+      Math.min(attempt, DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS.length - 1)
+    ];
+  }
+
+  private registerArtifactSettlementRetryTimer(
+    callback: () => Promise<void>,
+    delayMs: number,
+  ): ArtifactSettlementRetryHandle {
+    if (this.options.scheduleArtifactSettlementRetry) {
+      return (
+        this.options.scheduleArtifactSettlementRetry(callback, delayMs) ?? { cancel: () => {} }
+      );
+    }
     const timer = setTimeout(() => {
-      void (async () => {
-        try {
-          await this.runTaskMutation(taskId, async () => {
-            const task = this.options.sessionDb.getTask(taskId);
-            if (!task || !this.hasCompletedArtifactRevisionAwaitingSettlement(task)) return null;
-            return await this.settlePendingArtifactRevisionSettlementsLocked(task);
-          });
-        } catch {
-          // Pending settlement is durable; startup reconcile or a later retry can try again.
-        } finally {
-          this.pendingArtifactSettlementRetryTasks.delete(taskId);
-        }
-      })();
-    }, 0);
+      void callback().catch(() => {
+        // Durable pending state remains available for startup reconciliation.
+      });
+    }, delayMs);
     timer.unref?.();
+    return { cancel: () => clearTimeout(timer) };
+  }
+
+  private shouldRetryPendingArtifactSettlement(taskId: string): boolean {
+    const latest = this.options.sessionDb.getTask(taskId);
+    return Boolean(
+      latest &&
+        !isTerminalTask(latest) &&
+        !this.hasActiveArtifactRevision(latest) &&
+        this.hasCompletedArtifactRevisionAwaitingSettlement(latest),
+    );
+  }
+
+  private async runPendingArtifactSettlementRetry(taskId: string): Promise<void> {
+    const state = this.pendingArtifactSettlementRetryTasks.get(taskId);
+    if (!state || state.running) return;
+    state.running = true;
+    let retryAgain = false;
+    let nonRetryableFailure: unknown;
+    try {
+      await this.runTaskMutation(taskId, async () => {
+        const task = this.options.sessionDb.getTask(taskId);
+        if (!task || !this.hasCompletedArtifactRevisionAwaitingSettlement(task)) return null;
+        return await this.settlePendingArtifactRevisionSettlementsLocked(task);
+      });
+    } catch (error) {
+      if (error instanceof TerminalTaskCompletionQuiescenceError || isTaskLockedError(error)) {
+        retryAgain = this.shouldRetryPendingArtifactSettlement(taskId);
+      } else {
+        nonRetryableFailure = error;
+      }
+    } finally {
+      state.running = false;
+      if (retryAgain) {
+        state.attempts += 1;
+        state.cancel = null;
+        this.pendingArtifactSettlementRetryTasks.set(taskId, state);
+        this.schedulePendingArtifactSettlementRetry(taskId);
+      } else {
+        this.pendingArtifactSettlementRetryTasks.delete(taskId);
+      }
+    }
+    if (nonRetryableFailure !== undefined) throw nonRetryableFailure;
   }
 
   private async settlePendingArtifactRevisionSettlementsLocked(
@@ -3166,7 +3240,12 @@ export class TaskCoordinator {
           deferredTerminalCommitHook: input.deferredTerminalCommitHook,
         });
       } catch (error) {
-        if (error instanceof AtomicTaskCompletionSettlementError) throw error;
+        if (
+          error instanceof AtomicTaskCompletionSettlementError ||
+          error instanceof TerminalTaskCompletionQuiescenceError
+        ) {
+          throw error;
+        }
         return await this.restoreAfterArtifactRevisionCompletionProposalFailure({
           taskId: latest.id,
           priorTaskStatus: input.priorTaskStatus,
@@ -3285,8 +3364,12 @@ export class TaskCoordinator {
           if (!latest || !this.hasCompletedArtifactRevisionAwaitingSettlement(latest)) return null;
           return await this.settlePendingArtifactRevisionSettlementsLocked(latest);
         });
-      } catch {
-        continue;
+      } catch (error) {
+        if (error instanceof TerminalTaskCompletionQuiescenceError) {
+          this.schedulePendingArtifactSettlementRetry(task.id);
+          continue;
+        }
+        throw error;
       }
       const latest = this.options.sessionDb.getTask(task.id);
       if (
@@ -3866,11 +3949,16 @@ export class TaskCoordinator {
         ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
         : null;
       const updatedAt = nowIso();
-      const terminalRelease = !task.reviewRequired
-        ? await this.prepareTerminalTaskWrite(task, "completed", {
+      let terminalRelease: (() => void) | null = null;
+      if (!task.reviewRequired) {
+        try {
+          terminalRelease = await this.prepareTerminalTaskWrite(task, "completed", {
             originSessionId: input.sessionId,
-          })
-        : null;
+          });
+        } catch (error) {
+          throw new TerminalTaskCompletionQuiescenceError(error);
+        }
+      }
       let updated: TaskRecord;
       try {
         updated =

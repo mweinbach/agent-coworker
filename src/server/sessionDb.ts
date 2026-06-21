@@ -61,6 +61,7 @@ import type { SessionTitleSource } from "./sessionTitleService";
 export type { PersistedSessionSummary } from "./sessionStore";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
+const ANONYMOUS_IN_MEMORY_DB_PATH = ":memory:";
 
 export type SessionPersistenceStatus = "active" | "closed";
 
@@ -199,10 +200,13 @@ export class SessionDb {
   readonly dbPath: string;
 
   private readonly db: Database;
+  private readonly committedReadDb: Database;
   private readonly sessionsDir: string;
   private readonly busyTimeoutMs: number;
   private readonly repository: SessionDbRepository;
+  private readonly committedReadRepository: SessionDbRepository;
   private readonly taskRepository: SessionTaskRepository;
+  private readonly committedReadTaskRepository: SessionTaskRepository;
   private readonly writeCoordinator: SessionDbWriteCoordinator;
 
   private constructor(opts: {
@@ -213,11 +217,18 @@ export class SessionDb {
     writeCoordinator: SessionDbWriteCoordinator;
   }) {
     this.db = opts.db;
+    this.committedReadDb = new Database(opts.dbPath, { readonly: true, strict: false });
     this.dbPath = opts.dbPath;
     this.sessionsDir = opts.sessionsDir;
     this.busyTimeoutMs = opts.busyTimeoutMs;
+    this.committedReadDb.exec(
+      `PRAGMA busy_timeout=${Math.max(0, Math.floor(opts.busyTimeoutMs))};`,
+    );
+    this.committedReadDb.exec("PRAGMA foreign_keys=ON;");
     this.repository = new SessionDbRepository(this.db);
+    this.committedReadRepository = new SessionDbRepository(this.committedReadDb);
     this.taskRepository = new SessionTaskRepository(this.db);
+    this.committedReadTaskRepository = new SessionTaskRepository(this.committedReadDb);
     this.writeCoordinator = opts.writeCoordinator;
   }
 
@@ -225,6 +236,11 @@ export class SessionDb {
     await ensurePrivateDirectory(opts.paths.rootDir);
 
     const dbPath = opts.dbPath ?? path.join(opts.paths.rootDir, "sessions.db");
+    if (dbPath === ANONYMOUS_IN_MEMORY_DB_PATH) {
+      throw new Error(
+        "SessionDb requires a durable file-backed database path; anonymous in-memory databases cannot provide committed-reader isolation.",
+      );
+    }
     const busyTimeoutMs = opts.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
     const writeCoordinator = new SessionDbWriteCoordinator({
       rootDir: opts.paths.rootDir,
@@ -251,11 +267,11 @@ export class SessionDb {
       return repo;
     } catch (error) {
       if (!isCorruptionError(error)) {
-        db.close();
+        repo.close();
         throw error;
       }
 
-      db.close();
+      repo.close();
       await quarantineCorruptedDb(dbPath);
 
       const recreated = new Database(dbPath, { create: true, strict: false });
@@ -273,15 +289,28 @@ export class SessionDb {
   }
 
   close(): void {
+    this.committedReadDb.close();
     this.db.close();
   }
 
+  private get readRepository(): SessionDbRepository {
+    return this.writeCoordinator.ownsCurrentContext()
+      ? this.repository
+      : this.committedReadRepository;
+  }
+
+  private get readTaskRepository(): SessionTaskRepository {
+    return this.writeCoordinator.ownsCurrentContext()
+      ? this.taskRepository
+      : this.committedReadTaskRepository;
+  }
+
   listSessions(opts?: { workingDirectory?: string | null }): PersistedSessionSummary[] {
-    return this.repository.listSessions(opts);
+    return this.readRepository.listSessions(opts);
   }
 
   listAgentSessions(parentSessionId: string): PersistentAgentSummary[] {
-    return this.repository.listAgentSessions(parentSessionId);
+    return this.readRepository.listAgentSessions(parentSessionId);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -299,15 +328,15 @@ export class SessionDb {
     offset = 0,
     limit = 100,
   ): { messages: ModelMessage[]; total: number } {
-    return this.repository.getMessages(sessionId, offset, limit);
+    return this.readRepository.getMessages(sessionId, offset, limit);
   }
 
   getSessionRecord(sessionId: string): PersistedSessionRecord | null {
-    return this.repository.getSessionRecord(sessionId);
+    return this.readRepository.getSessionRecord(sessionId);
   }
 
   getSessionSnapshot(sessionId: string): SessionSnapshot | null {
-    return this.repository.getSessionSnapshot(sessionId);
+    return this.readRepository.getSessionSnapshot(sessionId);
   }
 
   async persistSessionMutation(opts: PersistedSessionMutation): Promise<number> {
@@ -329,7 +358,7 @@ export class SessionDb {
   }
 
   listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
-    return this.repository.listModelStreamChunks(sessionId, turnId);
+    return this.readRepository.listModelStreamChunks(sessionId, turnId);
   }
 
   async appendThreadJournalEvent(opts: Omit<PersistedThreadJournalEvent, "seq">): Promise<number> {
@@ -360,22 +389,22 @@ export class SessionDb {
     threadId: string,
     opts?: { afterSeq?: number; limit?: number },
   ): PersistedThreadJournalEvent[] {
-    return this.repository.listThreadJournalEvents(threadId, opts);
+    return this.readRepository.listThreadJournalEvents(threadId, opts);
   }
 
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    return this.repository.listResearch(opts);
+    return this.readRepository.listResearch(opts);
   }
 
   listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    return this.repository.listRunningResearch(opts);
+    return this.readRepository.listRunningResearch(opts);
   }
 
   getResearch(
     researchId: string,
     opts?: { workspacePath?: string | null },
   ): PersistedResearchRecord | null {
-    return this.repository.getResearch(researchId, opts);
+    return this.readRepository.getResearch(researchId, opts);
   }
 
   async upsertResearch(record: PersistedResearchRecord): Promise<void> {
@@ -389,34 +418,34 @@ export class SessionDb {
   }
 
   listTasks(workspacePath?: string | null): TaskSummary[] {
-    return this.taskRepository.listTasks(workspacePath);
+    return this.readTaskRepository.listTasks(workspacePath);
   }
 
   getTask(taskId: string): TaskRecord | null {
-    return this.taskRepository.getTask(taskId);
+    return this.readTaskRepository.getTask(taskId);
   }
 
   getTaskForThread(sessionId: string): TaskRecord | null {
-    return this.taskRepository.getTaskForThread(sessionId);
+    return this.readTaskRepository.getTaskForThread(sessionId);
   }
 
   listTaskReviews(taskId: string): TaskReviewRecord[] {
-    return this.taskRepository.listReviews(taskId);
+    return this.readTaskRepository.listReviews(taskId);
   }
 
   getTaskByCreationKey(
     idempotencyKey: string,
     scope?: { sourceSessionId?: string | null; workspacePath?: string },
   ): TaskRecord | null {
-    return this.taskRepository.getTaskByCreationKey(idempotencyKey, scope);
+    return this.readTaskRepository.getTaskByCreationKey(idempotencyKey, scope);
   }
 
   getActiveTaskForSourceSession(sessionId: string): TaskRecord | null {
-    return this.taskRepository.getActiveTaskForSourceSession(sessionId);
+    return this.readTaskRepository.getActiveTaskForSourceSession(sessionId);
   }
 
   isTaskThread(sessionId: string): boolean {
-    return this.taskRepository.isTaskThread(sessionId);
+    return this.readTaskRepository.isTaskThread(sessionId);
   }
 
   async createTask(input: CreateTaskInput): Promise<TaskRecord> {
@@ -554,7 +583,7 @@ export class SessionDb {
   }
 
   getTaskArtifactDetail(taskId: string, artifactId: string): TaskArtifactDetail | null {
-    return this.taskRepository.getArtifactDetail(taskId, artifactId);
+    return this.readTaskRepository.getArtifactDetail(taskId, artifactId);
   }
 
   getTaskArtifactVersion(
@@ -562,51 +591,54 @@ export class SessionDb {
     artifactId: string,
     versionId: string,
   ): TaskArtifactVersion | null {
-    return this.taskRepository.getArtifactVersion(taskId, artifactId, versionId);
+    return this.readTaskRepository.getArtifactVersion(taskId, artifactId, versionId);
   }
 
   getActiveTaskArtifactRevisionForSession(sessionId: string): TaskArtifactRevision | null {
-    return this.taskRepository.getActiveArtifactRevisionForSession(sessionId);
+    return this.readTaskRepository.getActiveArtifactRevisionForSession(sessionId);
   }
 
   getTaskArtifactRevisionForSession(sessionId: string): TaskArtifactRevision | null {
-    return this.taskRepository.getArtifactRevisionForSession(sessionId);
+    return this.readTaskRepository.getArtifactRevisionForSession(sessionId);
   }
 
   getTaskArtifactRevision(revisionId: string): TaskArtifactRevision | null {
-    return this.taskRepository.getArtifactRevision(revisionId);
+    return this.readTaskRepository.getArtifactRevision(revisionId);
   }
 
   getTaskArtifactRevisionPriorTaskStatus(revisionId: string): TaskStatus | null {
-    return this.taskRepository.getArtifactRevisionPriorTaskStatus(revisionId);
+    return this.readTaskRepository.getArtifactRevisionPriorTaskStatus(revisionId);
   }
 
   hasCompletedTaskArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
-    return this.taskRepository.hasCompletedArtifactRevisionForWorkItem(taskId, workItemId);
+    return this.readTaskRepository.hasCompletedArtifactRevisionForWorkItem(taskId, workItemId);
   }
 
   hasPendingTaskArtifactRevisionSettlement(taskId: string): boolean {
-    return this.taskRepository.hasPendingArtifactRevisionSettlement(taskId);
+    return this.readTaskRepository.hasPendingArtifactRevisionSettlement(taskId);
   }
 
   hasPendingTaskArtifactRevisionSettlementForWorkItem(taskId: string, workItemId: string): boolean {
-    return this.taskRepository.hasPendingArtifactRevisionSettlementForWorkItem(taskId, workItemId);
+    return this.readTaskRepository.hasPendingArtifactRevisionSettlementForWorkItem(
+      taskId,
+      workItemId,
+    );
   }
 
   listPendingTaskArtifactRevisionSettlementIds(taskId: string): string[] {
-    return this.taskRepository.listPendingArtifactRevisionSettlementIds(taskId);
+    return this.readTaskRepository.listPendingArtifactRevisionSettlementIds(taskId);
   }
 
   listTaskArtifactRevisionOutputPathsForWorkItem(taskId: string, workItemId: string): string[] {
-    return this.taskRepository.listArtifactRevisionOutputPathsForWorkItem(taskId, workItemId);
+    return this.readTaskRepository.listArtifactRevisionOutputPathsForWorkItem(taskId, workItemId);
   }
 
   listCoordinatorOwnedTaskArtifactRevisionWorkItemIds(taskId: string): string[] {
-    return this.taskRepository.listCoordinatorOwnedArtifactRevisionWorkItemIds(taskId);
+    return this.readTaskRepository.listCoordinatorOwnedArtifactRevisionWorkItemIds(taskId);
   }
 
   hasCancelledTaskArtifactRevisionForWorkItem(taskId: string, workItemId: string): boolean {
-    return this.taskRepository.hasCancelledArtifactRevisionForWorkItem(taskId, workItemId);
+    return this.readTaskRepository.hasCancelledArtifactRevisionForWorkItem(taskId, workItemId);
   }
 
   async registerTaskArtifactVersioned(input: {
@@ -663,11 +695,23 @@ export class SessionDb {
     revisionId: string;
     version: TaskArtifactVersion;
     updatedAt: string;
+    forcePendingSettlement?: boolean;
   }): Promise<TaskRecord> {
     return await this.writeCoordinator.runExclusive(
       "complete_task_artifact_revision",
       async () => this.taskRepository.completeArtifactRevision(input),
       { revisionId: input.revisionId, artifactId: input.version.artifactId },
+    );
+  }
+
+  async markTaskArtifactRevisionSettlementPending(input: {
+    revisionId: string;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "mark_task_artifact_revision_settlement_pending",
+      async () => this.taskRepository.markArtifactRevisionSettlementPending(input),
+      { revisionId: input.revisionId },
     );
   }
 
@@ -756,6 +800,101 @@ export class SessionDb {
         }
       },
       { taskId: input.taskId },
+    );
+  }
+
+  async previewArtifactRevisionCompletionReadiness(input: {
+    taskId: string;
+    revision:
+      | {
+          outcome: "completed";
+          revisionId: string;
+          version: TaskArtifactVersion;
+        }
+      | {
+          outcome: "cancelled";
+          revisionId: string;
+          detail?: string;
+        };
+    updatedAt: string;
+    summary: string;
+    detail?: string | null;
+    threadId?: string | null;
+    reviewRequired: boolean;
+    prepareCompletion: (task: TaskRecord) => Promise<
+      | {
+          ready: true;
+          validateReadyTask?: (task: TaskRecord) => Promise<void>;
+          validateAcceptedTask?: (task: TaskRecord) => Promise<void>;
+        }
+      | { ready: false; error: unknown }
+    >;
+  }): Promise<{ completion: "ready" | "not_ready"; error?: unknown }> {
+    return await this.writeCoordinator.runExclusive(
+      "preview_artifact_revision_completion_readiness",
+      async () => {
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        try {
+          if (input.revision.outcome === "completed") {
+            this.taskRepository.completeArtifactRevisionInOpenTransaction({
+              revisionId: input.revision.revisionId,
+              version: input.revision.version,
+              updatedAt: input.updatedAt,
+            });
+          } else {
+            this.taskRepository.failArtifactRevisionInOpenTransaction({
+              revisionId: input.revision.revisionId,
+              status: "cancelled",
+              updatedAt: input.updatedAt,
+              detail: input.revision.detail,
+            });
+          }
+          let task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          const prepared = await input.prepareCompletion(task);
+          if (!prepared.ready) {
+            this.db.exec("ROLLBACK");
+            return { completion: "not_ready" as const, error: prepared.error };
+          }
+          this.taskRepository.setStatusInOpenTransaction({
+            taskId: input.taskId,
+            expectedRevision: task.revision,
+            status: "awaiting_review",
+            summary: input.summary,
+            detail: input.detail ?? null,
+            updatedAt: input.updatedAt,
+            threadId: input.threadId ?? null,
+          });
+          task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await prepared.validateReadyTask?.(task);
+          if (!input.reviewRequired) {
+            this.taskRepository.acceptAllArtifactVersionsInOpenTransaction({
+              taskId: input.taskId,
+              expectedRevision: task.revision,
+              updatedAt: input.updatedAt,
+            });
+            task = this.getTask(input.taskId);
+            if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+            await prepared.validateAcceptedTask?.(task);
+          }
+          this.db.exec("ROLLBACK");
+          return { completion: "ready" as const };
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back artifact revision completion readiness preview: ${String(
+                rollbackError,
+              )}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      },
+      { taskId: input.taskId, revisionId: input.revision.revisionId },
     );
   }
 
@@ -1059,7 +1198,7 @@ export class SessionDb {
   }
 
   getTaskDirectiveReceipt(taskId: string, idempotencyKey: string): number | null {
-    return this.taskRepository.getDirectiveReceipt(taskId, idempotencyKey);
+    return this.readTaskRepository.getDirectiveReceipt(taskId, idempotencyKey);
   }
 
   async recordTaskDirectiveReceipt(
@@ -1079,6 +1218,21 @@ export class SessionDb {
         );
       },
       { taskId },
+    );
+  }
+
+  async recordTaskDirectiveReceiptWithCheckpoint(input: {
+    taskId: string;
+    idempotencyKey: string;
+    resultRevision: number;
+    receiptCreatedAt: string;
+    checkpoint: TaskCheckpoint;
+    checkpointOptions?: { rejectTerminal?: boolean };
+  }): Promise<TaskCheckpoint | null> {
+    return await this.writeCoordinator.runExclusive(
+      "record_task_directive_receipt_with_checkpoint",
+      async () => this.taskRepository.recordDirectiveReceiptWithCheckpoint(input),
+      { taskId: input.taskId },
     );
   }
 

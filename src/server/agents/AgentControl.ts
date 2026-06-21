@@ -11,8 +11,8 @@ import {
   resolveAgentSpawnContextOptions,
 } from "../../shared/agents";
 import type { AgentSession } from "../session/AgentSession";
+import type { TaskLockError } from "../session/taskLocks";
 import type { SessionBinding } from "../startServer/types";
-
 import { routeAgentConfig } from "./modelRouter";
 import { resolveAgentProfileSnapshot } from "./profiles";
 import { inspectChildAgentReport } from "./reportParser";
@@ -43,6 +43,28 @@ import type {
 const MAX_SPAWN_DEPTH =
   Math.max(0, ...Object.values(AGENT_ROLE_DEFINITIONS).map((r) => r.maxDepth)) + 1;
 const MAX_ACTIVE_CHILDREN_PER_PARENT = 16;
+
+export type AgentControlTaskLockError = Error & {
+  code: "task_locked";
+  source: "session";
+  data: TaskLockError["data"];
+};
+
+function makeAgentControlTaskLockError(lock: TaskLockError): AgentControlTaskLockError {
+  return Object.assign(new Error(lock.message), {
+    code: "task_locked" as const,
+    source: "session" as const,
+    data: lock.data,
+  });
+}
+
+export function isAgentControlTaskLockError(error: unknown): error is AgentControlTaskLockError {
+  return (
+    error instanceof Error &&
+    (error as { code?: unknown; source?: unknown }).code === "task_locked" &&
+    (error as { source?: unknown }).source === "session"
+  );
+}
 
 function executionStateForSession(
   session: AgentSession,
@@ -108,8 +130,44 @@ export class AgentControl {
   // MAX_ACTIVE_CHILDREN_PER_PARENT. Reserved at the (synchronous) check, released
   // once the binding is registered (or the spawn fails).
   private readonly inFlightSpawnsByParent = new Map<string, number>();
+  private readonly inFlightSpawnSettlementsByParent = new Map<string, Set<Promise<void>>>();
+  private readonly inFlightControlSettlementsByParent = new Map<string, Set<Promise<void>>>();
 
   constructor(private readonly deps: AgentControlDeps) {}
+
+  private assertParentWritable(parentSessionId: string): void {
+    const lock = this.deps.getParentTaskLock?.(parentSessionId) ?? null;
+    if (lock) throw makeAgentControlTaskLockError(lock);
+  }
+
+  private trackParentControl<T>(parentSessionId: string, run: () => Promise<T>): Promise<T> {
+    const operation = Promise.resolve().then(run);
+    let settlement!: Promise<void>;
+    settlement = operation
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        const settlements = this.inFlightControlSettlementsByParent.get(parentSessionId);
+        settlements?.delete(settlement);
+        if (settlements?.size === 0) {
+          this.inFlightControlSettlementsByParent.delete(parentSessionId);
+        }
+      });
+    const settlements =
+      this.inFlightControlSettlementsByParent.get(parentSessionId) ?? new Set<Promise<void>>();
+    settlements.add(settlement);
+    this.inFlightControlSettlementsByParent.set(parentSessionId, settlements);
+    return operation;
+  }
+
+  private pendingAdmissionSettlements(parentSessionId: string): Promise<void>[] {
+    return [
+      ...(this.inFlightSpawnSettlementsByParent.get(parentSessionId) ?? []),
+      ...(this.inFlightControlSettlementsByParent.get(parentSessionId) ?? []),
+    ];
+  }
 
   private hydrateAgentSession(parentSessionId: string, agentId: string): AgentSession {
     const persisted = this.deps.sessionDb?.getSessionRecord(agentId);
@@ -286,6 +344,7 @@ export class AgentControl {
   }
 
   async spawn(opts: AgentSpawnOptions): Promise<PersistentAgentSummary> {
+    this.assertParentWritable(opts.parentSessionId);
     const depth = (opts.parentDepth ?? 0) + 1;
     // Reject runaway recursion and fork-bombs before doing any spawn work.
     if (depth > MAX_SPAWN_DEPTH) {
@@ -308,8 +367,26 @@ export class AgentControl {
       );
     }
     this.inFlightSpawnsByParent.set(parentId, reserved + 1);
+    const spawnPromise = this.spawnReserved(opts, depth);
+    let spawnSettlement!: Promise<void>;
+    spawnSettlement = spawnPromise
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        const settlements = this.inFlightSpawnSettlementsByParent.get(parentId);
+        settlements?.delete(spawnSettlement);
+        if (settlements?.size === 0) {
+          this.inFlightSpawnSettlementsByParent.delete(parentId);
+        }
+      });
+    const settlements =
+      this.inFlightSpawnSettlementsByParent.get(parentId) ?? new Set<Promise<void>>();
+    settlements.add(spawnSettlement);
+    this.inFlightSpawnSettlementsByParent.set(parentId, settlements);
     try {
-      return await this.spawnReserved(opts, depth);
+      return await spawnPromise;
     } finally {
       const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
       if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
@@ -384,6 +461,7 @@ export class AgentControl {
       }
     }
     const childSystem = await this.deps.loadAgentPrompt(routed.config, role, profile);
+    this.assertParentWritable(opts.parentSessionId);
     const binding: SessionBinding = {
       session: null,
       runtime: null,
@@ -414,6 +492,7 @@ export class AgentControl {
     binding.session = built.session;
     binding.runtime = built.runtime;
     built.session.beginDisconnectedReplayBuffer();
+    const previousBinding = this.deps.sessionBindings.get(built.session.id);
     this.deps.sessionBindings.set(built.session.id, binding);
     this.publish(opts.parentSessionId, built.session, {
       mode: roleDefinition.defaultMode,
@@ -426,7 +505,22 @@ export class AgentControl {
       effectiveReasoningEffort: routed.effectiveReasoningEffort,
       executionState: "pending_init",
     });
-    return this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
+    try {
+      this.assertParentWritable(opts.parentSessionId);
+      return this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
+    } catch (error) {
+      if (this.deps.sessionBindings.get(built.session.id) === binding) {
+        if (previousBinding) {
+          this.deps.sessionBindings.set(built.session.id, previousBinding);
+        } else {
+          this.deps.sessionBindings.delete(built.session.id);
+        }
+      }
+      this.deps.disposeBinding(binding, "child spawn blocked by parent task lock", {
+        closeSharedCodexClient: false,
+      });
+      throw error;
+    }
   }
 
   async list(parentSessionId: string): Promise<PersistentAgentSummary[]> {
@@ -445,6 +539,13 @@ export class AgentControl {
   }
 
   async sendInput(opts: AgentSendInputOptions): Promise<void> {
+    return await this.trackParentControl(opts.parentSessionId, async () => {
+      await this.sendInputReserved(opts);
+    });
+  }
+
+  private async sendInputReserved(opts: AgentSendInputOptions): Promise<void> {
+    this.assertParentWritable(opts.parentSessionId);
     const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
     if (session.persistenceStatus === "closed") {
       session.reopenForHistory();
@@ -455,6 +556,7 @@ export class AgentControl {
     } else if (session.isBusy) {
       throw new Error(`Child agent ${opts.agentId} is busy`);
     }
+    this.assertParentWritable(opts.parentSessionId);
     this.trackRun(opts.parentSessionId, session, opts.message, "running");
   }
 
@@ -488,6 +590,7 @@ export class AgentControl {
   }
 
   async resume(opts: AgentResumeOptions): Promise<PersistentAgentSummary> {
+    this.assertParentWritable(opts.parentSessionId);
     const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
     if (session.persistenceStatus === "closed") {
       session.reopenForHistory();
@@ -511,19 +614,78 @@ export class AgentControl {
     return this.publish(opts.parentSessionId, binding.session, { executionState: "closed" });
   }
 
-  cancelAll(parentSessionId: string): void {
-    for (const binding of this.deps.sessionBindings.values()) {
-      const session = binding.session;
-      if (!session?.isAgentOf(parentSessionId)) continue;
+  async cancelAll(parentSessionId: string, opts?: { timeoutMs?: number }): Promise<void> {
+    const timeoutMs = opts?.timeoutMs ?? 30_000;
+    const deadline = Date.now() + timeoutMs;
+    const cancelledAgentIds = new Set<string>();
+    const failures: unknown[] = [];
+
+    const remainingTimeoutMs = () => Math.max(0, deadline - Date.now());
+    const waitWithTimeout = async (settlement: Promise<unknown>, message: string) => {
+      const remaining = remainingTimeoutMs();
+      if (remaining <= 0) throw new Error(message);
+      let timeout: ReturnType<typeof setTimeout> | null = null;
       try {
-        session.cancel();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.deps.emitParentLog(
-          parentSessionId,
-          `Failed to cancel child agent ${session.id}: ${message}`,
+        await Promise.race([
+          settlement,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error(message)), remaining);
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    };
+
+    while (true) {
+      const pendingAdmissions = this.pendingAdmissionSettlements(parentSessionId);
+      if (pendingAdmissions.length > 0) {
+        await waitWithTimeout(
+          Promise.allSettled(pendingAdmissions),
+          "Timed out waiting for child agent admission before cancellation.",
         );
       }
+
+      const sessions = [...this.deps.sessionBindings.values()]
+        .map((binding) => binding.session)
+        .filter((session): session is AgentSession => Boolean(session?.isAgentOf(parentSessionId)));
+      const newSessions = sessions.filter((session) => !cancelledAgentIds.has(session.id));
+      if (newSessions.length === 0) {
+        if (this.pendingAdmissionSettlements(parentSessionId).length === 0) break;
+        continue;
+      }
+
+      const waits: Promise<void>[] = [];
+      for (const session of newSessions) {
+        cancelledAgentIds.add(session.id);
+        try {
+          waits.push(
+            session
+              .cancelAndWaitForSettlement({ timeoutMs: remainingTimeoutMs() })
+              .catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                this.deps.emitParentLog(
+                  parentSessionId,
+                  `Failed to cancel child agent ${session.id}: ${message}`,
+                );
+                throw error;
+              }),
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.deps.emitParentLog(
+            parentSessionId,
+            `Failed to cancel child agent ${session.id}: ${message}`,
+          );
+          failures.push(error);
+        }
+      }
+      const settled = await Promise.allSettled(waits);
+      for (const result of settled) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
     }
+
+    if (failures.length > 0) throw failures[0];
   }
 }

@@ -15,6 +15,7 @@ import type { EditableMCPServerConfigSource, MCPRegistryServer } from "../../mcp
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
+import type { logoutProviderAuth } from "../../providers/authRegistry";
 import { closePooledCodexAppServerClient } from "../../providers/codexAppServerClient";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import {
@@ -40,6 +41,7 @@ import type {
   MCPServerConfig,
   ModelMessage,
   ServerErrorCode,
+  ServerErrorData,
   ServerErrorSource,
 } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
@@ -169,6 +171,7 @@ export class AgentSession {
     loadSystemPromptWithSkillsImpl?: typeof loadSystemPromptWithSkills;
     getProviderCatalogImpl?: typeof getProviderCatalog;
     getProviderStatusesImpl?: typeof getProviderStatuses;
+    logoutProviderAuthImpl?: typeof logoutProviderAuth;
     sessionBackupFactory?: SessionBackupFactory;
     harnessContextStore?: HarnessContextStore;
     runTurnImpl?: typeof runTurn;
@@ -197,6 +200,7 @@ export class AgentSession {
     applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
     createTaskImpl?: SessionDependencies["createTaskImpl"];
     getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
+    getLiveSessionParentIdImpl?: SessionDependencies["getLiveSessionParentIdImpl"];
     buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
     getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
     readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
@@ -339,6 +343,7 @@ export class AgentSession {
         opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills,
       getProviderCatalogImpl: opts.getProviderCatalogImpl ?? lazyGetProviderCatalog,
       getProviderStatusesImpl: opts.getProviderStatusesImpl ?? lazyGetProviderStatuses,
+      logoutProviderAuthImpl: opts.logoutProviderAuthImpl,
       sessionBackupFactory:
         opts.sessionBackupFactory ??
         (async (factoryOpts: SessionBackupInitOptions): Promise<SessionBackupHandle> =>
@@ -371,6 +376,10 @@ export class AgentSession {
       applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
       createTaskImpl: opts.createTaskImpl,
       getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
+      getLiveSessionParentIdImpl:
+        opts.getLiveSessionParentIdImpl ??
+        ((sessionId: string) =>
+          sessionId === this.id ? (this.state.sessionInfo.parentSessionId ?? null) : null),
       buildLegacySessionSnapshotImpl: opts.buildLegacySessionSnapshotImpl,
       getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,
       readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,
@@ -412,7 +421,7 @@ export class AgentSession {
       state: this.state,
       deps: this.deps,
       emit,
-      emitError: (code, source, message) => this.emitError(code, source, message),
+      emitError: (code, source, message, data) => this.emitError(code, source, message, data),
       emitTelemetry: (name, status, attributes, durationMs) =>
         this.emitTelemetry(name, status, attributes, durationMs),
       formatError: (err) => this.formatErrorMessage(err),
@@ -1507,6 +1516,13 @@ export class AgentSession {
     this.getTurnExecutionManager().cancel(opts);
   }
 
+  async cancelAndWaitForSettlement(opts?: {
+    includeSubagents?: boolean;
+    timeoutMs?: number;
+  }): Promise<void> {
+    await this.getTurnExecutionManager().cancelAndWaitForSettlement(opts);
+  }
+
   async closeForHistory(opts: { closeSharedCodexClient?: boolean } = {}): Promise<void> {
     this.state.persistenceStatus = "closed";
     if (this.state.config.provider === "codex-cli" && opts.closeSharedCodexClient !== false) {
@@ -1747,6 +1763,7 @@ export class AgentSession {
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
     references?: import("../../types").TurnReference[],
+    steerRequestId?: string,
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {
@@ -1759,6 +1776,7 @@ export class AgentSession {
       attachments,
       inputParts,
       references,
+      steerRequestId,
     );
   }
 
@@ -1820,8 +1838,13 @@ export class AgentSession {
     return this.runtimeSupport.waitForPromptResponse(requestId, bucket);
   }
 
-  private emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
-    this.runtimeSupport.emitError(code, source, message);
+  private emitError(
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: ServerErrorData,
+  ) {
+    this.runtimeSupport.emitError(code, source, message, data);
   }
 
   private guardBusy(): boolean {

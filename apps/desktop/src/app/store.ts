@@ -35,6 +35,7 @@ const initialState: AppStoreDataState = {
   taskSummariesByWorkspaceId: {},
   tasksById: {},
   taskListLoadingByWorkspaceId: {},
+  taskLifecycleRequestByTaskId: {},
   taskError: null,
   pluginManagementWorkspaceId: null,
   pluginManagementMode: "auto",

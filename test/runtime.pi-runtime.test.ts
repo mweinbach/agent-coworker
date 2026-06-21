@@ -1570,6 +1570,47 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: String(overflowOutput.value) }]);
   });
 
+  test("executeToolCall skips oversized output spill when the mutation gate closes", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-overflow-gate-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    let locked = false;
+    const oversized = "overflow-result-".repeat(400);
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-overflow-gated", name: "lookup", arguments: {} },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
+        tools: {
+          lookup: {
+            execute: async () => {
+              locked = true;
+              return oversized;
+            },
+          },
+        },
+        assertCanMutate: async (toolName) => {
+          if (locked) throw new Error(`${toolName} blocked by task lock`);
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      },
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "call-overflow-gated",
+        toolName: "lookup",
+        output: oversized,
+      },
+    ]);
+    expect(result).toMatchObject({
+      isError: false,
+      content: [{ type: "text", text: oversized }],
+    });
+    await expect(fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+  });
+
   test("executeToolCall keeps oversized read output inline even over the overflow threshold", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-read-inline-"));
     const emitted: Array<Record<string, unknown>> = [];

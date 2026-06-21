@@ -67,13 +67,13 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const cancelTask = useAppStore((state) => state.cancelTask);
   const reopenTask = useAppStore((state) => state.reopenTask);
   const retryTask = useAppStore((state) => state.retryTask);
+  const taskLifecycleRequestByTaskId = useAppStore((state) => state.taskLifecycleRequestByTaskId);
   const openFilePreview = useAppStore((state) => state.openFilePreview);
   const selectThread = useAppStore((state) => state.selectThread);
   const [title, setTitle] = useState(task?.title ?? "");
   const [objective, setObjective] = useState(task?.objective ?? "");
   const [briefDirty, setBriefDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [retrying, setRetrying] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const draftTaskId = useRef(task?.id ?? null);
@@ -117,15 +117,14 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const canEdit = !terminal;
   const canCancel = !["completed", "cancelled", "failed"].includes(task.status);
   const canReopen = ["completed", "cancelled"].includes(task.status);
+  const lifecycleAction = task.status === "failed" ? "retry" : canReopen ? "reopen" : null;
+  const lifecycleRequest = taskLifecycleRequestByTaskId[task.id];
+  const lifecyclePending = lifecycleAction !== null && lifecycleRequest?.action === lifecycleAction;
+  const lifecyclePendingLabel = lifecycleAction === "retry" ? "Retrying..." : "Reopening...";
 
   const retry = async () => {
-    if (retrying) return;
-    setRetrying(true);
-    try {
-      await retryTask(task.id);
-    } finally {
-      setRetrying(false);
-    }
+    if (lifecyclePending) return;
+    await retryTask(task.id);
   };
 
   const saveBrief = async () => {
@@ -420,20 +419,34 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={() => void reopenTask(task.id)}
+                disabled={lifecyclePending}
+                aria-busy={lifecyclePending || undefined}
+                onClick={() => {
+                  if (!lifecyclePending) void reopenTask(task.id);
+                }}
               >
-                <RotateCcwIcon data-icon="inline-start" />
-                Reopen task
-              </Button>
-            ) : null}
-            {task.status === "failed" ? (
-              <Button type="button" size="sm" disabled={retrying} onClick={() => void retry()}>
-                {retrying ? (
+                {lifecyclePending ? (
                   <Spinner data-icon="inline-start" />
                 ) : (
                   <RotateCcwIcon data-icon="inline-start" />
                 )}
-                {retrying ? "Retrying…" : "Retry task"}
+                {lifecyclePending ? lifecyclePendingLabel : "Reopen task"}
+              </Button>
+            ) : null}
+            {task.status === "failed" ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={lifecyclePending}
+                aria-busy={lifecyclePending || undefined}
+                onClick={() => void retry()}
+              >
+                {lifecyclePending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <RotateCcwIcon data-icon="inline-start" />
+                )}
+                {lifecyclePending ? lifecyclePendingLabel : "Retry task"}
               </Button>
             ) : null}
             {terminal && task.sourceSessionId ? (

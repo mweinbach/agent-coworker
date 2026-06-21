@@ -145,7 +145,10 @@ describe("desktop onboarding", () => {
   });
 
   test("input change handlers capture event values before functional state updates", async () => {
-    const source = await readFile("apps/desktop/src/ui/onboarding/DesktopOnboarding.tsx", "utf-8");
+    const source = await readFile(
+      new URL("../src/ui/onboarding/DesktopOnboarding.tsx", import.meta.url),
+      "utf-8",
+    );
 
     expect(source).toContain("const nextValue = e.currentTarget.value;");
     expect(source).not.toContain(

@@ -118,6 +118,7 @@ export function createTaskReviewTool(ctx: ToolContext) {
       const reviewedMaterial = await ctx.getTaskReviewMaterial?.();
       if (!reviewedMaterial) throw new Error("Task review material is unavailable");
       ctx.log(`tool> reviewTask ${JSON.stringify({ round, requiredRounds, requestedModel })}`);
+      await ctx.assertCanMutate?.("reviewTask");
       const reviewer = await agentControl.spawn({
         message: reviewPrompt(round, requiredRounds, input.focus),
         role: "reviewer",

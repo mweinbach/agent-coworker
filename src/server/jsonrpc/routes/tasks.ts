@@ -2,6 +2,7 @@ import type { z } from "zod";
 import { taskCreationInputSchema } from "../../../shared/tasks";
 import type { AgentConfig } from "../../../types";
 import { ArtifactComparisonService, ArtifactPreviewService } from "../../artifacts";
+import { isTaskLockedError } from "../../session/taskLocks";
 import { ArtifactFingerprintConflictError } from "../../tasks/ArtifactVersionStore";
 import { ArtifactConflictError, buildArtifactRevisionPrompt } from "../../tasks/TaskCoordinator";
 import { JSONRPC_ERROR_CODES } from "../protocol";
@@ -15,6 +16,9 @@ type TaskRequestMethod = keyof typeof jsonRpcTaskRequestSchemas;
 type TaskRequestParams<M extends TaskRequestMethod> = z.infer<
   (typeof jsonRpcTaskRequestSchemas)[M]
 >;
+type TaskRequestContext = {
+  workspacePath: string;
+};
 
 const artifactComparisonService = new ArtifactComparisonService();
 const artifactPreviewService = new ArtifactPreviewService();
@@ -22,7 +26,7 @@ const artifactPreviewService = new ArtifactPreviewService();
 function createTaskHandler<M extends TaskRequestMethod>(
   context: JsonRpcRouteContext,
   method: M,
-  run: (params: TaskRequestParams<M>) => Promise<unknown> | unknown,
+  run: (params: TaskRequestParams<M>, request: TaskRequestContext) => Promise<unknown> | unknown,
 ): JsonRpcRequestHandler {
   return async (ws, message) => {
     const deniedPermission = getDeniedTaskPermission(ws, method);
@@ -42,9 +46,24 @@ function createTaskHandler<M extends TaskRequestMethod>(
       });
       return;
     }
+    let pendingSubscription:
+      | {
+          commit: () => void;
+          rollback: () => void;
+        }
+      | undefined;
     try {
-      context.jsonrpc.sendResult(ws, message.id, await run(parsed.data as TaskRequestParams<M>));
+      const workspacePath =
+        resolveImmediateTaskWorkspacePath(context, parsed.data, method) ??
+        (await resolveTaskWorkspacePath(context, parsed.data, method));
+      pendingSubscription = context.taskRequests?.onStarted?.({ ws, method, workspacePath });
+      const result = await run(parsed.data as TaskRequestParams<M>, { workspacePath });
+      pendingSubscription?.commit();
+      pendingSubscription = undefined;
+      context.taskRequests?.onSucceeded?.({ ws, method, workspacePath });
+      context.jsonrpc.sendResult(ws, message.id, result);
     } catch (error) {
+      pendingSubscription?.rollback();
       const messageText = error instanceof Error ? error.message : String(error);
       const revisionMatch = messageText.match(
         /^Task revision conflict: expected (\d+), current (\d+)$/,
@@ -80,6 +99,7 @@ function createTaskHandler<M extends TaskRequestMethod>(
               },
             }
           : {}),
+        ...(isTaskLockedError(error) ? { data: error.data } : {}),
       });
     }
   };
@@ -160,10 +180,25 @@ export async function resolveTaskWorkspacePath(
   }
 }
 
+function resolveImmediateTaskWorkspacePath(
+  context: JsonRpcRouteContext,
+  params: { cwd?: string },
+  method: string,
+): string | null {
+  if (context.desktopService) return null;
+  try {
+    const workspacePath = context.utils.resolveWorkspacePath(params, method);
+    const workspaceKind = classifyWorkspaceKind({ path: workspacePath }, context.homedir);
+    return workspaceKind === "project" ? workspacePath : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
-    "task/create": createTaskHandler(context, "task/create", async (params) => {
-      const cwd = await resolveTaskWorkspacePath(context, params, "task/create");
+    "task/create": createTaskHandler(context, "task/create", async (params, { workspacePath }) => {
+      const cwd = workspacePath;
       const { cwd: _cwd, provider, model, ...rawCreation } = params;
       const creation = taskCreationInputSchema.parse(rawCreation);
       const existing = context.tasks.getByCreationKey(creation.idempotencyKey, {
@@ -209,99 +244,123 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         );
       return { task: result.task, thread: context.utils.buildThreadFromSession(runtime) };
     }),
-    "task/list": createTaskHandler(context, "task/list", async (params) => {
-      const cwd = await resolveTaskWorkspacePath(context, params, "task/list");
-      const tasks = context.tasks.list(cwd);
+    "task/list": createTaskHandler(context, "task/list", async (_params, { workspacePath }) => {
+      const tasks = context.tasks.list(workspacePath);
       return { tasks, total: tasks.length };
     }),
-    "task/read": createTaskHandler(context, "task/read", async (params) => ({
-      task: context.tasks.get(
-        params.taskId,
-        await resolveTaskWorkspacePath(context, params, "task/read"),
-      ),
+    "task/read": createTaskHandler(context, "task/read", async (params, { workspacePath }) => ({
+      task: context.tasks.get(params.taskId, workspacePath),
     })),
-    "task/updateBrief": createTaskHandler(context, "task/updateBrief", async (params) => ({
-      task: await context.tasks.updateBrief({
-        ...params,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/updateBrief"),
+    "task/updateBrief": createTaskHandler(
+      context,
+      "task/updateBrief",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.updateBrief({
+          ...params,
+          workspacePath,
+        }),
       }),
-    })),
-    "task/updateGraph": createTaskHandler(context, "task/updateGraph", async (params) => ({
-      task: await context.tasks.replaceWorkItems({
-        taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/updateGraph"),
-        expectedRevision: params.expectedRevision,
-        items: params.workItems,
+    ),
+    "task/updateGraph": createTaskHandler(
+      context,
+      "task/updateGraph",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.replaceWorkItems({
+          taskId: params.taskId,
+          workspacePath,
+          expectedRevision: params.expectedRevision,
+          items: params.workItems,
+        }),
       }),
-    })),
-    "task/workItem/claim": createTaskHandler(context, "task/workItem/claim", async (params) => ({
-      task: await context.tasks.claimWorkItem({
-        taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/workItem/claim"),
-        workItemId: params.workItemId,
-        threadId: params.taskThreadId,
-        expectedRevision: params.expectedRevision,
+    ),
+    "task/workItem/claim": createTaskHandler(
+      context,
+      "task/workItem/claim",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.claimWorkItem({
+          taskId: params.taskId,
+          workspacePath,
+          workItemId: params.workItemId,
+          threadId: params.taskThreadId,
+          expectedRevision: params.expectedRevision,
+        }),
       }),
-    })),
-    "task/workItem/mark": createTaskHandler(context, "task/workItem/mark", async (params) => ({
-      task: await context.tasks.markWorkItem({
-        taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/workItem/mark"),
-        workItemId: params.workItemId,
-        expectedRevision: params.expectedRevision,
-        status: params.status,
-        completionEvidence: params.completionEvidence,
+    ),
+    "task/workItem/mark": createTaskHandler(
+      context,
+      "task/workItem/mark",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.markWorkItem({
+          taskId: params.taskId,
+          workspacePath,
+          workItemId: params.workItemId,
+          expectedRevision: params.expectedRevision,
+          status: params.status,
+          completionEvidence: params.completionEvidence,
+        }),
       }),
-    })),
-    "task/decision/record": createTaskHandler(context, "task/decision/record", async (params) => ({
-      task: await context.tasks.recordDecision({
-        taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/decision/record"),
-        expectedRevision: params.expectedRevision,
-        question: params.question,
-        resolution: params.resolution,
-        source: params.source,
-        scope: params.scope,
-        confidence: params.confidence,
-        supersedes: params.supersedes,
+    ),
+    "task/decision/record": createTaskHandler(
+      context,
+      "task/decision/record",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.recordDecision({
+          taskId: params.taskId,
+          workspacePath,
+          expectedRevision: params.expectedRevision,
+          question: params.question,
+          resolution: params.resolution,
+          source: params.source,
+          scope: params.scope,
+          confidence: params.confidence,
+          supersedes: params.supersedes,
+        }),
       }),
-    })),
+    ),
     "task/questions/resolve": createTaskHandler(
       context,
       "task/questions/resolve",
-      async (params) =>
+      async (params, { workspacePath }) =>
         await context.tasks.resolveQuestions({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(context, params, "task/questions/resolve"),
+          workspacePath,
           expectedRevision: params.expectedRevision,
           answers: params.answers,
         }),
     ),
-    "task/blocker/report": createTaskHandler(context, "task/blocker/report", async (params) => ({
-      task: await context.tasks.reportBlocker({
-        taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/blocker/report"),
-        expectedRevision: params.expectedRevision,
-        description: params.description,
-        blocking: params.blocking,
-        workItemId: params.workItemId,
+    "task/blocker/report": createTaskHandler(
+      context,
+      "task/blocker/report",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.reportBlocker({
+          taskId: params.taskId,
+          workspacePath,
+          expectedRevision: params.expectedRevision,
+          description: params.description,
+          blocking: params.blocking,
+          workItemId: params.workItemId,
+        }),
       }),
-    })),
-    "task/blocker/resolve": createTaskHandler(context, "task/blocker/resolve", async (params) => ({
-      task: await context.tasks.resolveBlocker({
-        taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/blocker/resolve"),
-        expectedRevision: params.expectedRevision,
-        blockerId: params.blockerId,
+    ),
+    "task/blocker/resolve": createTaskHandler(
+      context,
+      "task/blocker/resolve",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.resolveBlocker({
+          taskId: params.taskId,
+          workspacePath,
+          expectedRevision: params.expectedRevision,
+          blockerId: params.blockerId,
+        }),
       }),
-    })),
+    ),
     "task/artifact/register": createTaskHandler(
       context,
       "task/artifact/register",
-      async (params) => ({
+      async (params, { workspacePath }) => ({
         task: await context.tasks.registerArtifact({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(context, params, "task/artifact/register"),
+          workspacePath,
           expectedRevision: params.expectedRevision,
           path: params.path,
           title: params.title,
@@ -314,54 +373,53 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         }),
       }),
     ),
-    "task/artifact/read": createTaskHandler(context, "task/artifact/read", async (params) => {
-      const workspacePath = await resolveTaskWorkspacePath(context, params, "task/artifact/read");
-      let detail = context.tasks.getArtifactDetail({
-        taskId: params.taskId,
-        workspacePath,
-        artifactId: params.artifactId,
-      });
-      if (!detail) throw new Error(`Unknown task artifact: ${params.artifactId}`);
-      if (detail.versions.length === 0) {
-        const task = context.tasks.get(params.taskId, workspacePath);
-        if (!task) throw new Error(`Unknown task: ${params.taskId}`);
-        if (
-          task.status === "completed" ||
-          task.status === "cancelled" ||
-          task.status === "failed"
-        ) {
-          return { detail };
+    "task/artifact/read": createTaskHandler(
+      context,
+      "task/artifact/read",
+      async (params, { workspacePath }) => {
+        let detail = context.tasks.getArtifactDetail({
+          taskId: params.taskId,
+          workspacePath,
+          artifactId: params.artifactId,
+        });
+        if (!detail) throw new Error(`Unknown task artifact: ${params.artifactId}`);
+        if (detail.versions.length === 0) {
+          const task = context.tasks.get(params.taskId, workspacePath);
+          if (!task) throw new Error(`Unknown task: ${params.taskId}`);
+          if (
+            task.status === "completed" ||
+            task.status === "cancelled" ||
+            task.status === "failed"
+          ) {
+            return { detail };
+          }
+          try {
+            detail = await context.tasks.ensureArtifactBaseline({
+              taskId: params.taskId,
+              workspacePath,
+              artifactId: params.artifactId,
+              expectedRevision: task.revision,
+            });
+          } catch (error) {
+            const concurrent = context.tasks.getArtifactDetail({
+              taskId: params.taskId,
+              workspacePath,
+              artifactId: params.artifactId,
+            });
+            if (!concurrent || concurrent.versions.length === 0) throw error;
+            detail = concurrent;
+          }
         }
-        try {
-          detail = await context.tasks.ensureArtifactBaseline({
-            taskId: params.taskId,
-            workspacePath,
-            artifactId: params.artifactId,
-            expectedRevision: task.revision,
-          });
-        } catch (error) {
-          const concurrent = context.tasks.getArtifactDetail({
-            taskId: params.taskId,
-            workspacePath,
-            artifactId: params.artifactId,
-          });
-          if (!concurrent || concurrent.versions.length === 0) throw error;
-          detail = concurrent;
-        }
-      }
-      return { detail };
-    }),
+        return { detail };
+      },
+    ),
     "task/artifact/version/capture": createTaskHandler(
       context,
       "task/artifact/version/capture",
-      async (params) => {
+      async (params, { workspacePath }) => {
         const result = await context.tasks.captureArtifactVersion({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(
-            context,
-            params,
-            "task/artifact/version/capture",
-          ),
+          workspacePath,
           artifactId: params.artifactId,
           expectedRevision: params.expectedRevision,
           changeSummary: params.changeSummary,
@@ -372,12 +430,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/artifact/version/compare": createTaskHandler(
       context,
       "task/artifact/version/compare",
-      async (params) => {
-        const workspacePath = await resolveTaskWorkspacePath(
-          context,
-          params,
-          "task/artifact/version/compare",
-        );
+      async (params, { workspacePath }) => {
         const [before, after] = await Promise.all([
           context.tasks.readArtifactVersion({
             taskId: params.taskId,
@@ -411,14 +464,10 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/artifact/version/preview": createTaskHandler(
       context,
       "task/artifact/version/preview",
-      async (params) => {
+      async (params, { workspacePath }) => {
         const source = await context.tasks.readArtifactVersion({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(
-            context,
-            params,
-            "task/artifact/version/preview",
-          ),
+          workspacePath,
           artifactId: params.artifactId,
           versionId: params.versionId,
         });
@@ -435,12 +484,7 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/artifact/version/restore": createTaskHandler(
       context,
       "task/artifact/version/restore",
-      async (params) => {
-        const workspacePath = await resolveTaskWorkspacePath(
-          context,
-          params,
-          "task/artifact/version/restore",
-        );
+      async (params, { workspacePath }) => {
         const detail = context.tasks.getArtifactDetail({
           taskId: params.taskId,
           workspacePath,
@@ -463,14 +507,10 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/artifact/version/accept": createTaskHandler(
       context,
       "task/artifact/version/accept",
-      async (params) => {
+      async (params, { workspacePath }) => {
         return await context.tasks.acceptArtifactVersion({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(
-            context,
-            params,
-            "task/artifact/version/accept",
-          ),
+          workspacePath,
           artifactId: params.artifactId,
           versionId: params.versionId,
           expectedRevision: params.expectedRevision,
@@ -480,14 +520,10 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/artifact/revision/start": createTaskHandler(
       context,
       "task/artifact/revision/start",
-      async (params) => {
+      async (params, { workspacePath }) => {
         const result = await context.tasks.startArtifactRevision({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(
-            context,
-            params,
-            "task/artifact/revision/start",
-          ),
+          workspacePath,
           artifactId: params.artifactId,
           instruction: params.instruction,
           baseVersionId: params.baseVersionId,
@@ -518,44 +554,44 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         };
       },
     ),
-    "task/thread/create": createTaskHandler(context, "task/thread/create", async (params) => {
-      const before = context.tasks.get(
-        params.taskId,
-        await resolveTaskWorkspacePath(context, params, "task/thread/create"),
-      );
-      if (!before) throw new Error(`Unknown task: ${params.taskId}`);
-      const task = await context.tasks.addThread({
-        taskId: params.taskId,
-        workspacePath: before.workspacePath,
-        expectedRevision: params.expectedRevision,
-        title: params.title,
-        createdBy: "user",
-        workItemId: params.workItemId,
-        provider: params.provider,
-        model: params.model,
-      });
-      const priorSessionIds = new Set(before.threads.map((thread) => thread.sessionId));
-      const createdThread = task.threads.find((thread) => !priorSessionIds.has(thread.sessionId));
-      if (!createdThread) throw new Error("Task thread was not created");
-      const binding = context.threads.getLive(createdThread.sessionId);
-      if (!binding?.runtime) throw new Error("Task thread runtime is unavailable");
-      return { task, thread: context.utils.buildThreadFromSession(binding.runtime) };
-    }),
+    "task/thread/create": createTaskHandler(
+      context,
+      "task/thread/create",
+      async (params, { workspacePath }) => {
+        const before = context.tasks.get(params.taskId, workspacePath);
+        if (!before) throw new Error(`Unknown task: ${params.taskId}`);
+        const task = await context.tasks.addThread({
+          taskId: params.taskId,
+          workspacePath: before.workspacePath,
+          expectedRevision: params.expectedRevision,
+          title: params.title,
+          createdBy: "user",
+          workItemId: params.workItemId,
+          provider: params.provider,
+          model: params.model,
+        });
+        const priorSessionIds = new Set(before.threads.map((thread) => thread.sessionId));
+        const createdThread = task.threads.find((thread) => !priorSessionIds.has(thread.sessionId));
+        if (!createdThread) throw new Error("Task thread was not created");
+        const binding = context.threads.getLive(createdThread.sessionId);
+        if (!binding?.runtime) throw new Error("Task thread runtime is unavailable");
+        return { task, thread: context.utils.buildThreadFromSession(binding.runtime) };
+      },
+    ),
     "task/proposeCompletion": createTaskHandler(
       context,
       "task/proposeCompletion",
-      async (params) => ({
+      async (params, { workspacePath }) => ({
         task: await context.tasks.proposeCompletion({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(context, params, "task/proposeCompletion"),
+          workspacePath,
           expectedRevision: params.expectedRevision,
           summary: params.summary,
           caveats: params.caveats,
         }),
       }),
     ),
-    "task/cancel": createTaskHandler(context, "task/cancel", async (params) => {
-      const workspacePath = await resolveTaskWorkspacePath(context, params, "task/cancel");
+    "task/cancel": createTaskHandler(context, "task/cancel", async (params, { workspacePath }) => {
       const task = await context.tasks.transition({
         taskId: params.taskId,
         workspacePath,
@@ -566,25 +602,29 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       });
       return { task };
     }),
-    "task/accept": createTaskHandler(context, "task/accept", async (params) => ({
+    "task/accept": createTaskHandler(context, "task/accept", async (params, { workspacePath }) => ({
       task: await context.tasks.acceptTask({
         taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/accept"),
+        workspacePath,
         expectedRevision: params.expectedRevision,
       }),
     })),
-    "task/requestChanges": createTaskHandler(context, "task/requestChanges", async (params) => ({
-      task: await context.tasks.requestChanges({
-        taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/requestChanges"),
-        expectedRevision: params.expectedRevision,
-        feedback: params.feedback,
+    "task/requestChanges": createTaskHandler(
+      context,
+      "task/requestChanges",
+      async (params, { workspacePath }) => ({
+        task: await context.tasks.requestChanges({
+          taskId: params.taskId,
+          workspacePath,
+          expectedRevision: params.expectedRevision,
+          feedback: params.feedback,
+        }),
       }),
-    })),
-    "task/reopen": createTaskHandler(context, "task/reopen", async (params) => ({
+    ),
+    "task/reopen": createTaskHandler(context, "task/reopen", async (params, { workspacePath }) => ({
       task: await context.tasks.reopenTask({
         taskId: params.taskId,
-        workspacePath: await resolveTaskWorkspacePath(context, params, "task/reopen"),
+        workspacePath,
         expectedRevision: params.expectedRevision,
         reason: params.reason,
       }),
@@ -592,10 +632,10 @@ export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     "task/retry": createTaskHandler(
       context,
       "task/retry",
-      async (params) =>
+      async (params, { workspacePath }) =>
         await context.tasks.retryTask({
           taskId: params.taskId,
-          workspacePath: await resolveTaskWorkspacePath(context, params, "task/retry"),
+          workspacePath,
           expectedRevision: params.expectedRevision,
         }),
     ),

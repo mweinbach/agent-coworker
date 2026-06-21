@@ -199,6 +199,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - After fixing locally, reply on each addressed GitHub thread and resolve it in the same pass.
 - Re-scan the latest SHA for both unresolved threads AND newer top-level review bodies before declaring PR feedback handled.
 - When the user asks for subagent verification, spawn one targeted subagent per reported issue before editing — never batch.
+- When the user explicitly stops automation or delegation, delete the automation, stop delegated work, and finish in the current primary thread without spawning or resuming agents.
 - Before claiming a comment is fixed, re-check the exact current branch path it points at.
 - Inspect the latest GitHub Actions run when babysitting a PR; flaky lanes (e.g. remote MCP smoke) can still be the real blocker after comments resolve.
 

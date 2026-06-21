@@ -43,6 +43,7 @@ import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
 import { resolveTrayIconPath } from "./services/trayIcon";
 import { DesktopUpdaterService } from "./services/updater";
+import { applyElectronUserDataDirOverride } from "./services/userDataOverride";
 import { revealAndActivateWindow } from "./services/windowActivation";
 import {
   applyPlatformWindowCreated,
@@ -65,6 +66,7 @@ const WINDOWS_APP_USER_MODEL_ID = "com.cowork.desktop";
 
 // App identity must be established before any service resolves `userData`.
 app.setName(DESKTOP_APP_NAME);
+const electronUserDataDirOverride = applyElectronUserDataDirOverride(app, process.env);
 
 if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
@@ -133,6 +135,9 @@ logInfo("main", "desktop process starting", {
   packaged: app.isPackaged,
   platform: process.platform,
   arch: process.arch,
+  ...(electronUserDataDirOverride.applied
+    ? { userDataDirOverride: electronUserDataDirOverride.path }
+    : {}),
 });
 
 function emitDesktopEvent(channel: string, payload: unknown): void {

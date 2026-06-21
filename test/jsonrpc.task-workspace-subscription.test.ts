@@ -1253,9 +1253,15 @@ describe("task workspace subscription routing", () => {
 
       const creator = makeSocket("task-mutation-subscriber");
       const deniedMutator = makeSocket("task-mutation-denied");
+      const invalidMutator = makeSocket("task-mutation-invalid");
+      const staleMutator = makeSocket("task-mutation-stale");
+      const failedMutator = makeSocket("task-mutation-failed");
       const secondCreator = makeSocket("task-mutation-second-creator");
       await initializeConnection(runtime, creator);
       await initializeConnection(runtime, deniedMutator);
+      await initializeConnection(runtime, invalidMutator);
+      await initializeConnection(runtime, staleMutator);
+      await initializeConnection(runtime, failedMutator);
       await initializeConnection(runtime, secondCreator);
       deniedMutator.data.taskMutationAllowed = false;
 
@@ -1281,6 +1287,53 @@ describe("task workspace subscription routing", () => {
       );
       expect(deniedCreateResponse.error?.message ?? "").toContain("requires turns permission");
 
+      const invalidUpdateResponse = await sendRequest(runtime, invalidMutator, "task/updateBrief", {
+        cwd: projectPath,
+        taskId: createdByMutationOnlySocket.id,
+        expectedRevision: "not-a-number",
+        title: "Invalid mutation should not subscribe",
+      });
+      expect(invalidUpdateResponse.error?.message ?? "").toContain("expected number");
+
+      const successfulUpdate = await sendRequest(runtime, creator, "task/updateBrief", {
+        cwd: projectPath,
+        taskId: createdByMutationOnlySocket.id,
+        expectedRevision: createdByMutationOnlySocket.revision,
+        title: "Advance task before stale mutation",
+      });
+      expect(successfulUpdate.error).toBeUndefined();
+      await waitForMessage(
+        creator,
+        taskNotificationPredicate("task/updated", createdByMutationOnlySocket.id, projectPath),
+        "task/updated for successful task/updateBrief subscriber",
+      );
+      const updatedTask = (successfulUpdate.result as { task?: { revision?: unknown } } | undefined)
+        ?.task;
+      const currentRevision = updatedTask?.revision;
+      if (typeof currentRevision !== "number") {
+        throw new Error("Expected successful task update to return current revision");
+      }
+
+      const staleUpdateResponse = await sendRequest(runtime, staleMutator, "task/updateBrief", {
+        cwd: projectPath,
+        taskId: createdByMutationOnlySocket.id,
+        expectedRevision: createdByMutationOnlySocket.revision,
+        title: "Stale mutation should not subscribe",
+      });
+      expect(staleUpdateResponse.error?.data).toEqual({
+        category: "revision_conflict",
+        expectedRevision: createdByMutationOnlySocket.revision,
+        currentRevision,
+      });
+
+      const failedUpdateResponse = await sendRequest(runtime, failedMutator, "task/updateBrief", {
+        cwd: projectPath,
+        taskId: "00000000-0000-4000-8000-000000000000",
+        expectedRevision: 0,
+        title: "Failed mutation should not subscribe",
+      });
+      expect(failedUpdateResponse.error?.message ?? "").toContain("Unknown task");
+
       const createdAfterDeniedAttempt = requireCreatedTask(
         await sendRequest(
           runtime,
@@ -1289,9 +1342,113 @@ describe("task workspace subscription routing", () => {
           createTaskParams(projectPath, "after-denied-mutation-subscription"),
         ),
       );
+      await waitForMessage(
+        creator,
+        taskNotificationPredicate("task/created", createdAfterDeniedAttempt.id, projectPath),
+        "future task/created for successful task mutation subscriber",
+      );
       await expectNoMessage(
         deniedMutator,
         taskNotificationPredicate("task/created", createdAfterDeniedAttempt.id, projectPath),
+      );
+      await expectNoMessage(
+        invalidMutator,
+        taskNotificationPredicate("task/created", createdAfterDeniedAttempt.id, projectPath),
+      );
+      await expectNoMessage(
+        staleMutator,
+        taskNotificationPredicate("task/created", createdAfterDeniedAttempt.id, projectPath),
+      );
+      await expectNoMessage(
+        failedMutator,
+        taskNotificationPredicate("task/created", createdAfterDeniedAttempt.id, projectPath),
+      );
+    } finally {
+      await runtime?.stop();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("task/cancel uses one authorized catalog workspace snapshot for mutation and subscription", async () => {
+    const home = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "task-cancel-catalog-")),
+    );
+    const activeWorkspace = path.join(home, "active");
+    const catalogWorkspace = path.join(home, "catalog");
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | null = null;
+    try {
+      await fs.mkdir(path.join(activeWorkspace, ".cowork"), { recursive: true });
+      await fs.mkdir(path.join(catalogWorkspace, ".cowork"), { recursive: true });
+      const activePath = await fs.realpath(activeWorkspace);
+      const catalogPath = await fs.realpath(catalogWorkspace);
+      let cancelLoadStateCalls = 0;
+      let mutateCatalogOnRead = false;
+      const desktopService = {
+        loadState: async () => {
+          if (mutateCatalogOnRead) cancelLoadStateCalls += 1;
+          return {
+            version: 2,
+            workspaces: [
+              {
+                id: "active",
+                name: "Active",
+                path: activePath,
+                workspaceKind: "project" as const,
+                createdAt: "2026-06-20T00:00:00.000Z",
+                lastOpenedAt: "2026-06-20T00:00:00.000Z",
+              },
+              {
+                id: "catalog",
+                name: "Catalog",
+                path: catalogPath,
+                workspaceKind:
+                  mutateCatalogOnRead && cancelLoadStateCalls > 1
+                    ? ("oneOffChat" as const)
+                    : ("project" as const),
+                createdAt: "2026-06-20T00:00:00.000Z",
+                lastOpenedAt: "2026-06-20T00:00:00.000Z",
+              },
+            ],
+          };
+        },
+      } as Partial<WebDesktopServiceLike> as WebDesktopServiceLike;
+      runtime = await createTaskTestRuntime({
+        cwd: activePath,
+        homedir: home,
+        desktopService,
+      });
+      const creator = makeSocket("catalog-cancel-creator");
+      const canceller = makeSocket("catalog-cancel-canceller");
+      await initializeConnection(runtime, creator);
+      await initializeConnection(runtime, canceller);
+
+      const created = requireCreatedTask(
+        await sendRequest(
+          runtime,
+          creator,
+          "task/create",
+          createTaskParams(catalogPath, "single-read-cancel"),
+        ),
+      );
+      await waitForMessage(
+        creator,
+        taskNotificationPredicate("task/created", created.id, catalogPath),
+        "task/created for catalog cancel setup",
+      );
+
+      mutateCatalogOnRead = true;
+      const cancelResponse = await sendRequest(runtime, canceller, "task/cancel", {
+        cwd: catalogPath,
+        taskId: created.id,
+        expectedRevision: created.revision,
+        reason: "Cancel from catalog project.",
+      });
+      expect(cancelResponse.error).toBeUndefined();
+      expect(cancelLoadStateCalls).toBe(1);
+      await waitForMessage(
+        canceller,
+        taskNotificationPredicate("task/updated", created.id, catalogPath),
+        "task/updated for catalog task/cancel caller",
       );
     } finally {
       await runtime?.stop();

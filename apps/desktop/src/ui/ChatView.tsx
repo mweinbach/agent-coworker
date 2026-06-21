@@ -1,6 +1,6 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { LockKeyholeIcon } from "lucide-react";
-import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
 import {
@@ -92,6 +92,15 @@ type ChatViewReadOnlyNotice = {
   id?: string;
   title: string;
   detail: string;
+  action?: {
+    label: string;
+    pendingLabel?: string;
+    pending?: boolean;
+    disabled?: boolean;
+    icon?: ReactNode;
+    pendingIcon?: ReactNode;
+    onClick: () => void;
+  };
 };
 
 type ChatViewProps = {
@@ -868,12 +877,29 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             className="absolute inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
             style={{ minHeight: composerOverlayMinHeight }}
           >
-            <div className="mx-auto flex max-w-3xl items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+            <div className="mx-auto flex max-w-3xl flex-col gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3 sm:flex-row sm:items-center">
               <LockKeyholeIcon className="size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium">{readOnlyNotice.title}</p>
                 <p className="text-xs leading-5 text-muted-foreground">{readOnlyNotice.detail}</p>
               </div>
+              {readOnlyNotice.action ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="w-full shrink-0 sm:w-auto"
+                  disabled={readOnlyNotice.action.disabled || readOnlyNotice.action.pending}
+                  aria-busy={readOnlyNotice.action.pending || undefined}
+                  onClick={readOnlyNotice.action.onClick}
+                >
+                  {readOnlyNotice.action.pending
+                    ? readOnlyNotice.action.pendingIcon
+                    : readOnlyNotice.action.icon}
+                  {readOnlyNotice.action.pending
+                    ? (readOnlyNotice.action.pendingLabel ?? readOnlyNotice.action.label)
+                    : readOnlyNotice.action.label}
+                </Button>
+              ) : null}
             </div>
           </div>
         ) : sourceTask ? (

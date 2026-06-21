@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -34,6 +35,13 @@ import {
 } from "../../shared/tasks";
 import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
+import {
+  getPendingTerminalTaskLock,
+  isTaskLockedError,
+  isTerminalTaskStatus,
+  makeTaskLockedError,
+  registerPendingTerminalTaskLocks,
+} from "../session/taskLocks";
 import type { SessionDb } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
 import {
@@ -49,6 +57,8 @@ type TaskNotification = {
   method: "task/created" | "task/updated" | "task/activity" | "task/checkpointCreated";
   params: Record<string, unknown>;
 };
+
+type TerminalTaskStatus = Extract<TaskStatus, "completed" | "cancelled" | "failed">;
 
 type TaskThreadFactory = (input: {
   task: TaskRecord;
@@ -68,13 +78,31 @@ type TaskContinuationDispatcher = (input: {
 type TaskThreadQuiescer = (
   task: TaskRecord,
   reason: "completed" | "cancelled" | "failed",
+  opts?: { originSessionId?: string },
 ) => Promise<void> | void;
+
+type ArtifactSettlementRetryHandle = {
+  cancel?: () => void;
+};
+
+type ArtifactSettlementRetryScheduler = (
+  callback: () => Promise<void>,
+  delayMs: number,
+) => ArtifactSettlementRetryHandle | undefined;
+
+type ArtifactSettlementRetryState = {
+  attempts: number;
+  running: boolean;
+  cancel: (() => void) | null;
+};
 
 type TaskCoordinatorOptions = {
   sessionDb: SessionDb;
   notify?: (notification: TaskNotification) => void;
   artifactStore?: ArtifactVersionStore;
   quiesceTaskThreads?: TaskThreadQuiescer;
+  artifactSettlementRetryDelayMs?: (attempt: number) => number;
+  scheduleArtifactSettlementRetry?: ArtifactSettlementRetryScheduler;
 };
 
 type CaptureArtifactVersionRequest = {
@@ -179,6 +207,16 @@ type ReplacementWorkItemInput = {
   expectedOutputs?: string[];
 };
 
+type DeferredTerminalCommitHook = {
+  markDeferred: () => void;
+  onCommitted: (task: TaskRecord) => Promise<void> | void;
+};
+
+type ArtifactRevisionOutcomeOptions = {
+  deferTerminalUntilOriginSettled?: boolean;
+  deferredTerminalCommitHook?: DeferredTerminalCommitHook;
+};
+
 const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ["planning", "working", "cancelled", "failed"],
   planning: ["working", "blocked", "cancelled", "failed"],
@@ -190,7 +228,7 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   cancelled: [],
 };
 
-const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
+const DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS = [0, 25, 100, 250, 500, 1000] as const;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -202,22 +240,32 @@ function nonEmpty(value: string, name: string): string {
   return normalized;
 }
 
-function assertTaskAcceptsNewThreads(task: TaskRecord): void {
-  if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+function assertTaskAcceptsNewThreads(
+  task: TaskRecord,
+  opts: { allowPendingTerminalLock?: boolean } = {},
+): void {
+  const pendingLock = getPendingTerminalTaskLock(task.id);
+  if (pendingLock && !opts.allowPendingTerminalLock) throw makeTaskLockedError(pendingLock);
+  if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot create new focused threads until it is reopened or retried.`,
   );
 }
 
-function assertTaskAcceptsMutation(task: TaskRecord): void {
-  if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+function assertTaskAcceptsMutation(
+  task: TaskRecord,
+  opts: { allowPendingTerminalLock?: boolean } = {},
+): void {
+  const pendingLock = getPendingTerminalTaskLock(task.id);
+  if (pendingLock && !opts.allowPendingTerminalLock) throw makeTaskLockedError(pendingLock);
+  if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot be changed until it is reopened or retried.`,
   );
 }
 
 function isTerminalTask(task: Pick<TaskRecord, "status">): boolean {
-  return TERMINAL_TASK_STATUSES.has(task.status);
+  return isTerminalTaskStatus(task.status);
 }
 
 function isTerminalTaskMutationError(taskId: string, error: unknown): boolean {
@@ -504,6 +552,13 @@ class AtomicTaskCompletionSettlementError extends Error {
   }
 }
 
+class TerminalTaskCompletionQuiescenceError extends Error {
+  constructor(cause: unknown) {
+    super(`Failed to quiesce task before completion settlement: ${String(cause)}`, { cause });
+    this.name = "TerminalTaskCompletionQuiescenceError";
+  }
+}
+
 export function buildArtifactRevisionPrompt(input: {
   artifact: TaskArtifact;
   revision: TaskArtifactRevision;
@@ -521,6 +576,11 @@ export class TaskCoordinator {
   private continuationDispatcher: TaskContinuationDispatcher | null = null;
   private readonly artifactStore: ArtifactVersionStore;
   private readonly taskMutationTails = new Map<string, Promise<void>>();
+  private readonly pendingArtifactSettlementRetryTasks = new Map<
+    string,
+    ArtifactSettlementRetryState
+  >();
+  private readonly pendingTerminalMutationBypass = new AsyncLocalStorage<Set<string>>();
 
   constructor(private readonly options: TaskCoordinatorOptions) {
     this.artifactStore =
@@ -538,6 +598,20 @@ export class TaskCoordinator {
     this.continuationDispatcher = dispatcher;
   }
 
+  private allowsPendingTerminalMutation(taskId: string): boolean {
+    return this.pendingTerminalMutationBypass.getStore()?.has(taskId) === true;
+  }
+
+  private async runWithPendingTerminalMutationBypass<T>(
+    taskId: string,
+    callback: () => Promise<T> | T,
+  ): Promise<T> {
+    const existing = this.pendingTerminalMutationBypass.getStore();
+    const allowed = new Set(existing ?? []);
+    allowed.add(taskId);
+    return await this.pendingTerminalMutationBypass.run(allowed, callback);
+  }
+
   private async runTaskMutation<T>(
     taskId: string,
     callback: (context: { queued: boolean }) => Promise<T> | T,
@@ -547,11 +621,15 @@ export class TaskCoordinator {
     const current = new Promise<void>((resolve) => {
       releaseCurrent = resolve;
     });
-    const nextTail = (previous ?? Promise.resolve()).catch(() => {}).then(() => current);
+    const nextTail = previous ? previous.catch(() => {}).then(() => current) : current;
     this.taskMutationTails.set(taskId, nextTail);
 
     if (previous) await previous.catch(() => {});
     try {
+      const pendingLock = getPendingTerminalTaskLock(taskId);
+      if (pendingLock && !this.allowsPendingTerminalMutation(taskId)) {
+        throw makeTaskLockedError(pendingLock);
+      }
       return await callback({ queued: Boolean(previous) });
     } finally {
       releaseCurrent();
@@ -561,10 +639,55 @@ export class TaskCoordinator {
     }
   }
 
-  private async quiesceTaskThreads(task: TaskRecord): Promise<void> {
-    const reason = task.status;
-    if (reason !== "completed" && reason !== "cancelled" && reason !== "failed") return;
-    await this.options.quiesceTaskThreads?.(task, reason);
+  private async prepareTerminalTaskWrite(
+    task: TaskRecord,
+    reason: TerminalTaskStatus,
+    opts?: { originSessionId?: string },
+  ): Promise<() => void> {
+    const releasePendingLocks = registerPendingTerminalTaskLocks(task, reason);
+    try {
+      await this.options.quiesceTaskThreads?.(task, reason, opts);
+      return releasePendingLocks;
+    } catch (error) {
+      releasePendingLocks();
+      throw error;
+    }
+  }
+
+  private isTaskThreadSession(
+    task: TaskRecord,
+    sessionId: string | undefined,
+  ): sessionId is string {
+    return Boolean(sessionId && task.threads.some((thread) => thread.sessionId === sessionId));
+  }
+
+  private deferSelfOriginTerminalTransition(input: {
+    task: TaskRecord;
+    status: "completed" | "cancelled" | "failed";
+    sessionId: string;
+    run: () => Promise<TaskRecord>;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
+  }): TaskRecord {
+    input.deferredTerminalCommitHook?.markDeferred();
+    const releasePendingLocks = registerPendingTerminalTaskLocks(input.task, input.status);
+    void (async () => {
+      try {
+        await this.options.quiesceTaskThreads?.(input.task, input.status, {
+          originSessionId: input.sessionId,
+        });
+        const finalized = await this.runWithPendingTerminalMutationBypass(input.task.id, input.run);
+        if (isTerminalTask(finalized) && finalized.status === input.status) {
+          await input.deferredTerminalCommitHook?.onCommitted(finalized);
+        }
+      } catch {
+        // The pending lock is released below so the task remains non-terminal
+        // rather than advertising a terminal lifecycle state that was not
+        // safely quiesced.
+      } finally {
+        releasePendingLocks();
+      }
+    })();
+    return input.task;
   }
 
   list(workspacePath?: string | null): TaskSummary[] {
@@ -593,6 +716,10 @@ export class TaskCoordinator {
 
   getForThread(sessionId: string): TaskRecord | null {
     return this.options.sessionDb.getTaskForThread(sessionId);
+  }
+
+  getActiveForSourceSession(sessionId: string): TaskRecord | null {
+    return this.options.sessionDb.getActiveTaskForSourceSession(sessionId);
   }
 
   isTaskThread(sessionId: string): boolean {
@@ -798,6 +925,19 @@ export class TaskCoordinator {
     provider?: string;
     model?: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(input.taskId, async () => await this.addThreadLocked(input));
+  }
+
+  private async addThreadLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    title: string;
+    expectedRevision: number;
+    createdBy: "user" | "coordinator";
+    workItemId?: string | null;
+    provider?: string;
+    model?: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsNewThreads(task);
@@ -825,7 +965,7 @@ export class TaskCoordinator {
     };
     let updated = await this.options.sessionDb.addTaskThread(thread, input.expectedRevision);
     if (workItemId) {
-      updated = await this.claimWorkItem({
+      updated = await this.claimWorkItemLocked({
         taskId: task.id,
         workspacePath: task.workspacePath,
         workItemId,
@@ -838,6 +978,25 @@ export class TaskCoordinator {
   }
 
   async updateBrief(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    title?: string;
+    objective?: string;
+    requirements?: Array<{
+      kind: TaskRequirementKind;
+      text: string;
+      permanence?: "fixed" | "temporary";
+      source?: "user" | "agent" | "policy";
+    }>;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.updateBriefLocked(input),
+    );
+  }
+
+  private async updateBriefLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -870,6 +1029,18 @@ export class TaskCoordinator {
   }
 
   async replaceWorkItems(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    items: ReplacementWorkItemInput[];
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.replaceWorkItemsLocked(input),
+    );
+  }
+
+  private async replaceWorkItemsLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -1087,6 +1258,19 @@ export class TaskCoordinator {
     threadId: string;
     expectedRevision: number;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.claimWorkItemLocked(input),
+    );
+  }
+
+  private async claimWorkItemLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    workItemId: string;
+    threadId: string;
+    expectedRevision: number;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1105,6 +1289,21 @@ export class TaskCoordinator {
   }
 
   async markWorkItem(input: {
+    taskId: string;
+    workspacePath: string;
+    workItemId: string;
+    expectedRevision: number;
+    status: WorkItemStatus;
+    completionEvidence?: string;
+    threadId?: string | null;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.markWorkItemLocked(input),
+    );
+  }
+
+  private async markWorkItemLocked(input: {
     taskId: string;
     workspacePath: string;
     workItemId: string;
@@ -1153,6 +1352,23 @@ export class TaskCoordinator {
     confidence?: number;
     supersedes?: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.recordDecisionLocked(input),
+    );
+  }
+
+  private async recordDecisionLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    question: string;
+    resolution: string;
+    source: "user" | "agent" | "policy";
+    scope?: "task" | "project";
+    confidence?: number;
+    supersedes?: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1182,6 +1398,19 @@ export class TaskCoordinator {
   }
 
   async requestInput(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    sessionId: string;
+    questions: Extract<TaskDirective, { type: "request_input" }>["questions"];
+  }): Promise<TaskDirectiveResult> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.requestInputLocked(input),
+    );
+  }
+
+  private async requestInputLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -1320,6 +1549,18 @@ export class TaskCoordinator {
     expectedRevision: number;
     answers: TaskQuestionAnswerInput[];
   }): Promise<{ task: TaskRecord; resumeStatus: TaskQuestionResumeStatus }> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.resolveQuestionsLocked(input),
+    );
+  }
+
+  private async resolveQuestionsLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    answers: TaskQuestionAnswerInput[];
+  }): Promise<{ task: TaskRecord; resumeStatus: TaskQuestionResumeStatus }> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1439,6 +1680,20 @@ export class TaskCoordinator {
   }
 
   async reportProgress(input: {
+    taskId: string;
+    workspacePath: string;
+    sessionId?: string;
+    summary: string;
+    detail?: string;
+    workItemId?: string;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.reportProgressLocked(input),
+    );
+  }
+
+  private async reportProgressLocked(input: {
     taskId: string;
     workspacePath: string;
     sessionId?: string;
@@ -1589,7 +1844,11 @@ export class TaskCoordinator {
     workItemId?: string;
     provenance?: Record<string, unknown>;
   }): Promise<TaskRecord> {
-    return await this.registerArtifactLocked(input);
+    return await this.runTaskMutation(
+      input.taskId,
+      async () =>
+        await this.registerArtifactLocked(input, { finishActiveRevisionInCurrentLock: true }),
+    );
   }
 
   private async registerArtifactLocked(
@@ -1634,7 +1893,9 @@ export class TaskCoordinator {
         throw new Error("Active revision targets a different artifact path");
       }
       const finalized = options.finishActiveRevisionInCurrentLock
-        ? await this.handleThreadOutcomeLocked(input.sessionId as string, "completed")
+        ? await this.handleThreadOutcomeLocked(input.sessionId as string, "completed", undefined, {
+            deferTerminalUntilOriginSettled: true,
+          })
         : await this.handleThreadOutcome(input.sessionId as string, "completed");
       if (!finalized) throw new Error("Active artifact revision could not be finalized");
       return finalized.task;
@@ -1739,6 +2000,20 @@ export class TaskCoordinator {
     expectedSha256?: string;
     createdBy?: string;
   }): Promise<TaskArtifactDetail> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.ensureArtifactBaselineLocked(input),
+    );
+  }
+
+  private async ensureArtifactBaselineLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    artifactId: string;
+    expectedRevision: number;
+    expectedSha256?: string;
+    createdBy?: string;
+  }): Promise<TaskArtifactDetail> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     const detail = this.requireArtifactDetail(input);
     if (detail.versions.length > 0) return detail;
@@ -1789,7 +2064,7 @@ export class TaskCoordinator {
     assertTaskAcceptsMutation(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
-      detail = await this.ensureArtifactBaseline({
+      detail = await this.ensureArtifactBaselineLocked({
         ...input,
         createdBy: input.createdBy,
       });
@@ -1931,8 +2206,6 @@ export class TaskCoordinator {
     workspacePath: string;
     expectedRevision: number;
   }): Promise<TaskRecord> {
-    const current = this.requireTask(input.taskId, input.workspacePath);
-    assertExpectedTaskRevision(current, input.expectedRevision);
     return await this.runTaskMutation(input.taskId, async () => await this.acceptTaskLocked(input));
   }
 
@@ -1940,6 +2213,9 @@ export class TaskCoordinator {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
+    sessionId?: string;
+    deferTerminalUntilOriginSettled?: boolean;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(current, input.expectedRevision);
@@ -1957,6 +2233,30 @@ export class TaskCoordinator {
       throw error;
     }
     if (reviewedMaterial) {
+      if (
+        input.deferTerminalUntilOriginSettled &&
+        this.isTaskThreadSession(current, input.sessionId)
+      ) {
+        return this.deferSelfOriginTerminalTransition({
+          task: current,
+          status: "completed",
+          sessionId: input.sessionId,
+          deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+          run: async () => {
+            const latest = this.requireTask(current.id, current.workspacePath);
+            if (isTerminalTask(latest)) return latest;
+            if (latest.status !== "awaiting_review") return latest;
+            return await this.acceptTask({
+              taskId: latest.id,
+              workspacePath: latest.workspacePath,
+              expectedRevision: latest.revision,
+            });
+          },
+        });
+      }
+      const terminalRelease = await this.prepareTerminalTaskWrite(current, "completed", {
+        originSessionId: input.sessionId,
+      });
       let task: TaskRecord;
       try {
         task = await this.options.sessionDb.acceptAllTaskArtifactVersionsValidated({
@@ -1968,19 +2268,48 @@ export class TaskCoordinator {
           },
         });
       } catch (error) {
+        terminalRelease();
         await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
         throw error;
       }
-      await this.quiesceTaskThreads(task);
+      terminalRelease();
       this.notifyUpdated(task);
       return task;
     }
-    const task = await this.options.sessionDb.acceptAllTaskArtifactVersions({
-      taskId: current.id,
-      expectedRevision: input.expectedRevision,
-      updatedAt: nowIso(),
+    if (
+      input.deferTerminalUntilOriginSettled &&
+      this.isTaskThreadSession(current, input.sessionId)
+    ) {
+      return this.deferSelfOriginTerminalTransition({
+        task: current,
+        status: "completed",
+        sessionId: input.sessionId,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+        run: async () => {
+          const latest = this.requireTask(current.id, current.workspacePath);
+          if (isTerminalTask(latest)) return latest;
+          if (latest.status !== "awaiting_review") return latest;
+          return await this.acceptTask({
+            taskId: latest.id,
+            workspacePath: latest.workspacePath,
+            expectedRevision: latest.revision,
+          });
+        },
+      });
+    }
+    const terminalRelease = await this.prepareTerminalTaskWrite(current, "completed", {
+      originSessionId: input.sessionId,
     });
-    await this.quiesceTaskThreads(task);
+    let task: TaskRecord;
+    try {
+      task = await this.options.sessionDb.acceptAllTaskArtifactVersions({
+        taskId: current.id,
+        expectedRevision: input.expectedRevision,
+        updatedAt: nowIso(),
+      });
+    } finally {
+      terminalRelease();
+    }
     this.notifyUpdated(task);
     return task;
   }
@@ -1991,12 +2320,24 @@ export class TaskCoordinator {
     expectedRevision: number;
     feedback: string;
   }): Promise<TaskRecord> {
+    return await this.runTaskMutation(
+      input.taskId,
+      async () => await this.requestChangesLocked(input),
+    );
+  }
+
+  private async requestChangesLocked(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    feedback: string;
+  }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     if (task.status !== "awaiting_review") {
       throw new Error("Task must be awaiting review before changes can be requested");
     }
-    return await this.transition({
+    return await this.transitionLocked({
       taskId: task.id,
       workspacePath: task.workspacePath,
       expectedRevision: input.expectedRevision,
@@ -2007,6 +2348,15 @@ export class TaskCoordinator {
   }
 
   async reopenTask(input: {
+    taskId: string;
+    workspacePath: string;
+    expectedRevision: number;
+    reason?: string;
+  }): Promise<TaskRecord> {
+    return await this.runTaskMutation(input.taskId, async () => await this.reopenTaskLocked(input));
+  }
+
+  private async reopenTaskLocked(input: {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
@@ -2046,7 +2396,7 @@ export class TaskCoordinator {
     assertTaskAcceptsNewThreads(task);
     let detail = this.requireArtifactDetail(input);
     if (detail.versions.length === 0) {
-      detail = await this.ensureArtifactBaseline({
+      detail = await this.ensureArtifactBaselineLocked({
         taskId: input.taskId,
         workspacePath: input.workspacePath,
         artifactId: input.artifactId,
@@ -2181,6 +2531,7 @@ export class TaskCoordinator {
     sessionId: string,
     outcome: "completed" | "cancelled" | "error",
     _failure?: unknown,
+    options: ArtifactRevisionOutcomeOptions = {},
   ): Promise<{
     task: TaskRecord;
     detail: TaskArtifactDetail;
@@ -2205,13 +2556,20 @@ export class TaskCoordinator {
           const priorTaskStatus =
             this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(closedRevision.id) ??
             closedTask.status;
-          const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
-            task: closedTask,
-            priorTaskStatus,
-            outcome: closedRevision.status,
-            sessionId,
-            detail: closedRevision.status === "cancelled" ? "Revision cancelled" : undefined,
-          });
+          let settledTask: TaskRecord;
+          try {
+            settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+              task: closedTask,
+              priorTaskStatus,
+              outcome: closedRevision.status,
+              sessionId,
+              detail: closedRevision.status === "cancelled" ? "Revision cancelled" : undefined,
+            });
+          } catch (error) {
+            if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
+            this.schedulePendingArtifactSettlementRetry(closedTask.id);
+            return { task: closedTask, detail: closedDetail, revision: closedRevision };
+          }
           const settledRevision =
             this.options.sessionDb.getTaskArtifactRevision(closedRevision.id) ?? closedRevision;
           const settledDetail =
@@ -2236,6 +2594,10 @@ export class TaskCoordinator {
     const hasPendingSettlementBeforeOutcome =
       this.hasCompletedArtifactRevisionAwaitingSettlement(task);
     const isFinalActiveRevision = !this.hasActiveArtifactRevisionOtherThan(task, revision.id);
+    const shouldDeferSelfOriginTerminal =
+      options.deferTerminalUntilOriginSettled === true &&
+      !task.reviewRequired &&
+      this.isTaskThreadSession(task, sessionId);
     if (isTerminalTask(task)) {
       const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
         revisionId: revision.id,
@@ -2256,6 +2618,8 @@ export class TaskCoordinator {
       let updatedTask: TaskRecord;
       let completedRevision: TaskArtifactRevision;
       let updatedDetail: TaskArtifactDetail;
+      let capturedVersion: TaskArtifactVersion | null = null;
+      let capturedAt: string | null = null;
       try {
         const latest = detail.versions.at(-1);
         if (latest?.id !== prior.id) {
@@ -2279,7 +2643,13 @@ export class TaskCoordinator {
           },
           reviewStatus: "draft",
         });
-        if (hasPendingSettlementBeforeOutcome && isFinalActiveRevision) {
+        capturedVersion = version;
+        capturedAt = createdAt;
+        if (
+          hasPendingSettlementBeforeOutcome &&
+          isFinalActiveRevision &&
+          !shouldDeferSelfOriginTerminal
+        ) {
           const settledTask = await this.finalizeArtifactRevisionAndProposeCompletionAtomically({
             task,
             priorTaskStatus,
@@ -2315,6 +2685,26 @@ export class TaskCoordinator {
         completedRevision = persistedRevision;
         updatedDetail = persistedDetail;
       } catch (error) {
+        if (error instanceof TerminalTaskCompletionQuiescenceError) {
+          if (!capturedVersion || !capturedAt) throw error;
+          updatedTask = await this.options.sessionDb.completeTaskArtifactRevision({
+            revisionId: revision.id,
+            version: capturedVersion,
+            updatedAt: capturedAt,
+            forcePendingSettlement: true,
+          });
+          const persistedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+          const persistedDetail = this.options.sessionDb.getTaskArtifactDetail(
+            task.id,
+            detail.artifact.id,
+          );
+          if (!persistedRevision || !persistedDetail)
+            throw new Error("Artifact revision did not persist");
+          this.notifyUpdated(updatedTask);
+          this.notifyActivity(updatedTask);
+          this.schedulePendingArtifactSettlementRetry(updatedTask.id);
+          return { task: updatedTask, detail: persistedDetail, revision: persistedRevision };
+        }
         const shouldRethrow = error instanceof AtomicTaskCompletionSettlementError;
         await this.artifactStore.restoreFile({
           blobSha256: prior.sha256,
@@ -2342,19 +2732,39 @@ export class TaskCoordinator {
         if (shouldRethrow) throw error;
         return { task: settledTask, detail: updatedDetail, revision: failedRevision };
       }
-      const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
-        task: updatedTask,
-        priorTaskStatus,
-        outcome: "completed",
-        sessionId,
-      });
+      let settledTask: TaskRecord;
+      try {
+        settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+          task: updatedTask,
+          priorTaskStatus,
+          outcome: "completed",
+          sessionId,
+          ...options,
+        });
+      } catch (error) {
+        if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
+        const pendingTask = await this.markCompletedArtifactRevisionPendingSettlement(
+          completedRevision.id,
+        );
+        const pendingRevision =
+          this.options.sessionDb.getTaskArtifactRevision(completedRevision.id) ?? completedRevision;
+        const pendingDetail =
+          this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ??
+          updatedDetail;
+        this.notifyUpdated(pendingTask);
+        this.notifyActivity(pendingTask);
+        return { task: pendingTask, detail: pendingDetail, revision: pendingRevision };
+      }
       const settledDetail =
         this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ?? updatedDetail;
       return { task: settledTask, detail: settledDetail, revision: completedRevision };
     }
 
     const restoreFailureRollback =
-      hasPendingSettlementBeforeOutcome && isFinalActiveRevision && outcome === "cancelled"
+      hasPendingSettlementBeforeOutcome &&
+      isFinalActiveRevision &&
+      outcome === "cancelled" &&
+      !shouldDeferSelfOriginTerminal
         ? await this.artifactStore.captureFile(resolvedPath)
         : null;
     await this.artifactStore.restoreFile({
@@ -2406,6 +2816,7 @@ export class TaskCoordinator {
       outcome,
       sessionId,
       detail: outcome === "cancelled" ? "Revision cancelled" : "Revision thread failed",
+      ...options,
     });
     return { task: settledTask, detail: updatedDetail, revision: failedRevision };
   }
@@ -2431,6 +2842,129 @@ export class TaskCoordinator {
 
   private pendingArtifactRevisionSettlementIds(task: TaskRecord): string[] {
     return this.options.sessionDb.listPendingTaskArtifactRevisionSettlementIds(task.id);
+  }
+
+  private async markCompletedArtifactRevisionPendingSettlement(
+    revisionId: string,
+  ): Promise<TaskRecord> {
+    const updated = await this.options.sessionDb.markTaskArtifactRevisionSettlementPending({
+      revisionId,
+      updatedAt: nowIso(),
+    });
+    this.schedulePendingArtifactSettlementRetry(updated.id);
+    return updated;
+  }
+
+  private schedulePendingArtifactSettlementRetry(taskId: string): void {
+    const state = this.pendingArtifactSettlementRetryTasks.get(taskId) ?? {
+      attempts: 0,
+      running: false,
+      cancel: null,
+    };
+    if (state.cancel || state.running) {
+      this.pendingArtifactSettlementRetryTasks.set(taskId, state);
+      return;
+    }
+    const delayMs = this.artifactSettlementRetryDelayMs(state.attempts);
+    const handle = this.registerArtifactSettlementRetryTimer(async () => {
+      state.cancel = null;
+      await this.runPendingArtifactSettlementRetry(taskId);
+    }, delayMs);
+    state.cancel = handle.cancel ?? (() => {});
+    this.pendingArtifactSettlementRetryTasks.set(taskId, state);
+  }
+
+  private artifactSettlementRetryDelayMs(attempt: number): number {
+    const configured = this.options.artifactSettlementRetryDelayMs?.(attempt);
+    if (configured !== undefined) return Math.max(0, configured);
+    return DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS[
+      Math.min(attempt, DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS.length - 1)
+    ];
+  }
+
+  private registerArtifactSettlementRetryTimer(
+    callback: () => Promise<void>,
+    delayMs: number,
+  ): ArtifactSettlementRetryHandle {
+    if (this.options.scheduleArtifactSettlementRetry) {
+      return (
+        this.options.scheduleArtifactSettlementRetry(callback, delayMs) ?? { cancel: () => {} }
+      );
+    }
+    const timer = setTimeout(() => {
+      void callback().catch(() => {
+        // Durable pending state remains available for startup reconciliation.
+      });
+    }, delayMs);
+    timer.unref?.();
+    return { cancel: () => clearTimeout(timer) };
+  }
+
+  private shouldRetryPendingArtifactSettlement(taskId: string): boolean {
+    const latest = this.options.sessionDb.getTask(taskId);
+    return Boolean(
+      latest &&
+        !isTerminalTask(latest) &&
+        !this.hasActiveArtifactRevision(latest) &&
+        this.hasCompletedArtifactRevisionAwaitingSettlement(latest),
+    );
+  }
+
+  private async runPendingArtifactSettlementRetry(taskId: string): Promise<void> {
+    const state = this.pendingArtifactSettlementRetryTasks.get(taskId);
+    if (!state || state.running) return;
+    state.running = true;
+    let retryAgain = false;
+    let nonRetryableFailure: unknown;
+    try {
+      await this.runTaskMutation(taskId, async () => {
+        const task = this.options.sessionDb.getTask(taskId);
+        if (!task || !this.hasCompletedArtifactRevisionAwaitingSettlement(task)) return null;
+        return await this.settlePendingArtifactRevisionSettlementsLocked(task);
+      });
+    } catch (error) {
+      if (error instanceof TerminalTaskCompletionQuiescenceError || isTaskLockedError(error)) {
+        retryAgain = this.shouldRetryPendingArtifactSettlement(taskId);
+      } else {
+        nonRetryableFailure = error;
+      }
+    } finally {
+      state.running = false;
+      if (retryAgain) {
+        state.attempts += 1;
+        state.cancel = null;
+        this.pendingArtifactSettlementRetryTasks.set(taskId, state);
+        this.schedulePendingArtifactSettlementRetry(taskId);
+      } else {
+        this.pendingArtifactSettlementRetryTasks.delete(taskId);
+      }
+    }
+    if (nonRetryableFailure !== undefined) throw nonRetryableFailure;
+  }
+
+  private async settlePendingArtifactRevisionSettlementsLocked(
+    task: TaskRecord,
+  ): Promise<TaskRecord | null> {
+    if (isTerminalTask(task) || this.hasActiveArtifactRevision(task)) return null;
+    const primaryThread = task.threads[0];
+    if (primaryThread) {
+      const primarySession = this.options.sessionDb.getSessionRecord(primaryThread.sessionId);
+      if (primarySession?.executionState === "errored") return null;
+    }
+    const pendingRevisionIds = this.pendingArtifactRevisionSettlementIds(task);
+    if (pendingRevisionIds.length === 0) return null;
+    const revision = pendingRevisionIds
+      .map((revisionId) => this.options.sessionDb.getTaskArtifactRevision(revisionId))
+      .find((candidate): candidate is TaskArtifactRevision => Boolean(candidate));
+    if (!revision) return null;
+    const priorTaskStatus =
+      this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(revision.id) ?? task.status;
+    return await this.settleTaskAfterArtifactRevisionOutcome({
+      task,
+      priorTaskStatus,
+      outcome: "completed",
+      sessionId: revision.sessionId,
+    });
   }
 
   private hasBlockingState(task: TaskRecord): boolean {
@@ -2537,9 +3071,64 @@ export class TaskCoordinator {
     detail?: string;
   }): Promise<TaskRecord> {
     const settlementRevisionIds = this.pendingArtifactRevisionSettlementIds(input.task);
-    let currentMaterial: TaskReviewMaterial | null = null;
     const updatedAt = nowIso();
     const thread = input.task.threads.find((candidate) => candidate.sessionId === input.sessionId);
+    let terminalRelease: (() => void) | null = null;
+    const buildPrepareCompletion = () => async (preparedTask: TaskRecord) => {
+      let currentMaterial: TaskReviewMaterial | null = null;
+      try {
+        currentMaterial = await this.validateCompletionProposalTask(preparedTask);
+      } catch (error) {
+        return { ready: false as const, error };
+      }
+      return {
+        ready: true as const,
+        validateReadyTask: currentMaterial
+          ? async (readyTask: TaskRecord) => {
+              if (!currentMaterial) return;
+              await this.assertLiveArtifactEvidenceUnchanged(readyTask, currentMaterial);
+            }
+          : undefined,
+        validateAcceptedTask: currentMaterial
+          ? async (acceptedTask: TaskRecord) => {
+              if (!currentMaterial) return;
+              await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, currentMaterial);
+            }
+          : undefined,
+      };
+    };
+    if (!input.task.reviewRequired) {
+      const preflight = await this.options.sessionDb.previewArtifactRevisionCompletionReadiness({
+        taskId: input.task.id,
+        revision:
+          input.outcome.type === "completed"
+            ? {
+                outcome: "completed",
+                revisionId: input.outcome.revisionId,
+                version: input.outcome.version,
+              }
+            : {
+                outcome: "cancelled",
+                revisionId: input.outcome.revisionId,
+                detail: input.outcome.detail,
+              },
+        updatedAt,
+        summary: input.summary,
+        detail: input.detail ?? null,
+        threadId: thread?.id ?? null,
+        reviewRequired: input.task.reviewRequired,
+        prepareCompletion: buildPrepareCompletion(),
+      });
+      if (preflight.completion === "ready") {
+        try {
+          terminalRelease = await this.prepareTerminalTaskWrite(input.task, "completed", {
+            originSessionId: input.sessionId,
+          });
+        } catch (error) {
+          throw new TerminalTaskCompletionQuiescenceError(error);
+        }
+      }
+    }
     let result: {
       task: TaskRecord;
       completion: "committed" | "not_ready";
@@ -2566,32 +3155,13 @@ export class TaskCoordinator {
         threadId: thread?.id ?? null,
         settlementRevisionIds,
         reviewRequired: input.task.reviewRequired,
-        prepareCompletion: async (preparedTask) => {
-          try {
-            currentMaterial = await this.validateCompletionProposalTask(preparedTask);
-          } catch (error) {
-            return { ready: false, error };
-          }
-          return {
-            ready: true,
-            validateReadyTask: currentMaterial
-              ? async (readyTask) => {
-                  if (!currentMaterial) return;
-                  await this.assertLiveArtifactEvidenceUnchanged(readyTask, currentMaterial);
-                }
-              : undefined,
-            validateAcceptedTask: currentMaterial
-              ? async (acceptedTask) => {
-                  if (!currentMaterial) return;
-                  await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, currentMaterial);
-                }
-              : undefined,
-          };
-        },
+        prepareCompletion: buildPrepareCompletion(),
       });
     } catch (error) {
+      terminalRelease?.();
       throw new AtomicTaskCompletionSettlementError(error);
     }
+    terminalRelease?.();
     if (result.completion === "not_ready") {
       return await this.restoreAfterArtifactRevisionCompletionProposalFailure({
         taskId: input.task.id,
@@ -2601,7 +3171,6 @@ export class TaskCoordinator {
         detail: input.detail,
       });
     }
-    await this.quiesceTaskThreads(result.task);
     this.notifyUpdated(result.task);
     return result.task;
   }
@@ -2612,6 +3181,8 @@ export class TaskCoordinator {
     outcome: "completed" | "cancelled" | "error";
     sessionId: string;
     detail?: string;
+    deferTerminalUntilOriginSettled?: boolean;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     const latest = this.options.sessionDb.getTask(input.task.id) ?? input.task;
     if (isTerminalTask(latest)) return latest;
@@ -2665,9 +3236,16 @@ export class TaskCoordinator {
               : "Artifact revision cancelled",
           sessionId: input.sessionId,
           defaultPendingQuestions: false,
+          deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+          deferredTerminalCommitHook: input.deferredTerminalCommitHook,
         });
       } catch (error) {
-        if (error instanceof AtomicTaskCompletionSettlementError) throw error;
+        if (
+          error instanceof AtomicTaskCompletionSettlementError ||
+          error instanceof TerminalTaskCompletionQuiescenceError
+        ) {
+          throw error;
+        }
         return await this.restoreAfterArtifactRevisionCompletionProposalFailure({
           taskId: latest.id,
           priorTaskStatus: input.priorTaskStatus,
@@ -2700,22 +3278,26 @@ export class TaskCoordinator {
     task: TaskRecord;
     retryStatus: Exclude<TaskQuestionResumeStatus, "not_needed">;
   }> {
-    const task = this.requireTask(input.taskId, input.workspacePath);
-    if (task.revision !== input.expectedRevision) {
-      throw new Error(
-        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
-      );
-    }
-    if (task.status !== "failed") throw new Error("Only failed tasks can be retried");
-    const primaryThread = task.threads[0];
-    if (!primaryThread) throw new Error("Task has no primary thread to retry");
+    const prepared = await this.runTaskMutation(input.taskId, async () => {
+      const task = this.requireTask(input.taskId, input.workspacePath);
+      if (task.revision !== input.expectedRevision) {
+        throw new Error(
+          `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
+        );
+      }
+      if (task.status !== "failed") throw new Error("Only failed tasks can be retried");
+      const primaryThread = task.threads[0];
+      if (!primaryThread) throw new Error("Task has no primary thread to retry");
 
-    const recovered = await this.recoverTerminalTask({
-      task,
-      expectedRevision: task.revision,
-      summary: "Task retry started",
-      sessionId: primaryThread.sessionId,
+      const recovered = await this.recoverTerminalTask({
+        task,
+        expectedRevision: task.revision,
+        summary: "Task retry started",
+        sessionId: primaryThread.sessionId,
+      });
+      return { task, recovered, primaryThread };
     });
+    const { task, recovered, primaryThread } = prepared;
 
     if (recovered.status !== "working") {
       return {
@@ -2768,6 +3350,39 @@ export class TaskCoordinator {
     return reconciled;
   }
 
+  async reconcilePendingArtifactRevisionSettlements(
+    workspacePath?: string | null,
+  ): Promise<number> {
+    let reconciled = 0;
+    for (const summary of this.list(workspacePath)) {
+      const task = this.options.sessionDb.getTask(summary.id);
+      if (!task || !this.hasCompletedArtifactRevisionAwaitingSettlement(task)) continue;
+      const hadPendingSettlement = this.hasCompletedArtifactRevisionAwaitingSettlement(task);
+      try {
+        await this.runTaskMutation(task.id, async () => {
+          const latest = this.options.sessionDb.getTask(task.id);
+          if (!latest || !this.hasCompletedArtifactRevisionAwaitingSettlement(latest)) return null;
+          return await this.settlePendingArtifactRevisionSettlementsLocked(latest);
+        });
+      } catch (error) {
+        if (error instanceof TerminalTaskCompletionQuiescenceError) {
+          this.schedulePendingArtifactSettlementRetry(task.id);
+          continue;
+        }
+        throw error;
+      }
+      const latest = this.options.sessionDb.getTask(task.id);
+      if (
+        hadPendingSettlement &&
+        latest &&
+        !this.hasCompletedArtifactRevisionAwaitingSettlement(latest)
+      ) {
+        reconciled += 1;
+      }
+    }
+    return reconciled;
+  }
+
   private async failPrimaryTaskRun(
     sessionId: string,
     failure?: unknown,
@@ -2809,9 +3424,8 @@ export class TaskCoordinator {
     summary: string;
     detail?: string;
     sessionId?: string;
+    deferTerminalUntilOriginSettled?: boolean;
   }): Promise<TaskRecord> {
-    const initial = this.requireTask(input.taskId, input.workspacePath);
-    assertExpectedTaskRevision(initial, input.expectedRevision);
     return await this.runTaskMutation(input.taskId, async () => await this.transitionLocked(input));
   }
 
@@ -2823,7 +3437,9 @@ export class TaskCoordinator {
     summary: string;
     detail?: string;
     sessionId?: string;
+    deferTerminalUntilOriginSettled?: boolean;
     validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
@@ -2833,6 +3449,9 @@ export class TaskCoordinator {
         taskId: task.id,
         workspacePath: task.workspacePath,
         expectedRevision,
+        sessionId: input.sessionId,
+        deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
       });
     }
     if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
@@ -2845,20 +3464,53 @@ export class TaskCoordinator {
     ) {
       throw new Error("Task cannot return to working while blocking input or issues remain");
     }
+    if (
+      isTerminalTaskStatus(input.status) &&
+      input.deferTerminalUntilOriginSettled &&
+      this.isTaskThreadSession(task, input.sessionId)
+    ) {
+      return this.deferSelfOriginTerminalTransition({
+        task,
+        status: input.status,
+        sessionId: input.sessionId,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+        run: async () => {
+          const latest = this.requireTask(task.id, task.workspacePath);
+          if (isTerminalTask(latest)) return latest;
+          return await this.transition({
+            taskId: latest.id,
+            workspacePath: latest.workspacePath,
+            expectedRevision: latest.revision,
+            status: input.status,
+            summary: input.summary,
+            ...(input.detail !== undefined ? { detail: input.detail } : {}),
+          });
+        },
+      });
+    }
     const thread = input.sessionId
       ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
       : null;
-    const updated = await this.options.sessionDb.setTaskStatus({
-      taskId: task.id,
-      expectedRevision,
-      status: input.status,
-      summary: nonEmpty(input.summary, "Status summary"),
-      detail: input.detail?.trim() || null,
-      updatedAt: nowIso(),
-      threadId: thread?.id ?? null,
-      validateUpdatedTask: input.validateUpdatedTask,
-    });
-    await this.quiesceTaskThreads(updated);
+    const terminalRelease = isTerminalTaskStatus(input.status)
+      ? await this.prepareTerminalTaskWrite(task, input.status, {
+          originSessionId: input.sessionId,
+        })
+      : null;
+    let updated: TaskRecord;
+    try {
+      updated = await this.options.sessionDb.setTaskStatus({
+        taskId: task.id,
+        expectedRevision,
+        status: input.status,
+        summary: nonEmpty(input.summary, "Status summary"),
+        detail: input.detail?.trim() || null,
+        updatedAt: nowIso(),
+        threadId: thread?.id ?? null,
+        validateUpdatedTask: input.validateUpdatedTask,
+      });
+    } finally {
+      terminalRelease?.();
+    }
     this.notifyUpdated(updated);
     return updated;
   }
@@ -2871,7 +3523,7 @@ export class TaskCoordinator {
     sessionId?: string;
   }): Promise<TaskRecord> {
     const { task } = input;
-    if (!TERMINAL_TASK_STATUSES.has(task.status)) {
+    if (!isTerminalTaskStatus(task.status)) {
       throw new Error(`Task ${task.id} is not terminal`);
     }
     if (task.revision !== input.expectedRevision) {
@@ -3208,6 +3860,8 @@ export class TaskCoordinator {
     summary: string;
     caveats?: string[];
     sessionId?: string;
+    defaultPendingQuestions?: boolean;
+    deferTerminalUntilOriginSettled?: boolean;
   }): Promise<TaskRecord> {
     return await this.runTaskMutation(
       input.taskId,
@@ -3223,10 +3877,17 @@ export class TaskCoordinator {
     caveats?: string[];
     sessionId?: string;
     defaultPendingQuestions?: boolean;
+    deferTerminalUntilOriginSettled?: boolean;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
+    allowPendingTerminalMutation?: boolean;
   }): Promise<TaskRecord> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
-    assertTaskAcceptsMutation(task);
+    assertTaskAcceptsMutation(task, {
+      allowPendingTerminalLock:
+        input.allowPendingTerminalMutation === true &&
+        this.allowsPendingTerminalMutation(input.taskId),
+    });
     if (task.questions.some((question) => question.status === "pending" && question.blocking)) {
       throw new Error("Task has unresolved blocking questions");
     }
@@ -3244,11 +3905,60 @@ export class TaskCoordinator {
     }
     const currentMaterial = await this.validateCompletionProposalTask(task);
     const settlementRevisionIds = this.pendingArtifactRevisionSettlementIds(task);
+    if (task.status === "awaiting_review" && settlementRevisionIds.length === 0) {
+      if (task.reviewRequired) return task;
+      return await this.acceptTaskLocked({
+        taskId: task.id,
+        workspacePath: task.workspacePath,
+        expectedRevision: task.revision,
+        sessionId: input.sessionId,
+        deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+        deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+      });
+    }
     if (settlementRevisionIds.length > 0) {
+      if (
+        !task.reviewRequired &&
+        input.deferTerminalUntilOriginSettled &&
+        this.isTaskThreadSession(task, input.sessionId)
+      ) {
+        return this.deferSelfOriginTerminalTransition({
+          task,
+          status: "completed",
+          sessionId: input.sessionId,
+          deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+          run: async () => {
+            const latest = this.requireTask(task.id, task.workspacePath);
+            if (isTerminalTask(latest)) return latest;
+            return await this.proposeCompletionLocked({
+              taskId: latest.id,
+              workspacePath: latest.workspacePath,
+              expectedRevision: latest.revision,
+              summary: input.summary,
+              ...(input.caveats ? { caveats: input.caveats } : {}),
+              defaultPendingQuestions: input.defaultPendingQuestions,
+              sessionId: input.sessionId,
+              deferTerminalUntilOriginSettled: false,
+              deferredTerminalCommitHook: input.deferredTerminalCommitHook,
+              allowPendingTerminalMutation: true,
+            });
+          },
+        });
+      }
       const thread = input.sessionId
         ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
         : null;
       const updatedAt = nowIso();
+      let terminalRelease: (() => void) | null = null;
+      if (!task.reviewRequired) {
+        try {
+          terminalRelease = await this.prepareTerminalTaskWrite(task, "completed", {
+            originSessionId: input.sessionId,
+          });
+        } catch (error) {
+          throw new TerminalTaskCompletionQuiescenceError(error);
+        }
+      }
       let updated: TaskRecord;
       try {
         updated =
@@ -3273,9 +3983,10 @@ export class TaskCoordinator {
               : undefined,
           });
       } catch (error) {
+        terminalRelease?.();
         throw new AtomicTaskCompletionSettlementError(error);
       }
-      await this.quiesceTaskThreads(updated);
+      terminalRelease?.();
       this.notifyUpdated(updated);
       return updated;
     }
@@ -3287,6 +3998,8 @@ export class TaskCoordinator {
       summary: input.summary,
       detail: input.caveats?.filter(Boolean).join("\n") || undefined,
       sessionId: input.sessionId,
+      deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+      deferredTerminalCommitHook: input.deferredTerminalCommitHook,
       validateUpdatedTask: currentMaterial
         ? async (updatedTask) => {
             await this.assertLiveArtifactEvidenceUnchanged(updatedTask, currentMaterial);
@@ -3298,10 +4011,27 @@ export class TaskCoordinator {
       taskId: ready.id,
       workspacePath: ready.workspacePath,
       expectedRevision: ready.revision,
+      sessionId: input.sessionId,
+      deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
+      deferredTerminalCommitHook: input.deferredTerminalCommitHook,
     });
   }
 
   async checkpointThread(
+    sessionId: string,
+    reason: string,
+    agentSummary = "",
+    options?: { allowTerminal?: boolean },
+  ): Promise<TaskRecord | null> {
+    const task = this.getForThread(sessionId);
+    if (!task) return null;
+    return await this.runTaskMutation(
+      task.id,
+      async () => await this.checkpointThreadLocked(sessionId, reason, agentSummary, options),
+    );
+  }
+
+  private async checkpointThreadLocked(
     sessionId: string,
     reason: string,
     agentSummary = "",
@@ -3314,40 +4044,7 @@ export class TaskCoordinator {
     let checkpoint: TaskCheckpoint;
     try {
       checkpoint = await this.options.sessionDb.createTaskCheckpoint(
-        {
-          id: crypto.randomUUID(),
-          taskId: task.id,
-          threadId: thread?.id ?? null,
-          taskRevision: task.revision,
-          reason: nonEmpty(reason, "Checkpoint reason"),
-          agentSummary,
-          contextDigest: JSON.stringify({
-            objective: task.objective,
-            status: task.status,
-            workItems: task.workItems.map((item) => ({
-              id: item.id,
-              title: item.title,
-              status: item.status,
-            })),
-            decisions: task.decisions
-              .filter((item) => item.status === "active")
-              .map((item) => ({ question: item.question, resolution: item.resolution })),
-            questions: task.questions
-              .filter((item) => item.status === "pending")
-              .map((item) => ({ question: item.question, blocking: item.blocking })),
-            blockers: task.blockers
-              .filter((item) => item.status === "active")
-              .map((item) => item.description),
-          }),
-          taskSnapshot: taskSnapshot(task),
-          artifactManifest: task.artifacts.map((item) => ({
-            id: item.id,
-            path: item.path,
-            title: item.title,
-            kind: item.kind,
-          })),
-          createdAt: nowIso(),
-        },
+        this.buildTaskCheckpoint(task, thread?.id ?? null, reason, agentSummary),
         { rejectTerminal: options?.allowTerminal !== true },
       );
     } catch (error) {
@@ -3355,18 +4052,63 @@ export class TaskCoordinator {
         return this.options.sessionDb.getTask(task.id);
       throw error;
     }
+    this.notifyTaskCheckpoint(task, checkpoint);
+    return this.options.sessionDb.getTask(task.id);
+  }
+
+  private buildTaskCheckpoint(
+    task: TaskRecord,
+    threadId: string | null,
+    reason: string,
+    agentSummary = "",
+  ): TaskCheckpoint {
+    return {
+      id: crypto.randomUUID(),
+      taskId: task.id,
+      threadId,
+      taskRevision: task.revision,
+      reason: nonEmpty(reason, "Checkpoint reason"),
+      agentSummary,
+      contextDigest: JSON.stringify({
+        objective: task.objective,
+        status: task.status,
+        workItems: task.workItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          status: item.status,
+        })),
+        decisions: task.decisions
+          .filter((item) => item.status === "active")
+          .map((item) => ({ question: item.question, resolution: item.resolution })),
+        questions: task.questions
+          .filter((item) => item.status === "pending")
+          .map((item) => ({ question: item.question, blocking: item.blocking })),
+        blockers: task.blockers
+          .filter((item) => item.status === "active")
+          .map((item) => item.description),
+      }),
+      taskSnapshot: taskSnapshot(task),
+      artifactManifest: task.artifacts.map((item) => ({
+        id: item.id,
+        path: item.path,
+        title: item.title,
+        kind: item.kind,
+      })),
+      createdAt: nowIso(),
+    };
+  }
+
+  private notifyTaskCheckpoint(task: TaskRecord, checkpoint: TaskCheckpoint): void {
     this.options.notify?.({
       method: "task/checkpointCreated",
       params: { cwd: task.workspacePath, taskId: task.id, checkpoint },
     });
-    return this.options.sessionDb.getTask(task.id);
   }
 
   async applyDirective(sessionId: string, directive: TaskDirective): Promise<TaskDirectiveResult> {
     const task = this.getForThread(sessionId);
     if (!task) throw new Error("Task directives are available only in task threads");
-    return await this.options.sessionDb.runTaskMutationExclusive(
-      "apply_task_directive",
+    return await this.runTaskMutation(
       task.id,
       async () => await this.applyDirectiveLocked(sessionId, directive),
     );
@@ -3402,6 +4144,41 @@ export class TaskCoordinator {
     };
     let updated: TaskRecord;
     let continuation: TaskDirectiveResult["continuation"] = "continue";
+    let directiveCommitDeferred = false;
+    const recordDirectiveReceipt = async (task: TaskRecord) => {
+      await this.options.sessionDb.recordTaskDirectiveReceipt(
+        current.id,
+        directive.idempotencyKey,
+        task.revision,
+        nowIso(),
+      );
+    };
+    const recordDeferredDirectiveCommit = async (task: TaskRecord) => {
+      const committedThread =
+        task.threads.find((candidate) => candidate.sessionId === sessionId) ?? null;
+      const checkpoint = this.buildTaskCheckpoint(
+        task,
+        committedThread?.id ?? null,
+        `directive ${directive.type}`,
+        "",
+      );
+      const createdCheckpoint =
+        await this.options.sessionDb.recordTaskDirectiveReceiptWithCheckpoint({
+          taskId: current.id,
+          idempotencyKey: directive.idempotencyKey,
+          resultRevision: task.revision,
+          receiptCreatedAt: nowIso(),
+          checkpoint,
+          checkpointOptions: { rejectTerminal: false },
+        });
+      if (createdCheckpoint) this.notifyTaskCheckpoint(task, createdCheckpoint);
+    };
+    const deferredTerminalCommitHook: DeferredTerminalCommitHook = {
+      markDeferred: () => {
+        directiveCommitDeferred = true;
+      },
+      onCommitted: recordDeferredDirectiveCommit,
+    };
     switch (directive.type) {
       case "update_plan": {
         updated = await this.updatePlanLocked({
@@ -3436,7 +4213,7 @@ export class TaskCoordinator {
         break;
       }
       case "mark_work_item":
-        updated = await this.markWorkItem({
+        updated = await this.markWorkItemLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           workItemId: directive.workItemId,
@@ -3447,7 +4224,7 @@ export class TaskCoordinator {
         });
         break;
       case "record_decision":
-        updated = await this.recordDecision({
+        updated = await this.recordDecisionLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -3460,7 +4237,7 @@ export class TaskCoordinator {
         });
         break;
       case "report_progress":
-        updated = await this.reportProgress({
+        updated = await this.reportProgressLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           sessionId,
@@ -3480,7 +4257,7 @@ export class TaskCoordinator {
         });
         break;
       case "request_input": {
-        const result = await this.requestInput({
+        const result = await this.requestInputLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -3544,10 +4321,12 @@ export class TaskCoordinator {
           summary: directive.summary,
           caveats: directive.caveats,
           sessionId,
+          deferTerminalUntilOriginSettled: true,
+          deferredTerminalCommitHook,
         });
         break;
       case "create_thread":
-        updated = await this.addThread({
+        updated = await this.addThreadLocked({
           taskId: current.id,
           workspacePath: current.workspacePath,
           expectedRevision: directive.expectedRevision,
@@ -3557,15 +4336,12 @@ export class TaskCoordinator {
         });
         break;
     }
-    await this.options.sessionDb.recordTaskDirectiveReceipt(
-      current.id,
-      directive.idempotencyKey,
-      updated.revision,
-      nowIso(),
-    );
-    await this.checkpointThread(sessionId, `directive ${directive.type}`, "", {
-      allowTerminal: true,
-    });
+    if (!directiveCommitDeferred) {
+      await recordDirectiveReceipt(updated);
+      await this.checkpointThreadLocked(sessionId, `directive ${directive.type}`, "", {
+        allowTerminal: true,
+      });
+    }
     return { task: this.withDirectiveReviewState(updated), continuation };
   }
 

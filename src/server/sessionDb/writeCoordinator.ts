@@ -109,6 +109,10 @@ export class SessionDbWriteCoordinator {
     this.emitTelemetry = opts.emitTelemetry;
   }
 
+  ownsCurrentContext(): boolean {
+    return activeWriteLocks.getStore()?.has(this.lockDir) === true;
+  }
+
   async runExclusive<T>(
     operation: string,
     callback: () => Promise<T> | T,

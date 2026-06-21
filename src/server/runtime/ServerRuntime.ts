@@ -45,7 +45,6 @@ import {
   requireWorkspacePath,
   shouldIncludeJsonRpcThreadSummary,
 } from "../jsonrpc/routes/shared";
-import { resolveTaskWorkspacePath } from "../jsonrpc/routes/tasks";
 import { jsonRpcTaskRequestSchemas } from "../jsonrpc/schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../jsonrpc/taskPermissions";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
@@ -115,7 +114,9 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
+  loadAgentPromptImpl?: typeof loadAgentPromptFn;
   preloadSystemPrompt?: boolean;
+  taskTerminalQuiesceTimeoutMs?: number;
 }
 
 type JsonRpcRequest = { id: string | number; method: string; params?: unknown };
@@ -154,6 +155,12 @@ export async function createAgentServerRuntime(
       ? Math.floor(parsedJsonRpcMaxPendingRequests)
       : 128,
   );
+  const taskTerminalQuiesceTimeoutMs =
+    typeof opts.taskTerminalQuiesceTimeoutMs === "number" &&
+    Number.isFinite(opts.taskTerminalQuiesceTimeoutMs) &&
+    opts.taskTerminalQuiesceTimeoutMs >= 0
+      ? Math.floor(opts.taskTerminalQuiesceTimeoutMs)
+      : 30_000;
 
   const builtInDir =
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
@@ -329,14 +336,22 @@ export async function createAgentServerRuntime(
       const cwd = typeof params.cwd === "string" ? params.cwd : null;
       if (cwd) taskSubscribers.notify(cwd, method, params);
     },
-    quiesceTaskThreads: (task, reason) => {
-      for (const thread of task.threads) {
-        const binding = registry.sessionBindings.get(thread.sessionId);
+    quiesceTaskThreads: async (task, reason) => {
+      const waits: Promise<void>[] = [];
+      const sessionIds = new Set(task.threads.map((thread) => thread.sessionId));
+      if (task.sourceSessionId) sessionIds.add(task.sourceSessionId);
+      for (const sessionId of sessionIds) {
+        const binding = registry.sessionBindings.get(sessionId);
         const runtime = binding?.runtime;
-        if (!runtime) continue;
-        try {
-          runtime.turns.cancel({ includeSubagents: true });
-        } catch {
+        if (!runtime) {
+          waits.push(
+            registry.cancelAgentSessions(sessionId, {
+              timeoutMs: taskTerminalQuiesceTimeoutMs,
+            }),
+          );
+          continue;
+        }
+        const disposeRuntime = () => {
           try {
             runtime.lifecycle.dispose(`task ${task.id} ${reason}`, {
               closeSharedCodexClient: true,
@@ -344,8 +359,28 @@ export async function createAgentServerRuntime(
           } catch {
             // Continue quiescing sibling task threads.
           }
+        };
+        try {
+          waits.push(
+            runtime.turns
+              .cancelAndWaitForSettlement({
+                includeSubagents: true,
+                timeoutMs: taskTerminalQuiesceTimeoutMs,
+              })
+              .catch((error) => {
+                disposeRuntime();
+                throw error;
+              }),
+          );
+        } catch {
+          disposeRuntime();
         }
       }
+      const settled = await Promise.allSettled(waits);
+      const rejection = settled.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (rejection) throw rejection.reason;
     },
   });
   const threadJournal = new ThreadJournal(sessionDb);
@@ -364,7 +399,7 @@ export async function createAgentServerRuntime(
     sessionDb,
     taskCoordinator: tasks,
     threadJournal,
-    loadAgentPrompt: lazyLoadAgentPrompt,
+    loadAgentPrompt: opts.loadAgentPromptImpl ?? lazyLoadAgentPrompt,
     setConfig: (nextConfig) => {
       config = nextConfig;
     },
@@ -398,6 +433,7 @@ export async function createAgentServerRuntime(
   });
   tasks.setContinuationDispatcher(async (input) => await registry.dispatchTaskContinuation(input));
   await tasks.reconcileFailedRuns();
+  await tasks.reconcilePendingArtifactRevisionSettlements();
 
   const refreshLocalSkillState = async ({
     workingDirectory,
@@ -466,6 +502,18 @@ export async function createAgentServerRuntime(
     homedir: opts.homedir,
     research,
     tasks,
+    taskRequests: {
+      onStarted: ({ ws, method, workspacePath }) => {
+        if (!shouldRegisterTaskSubscriber(method, ws)) return;
+        return taskSubscribers.beginBufferedRegistration(ws, workspacePath);
+      },
+      onSucceeded: ({ ws, method, workspacePath }) => {
+        workspaceControl.registerSubscriber(ws, workspacePath);
+        if (shouldRegisterTaskSubscriber(method, ws)) {
+          taskSubscribers.register(ws, workspacePath);
+        }
+      },
+    },
     threads: {
       create: ({ cwd, provider, model }) =>
         registry.createJsonRpcThreadSession(cwd, provider, model),
@@ -547,17 +595,14 @@ export async function createAgentServerRuntime(
     if (params || message.method.startsWith("task/")) {
       try {
         const isTaskMethod = message.method.startsWith("task/");
-        const cwd = isTaskMethod
-          ? await resolveTaskWorkspacePath(jsonRpcRouteContext, params ?? {}, message.method)
-          : requireWorkspacePath(
-              params ?? {},
-              message.method,
-              config.workingDirectory,
-              opts.homedir,
-            );
-        workspaceControl.registerSubscriber(ws, cwd);
-        if (isTaskMethod && shouldRegisterTaskSubscriber(message.method, ws)) {
-          taskSubscribers.register(ws, cwd);
+        if (!isTaskMethod) {
+          const cwd = requireWorkspacePath(
+            params ?? {},
+            message.method,
+            config.workingDirectory,
+            opts.homedir,
+          );
+          workspaceControl.registerSubscriber(ws, cwd);
         }
       } catch {
         // Ignore non-workspace-control requests that do not resolve a cwd.

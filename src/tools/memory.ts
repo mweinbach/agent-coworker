@@ -34,6 +34,11 @@ function assertSandboxAllowsMemoryMutation(ctx: ToolContext): void {
   }
 }
 
+async function assertCanMutateMemory(ctx: ToolContext): Promise<void> {
+  assertSandboxAllowsMemoryMutation(ctx);
+  await ctx.assertCanMutate?.("memory");
+}
+
 export function createMemoryTool(ctx: ToolContext, _opts: { execFileImpl?: unknown } = {}) {
   const memoryStore = new MemoryStore(
     ctx.config.projectMemoryDbPath ?? path.join(ctx.config.projectCoworkDir, "memory.sqlite"),
@@ -84,13 +89,14 @@ Actions:
       }
 
       if (action === "write") {
-        assertSandboxAllowsMemoryMutation(ctx);
         if (!content?.trim()) throw new Error("content is required for write action");
+        await assertCanMutateMemory(ctx);
         if (ctx.config.memoryRequireApproval ?? false) {
           const answer = await ctx.askUser("Allow saving this memory?", ["approve", "deny"]);
           if (answer.trim().toLowerCase() !== "approve") {
             return "Memory save denied by user.";
           }
+          await assertCanMutateMemory(ctx);
         }
         const saved = await memoryStore.upsert(scopeFromInput(scope), {
           id: defaultWriteKey(key),
@@ -100,8 +106,8 @@ Actions:
       }
 
       if (action === "delete") {
-        assertSandboxAllowsMemoryMutation(ctx);
         if (!key?.trim()) throw new Error("key is required for delete action");
+        await assertCanMutateMemory(ctx);
         const removed = await memoryStore.remove(scopeFromInput(scope), key);
         return removed ? `Memory deleted: ${key}` : `Memory key "${key}" not found.`;
       }

@@ -173,6 +173,12 @@ function providerAuthMethodsFor(
   return fallbackAuthMethods(provider);
 }
 
+export type TaskLifecycleRequest = {
+  action: "reopen" | "retry";
+  expectedRevision: number;
+  requestId: string;
+};
+
 export type AppStoreState = {
   ready: boolean;
   bootstrapPending: boolean;
@@ -195,6 +201,7 @@ export type AppStoreState = {
   taskSummariesByWorkspaceId: Record<string, TaskSummary[]>;
   tasksById: Record<string, TaskRecord>;
   taskListLoadingByWorkspaceId: Record<string, boolean>;
+  taskLifecycleRequestByTaskId: Record<string, TaskLifecycleRequest>;
   taskError: string | null;
 
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;

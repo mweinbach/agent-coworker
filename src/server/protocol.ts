@@ -30,6 +30,7 @@ import type {
   PluginUpdateCheckResult,
   SandboxDenialCategory,
   ServerErrorCode,
+  ServerErrorData,
   ServerErrorSource,
   SkillCatalogSnapshot,
   SkillEntry,
@@ -56,7 +57,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.38";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.39";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -293,6 +294,7 @@ export type SessionEvent =
       turnId: string;
       text: string;
       clientMessageId?: string;
+      steerRequestId?: string;
     }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | {
@@ -557,5 +559,7 @@ export type SessionEvent =
       message: string;
       code: ServerErrorCode;
       source: ServerErrorSource;
+      data?: ServerErrorData;
+      steerRequestId?: string;
     }
   | { type: "pong"; sessionId: string };

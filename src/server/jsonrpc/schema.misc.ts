@@ -27,6 +27,7 @@ const errorEventSchema = z
     message: z.string(),
     code: z.string(),
     source: z.string(),
+    data: z.unknown().optional(),
   })
   .passthrough();
 

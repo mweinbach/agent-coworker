@@ -798,7 +798,12 @@ describe("webFetch tool", () => {
       await expect(
         t.execute({ url: "https://example.com/reports/too-large.pdf", maxLength: 50000 }),
       ).rejects.toThrow(/8 bytes limit/i);
-      expect(await fs.readdir(path.join(dir, "Downloads"))).toEqual([]);
+      const downloadsDir = path.join(dir, "Downloads");
+      const entries = await fs.readdir(downloadsDir).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      });
+      expect(entries).toEqual([]);
     } finally {
       globalThis.fetch = originalFetch;
       webFetchInternal.setMaxDownloadBytes(50 * 1024 * 1024);
@@ -1130,6 +1135,39 @@ describe("webFetch tool", () => {
 
       expect(out).toBe(`File downloaded ${downloadedPath}`);
       expect(await fs.readFile(downloadedPath)).toEqual(Buffer.from(pngBase64, "base64"));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("blocks downloads without leaving directories when the mutation gate closes", async () => {
+    const dir = await tmpDir();
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4//8/AwAI/AL+X6ixAAAAAElFTkSuQmCC";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(Buffer.from(pngBase64, "base64"), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      });
+    }) as any;
+
+    try {
+      let gateChecks = 0;
+      const t: any = createWebFetchTool(
+        makeCtx(dir, {
+          assertCanMutate: () => {
+            gateChecks += 1;
+            if (gateChecks > 1) throw new Error("terminal task webFetch gate closed");
+          },
+        }),
+      );
+
+      await expect(
+        t.execute({ url: "https://example.com/download/image", maxLength: 50000 }),
+      ).rejects.toThrow(/webFetch gate closed/);
+      await expect(fs.access(path.join(dir, "Downloads"))).rejects.toThrow();
     } finally {
       globalThis.fetch = originalFetch;
     }

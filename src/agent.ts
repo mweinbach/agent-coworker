@@ -155,6 +155,9 @@ export interface RunTurnParams {
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
 
+  /** Server-authoritative write gate for mutating tool side effects. */
+  assertCanMutate?: (toolName: string) => void | Promise<void>;
+
   /**
    * Apply an A2UI v0.9 envelope to the session's surface state, returning a
    * per-envelope outcome. Plumbed into the `a2ui` tool's ToolContext when
@@ -197,6 +200,51 @@ function mergeToolSets(
     merged[alias] = toolDef;
   }
   return merged;
+}
+
+function wrapToolSetWithMutationGate(
+  tools: Record<string, any>,
+  assertCanMutate: RunTurnParams["assertCanMutate"],
+  abortSignal?: AbortSignal,
+): Record<string, any> {
+  if (!assertCanMutate) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [
+      name,
+      wrapToolWithMutationGate(name, tool, assertCanMutate, abortSignal),
+    ]),
+  );
+}
+
+function wrapToolWithMutationGate(
+  name: string,
+  tool: unknown,
+  assertCanMutate: NonNullable<RunTurnParams["assertCanMutate"]>,
+  abortSignal?: AbortSignal,
+): unknown {
+  if ((typeof tool !== "object" && typeof tool !== "function") || tool === null) return tool;
+  const record = tool as Record<string, unknown>;
+  if (typeof record.execute !== "function") return tool;
+  const execute = record.execute as (...args: unknown[]) => unknown;
+  return {
+    ...record,
+    execute: async (...args: unknown[]) => {
+      await assertCanMutate(name);
+      const input = args[0];
+      const executionOptions =
+        args.length > 1 && typeof args[1] === "object" && args[1] !== null
+          ? { ...(args[1] as Record<string, unknown>), ...(abortSignal ? { abortSignal } : {}) }
+          : abortSignal
+            ? { abortSignal }
+            : args[1];
+      const result = await execute.call(
+        tool,
+        input,
+        ...(executionOptions === undefined ? [] : [executionOptions]),
+      );
+      return result;
+    },
+  };
 }
 
 function mergePrepareStepOverrides(
@@ -493,6 +541,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
       onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
+      assertCanMutate: params.assertCanMutate,
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);
@@ -532,9 +581,10 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           allowProfileMcp: !!params.agentProfile,
         })
       : mergedTools;
-    const tools = params.agentProfile
+    const filteredTools = params.agentProfile
       ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
       : roleFilteredTools;
+    const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
     const mcpToolNames = Object.keys(tools)
       .filter((name) => name.startsWith("mcp__"))
       .sort();
@@ -723,6 +773,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           askUser,
           approveCommand,
           updateTodos,
+          assertCanMutate: params.assertCanMutate,
           onModelStreamPart: params.onModelStreamPart,
           onModelRawEvent: params.onModelRawEvent,
           onModelError: params.onModelError,

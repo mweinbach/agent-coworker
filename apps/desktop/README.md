@@ -11,6 +11,7 @@ bun run dev
 
 Dev mode enables Electron remote debugging on loopback automatically so local CDP tooling like the Chrome DevTools MCP can attach to `http://127.0.0.1:9222`.
 Set `COWORK_ELECTRON_REMOTE_DEBUG=0` to opt out, and use `COWORK_ELECTRON_REMOTE_DEBUG_PORT` to override the default port.
+Set `COWORK_ELECTRON_USER_DATA_DIR=/path/to/isolated-profile` in dev/test mode to override Electron `userData` before desktop services initialize. Packaged builds reject this override.
 
 Desktop renderer dev URL is restricted to loopback on `COWORK_DESKTOP_RENDERER_PORT` (default `1420`).
 If `ELECTRON_RENDERER_URL` points to another app on the wrong host or port, desktop falls back to its own renderer URL.

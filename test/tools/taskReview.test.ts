@@ -364,4 +364,81 @@ describe("task review tool", () => {
     );
     expect(result).toMatchObject({ round: 4, requiredRounds: 3, verdict: "pass" });
   });
+
+  test("checks the mutation gate before spawning a reviewer", async () => {
+    const dir = await tmpDir();
+    const spawn = mock(async () => {
+      throw new Error("reviewer should not spawn");
+    });
+    const applyTaskDirective = mock(async () => {
+      throw new Error("review should not record");
+    });
+    const assertCanMutate = mock(async () => {
+      throw new Error("task locked");
+    });
+    const ctx = makeCtx(dir, {
+      sessionId: "session-1",
+      getTaskReviewMaterial: async () => ({ fingerprint: "review-start-fingerprint-locked" }),
+      taskContext: {
+        id: "task-1",
+        title: "Locked task",
+        objective: "Do not spawn reviewers after terminal locks.",
+        status: "working",
+        revision: 2,
+        reviewRequired: true,
+        reviewRounds: 1,
+        requirements: [],
+        workItems: [],
+        decisions: [],
+        questions: [],
+        blockers: [],
+        artifacts: [],
+        activity: [],
+        activeThreadId: "task-thread-1",
+      },
+      applyTaskDirective,
+      assertCanMutate,
+      agentControl: {
+        spawn,
+        wait: mock(async () => ({
+          timedOut: false,
+          mode: "all" as const,
+          agents: [],
+          readyAgentIds: [],
+        })),
+        close: mock(async () => ({
+          agentId: "reviewer-1",
+          parentSessionId: "session-1",
+          role: "reviewer" as const,
+          mode: "delegate" as const,
+          depth: 1,
+          effectiveModel: "gpt-5.4",
+          provider: "openai" as const,
+          title: "Task review",
+          createdAt: "2026-06-19T12:00:00.000Z",
+          updatedAt: "2026-06-19T12:00:00.000Z",
+          lifecycleState: "closed" as const,
+          executionState: "closed" as const,
+          busy: false,
+        })),
+        list: mock(async () => []),
+        sendInput: mock(async () => {}),
+        inspect: mock(async () => {
+          throw new Error("not used");
+        }),
+        resume: mock(async () => {
+          throw new Error("not used");
+        }),
+      },
+    });
+    const tool = createTools(ctx).reviewTask as
+      | { execute: (input: unknown) => Promise<Record<string, unknown>> }
+      | undefined;
+    if (!tool) throw new Error("Expected reviewTask tool");
+
+    await expect(tool.execute({ expectedRevision: 2 })).rejects.toThrow("task locked");
+    expect(assertCanMutate).toHaveBeenCalledWith("reviewTask");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(applyTaskDirective).not.toHaveBeenCalled();
+  });
 });

@@ -56,6 +56,19 @@ const defaultTaskActionDependencies: TaskActionDependencies = {
   persistNow,
 };
 
+type TaskLifecycleMethod =
+  | "task/accept"
+  | "task/requestChanges"
+  | "task/cancel"
+  | "task/reopen"
+  | "task/retry";
+
+function terminalLifecycleActionForMethod(method: TaskLifecycleMethod): "reopen" | "retry" | null {
+  if (method === "task/reopen") return "reopen";
+  if (method === "task/retry") return "retry";
+  return null;
+}
+
 function workspacePlatform(): NodeJS.Platform {
   return getDesktopPlatformInfo().rawPlatform as NodeJS.Platform;
 }
@@ -365,7 +378,7 @@ export function createTaskActions(
 > {
   const mutateLifecycle = async (
     taskId: string,
-    method: "task/accept" | "task/requestChanges" | "task/cancel" | "task/reopen" | "task/retry",
+    method: TaskLifecycleMethod,
     extra: Record<string, unknown> = {},
   ): Promise<boolean> => {
     const task = get().tasksById[taskId];
@@ -373,21 +386,58 @@ export function createTaskActions(
     const workspaceId = workspaceIdForTask(get, task);
     const workspace = workspaceId ? get().workspaces.find((item) => item.id === workspaceId) : null;
     if (!workspaceId || !workspace) return false;
+    const terminalAction = terminalLifecycleActionForMethod(method);
+    const lifecycleRequest =
+      terminalAction !== null
+        ? {
+            action: terminalAction,
+            expectedRevision: task.revision,
+            requestId: makeId(),
+          }
+        : null;
+    const existingLifecycleRequest = get().taskLifecycleRequestByTaskId?.[taskId];
+    if (lifecycleRequest && existingLifecycleRequest?.action === lifecycleRequest.action) {
+      return false;
+    }
+    if (lifecycleRequest) {
+      set((state) => ({
+        taskLifecycleRequestByTaskId: {
+          ...(state.taskLifecycleRequestByTaskId ?? {}),
+          [taskId]: lifecycleRequest,
+        },
+      }));
+    }
+    const lifecycleRequestIsCurrent = () =>
+      !lifecycleRequest ||
+      get().taskLifecycleRequestByTaskId?.[taskId]?.requestId === lifecycleRequest.requestId;
     try {
       await ensureTaskTransport(get, set, workspaceId, deps);
+      if (!lifecycleRequestIsCurrent()) return false;
       const result = await deps.requestJsonRpc(get, set, workspaceId, method, {
         cwd: workspace.path,
         taskId,
         expectedRevision: task.revision,
         ...extra,
       });
+      if (!lifecycleRequestIsCurrent()) return false;
       const parsed = taskRecordSchema.safeParse(result?.task);
       if (!parsed.success) throw new Error(`Invalid ${method} response`);
       upsertTask(set, get, parsed.data, deps);
       return true;
     } catch (error) {
+      if (!lifecycleRequestIsCurrent()) return false;
       notifyError(set, "Unable to update task", error);
       return false;
+    } finally {
+      if (lifecycleRequest) {
+        set((state) => {
+          const current = state.taskLifecycleRequestByTaskId?.[taskId];
+          if (current?.requestId !== lifecycleRequest.requestId) return {};
+          const next = { ...(state.taskLifecycleRequestByTaskId ?? {}) };
+          delete next[taskId];
+          return { taskLifecycleRequestByTaskId: next };
+        });
+      }
     }
   };
 

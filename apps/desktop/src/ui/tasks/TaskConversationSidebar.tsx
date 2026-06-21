@@ -1,4 +1,4 @@
-import { MessageSquarePlusIcon } from "lucide-react";
+import { MessageSquarePlusIcon, RotateCcwIcon } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { TaskStatus } from "../../../../../src/shared/tasks";
@@ -15,6 +15,7 @@ import {
 } from "../../components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field";
 import { Input } from "../../components/ui/input";
+import { Spinner } from "../../components/ui/spinner";
 import { cn } from "../../lib/utils";
 import { ChatView } from "../ChatView";
 
@@ -41,6 +42,8 @@ function terminalConversationCopy(status: TaskStatus): { title: string; detail: 
   };
 }
 
+type LifecycleAction = "reopen" | "retry";
+
 export function TaskConversationSidebar() {
   const selectedThreadId = useAppStore((state) => state.selectedThreadId);
   const task = useAppStore((state) =>
@@ -48,12 +51,16 @@ export function TaskConversationSidebar() {
   );
   const selectTaskThread = useAppStore((state) => state.selectTaskThread);
   const createTaskThread = useAppStore((state) => state.createTaskThread);
+  const reopenTask = useAppStore((state) => state.reopenTask);
+  const retryTask = useAppStore((state) => state.retryTask);
+  const taskLifecycleRequestByTaskId = useAppStore((state) => state.taskLifecycleRequestByTaskId);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [threadTitle, setThreadTitle] = useState("");
   const [creating, setCreating] = useState(false);
 
   const terminal = task ? isTerminalTaskStatus(task.status) : false;
   const terminalCopy = task && terminal ? terminalConversationCopy(task.status) : null;
+  const lifecycleRequest = task ? taskLifecycleRequestByTaskId[task.id] : undefined;
 
   useEffect(() => {
     if (terminal && dialogOpen) setDialogOpen(false);
@@ -62,6 +69,38 @@ export function TaskConversationSidebar() {
   if (!task) return null;
 
   const terminalNoticeId = `task-terminal-lock-${task.id}`;
+  const terminalActionKind: LifecycleAction | null = terminal
+    ? task.status === "failed"
+      ? "retry"
+      : "reopen"
+    : null;
+  const terminalActionPending =
+    terminalActionKind !== null && lifecycleRequest?.action === terminalActionKind;
+
+  const restoreTaskWrites = async () => {
+    if (!terminal || !terminalActionKind || terminalActionPending) return;
+    try {
+      if (terminalActionKind === "retry") {
+        await retryTask(task.id);
+      } else {
+        await reopenTask(task.id);
+      }
+    } catch (error) {
+      console.error("Task lifecycle action failed", error);
+    }
+  };
+
+  const terminalPendingLabel = terminalActionKind === "retry" ? "Retrying..." : "Reopening...";
+  const terminalAction = terminal
+    ? {
+        label: task.status === "failed" ? "Retry task" : "Reopen task",
+        pendingLabel: terminalPendingLabel,
+        pending: terminalActionPending,
+        icon: <RotateCcwIcon data-icon="inline-start" />,
+        pendingIcon: <Spinner data-icon="inline-start" />,
+        onClick: () => void restoreTaskWrites(),
+      }
+    : undefined;
 
   const submitThread = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -164,7 +203,11 @@ export function TaskConversationSidebar() {
       </div>
       <div className="min-h-0 flex-1">
         <ChatView
-          readOnlyNotice={terminalCopy ? { ...terminalCopy, id: terminalNoticeId } : undefined}
+          readOnlyNotice={
+            terminalCopy
+              ? { ...terminalCopy, id: terminalNoticeId, action: terminalAction }
+              : undefined
+          }
         />
       </div>
     </aside>

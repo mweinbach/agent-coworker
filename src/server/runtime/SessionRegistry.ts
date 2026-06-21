@@ -26,6 +26,7 @@ import type {
   SessionInfoState,
 } from "../session/SessionContext";
 import { SessionRuntime } from "../session/SessionRuntime";
+import { getSessionTaskLock } from "../session/taskLocks";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 import type { TaskCoordinator } from "../tasks/TaskCoordinator";
@@ -263,6 +264,10 @@ export class SessionRegistry {
       .sendUserMessage(input.prompt, undefined, input.displayText)
       .catch((error) => void input.onFailure(error).catch(() => undefined));
     return "queued";
+  }
+
+  async cancelAgentSessions(parentSessionId: string, opts?: { timeoutMs?: number }): Promise<void> {
+    await this.getAgentControl().cancelAll(parentSessionId, opts);
   }
 
   async createTaskFromChat(
@@ -520,8 +525,8 @@ export class SessionRegistry {
       inspectAgentImpl: async (agentOpts) => await this.getAgentControl().inspect(agentOpts),
       resumeAgentImpl: async (agentOpts) => await this.getAgentControl().resume(agentOpts),
       closeAgentImpl: async (agentOpts) => await this.getAgentControl().close(agentOpts),
-      cancelAgentSessionsImpl: (parentSessionId) =>
-        this.getAgentControl().cancelAll(parentSessionId),
+      cancelAgentSessionsImpl: async (parentSessionId, cancelOpts) =>
+        await this.getAgentControl().cancelAll(parentSessionId, cancelOpts),
       deleteSessionImpl: async (opts) => {
         if (this.options.taskCoordinator.isTaskThread(opts.targetSessionId)) {
           throw new Error("Task threads must be managed through the task lifecycle");
@@ -609,6 +614,8 @@ export class SessionRegistry {
         this.sessionBindings.get(sessionId)?.runtime?.snapshot.peek() ?? null,
       getLiveSessionWorkingDirectoryImpl: (sessionId) =>
         this.sessionBindings.get(sessionId)?.runtime?.read.workingDirectory ?? null,
+      getLiveSessionParentIdImpl: (sessionId) =>
+        this.sessionBindings.get(sessionId)?.runtime?.read.parentSessionId ?? null,
       buildLegacySessionSnapshotImpl: (record: PersistedSessionRecord) =>
         loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(record),
       readSkillCatalogMtimeSnapshotImpl: this.options.readSkillCatalogMtimeSnapshot,
@@ -734,6 +741,22 @@ export class SessionRegistry {
       buildSession: (binding, persistedSessionId, overrides) =>
         this.buildSession(binding, persistedSessionId, overrides),
       loadAgentPrompt: this.options.loadAgentPrompt,
+      getParentTaskLock: (parentSessionId) =>
+        getSessionTaskLock(
+          {
+            getTaskForThread: (sessionId) => this.options.taskCoordinator.getForThread(sessionId),
+            getActiveTaskForSourceSession: (sessionId) =>
+              this.options.taskCoordinator.getActiveForSourceSession(sessionId),
+            getSessionRecord: (sessionId) => {
+              const liveParentSessionId =
+                this.sessionBindings.get(sessionId)?.runtime?.read.parentSessionId ?? null;
+              if (liveParentSessionId) return { parentSessionId: liveParentSessionId };
+              const persisted = this.options.sessionDb.getSessionRecord(sessionId);
+              return persisted ? { parentSessionId: persisted.parentSessionId } : null;
+            },
+          },
+          parentSessionId,
+        ),
       disposeBinding: (binding, reason) => this.disposeBinding(binding, reason),
       emitParentAgentStatus: (parentSessionId, agent) => {
         const parentBinding = this.sessionBindings.get(parentSessionId);

@@ -81,6 +81,204 @@ describe("WorkspaceJsonRpcSubscribers", () => {
     ]);
   });
 
+  test("buffers task notifications until commit and discards them on rollback", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const pending = socket("pending");
+    const committed = socket("committed");
+    const workspace = path.join(os.tmpdir(), "task-subscriber-buffered");
+
+    const rolledBack = subscribers.beginBufferedRegistration(pending, workspace);
+    subscribers.notify(workspace, "task/created", {
+      cwd: workspace,
+      task: { id: "task-rolled-back" },
+    });
+    rolledBack?.rollback();
+    subscribers.notify(workspace, "task/created", {
+      cwd: workspace,
+      task: { id: "task-after-rollback" },
+    });
+    expect(sent).toEqual([]);
+
+    const buffered = subscribers.beginBufferedRegistration(committed, workspace);
+    subscribers.notify(workspace, "task/created", {
+      cwd: workspace,
+      task: { id: "task-buffered" },
+    });
+    expect(sent).toEqual([]);
+    buffered?.commit();
+    expect(sent).toEqual([
+      {
+        connectionId: "committed",
+        payload: {
+          method: "task/created",
+          params: { cwd: workspace, task: { id: "task-buffered" } },
+        },
+      },
+    ]);
+
+    sent.length = 0;
+    subscribers.notify(workspace, "task/updated", {
+      cwd: workspace,
+      task: { id: "task-future" },
+    });
+    expect(sent).toEqual([
+      {
+        connectionId: "committed",
+        payload: {
+          method: "task/updated",
+          params: { cwd: workspace, task: { id: "task-future" } },
+        },
+      },
+    ]);
+  });
+
+  test("shares overlapping buffered registrations for the same connection and workspace", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const client = socket("client");
+    const workspace = path.join(os.tmpdir(), "task-subscriber-overlap");
+
+    const first = subscribers.beginBufferedRegistration(client, workspace);
+    const second = subscribers.beginBufferedRegistration(client, workspace);
+    subscribers.notify(workspace, "task/created", {
+      cwd: workspace,
+      task: { id: "task-buffered-once" },
+    });
+
+    first?.commit();
+    second?.commit();
+    expect(sent).toEqual([
+      {
+        connectionId: "client",
+        payload: {
+          method: "task/created",
+          params: { cwd: workspace, task: { id: "task-buffered-once" } },
+        },
+      },
+    ]);
+
+    sent.length = 0;
+    subscribers.notify(workspace, "task/updated", {
+      cwd: workspace,
+      task: { id: "task-live-once" },
+    });
+    expect(sent).toEqual([
+      {
+        connectionId: "client",
+        payload: {
+          method: "task/updated",
+          params: { cwd: workspace, task: { id: "task-live-once" } },
+        },
+      },
+    ]);
+  });
+
+  test("keeps a committed overlapping buffer when a sibling request rolls back", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const client = socket("client");
+    const workspace = path.join(os.tmpdir(), "task-subscriber-overlap-rollback");
+
+    const first = subscribers.beginBufferedRegistration(client, workspace);
+    const second = subscribers.beginBufferedRegistration(client, workspace);
+    subscribers.notify(workspace, "task/created", {
+      cwd: workspace,
+      task: { id: "task-buffered-once" },
+    });
+
+    first?.rollback();
+    second?.commit();
+    expect(sent).toEqual([
+      {
+        connectionId: "client",
+        payload: {
+          method: "task/created",
+          params: { cwd: workspace, task: { id: "task-buffered-once" } },
+        },
+      },
+    ]);
+
+    sent.length = 0;
+    subscribers.notify(workspace, "task/updated", {
+      cwd: workspace,
+      task: { id: "task-after-sibling-rollback" },
+    });
+    expect(sent).toHaveLength(1);
+  });
+
+  test("invalidates buffered registrations on disconnect before late commit", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const client = socket("client");
+    const workspace = path.join(os.tmpdir(), "task-subscriber-disconnect-buffer");
+
+    const buffered = subscribers.beginBufferedRegistration(client, workspace);
+    subscribers.notify(workspace, "task/created", {
+      cwd: workspace,
+      task: { id: "task-before-disconnect" },
+    });
+    subscribers.remove(client);
+    buffered?.commit();
+    subscribers.notify(workspace, "task/updated", {
+      cwd: workspace,
+      task: { id: "task-after-disconnect" },
+    });
+
+    expect(sent).toEqual([]);
+  });
+
+  test("clear invalidates buffered registrations before late commit", () => {
+    const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
+    const subscribers = new WorkspaceJsonRpcSubscribers({
+      shouldSendNotification: () => true,
+      send: (ws: StartServerSocket, payload: unknown) => {
+        sent.push({ connectionId: ws.data.connectionId, payload });
+        return true;
+      },
+    } as never);
+    const client = socket("client");
+    const workspace = path.join(os.tmpdir(), "task-subscriber-clear-buffer");
+
+    const buffered = subscribers.beginBufferedRegistration(client, workspace);
+    subscribers.notify(workspace, "task/created", {
+      cwd: workspace,
+      task: { id: "task-before-clear" },
+    });
+    subscribers.clear();
+    buffered?.commit();
+    subscribers.notify(workspace, "task/updated", {
+      cwd: workspace,
+      task: { id: "task-after-clear" },
+    });
+
+    expect(sent).toEqual([]);
+  });
+
   test("keeps a connection subscribed to every requested task workspace idempotently", () => {
     const sent: Array<{ connectionId: string | undefined; payload: unknown }> = [];
     const subscribers = new WorkspaceJsonRpcSubscribers({

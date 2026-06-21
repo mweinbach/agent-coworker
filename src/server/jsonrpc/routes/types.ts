@@ -57,6 +57,15 @@ export interface JsonRpcRouteContext {
   homedir?: string;
   research: ResearchService;
   tasks: TaskCoordinator;
+  taskRequests?: {
+    onStarted?(input: { ws: StartServerSocket; method: string; workspacePath: string }):
+      | undefined
+      | {
+          commit: () => void;
+          rollback: () => void;
+        };
+    onSucceeded?(input: { ws: StartServerSocket; method: string; workspacePath: string }): void;
+  };
   threads: {
     create(options: {
       cwd: string;

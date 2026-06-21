@@ -97,6 +97,76 @@ describe("SteerCoordinator", () => {
     ]);
   });
 
+  test("keeps the admitted turn interrupt latched while live steer materialization resumes", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const abortController = new AbortController();
+    const state = {
+      allMessages: [],
+      messages: [],
+      pendingSteers: [],
+      running: true,
+      currentTurnId: "turn-1",
+      acceptingSteers: true,
+      abortController,
+      activeSteerHandler: null as SteerCoordinatorDeps["context"]["state"]["activeSteerHandler"],
+    };
+    const context = {
+      id: "session-1",
+      state,
+      emit: (event: Record<string, unknown>) => events.push(event),
+      emitError: (
+        code: string,
+        source: string,
+        message: string,
+        data?: Record<string, unknown>,
+      ) => {
+        events.push({ type: "error", sessionId: "session-1", code, source, message, data });
+      },
+      formatError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      queuePersistSessionSnapshot: (reason: string) => {
+        events.push({ type: "persist", reason });
+      },
+    } as unknown as SessionContext;
+    const historyManager = new HistoryManager(context);
+    let buildCalls = 0;
+    let handlerCalls = 0;
+
+    state.activeSteerHandler = async () => {
+      handlerCalls += 1;
+    };
+
+    const coordinator = createSteerCoordinator({
+      context,
+      historyManager,
+      getTurnAttachmentValidationMessage: () => null,
+      validateUploadedFileAttachments: async () => {},
+      buildUserMessageContent: async (text) => {
+        buildCalls += 1;
+        abortController.abort();
+        state.abortController = null as never;
+        return text;
+      },
+      classifyTurnError: () => ({ code: "internal_error", source: "session" }),
+      getTaskLock: () => null,
+    });
+
+    await coordinator.sendSteerMessage("live steer", "turn-1", "client-steer-1");
+
+    expect(buildCalls).toBe(1);
+    expect(handlerCalls).toBe(0);
+    expect(state.messages).toEqual([]);
+    expect(state.allMessages).toEqual([]);
+    expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "steer_accepted")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "persist")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "error")).toEqual([
+      expect.objectContaining({
+        code: "validation_failed",
+        message: "Turn was interrupted before the steer could be accepted.",
+      }),
+    ]);
+  });
+
   test("does not materialize queued steer content when a task lock closes before drain build", async () => {
     const events: Array<Record<string, unknown>> = [];
     const state = {

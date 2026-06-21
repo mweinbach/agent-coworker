@@ -86,6 +86,14 @@ function makeAgentProfileSnapshot(): AgentProfileSnapshot {
 }
 
 describe("sessionDb", () => {
+  test("rejects anonymous in-memory databases because committed-reader isolation needs a durable path", async () => {
+    const paths = await makeTmpCoworkHome();
+
+    await expect(SessionDb.create({ paths, dbPath: ":memory:" })).rejects.toThrow(
+      "anonymous in-memory databases cannot provide committed-reader isolation",
+    );
+  });
+
   test("persists/lists/deletes sessions with canonical state", async () => {
     const paths = await makeTmpCoworkHome();
     const db = await SessionDb.create({ paths });
@@ -202,6 +210,59 @@ describe("sessionDb", () => {
       expect(db.getSessionRecord("s-1")).toBeNull();
     } finally {
       db.close();
+    }
+  });
+
+  test("recovers a corrupted file database with a working committed reader and can reopen after close", async () => {
+    const paths = await makeTmpCoworkHome();
+    const dbPath = path.join(paths.rootDir, "sessions.db");
+    await fs.writeFile(dbPath, "not a sqlite database", "utf-8");
+
+    const recovered = await SessionDb.create({ paths });
+    try {
+      expect(recovered.listSessions()).toEqual([]);
+      const now = new Date().toISOString();
+      await recovered.persistSessionMutation({
+        sessionId: "recovered-session",
+        eventType: "session.created",
+        snapshot: {
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Recovered Session",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          workingDirectory: "/tmp/project",
+          enableMcp: false,
+          createdAt: now,
+          updatedAt: now,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello after recovery" }],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      });
+      expect(recovered.getSessionRecord("recovered-session")?.title).toBe("Recovered Session");
+      expect(recovered.getMessages("recovered-session").total).toBe(1);
+    } finally {
+      recovered.close();
+    }
+
+    const rootEntries = await fs.readdir(paths.rootDir);
+    expect(rootEntries.some((entry) => entry.startsWith("sessions.db.corrupt."))).toBe(true);
+
+    const reopened = await SessionDb.create({ paths });
+    try {
+      expect(reopened.getSessionRecord("recovered-session")?.title).toBe("Recovered Session");
+    } finally {
+      reopened.close();
     }
   });
 

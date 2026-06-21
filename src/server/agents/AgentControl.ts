@@ -492,6 +492,7 @@ export class AgentControl {
     binding.session = built.session;
     binding.runtime = built.runtime;
     built.session.beginDisconnectedReplayBuffer();
+    const previousBinding = this.deps.sessionBindings.get(built.session.id);
     this.deps.sessionBindings.set(built.session.id, binding);
     this.publish(opts.parentSessionId, built.session, {
       mode: roleDefinition.defaultMode,
@@ -508,7 +509,13 @@ export class AgentControl {
       this.assertParentWritable(opts.parentSessionId);
       return this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
     } catch (error) {
-      this.deps.sessionBindings.delete(built.session.id);
+      if (this.deps.sessionBindings.get(built.session.id) === binding) {
+        if (previousBinding) {
+          this.deps.sessionBindings.set(built.session.id, previousBinding);
+        } else {
+          this.deps.sessionBindings.delete(built.session.id);
+        }
+      }
       this.deps.disposeBinding(binding, "child spawn blocked by parent task lock", {
         closeSharedCodexClient: false,
       });

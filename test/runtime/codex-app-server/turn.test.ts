@@ -196,6 +196,124 @@ describe("codex app-server turn lifecycle", () => {
     },
   );
 
+  test.serial(
+    "drops unknown-turn token usage when app-server disconnects before start ack",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-unknown-usage-close-"));
+      const controlled = createControlledCodexTurnClient();
+      let turnPromise: Promise<unknown> | undefined;
+
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        turnPromise = runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+        });
+
+        await controlled.turnStartEntered;
+        controlled.emitNotification({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread_1",
+            turnId: "old_turn",
+            tokenUsage: {
+              total: {
+                inputTokens: 7,
+                outputTokens: 11,
+                totalTokens: 18,
+              },
+            },
+          },
+        });
+        await controlled.client.close();
+
+        let capturedError: unknown;
+        try {
+          await turnPromise;
+        } catch (error) {
+          capturedError = error;
+        }
+        expect(capturedError).toBeInstanceOf(Error);
+        expect((capturedError as Error & { usage?: unknown }).message).toContain(
+          "Codex client disconnected during execution",
+        );
+        expect((capturedError as Error & { usage?: unknown }).usage).toBeUndefined();
+      } finally {
+        controlled.rejectTurnStart(new Error("late start rejection after disconnect"));
+        await turnPromise?.catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.serial(
+    "drops same-thread stale token usage after a stale item before start ack",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-stale-item-usage-"));
+      const controlled = createControlledCodexTurnClient();
+      let turnPromise: Promise<unknown> | undefined;
+
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        turnPromise = runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+        });
+
+        await controlled.turnStartEntered;
+        controlled.emitNotification({
+          method: "item/started",
+          params: {
+            threadId: "thread_1",
+            turnId: "old_turn",
+            item: { type: "agentMessage", id: "old_item", text: "stale" },
+          },
+        });
+        controlled.emitNotification({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread_1",
+            turnId: "old_turn",
+            tokenUsage: {
+              total: {
+                inputTokens: 7,
+                outputTokens: 11,
+                totalTokens: 18,
+              },
+            },
+          },
+        });
+        await controlled.client.close();
+
+        let capturedError: unknown;
+        try {
+          await turnPromise;
+        } catch (error) {
+          capturedError = error;
+        }
+        expect(capturedError).toBeInstanceOf(Error);
+        expect((capturedError as Error & { usage?: unknown }).message).toContain(
+          "Codex client disconnected during execution",
+        );
+        expect((capturedError as Error & { usage?: unknown }).usage).toBeUndefined();
+      } finally {
+        controlled.rejectTurnStart(new Error("late start rejection after disconnect"));
+        await turnPromise?.catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test.serial("registers an active steer handler that sends turn/steer to app-server", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-steer-"));
     const script = await writeMockAppServer(dir);

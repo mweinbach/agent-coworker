@@ -476,6 +476,10 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const createdNotification = await rpc.waitFor((message) => message.method === "task/created");
       const taskId = createdNotification.params.task.id;
       await waitForTurnCompleted(rpc, sourceThreadId, promotionTurn.result.turn.id);
+      await waitForCondition(
+        () => nonSourceRunCalls > 0,
+        "task kickoff run did not start after source promotion",
+      );
       const nonSourceRunCallsBeforeAgentRoutes = nonSourceRunCalls;
 
       const spawn = await rpc.sendRequest("cowork/session/agent/spawn", {
@@ -2478,6 +2482,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
         },
       );
     let runCalls = 0;
+    let turnSignal: AbortSignal | null = null;
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {
         env: { AGENT_UPLOADS_DIR: uploadsDir },
@@ -2486,6 +2491,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
           if (runCalls === 1) {
             return { text: "task kickoff complete", responseMessages: [] };
           }
+          turnSignal = params.abortSignal;
           params.registerSteerHandler?.(async () => {
             throw new Error("materialization-blocked steer should not reach handler");
           });
@@ -2533,6 +2539,10 @@ describe("server JSON-RPC task terminal turn locks", () => {
         reason: "Cancel while live steer materialization is admitted.",
       });
 
+      await waitForCondition(
+        () => turnSignal?.aborted === true,
+        "task cancel did not abort the live-steer materialization turn",
+      );
       await expectTaskLocked(
         await rpc.sendRequest("turn/steer", {
           threadId,

@@ -15,6 +15,7 @@ async function createHarness(
       task: TaskRecord,
       reason: "completed" | "cancelled" | "failed",
     ) => void | Promise<void>;
+    workspacePath?: string;
   } = {},
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-mode-test-"));
@@ -41,7 +42,7 @@ async function createHarness(
     sessionDb,
     coordinator,
     notifications,
-    workspacePath: path.join(home, "project"),
+    workspacePath: options.workspacePath ?? path.join(home, "project"),
   };
 }
 
@@ -438,19 +439,24 @@ async function invokeTaskRoute(
   params: Record<string, unknown>,
   options: {
     getLive?: (threadId: string) => unknown;
+    desktopService?: unknown;
+    resolveWorkspacePath?: (params: Record<string, unknown>, method: string) => string;
   } = {},
 ) {
   const errors: unknown[] = [];
   const results: unknown[] = [];
   const handlers = createTaskRouteHandlers({
     tasks: harness.coordinator,
+    getConfig: () => ({ workingDirectory: harness.workspacePath }),
+    homedir: harness.home,
+    desktopService: options.desktopService ?? null,
     threads: { getLive: options.getLive ?? (() => null) },
     jsonrpc: {
       sendResult: (_ws: unknown, _id: unknown, result: unknown) => results.push(result),
       sendError: (_ws: unknown, _id: unknown, error: unknown) => errors.push(error),
     },
     utils: {
-      resolveWorkspacePath: () => harness.workspacePath,
+      resolveWorkspacePath: options.resolveWorkspacePath ?? (() => harness.workspacePath),
       buildThreadFromSession: () => null,
     },
   } as never);
@@ -1208,6 +1214,179 @@ describe("task mode persistence", () => {
       ).toBe(false);
     } finally {
       pause.restore();
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/cancel falls back to an authorized desktop catalog project", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    harness.workspacePath = await fs.realpath(harness.workspacePath);
+    try {
+      const created = await createWorkingTask(harness);
+      const { errors, results } = await invokeTaskRoute(
+        harness,
+        "task/cancel",
+        {
+          cwd: harness.workspacePath,
+          taskId: created.task.id,
+          expectedRevision: created.task.revision,
+          reason: "Cancel a catalog-authorized project task",
+        },
+        {
+          resolveWorkspacePath: () => {
+            throw new Error("task/cancel cwd must match an authorized workspace");
+          },
+          desktopService: {
+            loadState: async () => ({
+              workspaces: [
+                {
+                  id: "catalog-project",
+                  name: "Catalog Project",
+                  path: harness.workspacePath,
+                  workspaceKind: "project",
+                  createdAt: new Date().toISOString(),
+                  lastOpenedAt: new Date().toISOString(),
+                },
+              ],
+            }),
+          },
+        },
+      );
+
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "cancelled" }),
+        }),
+      ]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("task/cancel rejects persisted one-off chat tasks before quiescence", async () => {
+    const quiesced: string[] = [];
+    const harness = await createHarness({
+      quiesceTaskThreads: (_task, reason) => {
+        quiesced.push(reason);
+      },
+    });
+    harness.workspacePath = path.join(harness.home, ".cowork", "chats", "20260621-one-off");
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const { errors, results } = await invokeTaskRoute(harness, "task/cancel", {
+        cwd: harness.workspacePath,
+        taskId: created.task.id,
+        expectedRevision: created.task.revision,
+        reason: "One-off tasks are not task RPC projects",
+      });
+
+      expect(results).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as { message?: string }).message ?? "").toContain(
+        "cwd must match an authorized project workspace",
+      );
+      expect(harness.coordinator.get(created.task.id, harness.workspacePath)?.status).toBe(
+        "working",
+      );
+      expect(quiesced).toEqual([]);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("valid task/cancel waits for workspace authorization before terminal locks", async () => {
+    const quiesceEntered = deferred();
+    const releaseQuiesce = deferred();
+    const catalogEntered = deferred();
+    const releaseCatalog = deferred();
+    const harness = await createHarness({
+      quiesceTaskThreads: async (_task, reason) => {
+        expect(reason).toBe("cancelled");
+        quiesceEntered.resolve();
+        await releaseQuiesce.promise;
+      },
+    });
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      const taskSessionId = created.task.threads[0]?.sessionId;
+      if (!taskSessionId) throw new Error("Expected task session binding");
+
+      const cancel = invokeTaskRoute(
+        harness,
+        "task/cancel",
+        {
+          cwd: harness.workspacePath,
+          taskId: created.task.id,
+          expectedRevision: created.task.revision,
+          reason: "Cancel while workspace catalog is slow",
+        },
+        {
+          desktopService: {
+            loadState: async () => {
+              catalogEntered.resolve();
+              await releaseCatalog.promise;
+              return {
+                workspaces: [
+                  {
+                    id: "workspace-1",
+                    name: "Project",
+                    path: harness.workspacePath,
+                    workspaceKind: "project",
+                    createdAt: new Date().toISOString(),
+                    lastOpenedAt: new Date().toISOString(),
+                    defaultEnableMcp: false,
+                    defaultBackupsEnabled: false,
+                    yolo: false,
+                  },
+                ],
+              };
+            },
+          },
+        },
+      );
+
+      await expectSettlesWithin(catalogEntered.promise, 500, "workspace catalog was not queried");
+      const quiesceOutcomeBeforeAuthorization = await Promise.race([
+        quiesceEntered.promise.then(() => "entered" as const),
+        new Promise<"not-entered">((resolve) => setTimeout(() => resolve("not-entered"), 20)),
+      ]);
+      expect(quiesceOutcomeBeforeAuthorization).toBe("not-entered");
+      expect(getSessionTaskLock(harness.sessionDb, taskSessionId)).toBeNull();
+
+      releaseCatalog.resolve();
+      await expectSettlesWithin(
+        quiesceEntered.promise,
+        500,
+        "valid task/cancel did not register terminal locks after workspace authorization",
+      );
+      const catalogOutcome = await Promise.race([
+        catalogEntered.promise.then(() => "entered" as const),
+        new Promise<"not-entered">((resolve) => setTimeout(() => resolve("not-entered"), 20)),
+      ]);
+      expect(catalogOutcome).toBe("entered");
+      expect(getSessionTaskLock(harness.sessionDb, taskSessionId)?.data).toEqual({
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: created.task.id,
+        taskStatus: "cancelled",
+      });
+
+      releaseQuiesce.resolve();
+      const { errors, results } = await cancel;
+      expect(errors).toEqual([]);
+      expect(results).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({ status: "cancelled" }),
+        }),
+      ]);
+    } finally {
+      releaseCatalog.resolve();
+      releaseQuiesce.resolve();
       harness.sessionDb.close();
     }
   });

@@ -273,13 +273,6 @@ export function createCodexTurnNotificationRouter(
     completion.onUsage(pendingUsage);
   };
 
-  const flushOnlyPendingUsage = () => {
-    if (pendingUsageByTurnId.size !== 1) return;
-    const [[id, pendingUsage]] = [...pendingUsageByTurnId.entries()];
-    pendingUsageByTurnId.delete(id);
-    completion.onUsage(pendingUsage);
-  };
-
   const settleReject = (error: Error) => {
     if (completionSettled) return;
     completionSettled = true;
@@ -325,8 +318,6 @@ export function createCodexTurnNotificationRouter(
           typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
         if (expectedTurnId) {
           flushPendingUsage(expectedTurnId);
-        } else {
-          flushOnlyPendingUsage();
         }
         settleReject(
           new Error(
@@ -359,11 +350,11 @@ export function createCodexTurnNotificationRouter(
     const expectedTurnId =
       typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
     const payloadThreadId = codexPayloadThreadId(payload);
+    const payloadTurnId = codexPayloadTurnId(payload);
 
     if (notification.method === "thread/tokenUsage/updated") {
       if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
       flushPendingUsage(expectedTurnId);
-      const payloadTurnId = codexPayloadTurnId(payload);
       const parsedUsage = parseUsage(payload?.tokenUsage);
       if (expectedTurnId) {
         if (payloadTurnId && payloadTurnId !== expectedTurnId) return;
@@ -374,7 +365,6 @@ export function createCodexTurnNotificationRouter(
         if (parsedUsage) pendingUsageByTurnId.set(payloadTurnId, parsedUsage);
         return;
       }
-      completion.onUsage(parsedUsage);
       return;
     }
 

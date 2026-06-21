@@ -116,6 +116,14 @@ export function registerPendingTerminalTaskLocks(
 ): () => void {
   const taskLock = pendingTerminalTaskLock(task, status);
   pendingTerminalTaskLocks.set(task.id, taskLock);
+  return registerPendingTerminalSessionLocksForTask(task, status, taskLock);
+}
+
+function registerPendingTerminalSessionLocksForTask(
+  task: Pick<TaskRecord, "id" | "title" | "threads" | "sourceSessionId">,
+  status: TerminalTaskStatus,
+  taskLock: TaskLockError,
+): () => void {
   const locks: Array<{ sessionId: string; lock: TaskLockError }> = [];
   const taskSessionIds = new Set(task.threads.map((thread) => thread.sessionId));
   for (const sessionId of taskSessionIds) {

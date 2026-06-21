@@ -61,6 +61,7 @@ import type { SessionTitleSource } from "./sessionTitleService";
 export type { PersistedSessionSummary } from "./sessionStore";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
+const ANONYMOUS_IN_MEMORY_DB_PATH = ":memory:";
 
 export type SessionPersistenceStatus = "active" | "closed";
 
@@ -235,6 +236,11 @@ export class SessionDb {
     await ensurePrivateDirectory(opts.paths.rootDir);
 
     const dbPath = opts.dbPath ?? path.join(opts.paths.rootDir, "sessions.db");
+    if (dbPath === ANONYMOUS_IN_MEMORY_DB_PATH) {
+      throw new Error(
+        "SessionDb requires a durable file-backed database path; anonymous in-memory databases cannot provide committed-reader isolation.",
+      );
+    }
     const busyTimeoutMs = opts.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
     const writeCoordinator = new SessionDbWriteCoordinator({
       rootDir: opts.paths.rootDir,
@@ -689,11 +695,23 @@ export class SessionDb {
     revisionId: string;
     version: TaskArtifactVersion;
     updatedAt: string;
+    forcePendingSettlement?: boolean;
   }): Promise<TaskRecord> {
     return await this.writeCoordinator.runExclusive(
       "complete_task_artifact_revision",
       async () => this.taskRepository.completeArtifactRevision(input),
       { revisionId: input.revisionId, artifactId: input.version.artifactId },
+    );
+  }
+
+  async markTaskArtifactRevisionSettlementPending(input: {
+    revisionId: string;
+    updatedAt: string;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "mark_task_artifact_revision_settlement_pending",
+      async () => this.taskRepository.markArtifactRevisionSettlementPending(input),
+      { revisionId: input.revisionId },
     );
   }
 

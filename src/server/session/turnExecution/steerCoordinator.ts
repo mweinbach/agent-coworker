@@ -202,7 +202,10 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     }
     return true;
   };
-  const makeAssertCanMaterializeSteerContent = (opts?: { turnId?: string }) => {
+  const makeAssertCanMaterializeSteerContent = (opts?: {
+    turnId?: string;
+    abortSignal?: AbortSignal | null;
+  }) => {
     return () => {
       const taskLock = deps.getTaskLock?.() ?? null;
       if (taskLock) {
@@ -216,7 +219,10 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       const turnEnded =
         opts?.turnId !== undefined &&
         (!context.state.running || context.state.currentTurnId !== opts.turnId);
-      if (context.state.abortController?.signal.aborted || turnEnded) {
+      const interrupted =
+        context.state.abortController?.signal.aborted === true ||
+        opts?.abortSignal?.aborted === true;
+      if (interrupted || turnEnded) {
         const message = "Turn was interrupted before the steer could be accepted.";
         throw makeTaskLockAbortError(message, {
           code: "validation_failed",
@@ -258,6 +264,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     references?: TurnReference[],
     steerRequestId?: string,
   ) => {
+    if (emitTaskLockIfPresent(steerRequestId)) return;
     if (!context.state.running) {
       emitSessionError(
         "validation_failed",
@@ -341,9 +348,11 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     if (!admitSteerForTurn(currentTurnId, steerRequestId)) return;
     const activeSteerHandler = context.state.activeSteerHandler;
     if (activeSteerHandler) {
+      const admittedAbortSignal = context.state.abortController?.signal ?? null;
       const materialization = createUserContentMaterializationTransaction();
       const assertCanMaterializeSteerContent = makeAssertCanMaterializeSteerContent({
         turnId: currentTurnId,
+        abortSignal: admittedAbortSignal,
       });
       const liveSteerTransaction = async () => {
         try {

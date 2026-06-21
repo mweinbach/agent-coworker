@@ -410,7 +410,7 @@ export function createMockClient(): CodexAppServerClient {
       }
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
       if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("disconnect-mid-turn")) {
-        queueMicrotask(() => {
+        setTimeout(() => {
           sendNotification({
             method: "item/started",
             params: {

@@ -1553,6 +1553,7 @@ export class SessionTaskRepository {
     revisionId: string;
     version: TaskArtifactVersion;
     updatedAt: string;
+    forcePendingSettlement?: boolean;
   }): TaskRecord {
     const revisionRow = this.requireArtifactRevisionRow(input.revisionId);
     const taskId = String(revisionRow.task_id);
@@ -1567,6 +1568,7 @@ export class SessionTaskRepository {
     revisionId: string;
     version: TaskArtifactVersion;
     updatedAt: string;
+    forcePendingSettlement?: boolean;
   }): void {
     const revisionRow = this.requireArtifactRevisionRow(input.revisionId);
     const taskId = String(revisionRow.task_id);
@@ -1577,7 +1579,8 @@ export class SessionTaskRepository {
         "SELECT 1 AS found FROM task_artifact_revisions WHERE task_id = ? AND revision_id != ? AND status = 'active' LIMIT 1",
       )
       .get(taskId, input.revisionId);
-    const settlementStatus = activeSibling ? PENDING_ARTIFACT_REVISION_SETTLEMENT : "none";
+    const settlementStatus =
+      activeSibling || input.forcePendingSettlement ? PENDING_ARTIFACT_REVISION_SETTLEMENT : "none";
     this.supersedePendingArtifactVersions(String(revisionRow.artifact_id));
     this.insertArtifactVersion(taskId, input.version);
     this.db
@@ -1610,6 +1613,23 @@ export class SessionTaskRepository {
       detail: input.version.changeSummary || null,
       createdAt: input.updatedAt,
     });
+  }
+
+  markArtifactRevisionSettlementPending(input: {
+    revisionId: string;
+    updatedAt: string;
+  }): TaskRecord {
+    const revisionRow = this.requireArtifactRevisionRow(input.revisionId);
+    const taskId = String(revisionRow.task_id);
+    if (revisionRow.status !== "completed" || revisionRow.result_version_id === null) {
+      return this.requireTask(taskId);
+    }
+    this.db
+      .query(
+        "UPDATE task_artifact_revisions SET settlement_status = ?, updated_at = ? WHERE revision_id = ? AND status = 'completed' AND result_version_id IS NOT NULL",
+      )
+      .run(PENDING_ARTIFACT_REVISION_SETTLEMENT, input.updatedAt, input.revisionId);
+    return this.requireTask(taskId);
   }
 
   failArtifactRevision(input: {

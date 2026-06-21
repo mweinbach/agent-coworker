@@ -477,6 +477,152 @@ describe("AgentControl.spawn", () => {
     expect(cancelResolved).toBe(true);
   });
 
+  test("cancelAll drains interrupt replacement generations to a fixed point", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    childSession.isBusy = false;
+    const firstRunEntered = Promise.withResolvers<void>();
+    const releaseFirstRun = Promise.withResolvers<void>();
+    const replacementRunEntered = Promise.withResolvers<void>();
+    const releaseReplacementRun = Promise.withResolvers<void>();
+    let runIndex = 0;
+    let currentRunSettled: Promise<void> = Promise.resolve();
+    childSession.sendUserMessage = mock(async () => {
+      runIndex += 1;
+      if (runIndex === 1) {
+        childSession.isBusy = true;
+        currentRunSettled = releaseFirstRun.promise.finally(() => {
+          childSession.isBusy = false;
+        });
+        firstRunEntered.resolve();
+        await currentRunSettled;
+        return;
+      }
+      childSession.isBusy = true;
+      currentRunSettled = releaseReplacementRun.promise.finally(() => {
+        childSession.isBusy = false;
+      });
+      replacementRunEntered.resolve();
+      await currentRunSettled;
+    });
+    childSession.cancel = mock(() => {
+      childSession.isBusy = false;
+    });
+    childSession.cancelAndWaitForSettlement = mock(async () => {
+      childSession.cancel();
+      await currentRunSettled;
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map([["child-1", { session: childSession, socket: null }]]) as Map<
+        string,
+        SessionBinding
+      >,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: (() => {
+        throw new Error("unused");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await control.sendInput({
+      parentSessionId: "root-1",
+      agentId: "child-1",
+      message: "first child run",
+    });
+    await firstRunEntered.promise;
+
+    const replacement = control.sendInput({
+      parentSessionId: "root-1",
+      agentId: "child-1",
+      message: "replacement child run",
+      interrupt: true,
+    });
+    await Promise.resolve();
+    const cancelled = control.cancelAll("root-1", { timeoutMs: 1_000 });
+
+    releaseFirstRun.resolve();
+    await replacementRunEntered.promise;
+    await replacement;
+    await expect(
+      Promise.race([
+        cancelled.then(() => "settled"),
+        new Promise((resolve) => setTimeout(() => resolve("pending"), 25)),
+      ]),
+    ).resolves.toBe("pending");
+
+    releaseReplacementRun.resolve();
+    await expect(cancelled).resolves.toBeUndefined();
+    expect(childSession.cancelAndWaitForSettlement).toHaveBeenCalledTimes(1);
+    expect(childSession.sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test("late spawn lock restores an existing binding and disposes only the new child", async () => {
+    const parentConfig = makeConfig();
+    const existingChild = makeChildSession(parentConfig);
+    const getExistingChildInfo = existingChild.getSessionInfoEvent;
+    existingChild.getSessionInfoEvent = () => ({
+      ...getExistingChildInfo(),
+      executionState: "completed",
+    });
+    const newChild = makeChildSession(parentConfig);
+    const existingBinding = { session: existingChild, socket: null } as unknown as SessionBinding;
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        { session: { isAgentOf: () => false, persistenceStatus: "active" }, socket: null },
+      ],
+      ["child-1", existingBinding],
+    ] as unknown as Array<[string, SessionBinding]>);
+    const disposeBinding = mock(() => {});
+    let lockChecks = 0;
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = newChild;
+        return { session: newChild, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding,
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+      getParentTaskLock: () => {
+        lockChecks += 1;
+        return lockChecks >= 3
+          ? {
+              message: "Parent task is finalizing cancelled.",
+              data: {
+                category: "task_locked",
+                source: "session",
+                lockKind: "terminal_task_thread",
+                taskId: "task-1",
+                taskStatus: "cancelled",
+              },
+            }
+          : null;
+      },
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "blocked child work",
+      }),
+    ).rejects.toThrow("Parent task is finalizing cancelled.");
+
+    expect(bindings.get("child-1")).toBe(existingBinding);
+    expect(disposeBinding).toHaveBeenCalledTimes(1);
+    expect(disposeBinding.mock.calls[0]?.[0]).not.toBe(existingBinding);
+    expect(newChild.sendUserMessage).not.toHaveBeenCalled();
+  });
+
   test("builds a briefing seed with optional structured context when contextMode is brief", async () => {
     const parentConfig = makeConfig();
     const seedContext: SeededSessionContext = {

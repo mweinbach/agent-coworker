@@ -1,31 +1,16 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
-import { ensureArtifactRuntimeReady } from "../../artifactRuntime";
-import {
-  ensureCodexPrimaryRuntimeReady,
-  shouldBootstrapCodexPrimaryRuntime,
-  WORKSPACE_TOOLS_PLUGIN_ID,
-} from "../../codexPrimaryRuntime";
 import { loadConfig } from "../../config";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
+import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
 import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
-import {
-  checkManagedSofficeRuntime,
-  prepareManagedSofficeToolEnv,
-} from "../../managedSofficeRuntime";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
-import { readPluginOverrides } from "../../plugins/overrides";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
-import {
-  DEFAULT_GLOBAL_SKILLS,
-  ensureDefaultGlobalSkillsReady,
-  isDefaultPluginRemoved,
-} from "../../skills/defaultGlobalSkills";
+import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
 import { decodeJsonRpcMessage } from "../jsonrpc/decodeJsonRpcMessage";
 import {
@@ -166,68 +151,30 @@ export async function createAgentServerRuntime(
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
-  let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
-  const codexPrimaryRuntimeEnabled = shouldBootstrapCodexPrimaryRuntime(env);
-  const defaultGlobalPlugins = codexPrimaryRuntimeEnabled
-    ? DEFAULT_GLOBAL_SKILLS.filter((plugin) => plugin.id !== WORKSPACE_TOOLS_PLUGIN_ID)
-    : DEFAULT_GLOBAL_SKILLS;
+  const coworkRuntimeSetup = await ensureCoworkRuntimeReady({
+    homedir: opts.homedir,
+    env,
+    log: (line) => {
+      console.warn(`[cowork-runtime] ${line}`);
+    },
+  });
+  if (coworkRuntimeSetup) Object.assign(env, coworkRuntimeSetup.runtimeEnv);
 
-  if (defaultGlobalPlugins.length > 0) {
-    await ensureDefaultGlobalSkillsReady({
-      homedir: opts.homedir,
-      env,
-      config,
-      plugins: defaultGlobalPlugins,
-      log: (line) => {
-        console.warn(`[default-skills] ${line}`);
-      },
-    });
-  }
+  let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+  await ensureDefaultGlobalSkillsReady({
+    homedir: opts.homedir,
+    env,
+    config,
+    log: (line) => {
+      console.warn(`[default-skills] ${line}`);
+    },
+  });
 
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,
     config.providerOptions,
   );
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
-
-  const packagedDesktopBundle = env.COWORK_DESKTOP_BUNDLE === "1";
-  const defaultAiCoworkerPaths = getAiCoworkerPathsDefault({ homedir: opts.homedir });
-  const pluginOverrides = await readPluginOverrides(config);
-  await ensureCodexPrimaryRuntimeReady({
-    homedir: opts.homedir,
-    workspaceDir: config.workingDirectory,
-    builtInSkillsDir: packagedDesktopBundle ? undefined : path.join(config.builtInDir, "skills"),
-    globalSkillsDir: defaultAiCoworkerPaths.skillsDir,
-    globalPluginsDir: path.join(defaultAiCoworkerPaths.rootDir, "plugins"),
-    skipGlobalWorkspaceToolsPlugin: isDefaultPluginRemoved(
-      WORKSPACE_TOOLS_PLUGIN_ID,
-      pluginOverrides,
-    ),
-    env,
-    log: (line) => {
-      console.warn(`[codex-primary-runtime] ${line}`);
-    },
-  });
-  const artifactRuntimeSetup = await ensureArtifactRuntimeReady({
-    homedir: opts.homedir,
-    env,
-    log: (line) => {
-      console.warn(`[artifact-runtime] ${line}`);
-    },
-  });
-  if (artifactRuntimeSetup) {
-    Object.assign(env, artifactRuntimeSetup.runtimeEnv);
-  }
-  Object.assign(
-    env,
-    await prepareManagedSofficeToolEnv({
-      homedir: opts.homedir,
-      env,
-      log: (line) => {
-        console.warn(`[managed-soffice] ${line}`);
-      },
-    }),
-  );
 
   await fs.mkdir(config.projectCoworkDir, { recursive: true });
 
@@ -560,8 +507,7 @@ export async function createAgentServerRuntime(
     },
     runtime: {
       checkLibreOffice: async (checkOpts) =>
-        await checkManagedSofficeRuntime({
-          homedir: opts.homedir,
+        await checkLibreOfficeCapability({
           env,
           smoke: checkOpts.smoke === true,
         }),

@@ -58,7 +58,6 @@ function libreOfficeBadge(status: LibreOfficeRuntimeDiagnostic | null): {
 } {
   if (!status) return { label: "Not checked", variant: "secondary" };
   if (status.status === "available") return { label: "Available", variant: "default" };
-  if (status.status === "disabled") return { label: "Disabled", variant: "outline" };
   return { label: "Unavailable", variant: "destructive" };
 }
 
@@ -389,8 +388,8 @@ export function DeveloperPage() {
         <CardHeader>
           <div className="flex items-start justify-between gap-3 max-[720px]:flex-col">
             <div>
-              <CardTitle>LibreOffice Runtime</CardTitle>
-              <CardDescription>Managed document conversion health.</CardDescription>
+              <CardTitle>LibreOffice</CardTitle>
+              <CardDescription>Managed headless document-rendering runtime.</CardDescription>
             </div>
             <Badge variant={libreOfficeState.variant}>
               {libreOfficeHealthy ? (
@@ -404,10 +403,6 @@ export function DeveloperPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="grid gap-3 text-xs text-muted-foreground md:grid-cols-2">
-            <div>
-              <div className="text-sm font-medium text-foreground">Shim</div>
-              <div className="break-all">{libreOfficeStatus?.shimPath ?? "Not checked"}</div>
-            </div>
             <div>
               <div className="text-sm font-medium text-foreground">Resolved executable</div>
               <div className="break-all">{libreOfficeStatus?.resolvedPath ?? "Not checked"}</div>
@@ -436,7 +431,7 @@ export function DeveloperPage() {
               ) : (
                 <RefreshCwIcon data-icon="inline-start" />
               )}
-              Check runtime
+              Check managed runtime
             </Button>
           </div>
         </CardContent>

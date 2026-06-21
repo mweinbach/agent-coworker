@@ -29,8 +29,7 @@
     "prompts/**/*",
     "!prompts/system-models/.research",
     "scripts/build_cowork_server_binary.ts",
-    "scripts/setup_codex_primary_runtime.ts",
-    "scripts/setup_artifact_runtime.ts",
+    "scripts/setup_cowork_runtime.ts",
     "scripts/postinstall.ts",
     "scripts/releaseBuildUtils.ts",
     "skills/**/*",
@@ -45,8 +44,7 @@
     "dev": "bun --watch src/index.ts",
     "serve": "bun src/server/index.ts",
     "desktop:demo": "COWORK_DEMO_MODE=1 bun run start",
-    "setup:codex-runtime": "bun scripts/setup_codex_primary_runtime.ts",
-    "setup:artifact-runtime": "bun scripts/setup_artifact_runtime.ts",
+    "setup:runtime": "bun scripts/setup_cowork_runtime.ts",
     "build:server-binary": "bun scripts/build_cowork_server_binary.ts",
     "desktop:dev": "cd apps/desktop && bun run dev",
     "desktop:web": "bun apps/desktop/scripts/start_web_dev.ts",
@@ -102,6 +100,7 @@
     "unified": "^11.0.5",
     "unofficial-antigravity-sdk": "^1.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yauzl": "3.4.0",
     "zod": "4.4.3"
   },
   "optionalDependencies": {

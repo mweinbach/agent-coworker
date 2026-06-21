@@ -252,7 +252,7 @@ describe("default global skills bootstrap", () => {
     }
   });
 
-  test("does not reinstall on later runs once the bootstrap state file exists", async () => {
+  test("repairs a missing default marketplace plugin even when bootstrap state exists", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-once-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
@@ -279,15 +279,12 @@ describe("default global skills bootstrap", () => {
         homedir: home,
         config,
         plugins: skills,
-        fetchImpl: (async () => {
-          throw new Error("should not fetch after one-time bootstrap");
-        }) as typeof fetch,
+        fetchImpl,
       });
 
-      expect(second.status).toBe("already_installed");
-      await expect(
-        fs.access(path.join(home, ".cowork", "plugins", "workspace-tools")),
-      ).rejects.toBeDefined();
+      expect(second.status).toBe("installed");
+      expect(second.installed).toEqual(["workspace-tools"]);
+      await fs.access(path.join(home, ".cowork", "plugins", "workspace-tools"));
     } finally {
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(workspace, { recursive: true, force: true });
@@ -400,12 +397,12 @@ describe("default global skills bootstrap", () => {
     }
   });
 
-  test("installs Workspace Tools as one default plugin with three bundled skills", async () => {
+  test("installs Workspace Tools as one default plugin with four bundled skills", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-workspace-tools-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
     const { tree, files } = createMarketplaceFixture(["workspace-tools"], {
-      "workspace-tools": ["documents", "presentations", "spreadsheets"],
+      "workspace-tools": ["documents", "pdf", "presentations", "spreadsheets"],
     });
     const config = makeConfig(workspace, home);
 
@@ -424,6 +421,7 @@ describe("default global skills bootstrap", () => {
       );
       expect(plugin?.skills.map((skill) => skill.rawName).sort()).toEqual([
         "documents",
+        "pdf",
         "presentations",
         "spreadsheets",
       ]);

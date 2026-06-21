@@ -107,58 +107,57 @@ describe("bash tool", () => {
     });
   });
 
-  test("pins managed soffice shim inside POSIX shell commands", async () => {
+  test("pins unified runtime executables inside POSIX shell commands", async () => {
     const seen: Array<{ file: string; args: string[] }> = [];
     const result = await bashInternal.runShellCommandWithExec({
-      command: "soffice --version",
+      command: "node --version && python --version",
       cwd: "/tmp",
       platform: "darwin",
       env: {
         PATH: "/opt/homebrew/bin:/usr/bin:/bin",
-        COWORK_MANAGED_SOFFICE_SHIM_DIR: "/Users/test/.cache/cowork/libreoffice/bin",
-        COWORK_SOFFICE: "/Users/test/.cache/cowork/libreoffice/bin/soffice",
+        COWORK_RUNTIME_NODE: "/Users/test/.cowork/runtime/2026-06-21/dependencies/node/bin/node",
+        COWORK_RUNTIME_PYTHON:
+          "/Users/test/.cowork/runtime/2026-06-21/dependencies/python/bin/python",
       },
       execRunner: async (file: string, args: string[]) => {
         seen.push({ file, args });
-        return { stdout: "LibreOffice 26.2.3.2\n", stderr: "", exitCode: 0 };
+        return { stdout: "v24.14.0\nPython 3.12.13\n", stderr: "", exitCode: 0 };
       },
     });
 
     const commandArg = seen[0]?.args.at(-1);
-    expect(commandArg).toContain(`export PATH='/Users/test/.cache/cowork/libreoffice/bin':$PATH`);
     expect(commandArg).toContain(
-      `export COWORK_SOFFICE='/Users/test/.cache/cowork/libreoffice/bin/soffice'`,
+      "export PATH='/Users/test/.cowork/runtime/2026-06-21/dependencies/node/bin:/Users/test/.cowork/runtime/2026-06-21/dependencies/python/bin':$PATH",
     );
-    expect(commandArg?.endsWith("soffice --version")).toBe(true);
-    expect(result.stdout.trim()).toBe("LibreOffice 26.2.3.2");
+    expect(commandArg?.endsWith("node --version && python --version")).toBe(true);
+    expect(result.stdout).toContain("Python 3.12.13");
   });
 
-  test("pins managed soffice shim inside Windows PowerShell commands", async () => {
+  test("pins unified runtime executables inside Windows PowerShell commands", async () => {
     const seen: Array<{ file: string; args: string[] }> = [];
     const result = await bashInternal.runShellCommandWithExec({
-      command: "soffice --version",
+      command: "node --version; python --version",
       cwd: "C:/tmp",
       platform: "win32",
       env: {
         Path: "C:\\Windows\\System32",
-        COWORK_MANAGED_SOFFICE_SHIM_DIR: "C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin",
-        COWORK_SOFFICE: "C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin\\soffice.cmd",
+        COWORK_RUNTIME_NODE:
+          "C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\node\\bin\\node.exe",
+        COWORK_RUNTIME_PYTHON:
+          "C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python\\python.exe",
       },
       execRunner: async (file: string, args: string[]) => {
         seen.push({ file, args });
-        return { stdout: "LibreOffice 26.2.3.2\n", stderr: "", exitCode: 0 };
+        return { stdout: "v24.14.0\nPython 3.12.13\n", stderr: "", exitCode: 0 };
       },
     });
 
     const commandArg = seen[0]?.args.at(-1);
     expect(commandArg).toContain(
-      "$env:PATH = 'C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin' + ';' + $env:PATH",
+      "$env:PATH = 'C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\node\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python\\Scripts' + ';' + $env:PATH",
     );
-    expect(commandArg).toContain(
-      "$env:COWORK_SOFFICE = 'C:\\Users\\test\\.cache\\cowork\\libreoffice\\bin\\soffice.cmd'",
-    );
-    expect(commandArg?.endsWith("soffice --version")).toBe(true);
-    expect(result.stdout.trim()).toBe("LibreOffice 26.2.3.2");
+    expect(commandArg?.endsWith("node --version; python --version")).toBe(true);
+    expect(result.stdout).toContain("Python 3.12.13");
   });
 
   test("executes simple command and returns stdout", async () => {

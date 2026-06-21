@@ -54,8 +54,9 @@ export function createRuntimeDiagnosticsActions(
             id: makeId(),
             ts: nowIso(),
             kind: "error",
-            title: "LibreOffice runtime",
-            detail: error instanceof Error ? error.message : "Unable to check LibreOffice runtime.",
+            title: "LibreOffice capability",
+            detail:
+              error instanceof Error ? error.message : "Unable to check managed LibreOffice.",
           }),
         }));
       }

@@ -17,9 +17,8 @@
 #     - pointing Bun at the system CA bundle (the proxy intercepts TLS),
 #     - using --frozen-lockfile (fewer registry roundtrips; we have bun.lock),
 #     - retrying once on a flaky fetch.
-#   If you want the heavier codex/artifact runtimes preinstalled and *cached*
-#   across sessions, put `bun install` in the cloud environment's Setup script
-#   (web UI) instead — setup-script output is cached; SessionStart hooks are not.
+#   The versioned Cowork runtime is installed separately under ~/.cowork/runtime;
+#   this dependency hook intentionally does not bootstrap that large release asset.
 
 set -uo pipefail
 
@@ -71,10 +70,9 @@ for ca in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem; do
   fi
 done
 
-# Skip the postinstall codex/artifact runtime downloads. They're only needed to
-# *run* the cowork agent itself, not to edit/typecheck/test this repo, and they'd
-# add network-dependent latency to every cloud session start. The root workspace
-# install already covers apps/* and packages/* deps.
+# Skip optional postinstall work. The unified Cowork runtime is not a package-manager
+# postinstall side effect; it is verified and activated by the harness when needed.
+# The root workspace install already covers apps/* and packages/* dependencies.
 export SKIP_POSTINSTALL=1
 
 # --frozen-lockfile is the correctness lever: it makes node_modules match

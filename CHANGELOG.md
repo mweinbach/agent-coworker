@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Unified Cowork runtime** — Added checksum-verified, date-versioned runtime
+  installation under `~/.cowork/runtime`, platform asset selection, atomic
+  activation, executable verification, and two-version fallback retention.
+
+### Changed
+
+- **OAI productivity stack** — Marketplace-installed workspace skills remain
+  the authoritative instructions and helper scripts, while the separately
+  downloaded runtime supplies their unified Node, Python, and native-tool
+  dependencies.
+- **Managed headless LibreOffice** — The unified runtime now includes a
+  checksum-pinned LibreOffice conversion engine and exposes only Cowork's
+  headless policy launcher, which blocks UI/printing modes and uses isolated
+  disposable profiles.
+
+### Removed
+
+- **Split runtime bootstraps** — Removed the legacy artifact runtime, Codex
+  primary runtime, managed LibreOffice downloader/shim, and duplicate bundled
+  productivity skill copies after the marketplace-skill plus unified-runtime
+  path was verified.
+
 ## 1.1.19 - 2026-06-08
 
 ### Changed

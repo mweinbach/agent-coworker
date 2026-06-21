@@ -132,7 +132,7 @@ describe("codex app-server client", () => {
 fs.writeFileSync(${JSON.stringify(envFile)}, JSON.stringify({
   CODEX_HOME: process.env.CODEX_HOME,
   PATH: process.env.PATH,
-  COWORK_SOFFICE: process.env.COWORK_SOFFICE
+  COWORK_TEST_TOOL_ENV: process.env.COWORK_TEST_TOOL_ENV
 }));
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
@@ -148,7 +148,7 @@ setInterval(() => {}, 1000);
     const client = await startCodexAppServerClient({
       env: {
         PATH: "/tmp/cowork-managed-bin",
-        COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+        COWORK_TEST_TOOL_ENV: "preserved",
         CODEX_HOME: path.join(home, ".codex-should-not-be-used-by-opts"),
       },
     });
@@ -160,7 +160,7 @@ setInterval(() => {}, 1000);
     expect(JSON.parse(await fs.readFile(envFile, "utf8"))).toEqual({
       CODEX_HOME: expectedCodexHome,
       PATH: "/tmp/cowork-managed-bin",
-      COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+      COWORK_TEST_TOOL_ENV: "preserved",
     });
     expect((await fs.stat(expectedCodexHome)).isDirectory()).toBe(true);
   });

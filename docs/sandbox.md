@@ -61,11 +61,11 @@ root + its declared skill paths (`pluginReadRoots`), and reads outside the proje
 are not constrained by a scoped child's `targetPaths`, so scoped agents can still
 load global skills and plugins.
 
-When the artifact runtime is active from Cowork's managed cache
-(`~/.cache/cowork/artifact-runtime`), that cache is writable for unscoped
-`workspace-write` turns. This lets bundled Python/Node tooling maintain runtime
-dependencies without asking for full disk access. Scoped child agents and
-read-only/no-project-write roles do not receive this extra writable root.
+The versioned Cowork runtime under `~/.cowork/runtime/<date>` is immutable and
+remains read-only in sandboxed turns. Node, Python, native tools, and runtime
+libraries are read directly from that verified tree; marketplace-installed
+skills and plugins remain in project/user `.cowork` roots. Generated artifacts
+and temporary dependency state belong in the workspace or scratch directories.
 
 Note on namespaces: the canonical runtime skill/plugin roots are `.cowork/` and
 `~/.cowork/` (project + user) plus the built-in dir. `.agents/` is the

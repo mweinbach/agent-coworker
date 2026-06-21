@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -28,8 +27,7 @@ import {
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 9;
-const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join("assets", "managed-soffice-helper.mjs");
+const CACHE_VERSION = 11;
 
 type DesktopResourcesCache = {
   version: number;
@@ -40,8 +38,6 @@ type DesktopResourcesCache = {
   promptsFingerprint: string;
   configFingerprint: string;
   skillsFingerprint: string;
-  codexPrimaryRuntimeFingerprint: string | null;
-  artifactRuntimeFingerprint: string | null;
   foundationModelsSdkFingerprint: string | null;
   windowsAiElectronFingerprint: string | null;
   windowsSandboxHelperFingerprint: string | null;
@@ -117,10 +113,6 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
       typeof parsed.skillsFingerprint !== "string" ||
-      (parsed.codexPrimaryRuntimeFingerprint !== null &&
-        typeof parsed.codexPrimaryRuntimeFingerprint !== "string") ||
-      (parsed.artifactRuntimeFingerprint !== null &&
-        typeof parsed.artifactRuntimeFingerprint !== "string") ||
       (parsed.foundationModelsSdkFingerprint !== null &&
         typeof parsed.foundationModelsSdkFingerprint !== "string") ||
       (parsed.windowsAiElectronFingerprint !== null &&
@@ -157,51 +149,6 @@ async function removeLegacyCodexAppServerBinaries(desktopBinariesDir: string): P
         await fs.rm(path.join(desktopBinariesDir, entry), { force: true });
       }),
   );
-}
-
-async function resolveCodexPrimaryRuntimeSource(): Promise<string | null> {
-  const fromEnv = process.env.COWORK_CODEX_PRIMARY_RUNTIME_DIR?.trim();
-  if (fromEnv) {
-    const resolved = path.resolve(fromEnv);
-    if (!(await pathExists(path.join(resolved, "runtime.json")))) {
-      throw new Error(
-        `COWORK_CODEX_PRIMARY_RUNTIME_DIR does not contain runtime.json: ${resolved}`,
-      );
-    }
-    return resolved;
-  }
-
-  const defaultRuntimeDir = path.join(
-    os.homedir(),
-    ".cache",
-    "codex-runtimes",
-    "codex-primary-runtime",
-  );
-  if (await pathExists(path.join(defaultRuntimeDir, "runtime.json"))) {
-    return defaultRuntimeDir;
-  }
-
-  return null;
-}
-
-async function resolveArtifactRuntimeSource(): Promise<string | null> {
-  const fromEnv = process.env.COWORK_ARTIFACT_RUNTIME_DIR?.trim();
-  const isUsable = async (dir: string): Promise<boolean> =>
-    (await pathExists(path.join(dir, "runtime.json"))) ||
-    (await pathExists(path.join(dir, "node", "node_modules", "@oai", "artifact-tool")));
-
-  if (fromEnv) {
-    const resolved = path.resolve(fromEnv);
-    if (!(await isUsable(resolved))) {
-      throw new Error(
-        `COWORK_ARTIFACT_RUNTIME_DIR does not contain an artifact runtime tree: ${resolved}`,
-      );
-    }
-    return resolved;
-  }
-
-  const defaultRuntimeDir = path.join(os.homedir(), ".cache", "cowork", "artifact-runtime");
-  return (await isUsable(defaultRuntimeDir)) ? defaultRuntimeDir : null;
 }
 
 async function syncCopiedDir(opts: {
@@ -481,11 +428,12 @@ async function main() {
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
   const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
-  const shouldBundleCodexPrimaryRuntime = process.env.COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME === "1";
   const cachePath = path.join(distDir, `.desktop-resources-cache-${platform}-${arch}.json`);
 
   await fs.mkdir(distDir, { recursive: true });
   await rmrf(path.join(distDir, "server"));
+  await rmrf(path.join(distDir, "codex-primary-runtime"));
+  await rmrf(path.join(distDir, "artifact-runtime"));
 
   const cache = await loadCache(cachePath);
 
@@ -504,32 +452,9 @@ async function main() {
   const configSrc = path.join(root, "config");
   const skillsSrc = path.join(root, "skills");
   const docsSrc = path.join(root, "docs");
-  const codexPrimaryRuntimeSource = shouldBundleCodexPrimaryRuntime
-    ? await resolveCodexPrimaryRuntimeSource()
-    : null;
-  if (shouldBundleCodexPrimaryRuntime && !codexPrimaryRuntimeSource) {
-    throw new Error(
-      "COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME=1 but no Codex primary runtime cache was found. Set COWORK_CODEX_PRIMARY_RUNTIME_DIR or run the Codex runtime setup first.",
-    );
-  }
-  const shouldBundleArtifactRuntime = process.env.COWORK_BUNDLE_ARTIFACT_RUNTIME === "1";
-  const artifactRuntimeSource = shouldBundleArtifactRuntime
-    ? await resolveArtifactRuntimeSource()
-    : null;
-  if (shouldBundleArtifactRuntime && !artifactRuntimeSource) {
-    throw new Error(
-      "COWORK_BUNDLE_ARTIFACT_RUNTIME=1 but no artifact runtime cache was found. Set COWORK_ARTIFACT_RUNTIME_DIR or run `bun run setup:artifact-runtime` first.",
-    );
-  }
   const promptsFingerprint = await fingerprintInputs([promptsSrc], root);
   const configFingerprint = await fingerprintInputs([configSrc], root);
   const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
-  const codexPrimaryRuntimeFingerprint = codexPrimaryRuntimeSource
-    ? await fingerprintInputs([codexPrimaryRuntimeSource], codexPrimaryRuntimeSource)
-    : null;
-  const artifactRuntimeFingerprint = artifactRuntimeSource
-    ? await fingerprintInputs([artifactRuntimeSource], artifactRuntimeSource)
-    : null;
   const foundationModelsSdkInputs = shouldBundleFoundationModelsSdk(platform, arch)
     ? await ensureFoundationModelsSdkInputs(root)
     : null;
@@ -567,14 +492,6 @@ async function main() {
   const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
-  const compiledManagedSofficeHelperPath = path.join(
-    desktopBinariesDir,
-    MANAGED_SOFFICE_HELPER_RELATIVE_PATH,
-  );
-  const bundledManagedSofficeHelperPath = path.join(
-    path.dirname(bundledEntrypointPath),
-    MANAGED_SOFFICE_HELPER_RELATIVE_PATH,
-  );
   const useBundledBunRuntime = shouldUseBundledBunRuntime(platform, arch);
   const bundledBunRuntimeVersion = useBundledBunRuntime
     ? resolveBundledBunRuntimeVersion(target)
@@ -588,10 +505,8 @@ async function main() {
     !(await pathExists(sidecarManifestPath)) ||
     (useBundledBunRuntime
       ? !(await pathExists(bundledBunPath)) ||
-        !(await pathExists(bundledEntrypointPath)) ||
-        !(await pathExists(bundledManagedSofficeHelperPath))
-      : !(await pathExists(sidecarOutfile)) ||
-        !(await pathExists(compiledManagedSofficeHelperPath)));
+        !(await pathExists(bundledEntrypointPath))
+      : !(await pathExists(sidecarOutfile)));
 
   if (sidecarNeedsBuild) {
     const entry = path.join(root, "src", "server", "index.ts");
@@ -621,11 +536,6 @@ async function main() {
 
       const { executablePath, version } = await ensureBundledBunRuntime(root, target);
       await fs.copyFile(executablePath, bundledBunPath);
-      await fs.mkdir(path.dirname(bundledManagedSofficeHelperPath), { recursive: true });
-      await fs.copyFile(
-        path.join(root, "src", "managedSofficeRuntime", MANAGED_SOFFICE_HELPER_RELATIVE_PATH),
-        bundledManagedSofficeHelperPath,
-      );
       console.log(
         `[resources] sidecar: rebuilt ${path.relative(root, bundledEntrypointPath)} with Bun runtime v${version}`,
       );
@@ -658,11 +568,6 @@ async function main() {
         cwd: root,
         env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
       });
-      await fs.mkdir(path.dirname(compiledManagedSofficeHelperPath), { recursive: true });
-      await fs.copyFile(
-        path.join(root, "src", "managedSofficeRuntime", MANAGED_SOFFICE_HELPER_RELATIVE_PATH),
-        compiledManagedSofficeHelperPath,
-      );
       console.log(`[resources] sidecar: rebuilt ${path.relative(root, sidecarOutfile)}`);
     }
 
@@ -677,8 +582,6 @@ async function main() {
   const promptsDest = path.join(distDir, "prompts");
   const configDest = path.join(distDir, "config");
   const skillsDest = path.join(distDir, "skills");
-  const codexPrimaryRuntimeDest = path.join(distDir, "codex-primary-runtime");
-  const artifactRuntimeDest = path.join(distDir, "artifact-runtime");
 
   await syncCopiedDir({
     label: "prompts",
@@ -703,34 +606,6 @@ async function main() {
     previousFingerprint: cache?.skillsFingerprint ?? null,
     nextFingerprint: skillsFingerprint,
   });
-
-  if (codexPrimaryRuntimeSource && codexPrimaryRuntimeFingerprint) {
-    await syncCopiedDir({
-      label: "codex primary runtime",
-      src: codexPrimaryRuntimeSource,
-      dest: codexPrimaryRuntimeDest,
-      previousFingerprint: cache?.codexPrimaryRuntimeFingerprint ?? null,
-      nextFingerprint: codexPrimaryRuntimeFingerprint,
-    });
-  } else {
-    await rmrf(codexPrimaryRuntimeDest);
-    await fs.mkdir(codexPrimaryRuntimeDest, { recursive: true });
-    console.log("[resources] codex primary runtime: disabled");
-  }
-
-  if (artifactRuntimeSource && artifactRuntimeFingerprint) {
-    await syncCopiedDir({
-      label: "artifact runtime",
-      src: artifactRuntimeSource,
-      dest: artifactRuntimeDest,
-      previousFingerprint: cache?.artifactRuntimeFingerprint ?? null,
-      nextFingerprint: artifactRuntimeFingerprint,
-    });
-  } else {
-    await rmrf(artifactRuntimeDest);
-    await fs.mkdir(artifactRuntimeDest, { recursive: true });
-    console.log("[resources] artifact runtime: disabled");
-  }
 
   await syncFoundationModelsSdk({
     root,
@@ -782,8 +657,6 @@ async function main() {
     promptsFingerprint,
     configFingerprint,
     skillsFingerprint,
-    codexPrimaryRuntimeFingerprint,
-    artifactRuntimeFingerprint,
     foundationModelsSdkFingerprint,
     windowsAiElectronFingerprint,
     windowsSandboxHelperFingerprint,

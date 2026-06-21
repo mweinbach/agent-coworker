@@ -21,7 +21,6 @@ import {
   writeMockAppServer,
 } from "./fixtures/codexAppServerMock";
 import {
-  expectedManagedSofficeShimPath,
   installCodexAppServerTestHooks,
   makeConfig,
   readCapturedRequests,
@@ -52,78 +51,17 @@ describe("codex app-server runtime", () => {
       maxSteps: 1,
       toolEnv: {
         PATH: "/tmp/cowork-managed-bin",
-        COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+        COWORK_TEST_TOOL_ENV: "preserved",
       },
     });
 
     expect(receivedOpts?.env).toMatchObject({
       PATH: "/tmp/cowork-managed-bin",
-      COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+      COWORK_TEST_TOOL_ENV: "preserved",
     });
   });
 
-  test.serial("prepares managed soffice env and instructions for app-server turns", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-soffice-"));
-    const home = path.join(dir, "home");
-    const capturePath = path.join(dir, "requests.jsonl");
-    await fs.mkdir(home, { recursive: true });
-    const previousHome = process.env.HOME;
-    process.env.HOME = home;
-    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
-
-    let receivedOpts:
-      | Parameters<
-          NonNullable<Parameters<typeof codexAppServerClientInternal.setClientFactoryForTests>[0]>
-        >[0]
-      | null = null;
-    codexAppServerClientInternal.setClientFactoryForTests(async (opts) => {
-      receivedOpts = opts;
-      return createMockClient();
-    });
-
-    try {
-      const runtime = createRuntime(makeConfig(dir));
-      await runtime.runTurn({
-        config: makeConfig(dir),
-        system: "You are Codex.",
-        messages: [{ role: "user", content: "Say hi" }],
-        tools: {},
-        maxSteps: 1,
-      });
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-    }
-
-    const shimDir = path.join(home, ".cache", "cowork", "libreoffice", "bin");
-    const shimPath = expectedManagedSofficeShimPath(shimDir);
-    expect(receivedOpts?.env?.COWORK_SOFFICE).toBe(shimPath);
-    expect(receivedOpts?.env?.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
-    const pathEnvKey = Object.keys(receivedOpts?.env ?? {}).find(
-      (key) => key.toLowerCase() === "path",
-    );
-    expect(pathEnvKey ? receivedOpts?.env?.[pathEnvKey]?.split(path.delimiter)[0] : undefined).toBe(
-      shimDir,
-    );
-
-    const requests = await readCapturedRequests(capturePath);
-    const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
-    expect(startParams?.baseInstructions).toContain("Managed LibreOffice Runtime");
-    expect(startParams?.baseInstructions).toContain(shimPath);
-    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
-      | { sandboxPolicy?: { writableRoots?: string[] } }
-      | undefined;
-    expect(turnStart?.sandboxPolicy?.writableRoots ?? []).toContain(
-      canonicalizeRoot(path.join(home, ".cache", "cowork", "libreoffice")),
-    );
-    if (process.platform === "win32") {
-      expect(startParams?.baseInstructions).toContain(`$env:PATH = '${shimDir};' + $env:PATH`);
-    } else {
-      expect(startParams?.baseInstructions).toContain(`PATH=${shimDir}:$PATH`);
-    }
-  });
-
-  test.serial("adds artifact runtime dependency instructions for app-server turns", async () => {
+  test.serial("adds Cowork runtime dependency instructions for app-server turns", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-runtime-"));
     const capturePath = path.join(dir, "requests.jsonl");
     const nodeModulesPath = path.join(dir, "runtime", "node", "node_modules");
@@ -146,40 +84,39 @@ describe("codex app-server runtime", () => {
       maxSteps: 1,
       toolEnv: {
         PATH: "/tmp/cowork-managed-bin",
-        COWORK_SOFFICE: path.join(dir, "soffice"),
-        COWORK_ARTIFACT_RUNTIME_NODE: nodePath,
-        COWORK_ARTIFACT_RUNTIME_NODE_MODULES: nodeModulesPath,
-        COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: resolverPath,
+        COWORK_RUNTIME_NODE: nodePath,
+        COWORK_RUNTIME_NODE_MODULES: nodeModulesPath,
+        COWORK_RUNTIME_NODE_RESOLVER: resolverPath,
       },
     });
 
     const requests = await readCapturedRequests(capturePath);
     const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
-    expect(startParams?.baseInstructions).toContain("Artifact Runtime Dependencies");
+    expect(startParams?.baseInstructions).toContain("Cowork Runtime");
     expect(startParams?.baseInstructions).toContain(nodePath);
-    expect(startParams?.baseInstructions).toContain("bare imports");
-    expect(startParams?.baseInstructions).toContain('import "@oai/artifact-tool"');
+    expect(startParams?.baseInstructions).toContain("Bare Node imports");
+    expect(startParams?.baseInstructions).toContain("@oai/artifact-tool");
     expect(startParams?.baseInstructions).not.toContain(
       process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",
     );
   });
 
-  test("includes artifact runtime dependency paths in app-server pool fingerprints", () => {
+  test("includes Cowork runtime dependency paths in app-server pool fingerprints", () => {
     const base = codexAppServerClientInternal.pooledEnvFingerprint({
       PATH: "/bin",
-      COWORK_ARTIFACT_RUNTIME_NODE: "/runtime/node/bin/node",
-      COWORK_ARTIFACT_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-a",
-      COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
+      COWORK_RUNTIME_NODE: "/runtime/node/bin/node",
+      COWORK_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-a",
+      COWORK_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
     });
     const changed = codexAppServerClientInternal.pooledEnvFingerprint({
       PATH: "/bin",
-      COWORK_ARTIFACT_RUNTIME_NODE: "/runtime/node/bin/node",
-      COWORK_ARTIFACT_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-b",
-      COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
+      COWORK_RUNTIME_NODE: "/runtime/node/bin/node",
+      COWORK_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-b",
+      COWORK_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
     });
 
     expect(base).not.toBe(changed);
-    expect(base).toContain("COWORK_ARTIFACT_RUNTIME_NODE_MODULES");
+    expect(base).toContain("COWORK_RUNTIME_NODE_MODULES");
   });
 
   test.serial("initializes app-server with the Cowork package version", async () => {

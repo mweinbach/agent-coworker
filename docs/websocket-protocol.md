@@ -816,7 +816,7 @@ Changes in `7.34`:
 
 Changes in `7.33`:
 
-- Added `cowork/runtime/libreoffice/check`, which returns `{ status }` for the Cowork-managed LibreOffice `soffice` shim and can run an optional PDF conversion smoke test with `smoke: true`.
+- `cowork/runtime/libreoffice/check` returns `{ status }` for the managed headless LibreOffice launcher and can run a real PDF conversion smoke test with `smoke: true`. A missing or failing launcher means the active unified runtime must be reinstalled or rolled back; Cowork never falls back to host `soffice`.
 - Runtime subprocesses now receive the harness-prepared tool environment so managed executables such as `soffice` resolve consistently across Antigravity, Codex app-server, and local tool execution.
 
 Changes in `7.32`:

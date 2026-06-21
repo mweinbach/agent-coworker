@@ -173,6 +173,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
 
   const marketplaceName = BUILT_IN_MARKETPLACE_REPO;
   const overrides = await readPluginOverrides(opts.config);
+  const catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
 
   if (!opts.force) {
     const state = await readState(stateFile);
@@ -181,6 +182,9 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       state &&
       state.marketplace === marketplaceName &&
       requestedPluginIds.every((pluginId) => state.plugins.includes(pluginId)) &&
+      requestedPluginIds.every((pluginId) =>
+        catalog.plugins.some((plugin) => plugin.id === pluginId && plugin.scope === "user"),
+      ) &&
       requestedPluginIds.every((pluginId) => !isDefaultPluginRemoved(pluginId, overrides))
     ) {
       return {
@@ -202,7 +206,6 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
 
   opts.log?.(`Ensuring default marketplace plugins in ${opts.config.userPluginsDir ?? "(none)"}`);
 
-  const catalog = await buildPluginCatalogSnapshot(opts.config, { fetchImpl });
   for (const pluginSpec of pluginSpecs) {
     const pluginId = pluginSpec.id;
     if (!opts.force && isDefaultPluginRemoved(pluginId, overrides)) {

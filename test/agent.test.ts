@@ -6,7 +6,6 @@ import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
 import { __internal as agentInternal, createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
-import { canonicalizeRoot } from "../src/platform/sandbox/policy";
 import { SessionCostTracker } from "../src/session/costTracker";
 import { buildTurnSystemPrompt } from "../src/turnSystemPrompt";
 import type { AgentConfig } from "../src/types";
@@ -37,10 +36,6 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     observabilityEnabled: false,
     ...overrides,
   };
-}
-
-function expectedManagedSofficeShimPath(shimDir: string): string {
-  return path.join(shimDir, process.platform === "win32" ? "soffice.cmd" : "soffice");
 }
 
 async function makeTempWorkspaceConfig(
@@ -246,7 +241,7 @@ describe("runTurn", () => {
         enableMcp: true,
         toolEnv: {
           PATH: "/tmp/cowork-managed-bin",
-          COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+          COWORK_TEST_TOOL_ENV: "preserved",
         },
         system:
           "Base system prompt\nMCP tool names are namespaced as `mcp__{serverName}__{toolName}`.",
@@ -264,7 +259,7 @@ describe("runTurn", () => {
     expect(runtimeParams.tools).not.toHaveProperty("read");
     expect(runtimeParams.tools).not.toHaveProperty("usage");
     expect(runtimeParams.tools).not.toHaveProperty("webFetch");
-    expect(runtimeParams.toolEnv.COWORK_SOFFICE).toBe("/tmp/cowork-managed-bin/soffice");
+    expect(runtimeParams.toolEnv.COWORK_TEST_TOOL_ENV).toBe("preserved");
     expect(String(runtimeParams.toolEnv.PATH).split(path.delimiter)).toContain(
       "/tmp/cowork-managed-bin",
     );
@@ -313,161 +308,7 @@ describe("runTurn", () => {
     expect(runtimeParams.tools).not.toHaveProperty("edit");
   });
 
-  for (const scenario of [
-    {
-      label: "Gemini Interactions",
-      config: (workspaceRoot: string, homeDir: string) =>
-        makeConfig({
-          provider: "google",
-          runtime: "google-interactions",
-          model: "gemini-3-flash-preview",
-          preferredChildModel: "gemini-3-flash-preview",
-          workingDirectory: workspaceRoot,
-          projectCoworkDir: path.join(workspaceRoot, ".cowork"),
-          userCoworkDir: path.join(homeDir, ".cowork"),
-          skillsDirs: [path.join(homeDir, ".cowork", "skills")],
-        }),
-    },
-    {
-      label: "OpenAI Responses",
-      config: (workspaceRoot: string, homeDir: string) =>
-        makeConfig({
-          provider: "openai",
-          runtime: "openai-responses",
-          model: "gpt-5.4",
-          preferredChildModel: "gpt-5.4",
-          workingDirectory: workspaceRoot,
-          projectCoworkDir: path.join(workspaceRoot, ".cowork"),
-          userCoworkDir: path.join(homeDir, ".cowork"),
-          skillsDirs: [path.join(homeDir, ".cowork", "skills")],
-        }),
-    },
-    {
-      label: "PI",
-      config: (workspaceRoot: string, homeDir: string) =>
-        makeConfig({
-          provider: "anthropic",
-          runtime: "pi",
-          model: "claude-opus-4-6",
-          preferredChildModel: "claude-opus-4-6",
-          workingDirectory: workspaceRoot,
-          projectCoworkDir: path.join(workspaceRoot, ".cowork"),
-          userCoworkDir: path.join(homeDir, ".cowork"),
-          skillsDirs: [path.join(homeDir, ".cowork", "skills")],
-        }),
-    },
-  ]) {
-    test(`prepares managed soffice env for ${scenario.label} turns`, async () => {
-      const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-turn-soffice-"));
-      const homeDir = path.join(workspaceRoot, "home");
-      await fs.mkdir(homeDir, { recursive: true });
-      const config = scenario.config(workspaceRoot, homeDir);
-      const runtimeRunTurn = mock(async (input: any) => ({
-        text: "ok",
-        responseMessages: [{ role: "assistant", content: "ok" }],
-        providerState: { provider: input.config.provider, model: input.config.model },
-      }));
-      const createRuntimeForTurn = mock((_config: AgentConfig) => ({
-        name: config.runtime ?? "pi",
-        runTurn: runtimeRunTurn,
-      }));
-      const createToolsForTurn = mock((_ctx: any) => ({
-        bash: { type: "builtin" },
-      }));
-      const runTurnForRuntime = createRunTurn({
-        createRuntime: createRuntimeForTurn,
-        createTools: createToolsForTurn,
-        loadMCPServers: mockLoadMCPServers,
-        loadMCPTools: mockLoadMCPTools,
-      });
-      const env = { PATH: "/usr/bin" };
-
-      await runTurnForRuntime(
-        makeParams({
-          config,
-          toolEnv: env,
-        }),
-      );
-
-      const shimDir = path.join(homeDir, ".cache", "cowork", "libreoffice", "bin");
-      const shimPath = expectedManagedSofficeShimPath(shimDir);
-      const managedRoot = path.join(homeDir, ".cache", "cowork", "libreoffice");
-      const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
-      expect(toolCtx.toolEnv.COWORK_SOFFICE).toBe(shimPath);
-      expect(toolCtx.toolEnv.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
-      expect(toolCtx.toolEnv.PATH.split(path.delimiter)[0]).toBe(shimDir);
-      expect(toolCtx.sandboxPolicy.writableRoots).toContain(canonicalizeRoot(managedRoot));
-
-      const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-      expect(runtimeParams.toolEnv.COWORK_SOFFICE).toBe(shimPath);
-      expect(runtimeParams.system).toContain("## Managed LibreOffice Runtime");
-      expect(runtimeParams.system).toContain(shimPath);
-    });
-  }
-
-  test("prepares managed soffice env when callers omit toolEnv", async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-turn-soffice-fallback-"));
-    const homeDir = path.join(workspaceRoot, "home");
-    await fs.mkdir(homeDir, { recursive: true });
-    const config = makeConfig({
-      workingDirectory: workspaceRoot,
-      projectCoworkDir: path.join(workspaceRoot, ".cowork"),
-      userCoworkDir: path.join(homeDir, ".cowork"),
-      skillsDirs: [path.join(homeDir, ".cowork", "skills")],
-    });
-    const previousSoffice = process.env.COWORK_SOFFICE;
-    const previousManagedSofficeShim = process.env.COWORK_MANAGED_SOFFICE_SHIM;
-    const previousManagedSofficeShimDir = process.env.COWORK_MANAGED_SOFFICE_SHIM_DIR;
-    delete process.env.COWORK_SOFFICE;
-    delete process.env.COWORK_MANAGED_SOFFICE_SHIM;
-    delete process.env.COWORK_MANAGED_SOFFICE_SHIM_DIR;
-
-    try {
-      const runtimeRunTurn = mock(async (input: any) => ({
-        text: "ok",
-        responseMessages: [{ role: "assistant", content: "ok" }],
-        providerState: { provider: input.config.provider, model: input.config.model },
-      }));
-      const createRuntimeForTurn = mock((_config: AgentConfig) => ({
-        name: "google-interactions" as const,
-        runTurn: runtimeRunTurn,
-      }));
-      const createToolsForTurn = mock((_ctx: any) => ({
-        bash: { type: "builtin" },
-      }));
-      const runTurnForRuntime = createRunTurn({
-        createRuntime: createRuntimeForTurn,
-        createTools: createToolsForTurn,
-        loadMCPServers: mockLoadMCPServers,
-        loadMCPTools: mockLoadMCPTools,
-      });
-
-      await runTurnForRuntime(makeParams({ config }));
-
-      const shimDir = path.join(homeDir, ".cache", "cowork", "libreoffice", "bin");
-      const shimPath = expectedManagedSofficeShimPath(shimDir);
-      const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
-      expect(toolCtx.toolEnv.COWORK_SOFFICE).toBe(shimPath);
-      expect(toolCtx.toolEnv.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
-
-      const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-      expect(runtimeParams.toolEnv.COWORK_SOFFICE).toBe(shimPath);
-      expect(runtimeParams.system).toContain("## Managed LibreOffice Runtime");
-      expect(runtimeParams.system).toContain(shimPath);
-    } finally {
-      if (previousSoffice === undefined) delete process.env.COWORK_SOFFICE;
-      else process.env.COWORK_SOFFICE = previousSoffice;
-      if (previousManagedSofficeShim === undefined) delete process.env.COWORK_MANAGED_SOFFICE_SHIM;
-      else process.env.COWORK_MANAGED_SOFFICE_SHIM = previousManagedSofficeShim;
-      if (previousManagedSofficeShimDir === undefined) {
-        delete process.env.COWORK_MANAGED_SOFFICE_SHIM_DIR;
-      } else {
-        process.env.COWORK_MANAGED_SOFFICE_SHIM_DIR = previousManagedSofficeShimDir;
-      }
-    }
-  });
-
-  test("adds artifact runtime dependency instructions when runtime node modules are available", async () => {
+  test("adds Cowork runtime dependency instructions when runtime node modules are available", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-turn-artifact-runtime-"));
     const nodeModulesPath = path.join(workspaceRoot, "artifact-runtime", "node", "node_modules");
     const nodePath = path.join(
@@ -512,22 +353,21 @@ describe("runTurn", () => {
         config,
         toolEnv: {
           PATH: "/usr/bin",
-          COWORK_SOFFICE: path.join(workspaceRoot, "soffice"),
-          COWORK_ARTIFACT_RUNTIME_NODE: nodePath,
-          COWORK_ARTIFACT_RUNTIME_NODE_MODULES: nodeModulesPath,
-          COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: resolverPath,
+          COWORK_RUNTIME_NODE: nodePath,
+          COWORK_RUNTIME_NODE_MODULES: nodeModulesPath,
+          COWORK_RUNTIME_NODE_RESOLVER: resolverPath,
         },
       }),
     );
 
     const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
-    expect(toolCtx.toolEnv.COWORK_ARTIFACT_RUNTIME_NODE_MODULES).toBe(nodeModulesPath);
+    expect(toolCtx.toolEnv.COWORK_RUNTIME_NODE_MODULES).toBe(nodeModulesPath);
 
     const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-    expect(runtimeParams.system).toContain("## Artifact Runtime Dependencies");
+    expect(runtimeParams.system).toContain("## Cowork Runtime");
     expect(runtimeParams.system).toContain(nodePath);
-    expect(runtimeParams.system).toContain("artifact runtime");
-    expect(runtimeParams.system).toContain('import "@oai/artifact-tool"');
+    expect(runtimeParams.system).toContain("versioned runtime");
+    expect(runtimeParams.system).toContain("@oai/artifact-tool");
     expect(runtimeParams.system).not.toContain(
       process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",
     );

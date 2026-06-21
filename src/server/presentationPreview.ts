@@ -2,11 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ARTIFACT_RUNTIME_ENV_NODE } from "../artifactRuntime/constants";
-import {
-  bundledRuntimeDirFromOptions,
-  discoverArtifactRuntimeEnv,
-} from "../artifactRuntime/runtimeDiscovery";
+import { prepareCoworkRuntimeToolEnv } from "../coworkRuntime";
+import { buildPluginCatalogSnapshot } from "../plugins";
+import type { AgentConfig } from "../types";
 import { runCommand } from "./sessionBackup/command";
 import { resolveWorkspaceFilePath } from "./spreadsheetPreview";
 
@@ -23,6 +21,7 @@ export type PresentationPreviewRequest = {
   cwd: string;
   filePath: string;
   builtInDir: string;
+  config?: AgentConfig;
   env?: Record<string, string | undefined>;
 };
 
@@ -51,16 +50,28 @@ async function resolvePresentationRuntimeEnv(
 ): Promise<{ nodeBin: string; env: NodeJS.ProcessEnv }> {
   const baseEnv: NodeJS.ProcessEnv = { ...process.env, ...requestEnv };
   const home = baseEnv.HOME || baseEnv.USERPROFILE || os.homedir();
-  const runtimeEnv = await discoverArtifactRuntimeEnv({
-    home,
-    env: baseEnv,
-    bundledRuntimeDir: bundledRuntimeDirFromOptions({ env: baseEnv }),
-  });
-  const env: NodeJS.ProcessEnv = { ...baseEnv, ...runtimeEnv };
+  const env = await prepareCoworkRuntimeToolEnv({ homedir: home, env: baseEnv });
   return {
-    nodeBin: env[ARTIFACT_RUNTIME_ENV_NODE] || "node",
+    nodeBin: env.COWORK_RUNTIME_NODE || "node",
     env,
   };
+}
+
+async function resolveMarketplacePresentationScript(
+  config: AgentConfig | undefined,
+): Promise<string | null> {
+  if (!config) return null;
+  const catalog = await buildPluginCatalogSnapshot(config);
+  for (const plugin of catalog.plugins) {
+    if (!plugin.enabled) continue;
+    const skill = plugin.skills.find(
+      (candidate) => candidate.rawName === "presentations" && candidate.enabled,
+    );
+    if (!skill) continue;
+    const candidate = path.join(skill.rootDir, "scripts", "render_artifact_slide.mjs");
+    if (await fs.stat(candidate).catch(() => null)) return candidate;
+  }
+  return null;
 }
 
 export async function previewPresentationFile(
@@ -94,18 +105,27 @@ export async function previewPresentationFile(
   }
 
   const { nodeBin, env } = await resolvePresentationRuntimeEnv(request.env);
-  const scriptPath = path.join(
-    request.builtInDir,
-    "skills",
-    "presentations",
-    "scripts",
-    "render_artifact_slide.mjs",
-  );
+  const marketplaceScript = await resolveMarketplacePresentationScript(request.config);
+  const scriptCandidates = [
+    ...(marketplaceScript ? [marketplaceScript] : []),
+    path.join(
+      request.builtInDir,
+      "skills",
+      "presentations",
+      "scripts",
+      "render_artifact_slide.mjs",
+    ),
+  ];
+  const scriptPath =
+    (await Promise.all(
+      scriptCandidates.map(async (candidate) => ({
+        candidate,
+        exists: Boolean(await fs.stat(candidate).catch(() => null)),
+      })),
+    )).find((entry) => entry.exists)?.candidate ?? scriptCandidates[0];
 
   // Check if render script exists
-  try {
-    await fs.stat(scriptPath);
-  } catch {
+  if (!scriptPath || !(await fs.stat(scriptPath).catch(() => null))) {
     return {
       ok: false,
       error: {

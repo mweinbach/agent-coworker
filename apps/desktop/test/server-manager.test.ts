@@ -323,9 +323,7 @@ describe("desktop server manager startup mode", () => {
     expect(env.COWORK_BOOTSTRAP_DEFAULT_SKILLS).toBe(
       process.env.COWORK_BOOTSTRAP_DEFAULT_SKILLS ?? "1",
     );
-    expect(env.COWORK_RUNTIME_ALLOW_NETWORK).toBe(
-      process.env.COWORK_RUNTIME_ALLOW_NETWORK ?? "1",
-    );
+    expect(env.COWORK_RUNTIME_ALLOW_NETWORK).toBe(process.env.COWORK_RUNTIME_ALLOW_NETWORK ?? "1");
     expect(env.COWORK_HARNESS_TERMINAL_LOGS).toBe(
       process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
     );

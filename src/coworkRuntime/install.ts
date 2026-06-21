@@ -20,10 +20,7 @@ export function installedRuntimeDir(version: string, home = os.homedir()): strin
   return path.join(coworkRuntimeRoot(home), version);
 }
 
-async function writeCurrentPointer(
-  root: string,
-  pointer: InstalledRuntimePointer,
-): Promise<void> {
+async function writeCurrentPointer(root: string, pointer: InstalledRuntimePointer): Promise<void> {
   const destination = path.join(root, CURRENT_RUNTIME_FILE);
   const temporary = `${destination}.tmp-${randomUUID()}`;
   await fs.writeFile(temporary, `${JSON.stringify(pointer, null, 2)}\n`, "utf8");
@@ -73,9 +70,9 @@ export async function resolveCurrentRuntime(home = os.homedir()): Promise<string
   return stat?.isDirectory() ? runtimeDir : null;
 }
 
-export async function listInstalledRuntimes(home = os.homedir()): Promise<
-  Array<{ version: string; path: string; current: boolean }>
-> {
+export async function listInstalledRuntimes(
+  home = os.homedir(),
+): Promise<Array<{ version: string; path: string; current: boolean }>> {
   const root = coworkRuntimeRoot(home);
   const current = await resolveCurrentRuntime(home).catch(() => null);
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
@@ -153,7 +150,9 @@ export async function installRuntimeArchive(opts: {
       host: opts.host,
     });
     if (!stagedVerification.ok || !stagedVerification.manifest) {
-      throw new Error(`Extracted runtime failed verification:\n${stagedVerification.errors.join("\n")}`);
+      throw new Error(
+        `Extracted runtime failed verification:\n${stagedVerification.errors.join("\n")}`,
+      );
     }
     const manifest = stagedVerification.manifest;
     if (opts.expectedVersion && manifest.version !== opts.expectedVersion) {
@@ -162,7 +161,9 @@ export async function installRuntimeArchive(opts: {
       );
     }
     if (opts.expectedAsset && manifest.asset !== opts.expectedAsset) {
-      throw new Error(`Runtime archive contains asset ${manifest.asset}, expected ${opts.expectedAsset}.`);
+      throw new Error(
+        `Runtime archive contains asset ${manifest.asset}, expected ${opts.expectedAsset}.`,
+      );
     }
     destination = installedRuntimeDir(manifest.version, home);
     const existing = await fs.stat(destination).catch(() => null);

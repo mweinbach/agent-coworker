@@ -48,10 +48,7 @@ export function resolveRuntimeAssetForHost(host: RuntimeHost = process): Runtime
   throw new Error(`Cowork runtime is not supported on ${hostKey}.`);
 }
 
-export function assertHostCompatible(
-  asset: RuntimeAssetId,
-  host: RuntimeHost = process,
-): void {
+export function assertHostCompatible(asset: RuntimeAssetId, host: RuntimeHost = process): void {
   const hostKey = `${host.platform}-${host.arch}`;
   if (!compatibleHostsForAsset(asset).includes(hostKey)) {
     throw new Error(`Runtime asset ${asset} is not compatible with ${hostKey}.`);

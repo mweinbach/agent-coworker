@@ -20,7 +20,11 @@ function assertRepository(repository: string): void {
   }
 }
 
-async function downloadToFile(fetchImpl: typeof fetch, url: string, destination: string): Promise<void> {
+async function downloadToFile(
+  fetchImpl: typeof fetch,
+  url: string,
+  destination: string,
+): Promise<void> {
   const response = await fetchImpl(url, { redirect: "follow" });
   if (!response.ok || !response.body) {
     const body = await response.text().catch(() => "");

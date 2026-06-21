@@ -504,8 +504,7 @@ async function main() {
     cache?.bundledBunRuntimeVersion !== bundledBunRuntimeVersion ||
     !(await pathExists(sidecarManifestPath)) ||
     (useBundledBunRuntime
-      ? !(await pathExists(bundledBunPath)) ||
-        !(await pathExists(bundledEntrypointPath))
+      ? !(await pathExists(bundledBunPath)) || !(await pathExists(bundledEntrypointPath))
       : !(await pathExists(sidecarOutfile)));
 
   if (sidecarNeedsBuild) {

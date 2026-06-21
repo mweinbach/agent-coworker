@@ -38,7 +38,8 @@ export function parseRuntimeManifest(value: unknown): CoworkRuntimeManifest {
   const version = requireString(value, "version");
   assertRuntimeVersion(version);
   const createdAt = requireString(value, "createdAt");
-  if (Number.isNaN(Date.parse(createdAt))) throw new Error(`Invalid manifest createdAt: ${createdAt}`);
+  if (Number.isNaN(Date.parse(createdAt)))
+    throw new Error(`Invalid manifest createdAt: ${createdAt}`);
   const assetFileName = requireString(value, "assetFileName");
   if (assetFileName !== runtimeAssetFileName(asset)) {
     throw new Error(`Manifest assetFileName does not match ${asset}: ${assetFileName}`);
@@ -47,7 +48,10 @@ export function parseRuntimeManifest(value: unknown): CoworkRuntimeManifest {
     throw new Error("Runtime manifest source, versions, and paths objects are required.");
   }
   if (!isRecord(value.payload)) throw new Error("Runtime manifest payload object is required.");
-  if (!Array.isArray(value.compatibleHosts) || !value.compatibleHosts.every((v) => typeof v === "string")) {
+  if (
+    !Array.isArray(value.compatibleHosts) ||
+    !value.compatibleHosts.every((v) => typeof v === "string")
+  ) {
     throw new Error("Runtime manifest compatibleHosts must be a string array.");
   }
   if (!Array.isArray(value.components) || !value.components.every(isRecord)) {
@@ -57,7 +61,7 @@ export function parseRuntimeManifest(value: unknown): CoworkRuntimeManifest {
     if (typeof component.id !== "string" || typeof component.path !== "string") {
       throw new Error("Every runtime component requires id and path strings.");
     }
-    if (!( ["built", "generated", "copied"] as unknown[]).includes(component.strategy)) {
+    if (!(["built", "generated", "copied"] as unknown[]).includes(component.strategy)) {
       throw new Error(`Unknown component strategy: ${String(component.strategy)}`);
     }
     assertSafeRelativePath(component.path, `components.${component.id}.path`);

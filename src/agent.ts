@@ -446,9 +446,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       projectRoot: path.dirname(config.projectCoworkDir),
       outputDirectory: config.outputDirectory,
       uploadsDirectory: config.uploadsDirectory,
-      toolRuntimeWritableRoots: [
-        ...resolveAdvancedMemoryWriteRoots(config),
-      ],
+      toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
       targetPaths: params.agentTargetPaths,
     });
 

@@ -90,7 +90,9 @@ export async function buildRuntimeEnv(
   return result;
 }
 
-async function payloadStats(runtimeDir: string): Promise<{ fileCount: number; unpackedBytes: number }> {
+async function payloadStats(
+  runtimeDir: string,
+): Promise<{ fileCount: number; unpackedBytes: number }> {
   let fileCount = 0;
   let unpackedBytes = 0;
   const visit = async (directory: string): Promise<void> => {
@@ -190,7 +192,8 @@ export async function verifyRuntime(opts: {
     else checks[name] = relative;
   }
   for (const key of ["soffice", "libreOffice", "libreOfficeBinary"] as const) {
-    if (!manifest.paths[key]) errors.push(`Runtime is missing required managed LibreOffice path: ${key}.`);
+    if (!manifest.paths[key])
+      errors.push(`Runtime is missing required managed LibreOffice path: ${key}.`);
   }
   if (opts.deep) {
     const stats = await payloadStats(runtimeDir);

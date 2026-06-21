@@ -29,16 +29,17 @@ async function writeFile(filePath: string, content = "fixture"): Promise<void> {
   await fs.writeFile(filePath, content);
 }
 
-async function runtimeArchive(root: string, version: string): Promise<{
+async function runtimeArchive(
+  root: string,
+  version: string,
+): Promise<{
   archivePath: string;
   sha256: string;
 }> {
   const asset = resolveRuntimeAssetForHost(process);
   const windows = asset === "win-x86";
   const nodePath = windows ? "dependencies/node/bin/node.exe" : "dependencies/node/bin/node";
-  const pythonPath = windows
-    ? "dependencies/python/python.exe"
-    : "dependencies/python/bin/python3";
+  const pythonPath = windows ? "dependencies/python/python.exe" : "dependencies/python/bin/python3";
   const sofficePath = windows ? "dependencies/bin/soffice.exe" : "dependencies/bin/soffice";
   const libreOfficeBinary = asset.startsWith("macos-")
     ? "dependencies/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
@@ -55,8 +56,7 @@ async function runtimeArchive(root: string, version: string): Promise<{
     "cowork/node-resolver/register.mjs": "export {};\n",
     [sofficePath]: "managed soffice launcher",
     [libreOfficeBinary]: "private libreoffice executable",
-    "dependencies/libreoffice/cowork-libreoffice.json":
-      '{"schemaVersion":1,"version":"26.2.3"}\n',
+    "dependencies/libreoffice/cowork-libreoffice.json": '{"schemaVersion":1,"version":"26.2.3"}\n',
   };
   const unpackedBytes = Object.values(files).reduce(
     (total, content) => total + Buffer.byteLength(content),
@@ -151,9 +151,13 @@ describe("Cowork unified runtime", () => {
     expect(result?.runtimeEnv.PYTHONDONTWRITEBYTECODE).toBe("1");
     expect(result?.runtimeEnv.COWORK_RUNTIME_SOFFICE).toContain("soffice");
     expect(result?.runtimeEnv).not.toHaveProperty("COWORK_RUNTIME_PLUGINS_DIR");
-    await expect(fs.stat(path.join(home, ".cache", "cowork", "artifact-runtime"))).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(home, ".cache", "cowork", "artifact-runtime")),
+    ).rejects.toThrow();
     await expect(fs.stat(path.join(home, ".cache", "cowork", "libreoffice"))).rejects.toThrow();
-    await expect(fs.stat(path.join(home, ".cowork", "plugins", "workspace-tools"))).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(home, ".cowork", "plugins", "workspace-tools")),
+    ).rejects.toThrow();
     await expect(fs.stat(path.join(home, ".cowork", "skills", "documents"))).rejects.toThrow();
     await fs.access(path.join(home, ".cowork", "plugins", "keep-me", "user.txt"));
     await fs.access(
@@ -203,7 +207,10 @@ describe("Cowork unified runtime", () => {
     );
     expect(catalog.plugins.flatMap((plugin) => plugin.skills)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ rawName: "documents", description: "Marketplace documents fixture" }),
+        expect.objectContaining({
+          rawName: "documents",
+          description: "Marketplace documents fixture",
+        }),
       ]),
     );
     await expect(fs.stat(path.join(result!.runtimeDir, "plugins"))).rejects.toThrow();

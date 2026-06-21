@@ -117,12 +117,14 @@ export async function previewPresentationFile(
     ),
   ];
   const scriptPath =
-    (await Promise.all(
-      scriptCandidates.map(async (candidate) => ({
-        candidate,
-        exists: Boolean(await fs.stat(candidate).catch(() => null)),
-      })),
-    )).find((entry) => entry.exists)?.candidate ?? scriptCandidates[0];
+    (
+      await Promise.all(
+        scriptCandidates.map(async (candidate) => ({
+          candidate,
+          exists: Boolean(await fs.stat(candidate).catch(() => null)),
+        })),
+      )
+    ).find((entry) => entry.exists)?.candidate ?? scriptCandidates[0];
 
   // Check if render script exists
   if (!scriptPath || !(await fs.stat(scriptPath).catch(() => null))) {

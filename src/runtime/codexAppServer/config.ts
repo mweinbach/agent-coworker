@@ -303,9 +303,7 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     projectRoot: path.dirname(params.config.projectCoworkDir),
     outputDirectory: params.config.outputDirectory,
     uploadsDirectory: params.config.uploadsDirectory,
-    toolRuntimeWritableRoots: [
-      ...resolveAdvancedMemoryWriteRoots(params.config),
-    ],
+    toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(params.config)],
     targetPaths: params.agentTargetPaths,
   });
 }

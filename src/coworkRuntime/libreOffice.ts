@@ -76,10 +76,7 @@ async function runProcessCapture(
   });
 }
 
-function envValue(
-  env: Record<string, string | undefined>,
-  name: string,
-): string | undefined {
+function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
   const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
   return key ? env[key] : undefined;
 }
@@ -157,19 +154,20 @@ async function checkLibreOfficeCapabilityWithRunner(
         { env, timeoutMs: 180_000 },
       );
       const stat = await fs.stat(outputPath).catch(() => null);
-      smoke = stat?.isFile() && stat.size > 0
-        ? {
-            ok: true,
-            durationMs: Date.now() - startedAt,
-            sizeBytes: stat.size,
-          }
-        : {
-            ok: false,
-            durationMs: Date.now() - startedAt,
-            error:
-              processErrorMessage(result) ||
-              `Managed headless LibreOffice did not produce ${outputPath}.`,
-          };
+      smoke =
+        stat?.isFile() && stat.size > 0
+          ? {
+              ok: true,
+              durationMs: Date.now() - startedAt,
+              sizeBytes: stat.size,
+            }
+          : {
+              ok: false,
+              durationMs: Date.now() - startedAt,
+              error:
+                processErrorMessage(result) ||
+                `Managed headless LibreOffice did not produce ${outputPath}.`,
+            };
     } catch (error) {
       smoke = {
         ok: false,
@@ -195,10 +193,7 @@ async function checkLibreOfficeCapabilityWithRunner(
 }
 
 export async function checkLibreOfficeCapability(
-  opts: {
-    env?: Record<string, string | undefined>;
-    smoke?: boolean;
-  } = {},
+  opts: { env?: Record<string, string | undefined>; smoke?: boolean } = {},
 ): Promise<LibreOfficeCapabilityDiagnostic> {
   return await checkLibreOfficeCapabilityWithRunner(opts, runProcessCapture);
 }

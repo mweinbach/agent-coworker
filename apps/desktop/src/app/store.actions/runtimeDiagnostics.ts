@@ -55,8 +55,7 @@ export function createRuntimeDiagnosticsActions(
             ts: nowIso(),
             kind: "error",
             title: "LibreOffice capability",
-            detail:
-              error instanceof Error ? error.message : "Unable to check managed LibreOffice.",
+            detail: error instanceof Error ? error.message : "Unable to check managed LibreOffice.",
           }),
         }));
       }

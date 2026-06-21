@@ -17,9 +17,7 @@ async function withTmpDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 
 describe("Cowork runtime ZIP extraction", () => {
   test("accepts normalized paths and rejects traversal or absolute paths", () => {
-    expect(normalizeZipEntryName("dependencies/node/bin/node")).toBe(
-      "dependencies/node/bin/node",
-    );
+    expect(normalizeZipEntryName("dependencies/node/bin/node")).toBe("dependencies/node/bin/node");
     for (const unsafe of ["../escape.txt", "a/../../escape.txt", "/etc/passwd", "C:/Windows/x"]) {
       expect(() => normalizeZipEntryName(unsafe)).toThrow();
     }

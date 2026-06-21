@@ -419,6 +419,64 @@ describe("AgentControl.spawn", () => {
     expect(rejected[0]?.reason?.message).toMatch(/active child agents/);
   });
 
+  test("cancelAll waits for pending child spawn registration before settling", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    const loadPromptEntered = Promise.withResolvers<void>();
+    const releaseLoadPrompt = Promise.withResolvers<void>();
+    childSession.cancelAndWaitForSettlement = mock(async () => {
+      childSession.cancel();
+    });
+    const bindings = new Map<string, SessionBinding>([
+      [
+        "root-1",
+        {
+          session: { isAgentOf: () => false, persistenceStatus: "active" },
+          socket: null,
+        },
+      ] as unknown as [string, SessionBinding],
+    ]);
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => {
+        loadPromptEntered.resolve();
+        await releaseLoadPrompt.promise;
+        return "child system prompt";
+      },
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const spawnPromise = control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "worker",
+      message: "start child work",
+    });
+    await loadPromptEntered.promise;
+
+    let cancelResolved = false;
+    const cancelPromise = control.cancelAll("root-1", { timeoutMs: 1_000 }).then(() => {
+      cancelResolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(cancelResolved).toBe(false);
+
+    releaseLoadPrompt.resolve();
+    await spawnPromise;
+    await cancelPromise;
+
+    expect(childSession.cancelAndWaitForSettlement).toHaveBeenCalledTimes(1);
+    expect(cancelResolved).toBe(true);
+  });
+
   test("builds a briefing seed with optional structured context when contextMode is brief", async () => {
     const parentConfig = makeConfig();
     const seedContext: SeededSessionContext = {

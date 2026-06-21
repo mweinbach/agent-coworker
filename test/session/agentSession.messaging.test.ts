@@ -124,14 +124,14 @@ describe("AgentSession", () => {
       );
     });
 
-    test("rechecks task locks before materializing turn content attachments", async () => {
+    test("rolls back inline turn attachments when the task lock closes after write", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-"));
       let taskLookupCount = 0;
       const sessionDb = {
         getActiveTaskForSourceSession: () => null,
         getTaskForThread: () => {
           taskLookupCount += 1;
-          return taskLookupCount <= 2
+          return taskLookupCount < 7
             ? null
             : {
                 id: "task-cancelled",
@@ -166,8 +166,77 @@ describe("AgentSession", () => {
           }),
         );
         expect(events.some((event) => event.type === "user_message")).toBe(false);
+        expect(events.some((event) => event.type === "session_busy")).toBe(false);
         expect(JSON.stringify((session as any).state.allMessages)).not.toContain("late input");
         await expect(fs.readdir(path.join(dir, "uploads"))).rejects.toThrow();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("rolls back all newly-created inline turn attachments without deleting collisions", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-multi-"));
+      const uploadsDir = path.join(dir, "uploads");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(path.join(uploadsDir, "late.txt"), "pre-existing", "utf8");
+      const persistedReasons: string[] = [];
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount < 10
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async ({ reason }: { reason: string }) => {
+          persistedReasons.push(reason);
+          return persistedReasons.length;
+        },
+        persistSessionSnapshot: async (_id: string, _snapshot: unknown, reason: string) => {
+          persistedReasons.push(reason);
+        },
+      };
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+        sessionDb: sessionDb as never,
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-cancelled-content", undefined, [
+          {
+            filename: "late.txt",
+            contentBase64: Buffer.from("late input").toString("base64"),
+            mimeType: "text/plain",
+          },
+          {
+            filename: "second.txt",
+            contentBase64: Buffer.from("second input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ]);
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
+        expect(events.filter((event) => event.type === "session_busy")).toHaveLength(0);
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+          }),
+        );
+        await expect(fs.readFile(path.join(uploadsDir, "late.txt"), "utf8")).resolves.toBe(
+          "pre-existing",
+        );
+        await expect(fs.stat(path.join(uploadsDir, "late_1.txt"))).rejects.toThrow();
+        await expect(fs.stat(path.join(uploadsDir, "second.txt"))).rejects.toThrow();
+        expect(JSON.stringify((session as any).state.allMessages)).not.toContain("late input");
+        expect(JSON.stringify((session as any).state.allMessages)).not.toContain("second input");
+        expect(persistedReasons).toEqual([]);
       } finally {
         await fs.rm(dir, { recursive: true, force: true });
       }
@@ -191,6 +260,54 @@ describe("AgentSession", () => {
         );
       });
     }
+
+    test("locks restarted child-agent sessions through their task-thread parent", async () => {
+      let childSessionId = "";
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: (sessionId: string) =>
+          sessionId === childSessionId
+            ? {
+                sessionId,
+                parentSessionId: "task-thread-parent",
+              }
+            : null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+      childSessionId = session.id;
+
+      await session.sendUserMessage("child should not restart after terminal parent task");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          data: expect.objectContaining({
+            lockKind: "terminal_task_thread",
+            taskId: "task-completed",
+            taskStatus: "completed",
+          }),
+        }),
+      );
+    });
 
     for (const status of TERMINAL_TASK_STATUSES) {
       test(`locks ${status} task threads against new steers`, async () => {
@@ -323,6 +440,33 @@ describe("AgentSession", () => {
           (m: any) => m.role === "assistant" && m.content[0]?.text === "Working on it...",
         ),
       ).toBe(true);
+    });
+
+    test("suppresses abort partial messages and provider state before persistence", async () => {
+      const { session } = makeSession();
+
+      mockRunTurn.mockImplementation(async () => {
+        (session as any).state.abortController?.abort();
+        const error = Object.assign(new Error("Provider aborted after partial output"), {
+          code: "ABORT_ERR" as const,
+          responseMessages: [
+            { role: "assistant", content: [{ type: "text", text: "should not persist" }] },
+          ],
+          providerState: {
+            provider: "google" as const,
+            model: "gemini-3-flash-preview",
+            interactionId: "partial-interaction",
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        throw error;
+      });
+
+      await session.sendUserMessage("trigger abort partial");
+
+      const history = (session as any).state.allMessages;
+      expect(JSON.stringify(history)).not.toContain("should not persist");
+      expect((session as any).state.providerState).toBeNull();
     });
 
     test("records provider failure usage once when runTurn throws with usage", async () => {

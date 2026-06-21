@@ -208,10 +208,48 @@ export type UserMessageAttachmentHelpers = {
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
-    options?: { assertCanMaterialize?: () => void },
+    options?: UserMessageContentBuildOptions,
   ) => Promise<string | Array<Record<string, unknown>>>;
   validateUploadedFileAttachments: (attachments?: readonly FileAttachment[]) => Promise<void>;
 };
+
+export type UserContentMaterializationTransaction = {
+  trackCreatedFile: (filePath: string) => void;
+  trackCreatedDirectory: (dirPath: string) => void;
+  commit: () => void;
+  rollback: () => Promise<void>;
+};
+
+export type UserMessageContentBuildOptions = {
+  assertCanMaterialize?: () => void;
+  materialization?: UserContentMaterializationTransaction;
+};
+
+export function createUserContentMaterializationTransaction(): UserContentMaterializationTransaction {
+  const createdFiles: string[] = [];
+  const createdDirectories: string[] = [];
+  let committed = false;
+  return {
+    trackCreatedFile: (filePath) => {
+      if (!committed) createdFiles.push(filePath);
+    },
+    trackCreatedDirectory: (dirPath) => {
+      if (!committed) createdDirectories.push(dirPath);
+    },
+    commit: () => {
+      committed = true;
+    },
+    rollback: async () => {
+      if (committed) return;
+      for (const filePath of [...createdFiles].reverse()) {
+        await fs.rm(filePath, { force: true }).catch(() => undefined);
+      }
+      for (const dirPath of [...createdDirectories].sort((a, b) => b.length - a.length)) {
+        await fs.rmdir(dirPath).catch(() => undefined);
+      }
+    },
+  };
+}
 
 export function createUserMessageAttachmentHelpers(
   context: SessionContext,
@@ -278,9 +316,10 @@ export function createUserMessageAttachmentHelpers(
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
-    options?: { assertCanMaterialize?: () => void },
+    options?: UserMessageContentBuildOptions,
   ): Promise<string | Array<Record<string, unknown>>> => {
     const assertCanMaterialize = options?.assertCanMaterialize ?? (() => {});
+    const materialization = options?.materialization;
     assertCanMaterialize();
     if (!attachments || attachments.length === 0) {
       return text;
@@ -289,7 +328,10 @@ export function createUserMessageAttachmentHelpers(
     const config = context.state.config;
     let resolvedUploadsDir = await resolveUploadsDirectory();
     assertCanMaterialize();
-    await fs.mkdir(resolvedUploadsDir, { recursive: true });
+    const firstCreatedUploadDir = await fs.mkdir(resolvedUploadsDir, { recursive: true });
+    if (firstCreatedUploadDir) {
+      materialization?.trackCreatedDirectory(path.resolve(firstCreatedUploadDir));
+    }
     resolvedUploadsDir = await resolveUploadsDirectory();
 
     const provider = config.provider;
@@ -344,34 +386,13 @@ export function createUserMessageAttachmentHelpers(
           }
         }
 
-        const filePath = path.resolve(resolvedUploadsDir, finalName);
+        let filePath = path.resolve(resolvedUploadsDir, finalName);
         if (!isPathInside(resolvedUploadsDir, filePath)) {
           throw makeStructuredSessionError(
             "validation_failed",
             `Invalid attachment filename: ${attachment.filename}`,
           );
         }
-
-        diskPath = filePath;
-        try {
-          await fs.access(diskPath);
-          const ext = path.extname(finalName);
-          const base = finalName.slice(0, finalName.length - ext.length);
-          let counter = 1;
-          while (true) {
-            diskPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
-            try {
-              await fs.access(diskPath);
-              counter++;
-            } catch {
-              break;
-            }
-          }
-          finalName = path.basename(diskPath);
-        } catch {
-          // File doesn't exist, use as-is.
-        }
-        usedNames.add(finalName);
 
         const attachmentValidationMessage = getAttachmentValidationMessage([inlineAttachment]);
         if (attachmentValidationMessage) {
@@ -386,7 +407,41 @@ export function createUserMessageAttachmentHelpers(
           );
         }
         assertCanMaterialize();
-        await fs.writeFile(diskPath, decoded);
+        const ext = path.extname(finalName);
+        const base = finalName.slice(0, finalName.length - ext.length);
+        let counter = usedNames.has(finalName) ? 1 : 0;
+        let fileHandle: Awaited<ReturnType<typeof fs.open>> | null = null;
+        while (true) {
+          const candidateName = counter === 0 ? finalName : `${base}_${counter}${ext}`;
+          filePath = path.resolve(resolvedUploadsDir, candidateName);
+          if (!isPathInside(resolvedUploadsDir, filePath)) {
+            throw makeStructuredSessionError(
+              "validation_failed",
+              `Invalid attachment filename: ${attachment.filename}`,
+            );
+          }
+          try {
+            fileHandle = await fs.open(filePath, "wx");
+            finalName = candidateName;
+            diskPath = filePath;
+            break;
+          } catch (error) {
+            if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+            counter++;
+          }
+        }
+        const openedFile = fileHandle;
+        if (!openedFile) {
+          throw new Error("Failed to create attachment file");
+        }
+        materialization?.trackCreatedFile(diskPath);
+        usedNames.add(finalName);
+        try {
+          await openedFile.writeFile(decoded);
+        } finally {
+          await openedFile.close();
+        }
+        assertCanMaterialize();
         contentReadPath = diskPath;
         multimodalData = decoded.toString("base64");
       } else {
@@ -429,6 +484,7 @@ export function createUserMessageAttachmentHelpers(
       if (!multimodalData && contentPartType) {
         assertCanMaterialize();
         multimodalData = (await fs.readFile(contentReadPath)).toString("base64");
+        assertCanMaterialize();
       }
 
       if (multimodalData && contentPartType) {

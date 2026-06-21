@@ -31,11 +31,13 @@ import {
 import { createTurnUsageAggregator } from "./turnUsageAggregator";
 import {
   type ClassifiedTurnError,
+  createUserContentMaterializationTransaction,
   getTurnAttachmentValidationMessage,
   type UserMessageAttachmentHelpers,
 } from "./userMessageAttachments";
 import {
   isAbortLikeError,
+  makeTaskLockAbortError,
   makeTurnId,
   resolveUserInputDisplayText,
 } from "./userMessageTurnHelpers";
@@ -129,14 +131,12 @@ export function createUserMessageTurnRunner(
     context.emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
-  const makeAbortError = (): Error & { code: "ABORT_ERR" } =>
-    Object.assign(new Error("Cancelled by task lock"), { code: "ABORT_ERR" as const });
   const assertCanMaterializeUserContent = () => {
     if (emitTaskLockIfPresent() || context.state.abortController?.signal.aborted) {
       context.state.pendingSteers.splice(0);
       context.state.currentTurnOutcome = "cancelled";
       context.state.acceptingSteers = false;
-      throw makeAbortError();
+      throw makeTaskLockAbortError();
     }
   };
 
@@ -180,11 +180,6 @@ export function createUserMessageTurnRunner(
     }
     const visibleText = displayText ?? resolveUserInputDisplayText(text, attachments);
 
-    if (context.state.persistenceStatus === "closed") {
-      context.state.persistenceStatus = "active";
-      context.queuePersistSessionSnapshot("session.reopened");
-    }
-
     context.state.running = true;
     context.state.abortController = new AbortController();
     context.state.acceptingSteers = true;
@@ -193,11 +188,11 @@ export function createUserMessageTurnRunner(
     context.state.currentTurnId = turnId;
     context.state.turnReferenceInjectionCounter = 0;
     context.state.currentTurnOutcome = "completed";
-    updateSessionExecutionState("running");
     const cause: "user_message" | "command" = visibleText.startsWith("/")
       ? "command"
       : "user_message";
     let lastMessagePreview: string | undefined;
+    let turnAnnounced = false;
     const includeRawChunks = context.state.config.includeRawChunks ?? true;
     const tracker = {
       startedStepCount: 0,
@@ -231,6 +226,52 @@ export function createUserMessageTurnRunner(
       },
     });
     try {
+      // Apply @-mentioned references BEFORE building the user message so a forced
+      // skill's body can be folded into the model-facing text. This is
+      // provider-agnostic: stateful interaction APIs reject synthetic tool-call
+      // history. The user's typed text stays the UI-visible message (`visibleText`).
+      context.state.turnReferencedPlugins = undefined;
+      let skillInjectionText = "";
+      if (references && references.length > 0) {
+        const referencedSkills = await resolveReferencedSkills({ context, references, log });
+        skillInjectionText = renderReferencedSkillsInjection(referencedSkills);
+        const referencedPlugins = await resolveReferencedPlugins(context, references);
+        if (referencedPlugins.length > 0) {
+          context.state.turnReferencedPlugins = referencedPlugins;
+        }
+      }
+      const modelFacingText = skillInjectionText ? `${text}\n\n${skillInjectionText}` : text;
+      const materialization = createUserContentMaterializationTransaction();
+      try {
+        assertCanMaterializeUserContent();
+        const userMessageContent = await buildUserMessageContent(
+          modelFacingText,
+          attachments,
+          inputParts,
+          {
+            assertCanMaterialize: assertCanMaterializeUserContent,
+            materialization,
+          },
+        );
+        assertCanMaterializeUserContent();
+        if (context.state.persistenceStatus === "closed") {
+          context.state.persistenceStatus = "active";
+          context.queuePersistSessionSnapshot("session.reopened");
+        }
+        historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
+        materialization.commit();
+      } catch (error) {
+        await materialization.rollback();
+        throw error;
+      }
+      context.emit({
+        type: "user_message",
+        sessionId: context.id,
+        text: visibleText,
+        clientMessageId,
+      });
+      metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
+      context.queuePersistSessionSnapshot("session.user_message");
       context.emit({
         type: "session_busy",
         sessionId: context.id,
@@ -238,6 +279,8 @@ export function createUserMessageTurnRunner(
         turnId,
         cause,
       });
+      turnAnnounced = true;
+      updateSessionExecutionState("running");
       context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: context.id,
         turnId,
@@ -254,39 +297,6 @@ export function createUserMessageTurnRunner(
         attachmentCount: attachments?.length ?? 0,
         referenceCount: references?.length ?? 0,
       });
-
-      // Apply @-mentioned references BEFORE building the user message so a forced
-      // skill's body can be folded into the model-facing text. This is
-      // provider-agnostic: stateful interaction APIs reject synthetic tool-call
-      // history. The user's typed text stays the UI-visible message (`visibleText`).
-      context.state.turnReferencedPlugins = undefined;
-      let skillInjectionText = "";
-      if (references && references.length > 0) {
-        const referencedSkills = await resolveReferencedSkills({ context, references, log });
-        skillInjectionText = renderReferencedSkillsInjection(referencedSkills);
-        const referencedPlugins = await resolveReferencedPlugins(context, references);
-        if (referencedPlugins.length > 0) {
-          context.state.turnReferencedPlugins = referencedPlugins;
-        }
-      }
-      const modelFacingText = skillInjectionText ? `${text}\n\n${skillInjectionText}` : text;
-      assertCanMaterializeUserContent();
-      const userMessageContent = await buildUserMessageContent(
-        modelFacingText,
-        attachments,
-        inputParts,
-        { assertCanMaterialize: assertCanMaterializeUserContent },
-      );
-      assertCanMaterializeUserContent();
-      historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
-      context.emit({
-        type: "user_message",
-        sessionId: context.id,
-        text: visibleText,
-        clientMessageId,
-      });
-      metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
-      context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
       while (continueSameTurn) {
         const remainingSteps = context.state.maxSteps - tracker.startedStepCount;
@@ -451,8 +461,9 @@ export function createUserMessageTurnRunner(
           : err;
 
       const partialTurnSource = resolvePartialTurnProgressSource(actualErr, err);
+      const abortLike = isAbortLikeError(context, actualErr);
       const partialMessages = getPartialTurnResponseMessages(partialTurnSource);
-      if (partialMessages && partialMessages.length > 0) {
+      if (!abortLike && partialMessages && partialMessages.length > 0) {
         historyManager.appendMessagesToHistory(partialMessages);
         context.queuePersistSessionSnapshot("session.turn_response");
       }
@@ -462,6 +473,7 @@ export function createUserMessageTurnRunner(
       }
       const partialProviderState = getPartialTurnProviderState(partialTurnSource);
       if (
+        !abortLike &&
         partialProviderState &&
         supportsProviderManagedContinuationProvider(context.state.config.provider)
       ) {
@@ -469,44 +481,48 @@ export function createUserMessageTurnRunner(
       }
 
       const msg = context.formatError(actualErr);
-      if (!isAbortLikeError(context, actualErr)) {
+      if (!abortLike) {
         context.state.currentTurnOutcome = "error";
         const classified = classifyTurnError(actualErr);
         context.emitError(classified.code, classified.source, msg);
         lastMessagePreview = normalizePreviewText(msg);
-        context.emitTelemetry(
-          "agent.turn.failed",
-          "error",
-          {
-            sessionId: context.id,
-            turnId,
+        if (turnAnnounced) {
+          context.emitTelemetry(
+            "agent.turn.failed",
+            "error",
+            {
+              sessionId: context.id,
+              turnId,
+              provider: context.state.config.provider,
+              model: context.state.config.model,
+              error: msg,
+            },
+            Date.now() - turnStartedAt,
+          );
+          captureProductEvent("turn_failed", {
+            eventSource: "server",
             provider: context.state.config.provider,
             model: context.state.config.model,
-            error: msg,
-          },
-          Date.now() - turnStartedAt,
-        );
-        captureProductEvent("turn_failed", {
-          eventSource: "server",
-          provider: context.state.config.provider,
-          model: context.state.config.model,
-          status: "failed",
-          errorCategory: classified.code,
-          durationMs: Date.now() - turnStartedAt,
-        });
+            status: "failed",
+            errorCategory: classified.code,
+            durationMs: Date.now() - turnStartedAt,
+          });
+        }
       } else {
         context.state.currentTurnOutcome = "cancelled";
-        context.emitTelemetry(
-          "agent.turn.aborted",
-          "ok",
-          {
-            sessionId: context.id,
-            turnId,
-            provider: context.state.config.provider,
-            model: context.state.config.model,
-          },
-          Date.now() - turnStartedAt,
-        );
+        if (turnAnnounced) {
+          context.emitTelemetry(
+            "agent.turn.aborted",
+            "ok",
+            {
+              sessionId: context.id,
+              turnId,
+              provider: context.state.config.provider,
+              model: context.state.config.model,
+            },
+            Date.now() - turnStartedAt,
+          );
+        }
       }
     } finally {
       persistAggregatedUsage();
@@ -514,32 +530,36 @@ export function createUserMessageTurnRunner(
       context.state.activeSteerHandler = null;
       context.state.pendingSteers.splice(0);
       context.state.turnReferencedPlugins = undefined;
-      metadataManager.updateSessionInfo({
-        executionState: settledExecutionState(),
-        lastMessagePreview,
-      });
-      context.emit({
-        type: "session_busy",
-        sessionId: context.id,
-        busy: false,
-        turnId,
-        outcome: context.state.currentTurnOutcome,
-      });
+      if (turnAnnounced) {
+        metadataManager.updateSessionInfo({
+          executionState: settledExecutionState(),
+          lastMessagePreview,
+        });
+        context.emit({
+          type: "session_busy",
+          sessionId: context.id,
+          busy: false,
+          turnId,
+          outcome: context.state.currentTurnOutcome,
+        });
+      }
       context.state.running = false;
       context.state.abortController = null;
       context.state.currentTurnId = null;
-      void flushPendingExternalSkillRefresh().catch(() => {
-        // refresh helper already emits skill refresh errors.
-      });
-      if (backupController.isBackupsEnabled()) {
-        void backupController.takeAutomaticSessionCheckpoint().catch(() => {
-          // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.
+      if (turnAnnounced) {
+        void flushPendingExternalSkillRefresh().catch(() => {
+          // refresh helper already emits skill refresh errors.
         });
-      }
-      // Fire advanced memory generation for completed turns only. Fire-and-forget;
-      // never blocks the user-facing turn (no-op unless advanced memory is on).
-      if (context.state.currentTurnOutcome === "completed") {
-        triggerMemoryGeneration?.();
+        if (backupController.isBackupsEnabled()) {
+          void backupController.takeAutomaticSessionCheckpoint().catch(() => {
+            // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.
+          });
+        }
+        // Fire advanced memory generation for completed turns only. Fire-and-forget;
+        // never blocks the user-facing turn (no-op unless advanced memory is on).
+        if (context.state.currentTurnOutcome === "completed") {
+          triggerMemoryGeneration?.();
+        }
       }
     }
   };

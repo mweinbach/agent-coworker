@@ -1092,6 +1092,81 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("retry releases the task mutation queue before continuation failure callbacks", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      await harness.coordinator.handleThreadOutcome("task-session-1", "error");
+      const failed = harness.coordinator.get(created.task.id, harness.workspacePath);
+      if (!failed) throw new Error("Expected failed task");
+
+      harness.coordinator.setContinuationDispatcher(async (input) => {
+        await input.onFailure(new Error("Retry continuation failed"));
+        return "failed";
+      });
+
+      const retried = await expectSettlesWithin(
+        harness.coordinator.retryTask({
+          taskId: failed.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: failed.revision,
+        }),
+        500,
+        "retry with inline failure callback",
+      );
+
+      expect(retried.retryStatus).toBe("failed");
+      expect(harness.coordinator.get(failed.id, harness.workspacePath)?.status).toBe("failed");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("retry recovery serializes with concurrent lifecycle mutations", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    try {
+      const created = await createWorkingTask(harness);
+      await harness.coordinator.handleThreadOutcome("task-session-1", "error");
+      const failed = harness.coordinator.get(created.task.id, harness.workspacePath);
+      if (!failed) throw new Error("Expected failed task");
+      const pausedStatusWrite = pauseNextTaskStatusWrite(harness);
+
+      harness.coordinator.setContinuationDispatcher(async () => "queued");
+      const retryPromise = harness.coordinator.retryTask({
+        taskId: failed.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: failed.revision,
+      });
+      await pausedStatusWrite.reached;
+
+      let reopenSettled = false;
+      const reopenPromise = harness.coordinator
+        .reopenTask({
+          taskId: failed.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: failed.revision,
+          reason: "Concurrent reopen should wait for retry recovery",
+        })
+        .finally(() => {
+          reopenSettled = true;
+        });
+      await flushAsyncWork();
+      expect(reopenSettled).toBe(false);
+
+      pausedStatusWrite.release();
+      const retried = await retryPromise;
+      await expect(reopenPromise).rejects.toThrow(
+        `Task revision conflict: expected ${failed.revision}, current ${retried.task.revision}`,
+      );
+
+      expect(retried.task.status).toBe("working");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("does not dispatch retry continuation when failed task recovery remains blocked", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });

@@ -653,6 +653,10 @@ export class TaskCoordinator {
     return this.options.sessionDb.getTaskForThread(sessionId);
   }
 
+  getActiveForSourceSession(sessionId: string): TaskRecord | null {
+    return this.options.sessionDb.getActiveTaskForSourceSession(sessionId);
+  }
+
   isTaskThread(sessionId: string): boolean {
     return this.options.sessionDb.isTaskThread(sessionId);
   }
@@ -3012,22 +3016,26 @@ export class TaskCoordinator {
     task: TaskRecord;
     retryStatus: Exclude<TaskQuestionResumeStatus, "not_needed">;
   }> {
-    const task = this.requireTask(input.taskId, input.workspacePath);
-    if (task.revision !== input.expectedRevision) {
-      throw new Error(
-        `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
-      );
-    }
-    if (task.status !== "failed") throw new Error("Only failed tasks can be retried");
-    const primaryThread = task.threads[0];
-    if (!primaryThread) throw new Error("Task has no primary thread to retry");
+    const prepared = await this.runTaskMutation(input.taskId, async () => {
+      const task = this.requireTask(input.taskId, input.workspacePath);
+      if (task.revision !== input.expectedRevision) {
+        throw new Error(
+          `Task revision conflict: expected ${input.expectedRevision}, current ${task.revision}`,
+        );
+      }
+      if (task.status !== "failed") throw new Error("Only failed tasks can be retried");
+      const primaryThread = task.threads[0];
+      if (!primaryThread) throw new Error("Task has no primary thread to retry");
 
-    const recovered = await this.recoverTerminalTask({
-      task,
-      expectedRevision: task.revision,
-      summary: "Task retry started",
-      sessionId: primaryThread.sessionId,
+      const recovered = await this.recoverTerminalTask({
+        task,
+        expectedRevision: task.revision,
+        summary: "Task retry started",
+        sessionId: primaryThread.sessionId,
+      });
+      return { task, recovered, primaryThread };
     });
+    const { task, recovered, primaryThread } = prepared;
 
     if (recovered.status !== "working") {
       return {

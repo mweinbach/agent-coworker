@@ -21,6 +21,11 @@ import {
   resolveReferencedPlugins,
   resolveReferencedSkills,
 } from "./referenceInjection";
+import {
+  createUserContentMaterializationTransaction,
+  type UserMessageContentBuildOptions,
+} from "./userMessageAttachments";
+import { isTaskLockAbortError, makeTaskLockAbortError } from "./userMessageTurnHelpers";
 
 const MAX_PENDING_STEER_COUNT = 32;
 
@@ -61,7 +66,7 @@ export type SteerCoordinatorDeps = {
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
-    options?: { assertCanMaterialize?: () => void },
+    options?: UserMessageContentBuildOptions,
   ) => Promise<string | Array<Record<string, unknown>>>;
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
   getTaskLock?: () => TaskLockError | null;
@@ -139,12 +144,6 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     context.emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
-  const makeTaskLockAbortError = (): Error & { code: "ABORT_ERR" } =>
-    Object.assign(new Error("Cancelled by task lock"), { code: "ABORT_ERR" as const });
-  const isTaskLockAbortError = (error: unknown): boolean =>
-    error instanceof Error &&
-    (error.message === "Cancelled by task lock" ||
-      (error as { code?: unknown }).code === "ABORT_ERR");
   const assertCanMaterializeSteerContent = () => {
     if (emitTaskLockIfPresent() || context.state.abortController?.signal.aborted) {
       throw makeTaskLockAbortError();
@@ -222,22 +221,27 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     if (emitTaskLockIfPresent()) return;
     const activeSteerHandler = context.state.activeSteerHandler;
     if (activeSteerHandler) {
+      const materialization = createUserContentMaterializationTransaction();
       try {
         const resolvedReferences = await resolveSteerReferences(references);
         assertCanMaterializeSteerContent();
         const content = await deps.buildUserMessageContent(text, attachments, inputParts, {
           assertCanMaterialize: assertCanMaterializeSteerContent,
+          materialization,
         });
         const deliveryContent = prependReferenceContextToContent(
           content,
           renderSteerReferenceContext(resolvedReferences),
         );
-        if (emitTaskLockIfPresent()) return;
+        if (emitTaskLockIfPresent()) {
+          await materialization.rollback();
+          return;
+        }
         await activeSteerHandler({ text, expectedTurnId: currentTurnId, content: deliveryContent });
-        if (emitTaskLockIfPresent()) return;
         // Persist the model-facing content (with any forced-skill text folded in)
         // as plain text — accepted by all providers, unlike synthetic tool calls.
         historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);
+        materialization.commit();
         context.emit({
           type: "user_message",
           sessionId: context.id,
@@ -254,6 +258,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
           ...(clientMessageId ? { clientMessageId } : {}),
         });
       } catch (error) {
+        await materialization.rollback();
         if (isTaskLockAbortError(error)) return;
         const classified = deps.classifyTurnError(error);
         context.emitError(classified.code, classified.source, context.formatError(error));
@@ -314,6 +319,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
 
     const steerMessages: ModelMessage[] = [];
     const pluginBatches: ReferencedPluginContext[][] = [];
+    const materialization = createUserContentMaterializationTransaction();
     try {
       for (const steer of drained) {
         const resolvedReferences = await resolveSteerReferences(steer.references);
@@ -324,7 +330,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
           steer.text,
           steer.attachments,
           steer.inputParts,
-          { assertCanMaterialize: assertCanMaterializeSteerContent },
+          { assertCanMaterialize: assertCanMaterializeSteerContent, materialization },
         );
         if (referenceContext) {
           content = prependReferenceContextToContent(content, referenceContext);
@@ -332,11 +338,13 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
         steerMessages.push({ role: "user", content });
       }
     } catch (error) {
+      await materialization.rollback();
       if (!isTaskLockAbortError(error)) throw error;
       context.state.pendingSteers.splice(0);
       return { messages: [], committedCount: 0 };
     }
     if (emitTaskLockIfPresent()) {
+      await materialization.rollback();
       context.state.pendingSteers.splice(0);
       return { messages: [], committedCount: 0 };
     }
@@ -352,6 +360,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       });
     }
     context.queuePersistSessionSnapshot("session.steer_committed");
+    materialization.commit();
     return { messages: steerMessages, committedCount: drained.length };
   };
 

@@ -10,6 +10,7 @@ type TaskSessionDb = {
     sessionId: string,
   ) => Pick<TaskRecord, "id" | "status" | "title"> | null | undefined;
   getTaskForThread?: (sessionId: string) => Pick<TaskRecord, "id" | "status"> | null | undefined;
+  getSessionRecord?: (sessionId: string) => { parentSessionId?: string | null } | null | undefined;
 };
 
 export type TaskLockError = {
@@ -130,5 +131,19 @@ export function getSessionTaskLock(
   sessionDb: TaskSessionDb | null | undefined,
   sessionId: string,
 ): TaskLockError | null {
-  return getTaskThreadLock(sessionDb, sessionId) ?? getActiveSourceChatLock(sessionDb, sessionId);
+  return getSessionTaskLockRecursive(sessionDb, sessionId, new Set());
+}
+
+function getSessionTaskLockRecursive(
+  sessionDb: TaskSessionDb | null | undefined,
+  sessionId: string,
+  seen: Set<string>,
+): TaskLockError | null {
+  if (seen.has(sessionId)) return null;
+  seen.add(sessionId);
+  const directLock =
+    getTaskThreadLock(sessionDb, sessionId) ?? getActiveSourceChatLock(sessionDb, sessionId);
+  if (directLock) return directLock;
+  const parentSessionId = sessionDb?.getSessionRecord?.(sessionId)?.parentSessionId ?? null;
+  return parentSessionId ? getSessionTaskLockRecursive(sessionDb, parentSessionId, seen) : null;
 }

@@ -331,6 +331,188 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }, 20_000);
   }
 
+  for (const status of TERMINAL_TASK_STATUSES) {
+    test(`JSON-RPC agent work routes reject ${status} task-owned threads with structured task_locked errors`, async () => {
+      const tmpDir = await makeCanonicalTmpProject();
+      let failTurns = status === "failed";
+      let runCalls = 0;
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async () => {
+            runCalls += 1;
+            if (failTurns) throw new Error("planned task failure");
+            return { text: "ok", responseMessages: [] };
+          }) as never,
+        }),
+      );
+
+      try {
+        const rpc = await connectJsonRpc(url);
+        const task = await terminalTask(rpc, tmpDir, status, `agent-route-${status}`);
+        failTurns = false;
+        const threadId = task.threads[0]?.sessionId;
+        if (!threadId) throw new Error("Expected primary task thread");
+        const runCallsBeforeAgentRoutes = runCalls;
+
+        const spawn = await rpc.sendRequest("cowork/session/agent/spawn", {
+          threadId,
+          message: "spawn should be rejected",
+        });
+        await expectTaskLocked(spawn, undefined, {
+          lockKind: "terminal_task_thread",
+          taskId: task.id,
+          taskStatus: status,
+        });
+
+        const send = await rpc.sendRequest("cowork/session/agent/input/send", {
+          threadId,
+          agentId: "child-agent",
+          message: "send should be rejected",
+        });
+        await expectTaskLocked(send, undefined, {
+          lockKind: "terminal_task_thread",
+          taskId: task.id,
+          taskStatus: status,
+        });
+
+        const resume = await rpc.sendRequest("cowork/session/agent/resume", {
+          threadId,
+          agentId: "child-agent",
+        });
+        await expectTaskLocked(resume, undefined, {
+          lockKind: "terminal_task_thread",
+          taskId: task.id,
+          taskStatus: status,
+        });
+
+        await expect(
+          rpc.waitFor(
+            (message) =>
+              (message.method === "cowork/session/agentSpawned" ||
+                message.method === "cowork/session/agentStatus") &&
+              message.params.sessionId === threadId,
+            250,
+          ),
+        ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+        expect(runCalls).toBe(runCallsBeforeAgentRoutes);
+        rpc.close();
+      } finally {
+        await stopTestServer(server);
+      }
+    }, 20_000);
+  }
+
+  test("JSON-RPC agent work routes reject active source chats with structured task_locked errors", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    let sourceThreadIdForProvider: string | null = null;
+    let promoteNextTurn = true;
+    let nonSourceRunCalls = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          if (params.sessionId !== sourceThreadIdForProvider) {
+            nonSourceRunCalls += 1;
+            return { text: "task or child response", responseMessages: [] };
+          }
+          if (promoteNextTurn) {
+            promoteNextTurn = false;
+            const result = await params.createTask?.({
+              idempotencyKey: "source-agent-route-lock",
+              title: "Source agent route lock",
+              objective: "Prove source-chat agent controls are locked while a task is active.",
+              context: "Created through the real chat createTask path.",
+              requirements: [
+                {
+                  kind: "acceptance_criterion",
+                  text: "Source chat agent routes cannot launch child work while locked.",
+                },
+              ],
+              workItems: [
+                {
+                  key: "verify",
+                  title: "Verify source agent route lock",
+                  expectedOutputs: ["source-agent-route-lock.txt"],
+                },
+              ],
+              decisions: [],
+              reviewRequired: false,
+              reviewRounds: 0,
+            });
+            if (!result) throw new Error("createTask tool path was not registered");
+            return { text: "promotion complete", responseMessages: [] };
+          }
+          return { text: "source chat response", responseMessages: [] };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const sourceThreadId = started.result.thread.id;
+      sourceThreadIdForProvider = sourceThreadId;
+
+      const promotionTurn = await rpc.sendRequest("turn/start", {
+        threadId: sourceThreadId,
+        input: [{ type: "text", text: "promote this source chat" }],
+      });
+      expect(promotionTurn.error).toBeUndefined();
+      const createdNotification = await rpc.waitFor((message) => message.method === "task/created");
+      const taskId = createdNotification.params.task.id;
+      await waitForTurnCompleted(rpc, sourceThreadId, promotionTurn.result.turn.id);
+      const nonSourceRunCallsBeforeAgentRoutes = nonSourceRunCalls;
+
+      const spawn = await rpc.sendRequest("cowork/session/agent/spawn", {
+        threadId: sourceThreadId,
+        message: "spawn should be rejected",
+      });
+      await expectTaskLocked(spawn, "Chat is locked by active task", {
+        lockKind: "active_source_chat",
+        taskId,
+        taskStatus: "working",
+        taskTitle: "Source agent route lock",
+      });
+
+      const send = await rpc.sendRequest("cowork/session/agent/input/send", {
+        threadId: sourceThreadId,
+        agentId: "child-agent",
+        message: "send should be rejected",
+      });
+      await expectTaskLocked(send, "Chat is locked by active task", {
+        lockKind: "active_source_chat",
+        taskId,
+        taskStatus: "working",
+        taskTitle: "Source agent route lock",
+      });
+
+      const resume = await rpc.sendRequest("cowork/session/agent/resume", {
+        threadId: sourceThreadId,
+        agentId: "child-agent",
+      });
+      await expectTaskLocked(resume, "Chat is locked by active task", {
+        lockKind: "active_source_chat",
+        taskId,
+        taskStatus: "working",
+        taskTitle: "Source agent route lock",
+      });
+
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            (message.method === "cowork/session/agentSpawned" ||
+              message.method === "cowork/session/agentStatus") &&
+            message.params.sessionId === sourceThreadId,
+          250,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+      expect(nonSourceRunCalls).toBe(nonSourceRunCallsBeforeAgentRoutes);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
   test("terminal transition aborts a running task turn before late output, telemetry, or tool writes escape", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     const lateWritePath = path.join(tmpDir, "late-tool-write.txt");

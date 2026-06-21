@@ -108,6 +108,7 @@ export class AgentControl {
   // MAX_ACTIVE_CHILDREN_PER_PARENT. Reserved at the (synchronous) check, released
   // once the binding is registered (or the spawn fails).
   private readonly inFlightSpawnsByParent = new Map<string, number>();
+  private readonly inFlightSpawnSettlementsByParent = new Map<string, Set<Promise<void>>>();
 
   constructor(private readonly deps: AgentControlDeps) {}
 
@@ -308,8 +309,26 @@ export class AgentControl {
       );
     }
     this.inFlightSpawnsByParent.set(parentId, reserved + 1);
+    const spawnPromise = this.spawnReserved(opts, depth);
+    let spawnSettlement!: Promise<void>;
+    spawnSettlement = spawnPromise
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        const settlements = this.inFlightSpawnSettlementsByParent.get(parentId);
+        settlements?.delete(spawnSettlement);
+        if (settlements?.size === 0) {
+          this.inFlightSpawnSettlementsByParent.delete(parentId);
+        }
+      });
+    const settlements =
+      this.inFlightSpawnSettlementsByParent.get(parentId) ?? new Set<Promise<void>>();
+    settlements.add(spawnSettlement);
+    this.inFlightSpawnSettlementsByParent.set(parentId, settlements);
     try {
-      return await this.spawnReserved(opts, depth);
+      return await spawnPromise;
     } finally {
       const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
       if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
@@ -512,33 +531,77 @@ export class AgentControl {
   }
 
   async cancelAll(parentSessionId: string, opts?: { timeoutMs?: number }): Promise<void> {
-    const waits: Promise<void>[] = [];
-    for (const binding of this.deps.sessionBindings.values()) {
-      const session = binding.session;
-      if (!session?.isAgentOf(parentSessionId)) continue;
+    const timeoutMs = opts?.timeoutMs ?? 30_000;
+    const deadline = Date.now() + timeoutMs;
+    const cancelledAgentIds = new Set<string>();
+    const failures: unknown[] = [];
+
+    const remainingTimeoutMs = () => Math.max(0, deadline - Date.now());
+    const waitWithTimeout = async (settlement: Promise<unknown>, message: string) => {
+      const remaining = remainingTimeoutMs();
+      if (remaining <= 0) throw new Error(message);
+      let timeout: ReturnType<typeof setTimeout> | null = null;
       try {
-        waits.push(
-          session.cancelAndWaitForSettlement({ timeoutMs: opts?.timeoutMs }).catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            this.deps.emitParentLog(
-              parentSessionId,
-              `Failed to cancel child agent ${session.id}: ${message}`,
-            );
-            throw error;
+        await Promise.race([
+          settlement,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error(message)), remaining);
           }),
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.deps.emitParentLog(
-          parentSessionId,
-          `Failed to cancel child agent ${session.id}: ${message}`,
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    };
+
+    while (true) {
+      const pendingSpawns = [...(this.inFlightSpawnSettlementsByParent.get(parentSessionId) ?? [])];
+      if (pendingSpawns.length > 0) {
+        await waitWithTimeout(
+          Promise.allSettled(pendingSpawns),
+          "Timed out waiting for child agent spawn registration before cancellation.",
         );
       }
+
+      const sessions = [...this.deps.sessionBindings.values()]
+        .map((binding) => binding.session)
+        .filter((session): session is AgentSession => Boolean(session?.isAgentOf(parentSessionId)));
+      const newSessions = sessions.filter((session) => !cancelledAgentIds.has(session.id));
+      if (newSessions.length === 0) {
+        if ((this.inFlightSpawnSettlementsByParent.get(parentSessionId)?.size ?? 0) === 0) break;
+        continue;
+      }
+
+      const waits: Promise<void>[] = [];
+      for (const session of newSessions) {
+        cancelledAgentIds.add(session.id);
+        try {
+          waits.push(
+            session
+              .cancelAndWaitForSettlement({ timeoutMs: remainingTimeoutMs() })
+              .catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                this.deps.emitParentLog(
+                  parentSessionId,
+                  `Failed to cancel child agent ${session.id}: ${message}`,
+                );
+                throw error;
+              }),
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.deps.emitParentLog(
+            parentSessionId,
+            `Failed to cancel child agent ${session.id}: ${message}`,
+          );
+          failures.push(error);
+        }
+      }
+      const settled = await Promise.allSettled(waits);
+      for (const result of settled) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
     }
-    const settled = await Promise.allSettled(waits);
-    const rejection = settled.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    );
-    if (rejection) throw rejection.reason;
+
+    if (failures.length > 0) throw failures[0];
   }
 }

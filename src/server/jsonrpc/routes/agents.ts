@@ -1,8 +1,38 @@
+import { getSessionTaskLock } from "../../session/taskLocks";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcAgentRequestSchemas } from "../schema.agents";
-
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
+
+function assertAgentControlWritable(
+  context: JsonRpcRouteContext,
+  ws: Parameters<JsonRpcRouteContext["jsonrpc"]["send"]>[0],
+  id: Parameters<JsonRpcRouteContext["jsonrpc"]["sendError"]>[1],
+  threadId: string,
+): boolean {
+  const taskLock = getSessionTaskLock(
+    {
+      getTaskForThread: (sessionId) => context.tasks?.getForThread?.(sessionId),
+      getActiveTaskForSourceSession: (sessionId) =>
+        context.tasks?.getActiveForSourceSession?.(sessionId),
+      getSessionRecord: (sessionId) => {
+        const liveParentSessionId =
+          context.threads.getLive(sessionId)?.runtime?.read.parentSessionId ?? null;
+        if (liveParentSessionId) return { parentSessionId: liveParentSessionId };
+        const persisted = context.threads.getPersisted(sessionId);
+        return persisted ? { parentSessionId: persisted.parentSessionId } : null;
+      },
+    },
+    threadId,
+  );
+  if (!taskLock) return true;
+  context.jsonrpc.sendError(ws, id, {
+    code: JSONRPC_ERROR_CODES.invalidRequest,
+    message: taskLock.message,
+    data: taskLock.data,
+  });
+  return false;
+}
 
 export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
@@ -44,6 +74,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         });
         return;
       }
+      if (!assertAgentControlWritable(context, ws, message.id, threadId)) return;
 
       await runtime.agents.create({
         message: prompt,
@@ -94,6 +125,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         });
         return;
       }
+      if (!assertAgentControlWritable(context, ws, message.id, threadId)) return;
 
       await runtime.agents.sendInput(
         agentId,
@@ -173,6 +205,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         });
         return;
       }
+      if (!assertAgentControlWritable(context, ws, message.id, threadId)) return;
 
       await runtime.agents.resume(agentId);
       context.jsonrpc.sendResult(ws, message.id, {});

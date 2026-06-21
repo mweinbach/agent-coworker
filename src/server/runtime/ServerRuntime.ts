@@ -116,6 +116,7 @@ export interface StartAgentServerOptions {
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
   preloadSystemPrompt?: boolean;
+  taskTerminalQuiesceTimeoutMs?: number;
 }
 
 type JsonRpcRequest = { id: string | number; method: string; params?: unknown };
@@ -154,6 +155,12 @@ export async function createAgentServerRuntime(
       ? Math.floor(parsedJsonRpcMaxPendingRequests)
       : 128,
   );
+  const taskTerminalQuiesceTimeoutMs =
+    typeof opts.taskTerminalQuiesceTimeoutMs === "number" &&
+    Number.isFinite(opts.taskTerminalQuiesceTimeoutMs) &&
+    opts.taskTerminalQuiesceTimeoutMs >= 0
+      ? Math.floor(opts.taskTerminalQuiesceTimeoutMs)
+      : 30_000;
 
   const builtInDir =
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
@@ -339,7 +346,7 @@ export async function createAgentServerRuntime(
           waits.push(
             runtime.turns.cancelAndWaitForSettlement({
               includeSubagents: true,
-              timeoutMs: 30_000,
+              timeoutMs: taskTerminalQuiesceTimeoutMs,
             }),
           );
         } catch {

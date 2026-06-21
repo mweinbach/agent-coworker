@@ -136,6 +136,10 @@ async function waitForFile(pathname: string): Promise<void> {
   throw new Error(`Timed out waiting for file ${pathname}`);
 }
 
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function waitForThreadReadToContain(
   rpc: JsonRpcConnection,
   threadId: string,
@@ -697,6 +701,203 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }
   }, 20_000);
 
+  test("terminal transition timeout fails closed while non-cooperative MCP execution remains unsettled", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const mcpWritePath = path.join(tmpDir, "mcp-timeout-write.txt");
+    let holdNextTurn = false;
+    let mcpMutationResult: string | null = null;
+    let mcpExecuteCalls = 0;
+    const kickoffCompleted = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<AbortSignal | null>();
+    const mcpEntered = Promise.withResolvers<AbortSignal | null>();
+    const releaseMcpWrite = Promise.withResolvers<void>();
+    const runTurnImpl = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async (params) => {
+          if (!holdNextTurn) {
+            kickoffCompleted.resolve();
+            return { text: "kickoff complete", responseMessages: [] };
+          }
+          manualStarted.resolve(params.abortSignal ?? null);
+          try {
+            await params.tools.mcp__local__mutate.execute({});
+            mcpMutationResult = "wrote";
+          } catch (error) {
+            mcpMutationResult = error instanceof Error ? error.message : String(error);
+          }
+          return {
+            text: `mcp timeout result: ${mcpMutationResult}`,
+            responseMessages: [],
+          };
+        },
+      }),
+      loadMCPServers: async () => [
+        { name: "local", transport: { type: "stdio", command: "mcp-local", args: [] } },
+      ],
+      loadMCPTools: async () => ({
+        tools: {
+          mcp__local__mutate: {
+            description: "Mutates the workspace after the local abort signal fires.",
+            inputSchema: { type: "object", properties: {} },
+            execute: async (_input: unknown, options?: { abortSignal?: AbortSignal }) => {
+              mcpExecuteCalls += 1;
+              mcpEntered.resolve(options?.abortSignal ?? null);
+              await releaseMcpWrite.promise;
+              await fs.writeFile(mcpWritePath, "mcp side effect settled after timeout", "utf8");
+              return "mcp write settled after timeout";
+            },
+          },
+        },
+        errors: [],
+        close: async () => {},
+      }),
+    });
+    const opts = serverOpts(tmpDir, {
+      env: { AGENT_ENABLE_MCP: "true" },
+      runTurnImpl,
+      taskTerminalQuiesceTimeoutMs: 35,
+    });
+    let running = await startAgentServer(opts);
+    let rpc = await connectJsonRpc(running.url);
+
+    try {
+      const created = await createTask(rpc, tmpDir, "mcp-timeout");
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await kickoffCompleted.promise;
+      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+
+      holdNextTurn = true;
+      const started = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start mcp timeout race" }],
+      });
+      expect(started.error).toBeUndefined();
+      const turnId = started.result.turn.id;
+      const signal = await manualStarted.promise;
+      const toolSignal = await mcpEntered.promise;
+      expect(toolSignal).toBe(signal);
+
+      const latest = await readTask(rpc, tmpDir, created.id);
+      const cancelPromise = rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: latest.id,
+        expectedRevision: latest.revision,
+        reason: "Close the task while an MCP tool remains unsettled.",
+      });
+      await waitForCondition(() => signal?.aborted === true, "task cancel did not abort the turn");
+
+      await expectTaskLocked(
+        await rpc.sendRequest("turn/steer", {
+          threadId,
+          turnId,
+          input: [{ type: "text", text: "blocked while cancel is pending" }],
+        }),
+        "finalizing cancelled",
+        {
+          lockKind: "terminal_task_thread",
+          taskId: created.id,
+          taskStatus: "cancelled",
+        },
+      );
+
+      const timedOutCancel = await cancelPromise;
+      expect(timedOutCancel.result).toBeUndefined();
+      expect(timedOutCancel.error).toEqual(
+        expect.objectContaining({
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: expect.stringContaining(
+            "Timed out waiting for turn settlement after cancellation.",
+          ),
+        }),
+      );
+
+      const afterTimeout = await readTask(rpc, tmpDir, created.id);
+      expect(afterTimeout.status).toBe("working");
+      expect(afterTimeout.revision).toBe(latest.revision);
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "cancelled",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      const steerAfterTimeout = await rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "accepted after timed-out terminal lock releases" }],
+      });
+      expect(steerAfterTimeout.error).toBeUndefined();
+
+      releaseMcpWrite.resolve();
+      await waitForFile(mcpWritePath);
+      const completed = await waitForTurnCompleted(rpc, threadId, turnId);
+      expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+      expect(mcpMutationResult).toBe("wrote");
+      expect(mcpExecuteCalls).toBe(1);
+      expect(await readTask(rpc, tmpDir, created.id)).toMatchObject({
+        id: created.id,
+        status: "working",
+      });
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "cancelled",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      rpc.close();
+      await stopTestServer(running.server);
+
+      running = await startAgentServer(opts);
+      rpc = await connectJsonRpc(running.url);
+      const afterRestart = await readTask(rpc, tmpDir, created.id);
+      expect(afterRestart.status).toBe("working");
+      expect(afterRestart.revision).toBe(latest.revision);
+
+      const retryTerminalUpdate = rpc.waitFor(
+        (message) =>
+          message.method === "task/updated" &&
+          message.params.task?.id === created.id &&
+          message.params.task?.status === "cancelled",
+        1_000,
+      );
+      const retryCancel = await rpc.sendRequest("task/cancel", {
+        cwd: tmpDir,
+        taskId: afterRestart.id,
+        expectedRevision: afterRestart.revision,
+        reason: "Retry cancellation after the original MCP turn settled.",
+      });
+      expect(retryCancel.error).toBeUndefined();
+      expect(retryCancel.result.task.status).toBe("cancelled");
+      const terminalUpdate = await retryTerminalUpdate;
+      expect(terminalUpdate.params.task.revision).toBe(retryCancel.result.task.revision);
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "cancelled",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+      await expect(fs.readFile(mcpWritePath, "utf8")).resolves.toBe(
+        "mcp side effect settled after timeout",
+      );
+      rpc.close();
+    } finally {
+      rpc.close();
+      await stopTestServer(running.server);
+    }
+  }, 20_000);
+
   test("self-origin terminal directive waits for provider turn settlement before terminal notification", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     const evidencePath = path.join(tmpDir, "self-terminal-evidence.txt");
@@ -851,6 +1052,208 @@ describe("server JSON-RPC task terminal turn locks", () => {
       rpc.close();
     } finally {
       await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("self-origin terminal directive timeout fails closed until an explicit later accept", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const evidencePath = path.join(tmpDir, "self-terminal-timeout-evidence.txt");
+    const providerWritePath = path.join(tmpDir, "self-terminal-timeout-provider-write.txt");
+    let holdNextTurn = false;
+    let createdForProvider: TaskRecord | null = null;
+    const kickoffCompleted = Promise.withResolvers<void>();
+    const directiveReturned = Promise.withResolvers<void>();
+    const directiveFailed = Promise.withResolvers<string>();
+    const providerSideEffectEntered = Promise.withResolvers<AbortSignal | null>();
+    const providerWriteCompleted = Promise.withResolvers<void>();
+    const releaseProviderSideEffect = Promise.withResolvers<void>();
+    const runTurnImpl = (async (params: RunTurnParams) => {
+      if (!holdNextTurn) {
+        kickoffCompleted.resolve();
+        return { text: "kickoff complete", responseMessages: [] };
+      }
+      try {
+        const context = params.getTaskContext?.();
+        const workItem = context?.workItems[0] ?? createdForProvider?.workItems[0];
+        const expectedRevision = context?.revision ?? createdForProvider?.revision;
+        if (!workItem || expectedRevision === undefined) {
+          throw new Error("Expected task context with a work item");
+        }
+        await fs.writeFile(evidencePath, "ready for delayed completion", "utf8");
+        const registered = await params.applyTaskDirective?.({
+          type: "register_artifact",
+          idempotencyKey: "self-terminal-timeout-register-artifact",
+          expectedRevision,
+          path: "self-terminal-timeout-evidence.txt",
+          title: "Self-terminal timeout evidence",
+          kind: "text",
+          workItemId: workItem.id,
+        });
+        if (!registered) throw new Error("Expected register_artifact directive result");
+        const marked = await params.applyTaskDirective?.({
+          type: "mark_work_item",
+          idempotencyKey: "self-terminal-timeout-mark-work",
+          expectedRevision: registered.task.revision,
+          workItemId: workItem.id,
+          status: "done",
+          completionEvidence: "Focused timeout regression completed its work item.",
+        });
+        if (!marked) throw new Error("Expected mark_work_item directive result");
+        await params.applyTaskDirective?.({
+          type: "propose_completion",
+          idempotencyKey: "self-terminal-timeout-propose-completion",
+          expectedRevision: marked.task.revision,
+          summary: "Self-origin terminal timeout proposal",
+        });
+        directiveReturned.resolve();
+      } catch (error) {
+        directiveFailed.resolve(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      providerSideEffectEntered.resolve(params.abortSignal ?? null);
+      await releaseProviderSideEffect.promise;
+      await fs.writeFile(providerWritePath, "provider side effect settled after timeout", "utf8");
+      providerWriteCompleted.resolve();
+      return {
+        text: "provider turn settled after self-origin terminal timeout",
+        responseMessages: [],
+      };
+    }) as never;
+    const opts = serverOpts(tmpDir, {
+      runTurnImpl,
+      taskTerminalQuiesceTimeoutMs: 35,
+    });
+    let running = await startAgentServer(opts);
+    let rpc = await connectJsonRpc(running.url);
+
+    try {
+      const createdResponse = await rpc.sendRequest("task/create", {
+        ...taskCreateParams(tmpDir, "self-origin-terminal-timeout"),
+        workItems: [
+          {
+            key: "verify",
+            title: "Verify self-origin timeout handoff",
+            expectedOutputs: ["self-terminal-timeout-evidence.txt"],
+          },
+        ],
+        reviewRequired: false,
+        reviewRounds: 0,
+      });
+      expect(createdResponse.error).toBeUndefined();
+      const created = createdResponse.result.task as TaskRecord;
+      createdForProvider = created;
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await kickoffCompleted.promise;
+      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+
+      holdNextTurn = true;
+      const started = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "complete this task but let terminal quiesce time out" }],
+      });
+      expect(started.error).toBeUndefined();
+      const turnId = started.result.turn.id;
+      const directiveOutcome = await Promise.race([
+        directiveReturned.promise.then(() => "ok" as const),
+        directiveFailed.promise.then((message) => `error: ${message}` as const),
+        delay(2_000).then(() => "timeout" as const),
+      ]);
+      expect(directiveOutcome).toBe("ok");
+      const signal = await providerSideEffectEntered.promise;
+      expect(signal?.aborted).toBe(true);
+
+      await expectTaskLocked(
+        await rpc.sendRequest("turn/steer", {
+          threadId,
+          turnId,
+          input: [{ type: "text", text: "blocked while self-terminal finalizer is pending" }],
+        }),
+        "finalizing completed",
+        {
+          lockKind: "terminal_task_thread",
+          taskId: created.id,
+          taskStatus: "completed",
+        },
+      );
+
+      await delay(120);
+      const afterTimeout = await readTask(rpc, tmpDir, created.id);
+      expect(afterTimeout.status).toBe("awaiting_review");
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "completed",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      const steerAfterTimeout = await rpc.sendRequest("turn/steer", {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "accepted after timed-out self-terminal lock releases" }],
+      });
+      expect(steerAfterTimeout.error).toBeUndefined();
+
+      releaseProviderSideEffect.resolve();
+      await providerWriteCompleted.promise;
+      const completed = await waitForTurnCompleted(rpc, threadId, turnId);
+      expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+      await expect(fs.readFile(providerWritePath, "utf8")).resolves.toBe(
+        "provider side effect settled after timeout",
+      );
+      expect(await readTask(rpc, tmpDir, created.id)).toMatchObject({
+        id: created.id,
+        status: "awaiting_review",
+      });
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "completed",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      rpc.close();
+      await stopTestServer(running.server);
+
+      running = await startAgentServer(opts);
+      rpc = await connectJsonRpc(running.url);
+      const afterRestart = await readTask(rpc, tmpDir, created.id);
+      expect(afterRestart.status).toBe("awaiting_review");
+      const acceptUpdate = rpc.waitFor(
+        (message) =>
+          message.method === "task/updated" &&
+          message.params.task?.id === created.id &&
+          message.params.task?.status === "completed",
+        1_000,
+      );
+      const accepted = await rpc.sendRequest("task/accept", {
+        cwd: tmpDir,
+        taskId: afterRestart.id,
+        expectedRevision: afterRestart.revision,
+      });
+      expect(accepted.error).toBeUndefined();
+      expect(accepted.result.task.status).toBe("completed");
+      const terminalUpdate = await acceptUpdate;
+      expect(terminalUpdate.params.task.revision).toBe(accepted.result.task.revision);
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "completed",
+          120,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+      rpc.close();
+    } finally {
+      rpc.close();
+      await stopTestServer(running.server);
     }
   }, 20_000);
 

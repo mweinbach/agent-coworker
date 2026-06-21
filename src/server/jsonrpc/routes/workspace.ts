@@ -212,6 +212,7 @@ export function createWorkspaceRouteHandlers(
           cwd,
           filePath: parsed.data.path,
           builtInDir: context.getConfig().builtInDir,
+          config: context.getConfig(),
         });
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {

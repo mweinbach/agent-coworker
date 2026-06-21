@@ -229,6 +229,10 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Repo-Specific Contracts
 
+- **Runtime and skill ownership**: marketplace-installed project/user skills are the authoritative skill content. The unified runtime is a separately downloaded executable/library layer and must never be registered as a plugin or skill discovery root; the application updates both layers independently.
+- **Productivity skill parity**: retiring bundled productivity skills requires migrating the complete documents, PDF, presentations, and spreadsheets set into the authoritative marketplace plugin; never drop PDF as an incidental part of a runtime cutover.
+- **Unified runtime completeness**: before deleting a legacy runtime manager, inventory and migrate every executable it owns—especially LibreOffice/`soffice` and companion files—and prove the installed unified runtime can execute the real workflow. Do not silently leave a second lazy-download cache behind.
+- **Managed soffice boundary**: ship LibreOffice inside the unified runtime, keep its private program directory off `PATH`, and expose only Cowork's headless policy launcher. The launcher must reject UI/printing modes, disable printer detection, use disposable profiles, and pass a real conversion test; never fall back to host `soffice`.
 - **Chat plans vs Task mode**: never present a standard-chat `todoWrite` checklist as durable task state or expand it into a second task system. Label it as a plan/checklist; keep durable IDs, transitions, ownership, blockers, artifacts, and user editing in `TaskCoordinator` and Task mode.
 - **Auth home**: `~/.cowork` is the only auth home. Never derive auth from a workspace `.agent` path. Pin `HOME` in tests that fabricate auth state.
 - **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.

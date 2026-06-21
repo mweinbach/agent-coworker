@@ -821,12 +821,10 @@ describe("JSON-RPC extracted route review fixes", () => {
         checkedAt: "2026-05-21T00:00:00.000Z",
         message: checkOpts.smoke ? "Smoke passed." : "Version passed.",
         version: "26.2.3.2",
-        shimPath: "/tmp/soffice",
-        resolvedPath: "/tmp/LibreOffice.app/Contents/MacOS/soffice",
+        resolvedPath: "/usr/bin/soffice",
         smoke: {
           ok: true,
           durationMs: 125,
-          outputPath: "/tmp/check.pdf",
           sizeBytes: 2048,
         },
       }),

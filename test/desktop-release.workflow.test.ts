@@ -106,9 +106,7 @@ describe("desktop release workflow", () => {
     expect(workflow).toContain(
       'throw "ARM64 unpacked sidecar manifest does not point at the expected Bun runtime payload"',
     );
-    expect(workflow).toContain(
-      'Join-Path $sidecarRoot "server\\\\assets\\\\managed-soffice-helper.mjs"',
-    );
+    expect(workflow).not.toContain("managed-soffice-helper.mjs");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_OUTPUT");
     expect(workflow).toContain(

@@ -1,6 +1,5 @@
 import path from "node:path";
 
-import { prepareManagedSofficeToolEnv } from "../../managedSofficeRuntime";
 import {
   type CodexAppServerJsonRpcRawMessage,
   getPooledCodexAppServerClient,
@@ -41,11 +40,7 @@ export async function startCodexAppServer(
     );
   };
 
-  const appServerEnv = await prepareManagedSofficeToolEnv({
-    homedir: resolveAuthHomeDir(params.config),
-    env: { ...(params.toolEnv ?? process.env) },
-    log: (line) => params.log?.(`[managed-soffice] ${line}`),
-  });
+  const appServerEnv = { ...(params.toolEnv ?? process.env) };
 
   const client = await getPooledCodexAppServerClient({
     cwd: params.config.workingDirectory,

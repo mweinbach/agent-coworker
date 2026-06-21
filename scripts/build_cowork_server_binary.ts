@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -24,49 +23,6 @@ function shouldUseBundledBunRuntime(
 
 const root = path.resolve(import.meta.dirname, "..");
 
-async function resolveCodexPrimaryRuntimeSource(): Promise<string | null> {
-  const fromEnv = process.env.COWORK_CODEX_PRIMARY_RUNTIME_DIR?.trim();
-  if (fromEnv) {
-    const resolved = path.resolve(fromEnv);
-    if (!(await pathExists(path.join(resolved, "runtime.json")))) {
-      throw new Error(
-        `COWORK_CODEX_PRIMARY_RUNTIME_DIR does not contain runtime.json: ${resolved}`,
-      );
-    }
-    return resolved;
-  }
-
-  const defaultRuntimeDir = path.join(
-    os.homedir(),
-    ".cache",
-    "codex-runtimes",
-    "codex-primary-runtime",
-  );
-  return (await pathExists(path.join(defaultRuntimeDir, "runtime.json")))
-    ? defaultRuntimeDir
-    : null;
-}
-
-async function resolveArtifactRuntimeSource(): Promise<string | null> {
-  const isUsable = async (dir: string): Promise<boolean> =>
-    (await pathExists(path.join(dir, "runtime.json"))) ||
-    (await pathExists(path.join(dir, "node", "node_modules", "@oai", "artifact-tool")));
-
-  const fromEnv = process.env.COWORK_ARTIFACT_RUNTIME_DIR?.trim();
-  if (fromEnv) {
-    const resolved = path.resolve(fromEnv);
-    if (!(await isUsable(resolved))) {
-      throw new Error(
-        `COWORK_ARTIFACT_RUNTIME_DIR does not contain an artifact runtime tree: ${resolved}`,
-      );
-    }
-    return resolved;
-  }
-
-  const defaultRuntimeDir = path.join(os.homedir(), ".cache", "cowork", "artifact-runtime");
-  return (await isUsable(defaultRuntimeDir)) ? defaultRuntimeDir : null;
-}
-
 async function copyBundledResourceDirs(outDir: string): Promise<string[]> {
   const bundledDirs: string[] = [];
   for (const dir of ["prompts", "config", "docs", "skills"] as const) {
@@ -78,32 +34,6 @@ async function copyBundledResourceDirs(outDir: string): Promise<string[]> {
     await rmrf(dest);
     await copyDir(srcDir, dest);
     bundledDirs.push(dir);
-  }
-
-  if (process.env.COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME === "1") {
-    const runtimeSource = await resolveCodexPrimaryRuntimeSource();
-    if (!runtimeSource) {
-      throw new Error(
-        "COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME=1 but no Codex primary runtime cache was found. Set COWORK_CODEX_PRIMARY_RUNTIME_DIR or run the Codex runtime setup first.",
-      );
-    }
-    const dest = path.join(outDir, "codex-primary-runtime");
-    await rmrf(dest);
-    await copyDir(runtimeSource, dest);
-    bundledDirs.push("codex-primary-runtime");
-  }
-
-  if (process.env.COWORK_BUNDLE_ARTIFACT_RUNTIME === "1") {
-    const runtimeSource = await resolveArtifactRuntimeSource();
-    if (!runtimeSource) {
-      throw new Error(
-        "COWORK_BUNDLE_ARTIFACT_RUNTIME=1 but no artifact runtime cache was found. Set COWORK_ARTIFACT_RUNTIME_DIR or run `bun run setup:artifact-runtime` first.",
-      );
-    }
-    const dest = path.join(outDir, "artifact-runtime");
-    await rmrf(dest);
-    await copyDir(runtimeSource, dest);
-    bundledDirs.push("artifact-runtime");
   }
 
   return bundledDirs;

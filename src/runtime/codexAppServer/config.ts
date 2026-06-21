@@ -1,10 +1,9 @@
 import path from "node:path";
 import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import {
-  ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
-  renderArtifactRuntimeInstructions,
-} from "../../artifactRuntime";
-import { renderManagedSofficeRuntimeInstructions } from "../../managedSofficeRuntime";
+  COWORK_RUNTIME_INSTRUCTIONS_HEADING,
+  renderCoworkRuntimeInstructions,
+} from "../../coworkRuntime";
 import { getSupportedModel } from "../../models/registry";
 import {
   type SandboxPolicy as CoworkSandboxPolicy,
@@ -134,12 +133,9 @@ export function codexBaseInstructions(
   system: string,
   env?: Record<string, string | undefined>,
 ): string {
-  const managedSofficeInstructions = system.includes("## Managed LibreOffice Runtime")
+  const coworkRuntimeInstructions = system.includes(COWORK_RUNTIME_INSTRUCTIONS_HEADING)
     ? null
-    : renderManagedSofficeRuntimeInstructions(env);
-  const artifactRuntimeInstructions = system.includes(ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING)
-    ? null
-    : renderArtifactRuntimeInstructions(env);
+    : renderCoworkRuntimeInstructions(env);
   return [
     [
       "## Codex App-Server Tool Boundary",
@@ -150,8 +146,7 @@ export function codexBaseInstructions(
       "Use Cowork dynamic tools for tasks, subagents, memory, skills, todos, and A2UI.",
       "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
     ].join("\n"),
-    ...(artifactRuntimeInstructions ? [artifactRuntimeInstructions] : []),
-    ...(managedSofficeInstructions ? [managedSofficeInstructions] : []),
+    ...(coworkRuntimeInstructions ? [coworkRuntimeInstructions] : []),
     system,
   ].join("\n\n");
 }
@@ -308,19 +303,9 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     projectRoot: path.dirname(params.config.projectCoworkDir),
     outputDirectory: params.config.outputDirectory,
     uploadsDirectory: params.config.uploadsDirectory,
-    toolRuntimeWritableRoots: [
-      ...resolveAdvancedMemoryWriteRoots(params.config),
-      ...resolveCodexToolRuntimeWriteRoots(params.toolEnv),
-    ],
+    toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(params.config)],
     targetPaths: params.agentTargetPaths,
   });
-}
-
-function resolveCodexToolRuntimeWriteRoots(
-  env: Record<string, string | undefined> | undefined,
-): string[] {
-  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
-  return managedSofficeRoot ? [managedSofficeRoot] : [];
 }
 
 function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undefined {

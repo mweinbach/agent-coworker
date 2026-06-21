@@ -254,62 +254,6 @@ function findSidecarLaunchCommand() {
   });
 }
 
-function findBundledCodexPrimaryRuntimeDir(): string | null {
-  const fromEnv = process.env.COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR;
-  if (fromEnv && fs.existsSync(fromEnv)) {
-    return fromEnv;
-  }
-
-  if (!app.isPackaged) {
-    try {
-      const devRepoRoot = resolveRepoRoot();
-      const candidate = path.join(devRepoRoot, "dist", "codex-primary-runtime");
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  const builtInDist = resolvePackagedBuiltinDistDir();
-  if (!builtInDist) {
-    return null;
-  }
-  const candidate = path.join(builtInDist, "codex-primary-runtime");
-  return fs.existsSync(candidate) ? candidate : null;
-}
-
-function findBundledArtifactRuntimeDir(): string | null {
-  const fromEnv = process.env.COWORK_BUNDLED_ARTIFACT_RUNTIME_DIR;
-  if (fromEnv && fs.existsSync(fromEnv)) {
-    return fromEnv;
-  }
-
-  const isUsable = (dir: string): boolean =>
-    fs.existsSync(path.join(dir, "runtime.json")) ||
-    fs.existsSync(path.join(dir, "node", "node_modules", "@oai", "artifact-tool"));
-
-  if (!app.isPackaged) {
-    try {
-      const devRepoRoot = resolveRepoRoot();
-      const candidate = path.join(devRepoRoot, "dist", "artifact-runtime");
-      if (isUsable(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  const builtInDist = resolvePackagedBuiltinDistDir();
-  if (!builtInDist) {
-    return null;
-  }
-  const candidate = path.join(builtInDist, "artifact-runtime");
-  return isUsable(candidate) ? candidate : null;
-}
-
 function findBundledFoundationModelsSdkDir(): string | null {
   for (const dir of getSidecarSearchDirs()) {
     const candidate = path.join(dir, FOUNDATION_MODELS_SDK_DIR_NAME);
@@ -606,8 +550,6 @@ function buildServerEnv(
     productAnalyticsState?: PersistedProductAnalyticsState | null;
   } = {},
 ): NodeJS.ProcessEnv {
-  const bundledCodexPrimaryRuntime = findBundledCodexPrimaryRuntimeDir();
-  const bundledArtifactRuntime = findBundledArtifactRuntimeDir();
   const bundledFoundationModelsSdk =
     opts.includeBundledFoundationModelsSdk && !process.env.COWORK_TSFMSDK_DIR
       ? findBundledFoundationModelsSdkDir()
@@ -630,6 +572,7 @@ function buildServerEnv(
   const processEnv = withoutInheritedProductAnalyticsEnv(
     withoutInheritedCrashReportingEnv(inheritedEnv),
   );
+  delete processEnv.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP;
   return {
     ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",
@@ -637,13 +580,8 @@ function buildServerEnv(
     COWORK_BROWSER_ACCESS_TOKEN:
       process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
       `${randomUUID()}${randomUUID().replaceAll("-", "")}`,
-    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
-    ...(bundledCodexPrimaryRuntime
-      ? { COWORK_BUNDLED_CODEX_PRIMARY_RUNTIME_DIR: bundledCodexPrimaryRuntime }
-      : {}),
-    ...(bundledArtifactRuntime
-      ? { COWORK_BUNDLED_ARTIFACT_RUNTIME_DIR: bundledArtifactRuntime }
-      : {}),
+    COWORK_BOOTSTRAP_DEFAULT_SKILLS: process.env.COWORK_BOOTSTRAP_DEFAULT_SKILLS ?? "1",
+    COWORK_RUNTIME_ALLOW_NETWORK: process.env.COWORK_RUNTIME_ALLOW_NETWORK ?? "1",
     ...(bundledFoundationModelsSdk ? { COWORK_TSFMSDK_DIR: bundledFoundationModelsSdk } : {}),
     ...(bundledWindowsAiElectron
       ? { COWORK_WINDOWS_AI_ELECTRON_DIR: bundledWindowsAiElectron }

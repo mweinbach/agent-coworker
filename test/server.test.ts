@@ -224,7 +224,8 @@ describe("Server Startup", () => {
       expect(config.skillsDirs[0]).toBe(path.join(tmpDir, ".cowork", "skills"));
       expect(config.skillsDirs[2]).toBe(path.join(config.builtInDir, "skills"));
       expect(system).toContain("## Available Skills");
-      expect(system).toContain("**presentations**");
+      expect(system).toContain("**git-workflow**");
+      expect(system).not.toContain("**presentations**");
     } finally {
       await stopTestServer(server);
     }

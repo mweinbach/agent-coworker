@@ -275,7 +275,9 @@ List and query sessions via:
 | `AGENT_MODEL` | Override model ID |
 | `AGENT_WORKING_DIR` | Override working directory |
 | `COWORK_BUILTIN_DIR` | Path to bundled resources (prompts, config, docs) |
+| `COWORK_BOOTSTRAP_DEFAULT_SKILLS` | Download the default marketplace plugin set on startup (desktop defaults to `1`) |
 | `COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP` | Skip first-run skill installation |
+| `COWORK_RUNTIME_ALLOW_NETWORK` | Allow the server to download the platform runtime release (desktop defaults to `1`) |
 
 ### Runtime Config Patching
 

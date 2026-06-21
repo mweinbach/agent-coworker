@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { loadConfig } from "../src/config";
 import { previewPresentationFile } from "../src/server/presentationPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -92,13 +93,42 @@ describe("presentation preview renderer", () => {
     });
   });
 
-  test("uses the bundled artifact runtime environment for slide rendering", async () => {
+  test("runs the marketplace presentation skill with the separate runtime environment", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "slide-1.mjs");
       await fs.writeFile(filePath, "export default {}", "utf8");
 
-      const scriptDir = path.join(dir, "skills/presentations/scripts");
+      const home = path.join(dir, "home");
+      const pluginRoot = path.join(home, ".cowork", "plugins", "workspace-tools");
+      const scriptDir = path.join(pluginRoot, "skills", "presentations", "scripts");
       await fs.mkdir(scriptDir, { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, ".cowork-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".cowork-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "workspace-tools",
+          version: "1.0.0",
+          description: "Marketplace workspace tools",
+          skills: "./skills",
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".cowork-plugin", "install.json"),
+        `${JSON.stringify({
+          marketplace: {
+            name: "cowork-personal",
+            sourceInput:
+              "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/workspace-tools",
+          },
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, "skills", "presentations", "SKILL.md"),
+        "---\nname: presentations\ndescription: Marketplace presentations fixture\n---\n",
+        "utf8",
+      );
       await fs.writeFile(
         path.join(scriptDir, "render_artifact_slide.mjs"),
         `import fs from "node:fs";
@@ -124,14 +154,18 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
       await fs.chmod(fakeNode, 0o755);
 
       const envCapture = path.join(dir, "render-env.txt");
+      const config = await loadConfig({ cwd: dir, homedir: home, builtInDir: dir });
       const result = await previewPresentationFile({
         cwd: dir,
         filePath: "slide-1.mjs",
         builtInDir: dir,
+        config,
         env: {
-          COWORK_BUNDLED_ARTIFACT_RUNTIME_DIR: bundledRuntime,
+          COWORK_RUNTIME_DIR: bundledRuntime,
+          COWORK_RUNTIME_NODE: fakeNode,
+          COWORK_RUNTIME_NODE_MODULES: path.join(bundledRuntime, "node/node_modules"),
           COWORK_TEST_ENV_CAPTURE: envCapture,
-          HOME: path.join(dir, "home"),
+          HOME: home,
         },
       });
 
@@ -141,9 +175,9 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
         "data:image/png;base64,YnVuZGxlZC1ydW50aW1lLXBuZw==",
       );
       const capturedEnv = await fs.readFile(envCapture, "utf8");
-      expect(capturedEnv).toContain(`COWORK_ARTIFACT_RUNTIME_NODE=${fakeNode}`);
+      expect(capturedEnv).toContain(`COWORK_RUNTIME_NODE=${fakeNode}`);
       expect(capturedEnv).toContain(
-        `COWORK_ARTIFACT_RUNTIME_NODE_MODULES=${path.join(bundledRuntime, "node/node_modules")}`,
+        `COWORK_RUNTIME_NODE_MODULES=${path.join(bundledRuntime, "node/node_modules")}`,
       );
     });
   });

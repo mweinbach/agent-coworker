@@ -313,21 +313,28 @@ describe("desktop server manager startup mode", () => {
     }
   });
 
-  test("buildServerEnv mirrors process env without desktop-only skill bootstrap flags", () => {
+  test("buildServerEnv enables independent marketplace and runtime downloads by default", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
     expect(env.COWORK_WEB_DESKTOP_SERVICE).toBe("1");
     expect(env.COWORK_DESKTOP_USER_DATA_DIR).toBe(userDataDir);
     expect(env.COWORK_BROWSER_ACCESS_TOKEN).toEqual(expect.any(String));
     expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);
-    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
-      process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    expect(env.COWORK_BOOTSTRAP_DEFAULT_SKILLS).toBe(
+      process.env.COWORK_BOOTSTRAP_DEFAULT_SKILLS ?? "1",
     );
+    expect(env.COWORK_RUNTIME_ALLOW_NETWORK).toBe(process.env.COWORK_RUNTIME_ALLOW_NETWORK ?? "1");
     expect(env.COWORK_HARNESS_TERMINAL_LOGS).toBe(
       process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
     );
     expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
     expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
+  });
+
+  test("buildServerEnv does not inherit the child-server default-skills skip flag", async () => {
+    await withProcessEnv({ COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1" }, () => {
+      expect(__internal.buildServerEnv().COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBeUndefined();
+    });
   });
 
   test("buildServerEnv preserves explicit browser access tokens", () => {

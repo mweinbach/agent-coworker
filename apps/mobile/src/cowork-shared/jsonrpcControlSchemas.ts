@@ -335,18 +335,15 @@ export const libreOfficeRuntimeCheckRequestSchema = cwdRequestSchema
 
 export const libreOfficeRuntimeDiagnosticSchema = z
   .object({
-    status: z.enum(["available", "unavailable", "disabled"]),
+    status: z.enum(["available", "unavailable"]),
     checkedAt: z.string(),
     message: z.string(),
     version: z.string().optional(),
-    shimPath: z.string().optional(),
     resolvedPath: z.string().optional(),
-    rootDir: z.string().optional(),
     smoke: z
       .object({
         ok: z.boolean(),
         durationMs: z.number().nonnegative(),
-        outputPath: z.string().optional(),
         sizeBytes: z.number().nonnegative().optional(),
         error: z.string().optional(),
       })

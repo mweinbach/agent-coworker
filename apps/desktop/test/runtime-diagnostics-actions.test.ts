@@ -16,13 +16,13 @@ class MockJsonRpcSocket {
         status: {
           status: "available",
           checkedAt: "2026-05-21T00:00:00.000Z",
-          message: "LibreOffice is available through the Cowork-managed soffice shim.",
+          message:
+            "Cowork's managed headless LibreOffice launcher is available; UI and printing modes are blocked.",
           version: "26.2.3.2",
-          shimPath: "/tmp/cowork/libreoffice/bin/soffice",
+          resolvedPath: "/runtime/dependencies/bin/soffice",
           smoke: {
             ok: true,
             durationMs: 50,
-            outputPath: "/tmp/check.pdf",
             sizeBytes: 2048,
           },
         },

@@ -3,18 +3,12 @@ import path from "node:path";
 import { z } from "zod";
 
 import { resolveAdvancedMemoryWriteRoots } from "./advancedMemory/store";
-import {
-  ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
-  prepareArtifactRuntimeToolEnv,
-  renderArtifactRuntimeInstructions,
-} from "./artifactRuntime";
-import { ARTIFACT_RUNTIME_ENV_DIR } from "./artifactRuntime/constants";
-import { artifactRuntimeCacheRoot } from "./artifactRuntime/runtimeDiscovery";
 import { getModel as realGetModel } from "./config";
 import {
-  prepareManagedSofficeToolEnv,
-  renderManagedSofficeRuntimeInstructions,
-} from "./managedSofficeRuntime";
+  COWORK_RUNTIME_INSTRUCTIONS_HEADING,
+  prepareCoworkRuntimeToolEnv,
+  renderCoworkRuntimeInstructions,
+} from "./coworkRuntime";
 import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { policyAllowsNetwork, resolveSandboxPolicy } from "./platform/sandbox";
@@ -344,53 +338,15 @@ function providerOwnsExecutableTools(config: AgentConfig): boolean {
   return config.provider === "codex-cli";
 }
 
-function collectToolRuntimeWritableRoots(
-  config: AgentConfig,
-  env: Record<string, string | undefined> | undefined,
-): string[] | undefined {
-  const writableRoots: string[] = [];
-  const artifactRuntimeDir = env?.[ARTIFACT_RUNTIME_ENV_DIR]?.trim();
-  if (artifactRuntimeDir) {
-    const cacheRoot = artifactRuntimeCacheRoot(resolveAuthHomeDir(config));
-    const relativeToCache = path.relative(
-      path.resolve(cacheRoot),
-      path.resolve(artifactRuntimeDir),
-    );
-    const runtimeIsInCache =
-      relativeToCache === "" ||
-      (!relativeToCache.startsWith("..") && !path.isAbsolute(relativeToCache));
-    if (runtimeIsInCache) writableRoots.push(cacheRoot);
-  }
-
-  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
-  if (managedSofficeRoot) writableRoots.push(managedSofficeRoot);
-
-  return writableRoots.length > 0 ? writableRoots : undefined;
-}
-
 async function prepareTurnToolEnv(
   params: Pick<RunTurnParams, "config" | "toolEnv" | "log">,
 ): Promise<Record<string, string | undefined> | undefined> {
   const homedir = resolveAuthHomeDir(params.config);
-  const withArtifactRuntime = await prepareArtifactRuntimeToolEnv({
+  return await prepareCoworkRuntimeToolEnv({
     homedir,
     env: params.toolEnv ?? { ...process.env },
-    log: (line) => params.log?.(`[artifact-runtime] ${line}`),
+    log: (line) => params.log?.(`[cowork-runtime] ${line}`),
   });
-  return await prepareManagedSofficeToolEnv({
-    homedir,
-    env: withArtifactRuntime,
-    log: (line) => params.log?.(`[managed-soffice] ${line}`),
-  });
-}
-
-function appendManagedSofficeInstructions(
-  system: string,
-  env: Record<string, string | undefined> | undefined,
-): string {
-  if (system.includes("## Managed LibreOffice Runtime")) return system;
-  const instructions = renderManagedSofficeRuntimeInstructions(env);
-  return instructions ? `${system}\n\n${instructions}` : system;
 }
 
 function appendRuntimeInstructions(
@@ -398,13 +354,13 @@ function appendRuntimeInstructions(
   env: Record<string, string | undefined> | undefined,
 ): string {
   let nextSystem = system;
-  if (!nextSystem.includes(ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING)) {
-    const artifactRuntimeInstructions = renderArtifactRuntimeInstructions(env);
-    if (artifactRuntimeInstructions) {
-      nextSystem = `${nextSystem}\n\n${artifactRuntimeInstructions}`;
+  if (!nextSystem.includes(COWORK_RUNTIME_INSTRUCTIONS_HEADING)) {
+    const coworkRuntimeInstructions = renderCoworkRuntimeInstructions(env);
+    if (coworkRuntimeInstructions) {
+      nextSystem = `${nextSystem}\n\n${coworkRuntimeInstructions}`;
     }
   }
-  return appendManagedSofficeInstructions(nextSystem, env);
+  return nextSystem;
 }
 
 type RunTurnDeps = {
@@ -490,10 +446,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       projectRoot: path.dirname(config.projectCoworkDir),
       outputDirectory: config.outputDirectory,
       uploadsDirectory: config.uploadsDirectory,
-      toolRuntimeWritableRoots: [
-        ...(collectToolRuntimeWritableRoots(config, turnToolEnv) ?? []),
-        ...resolveAdvancedMemoryWriteRoots(config),
-      ],
+      toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
       targetPaths: params.agentTargetPaths,
     });
 

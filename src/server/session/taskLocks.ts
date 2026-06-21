@@ -17,6 +17,8 @@ export type TaskLockError = {
   data: TaskLockErrorData;
 };
 
+const pendingTerminalSessionLocks = new Map<string, TaskLockError>();
+
 export function isTerminalTaskStatus(status: TaskStatus): status is TerminalTaskStatus {
   return TERMINAL_TASK_STATUSES.has(status);
 }
@@ -51,10 +53,39 @@ export function activeSourceChatLock(
   };
 }
 
+export function registerPendingTerminalTaskThreadLocks(
+  task: Pick<TaskRecord, "id" | "title" | "threads">,
+  status: TerminalTaskStatus,
+): () => void {
+  const locks = task.threads.map((thread) => {
+    const lock: TaskLockError = {
+      message: `Task ${task.id} is finalizing ${status} and cannot accept new turns until it is reopened or retried.`,
+      data: {
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: task.id,
+        taskStatus: status,
+      },
+    };
+    pendingTerminalSessionLocks.set(thread.sessionId, lock);
+    return { sessionId: thread.sessionId, lock };
+  });
+  return () => {
+    for (const { sessionId, lock } of locks) {
+      if (pendingTerminalSessionLocks.get(sessionId) === lock) {
+        pendingTerminalSessionLocks.delete(sessionId);
+      }
+    }
+  };
+}
+
 export function getTaskThreadLock(
   sessionDb: TaskSessionDb | null | undefined,
   sessionId: string,
 ): TaskLockError | null {
+  const pendingLock = pendingTerminalSessionLocks.get(sessionId);
+  if (pendingLock) return pendingLock;
   const task = sessionDb?.getTaskForThread?.(sessionId);
   return task ? terminalTaskLock(task) : null;
 }

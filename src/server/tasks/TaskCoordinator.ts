@@ -34,6 +34,7 @@ import {
 } from "../../shared/tasks";
 import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
+import { isTerminalTaskStatus, registerPendingTerminalTaskThreadLocks } from "../session/taskLocks";
 import type { SessionDb } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
 import {
@@ -68,6 +69,7 @@ type TaskContinuationDispatcher = (input: {
 type TaskThreadQuiescer = (
   task: TaskRecord,
   reason: "completed" | "cancelled" | "failed",
+  opts?: { originSessionId?: string },
 ) => Promise<void> | void;
 
 type TaskCoordinatorOptions = {
@@ -190,8 +192,6 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   cancelled: [],
 };
 
-const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
-
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -203,21 +203,21 @@ function nonEmpty(value: string, name: string): string {
 }
 
 function assertTaskAcceptsNewThreads(task: TaskRecord): void {
-  if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+  if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot create new focused threads until it is reopened or retried.`,
   );
 }
 
 function assertTaskAcceptsMutation(task: TaskRecord): void {
-  if (!TERMINAL_TASK_STATUSES.has(task.status)) return;
+  if (!isTerminalTaskStatus(task.status)) return;
   throw new Error(
     `Task ${task.id} is ${task.status} and cannot be changed until it is reopened or retried.`,
   );
 }
 
 function isTerminalTask(task: Pick<TaskRecord, "status">): boolean {
-  return TERMINAL_TASK_STATUSES.has(task.status);
+  return isTerminalTaskStatus(task.status);
 }
 
 function isTerminalTaskMutationError(taskId: string, error: unknown): boolean {
@@ -561,10 +561,50 @@ export class TaskCoordinator {
     }
   }
 
-  private async quiesceTaskThreads(task: TaskRecord): Promise<void> {
-    const reason = task.status;
-    if (reason !== "completed" && reason !== "cancelled" && reason !== "failed") return;
-    await this.options.quiesceTaskThreads?.(task, reason);
+  private async prepareTerminalTaskWrite(
+    task: TaskRecord,
+    reason: "completed" | "cancelled" | "failed",
+    opts?: { originSessionId?: string },
+  ): Promise<() => void> {
+    const releasePendingLocks = registerPendingTerminalTaskThreadLocks(task, reason);
+    try {
+      await this.options.quiesceTaskThreads?.(task, reason, opts);
+      return releasePendingLocks;
+    } catch (error) {
+      releasePendingLocks();
+      throw error;
+    }
+  }
+
+  private isTaskThreadSession(
+    task: TaskRecord,
+    sessionId: string | undefined,
+  ): sessionId is string {
+    return Boolean(sessionId && task.threads.some((thread) => thread.sessionId === sessionId));
+  }
+
+  private deferSelfOriginTerminalTransition(input: {
+    task: TaskRecord;
+    status: "completed" | "cancelled" | "failed";
+    sessionId: string;
+    run: () => Promise<TaskRecord>;
+  }): TaskRecord {
+    const releasePendingLocks = registerPendingTerminalTaskThreadLocks(input.task, input.status);
+    void (async () => {
+      try {
+        await this.options.quiesceTaskThreads?.(input.task, input.status, {
+          originSessionId: input.sessionId,
+        });
+        await input.run();
+      } catch {
+        // The pending lock is released below so the task remains non-terminal
+        // rather than advertising a terminal lifecycle state that was not
+        // safely quiesced.
+      } finally {
+        releasePendingLocks();
+      }
+    })();
+    return input.task;
   }
 
   list(workspacePath?: string | null): TaskSummary[] {
@@ -1940,6 +1980,8 @@ export class TaskCoordinator {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
+    sessionId?: string;
+    deferTerminalUntilOriginSettled?: boolean;
   }): Promise<TaskRecord> {
     const current = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(current, input.expectedRevision);
@@ -1957,6 +1999,29 @@ export class TaskCoordinator {
       throw error;
     }
     if (reviewedMaterial) {
+      if (
+        input.deferTerminalUntilOriginSettled &&
+        this.isTaskThreadSession(current, input.sessionId)
+      ) {
+        return this.deferSelfOriginTerminalTransition({
+          task: current,
+          status: "completed",
+          sessionId: input.sessionId,
+          run: async () => {
+            const latest = this.requireTask(current.id, current.workspacePath);
+            if (isTerminalTask(latest)) return latest;
+            if (latest.status !== "awaiting_review") return latest;
+            return await this.acceptTask({
+              taskId: latest.id,
+              workspacePath: latest.workspacePath,
+              expectedRevision: latest.revision,
+            });
+          },
+        });
+      }
+      const terminalRelease = await this.prepareTerminalTaskWrite(current, "completed", {
+        originSessionId: input.sessionId,
+      });
       let task: TaskRecord;
       try {
         task = await this.options.sessionDb.acceptAllTaskArtifactVersionsValidated({
@@ -1968,19 +2033,47 @@ export class TaskCoordinator {
           },
         });
       } catch (error) {
+        terminalRelease();
         await this.returnTaskToWorkingAfterStaleAcceptance(current, error);
         throw error;
       }
-      await this.quiesceTaskThreads(task);
+      terminalRelease();
       this.notifyUpdated(task);
       return task;
     }
-    const task = await this.options.sessionDb.acceptAllTaskArtifactVersions({
-      taskId: current.id,
-      expectedRevision: input.expectedRevision,
-      updatedAt: nowIso(),
+    if (
+      input.deferTerminalUntilOriginSettled &&
+      this.isTaskThreadSession(current, input.sessionId)
+    ) {
+      return this.deferSelfOriginTerminalTransition({
+        task: current,
+        status: "completed",
+        sessionId: input.sessionId,
+        run: async () => {
+          const latest = this.requireTask(current.id, current.workspacePath);
+          if (isTerminalTask(latest)) return latest;
+          if (latest.status !== "awaiting_review") return latest;
+          return await this.acceptTask({
+            taskId: latest.id,
+            workspacePath: latest.workspacePath,
+            expectedRevision: latest.revision,
+          });
+        },
+      });
+    }
+    const terminalRelease = await this.prepareTerminalTaskWrite(current, "completed", {
+      originSessionId: input.sessionId,
     });
-    await this.quiesceTaskThreads(task);
+    let task: TaskRecord;
+    try {
+      task = await this.options.sessionDb.acceptAllTaskArtifactVersions({
+        taskId: current.id,
+        expectedRevision: input.expectedRevision,
+        updatedAt: nowIso(),
+      });
+    } finally {
+      terminalRelease();
+    }
     this.notifyUpdated(task);
     return task;
   }
@@ -2540,6 +2633,12 @@ export class TaskCoordinator {
     let currentMaterial: TaskReviewMaterial | null = null;
     const updatedAt = nowIso();
     const thread = input.task.threads.find((candidate) => candidate.sessionId === input.sessionId);
+    const willCompleteTask = !input.task.reviewRequired;
+    const terminalRelease = willCompleteTask
+      ? await this.prepareTerminalTaskWrite(input.task, "completed", {
+          originSessionId: input.sessionId,
+        })
+      : null;
     let result: {
       task: TaskRecord;
       completion: "committed" | "not_ready";
@@ -2590,8 +2689,10 @@ export class TaskCoordinator {
         },
       });
     } catch (error) {
+      terminalRelease?.();
       throw new AtomicTaskCompletionSettlementError(error);
     }
+    terminalRelease?.();
     if (result.completion === "not_ready") {
       return await this.restoreAfterArtifactRevisionCompletionProposalFailure({
         taskId: input.task.id,
@@ -2601,7 +2702,6 @@ export class TaskCoordinator {
         detail: input.detail,
       });
     }
-    await this.quiesceTaskThreads(result.task);
     this.notifyUpdated(result.task);
     return result.task;
   }
@@ -2809,6 +2909,7 @@ export class TaskCoordinator {
     summary: string;
     detail?: string;
     sessionId?: string;
+    deferTerminalUntilOriginSettled?: boolean;
   }): Promise<TaskRecord> {
     const initial = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(initial, input.expectedRevision);
@@ -2823,6 +2924,7 @@ export class TaskCoordinator {
     summary: string;
     detail?: string;
     sessionId?: string;
+    deferTerminalUntilOriginSettled?: boolean;
     validateUpdatedTask?: (task: TaskRecord) => Promise<void>;
   }): Promise<TaskRecord> {
     const task = this.requireTask(input.taskId, input.workspacePath);
@@ -2833,6 +2935,8 @@ export class TaskCoordinator {
         taskId: task.id,
         workspacePath: task.workspacePath,
         expectedRevision,
+        sessionId: input.sessionId,
+        deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
       });
     }
     if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
@@ -2845,20 +2949,52 @@ export class TaskCoordinator {
     ) {
       throw new Error("Task cannot return to working while blocking input or issues remain");
     }
+    if (
+      isTerminalTaskStatus(input.status) &&
+      input.deferTerminalUntilOriginSettled &&
+      this.isTaskThreadSession(task, input.sessionId)
+    ) {
+      return this.deferSelfOriginTerminalTransition({
+        task,
+        status: input.status,
+        sessionId: input.sessionId,
+        run: async () => {
+          const latest = this.requireTask(task.id, task.workspacePath);
+          if (isTerminalTask(latest)) return latest;
+          return await this.transition({
+            taskId: latest.id,
+            workspacePath: latest.workspacePath,
+            expectedRevision: latest.revision,
+            status: input.status,
+            summary: input.summary,
+            ...(input.detail !== undefined ? { detail: input.detail } : {}),
+          });
+        },
+      });
+    }
     const thread = input.sessionId
       ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
       : null;
-    const updated = await this.options.sessionDb.setTaskStatus({
-      taskId: task.id,
-      expectedRevision,
-      status: input.status,
-      summary: nonEmpty(input.summary, "Status summary"),
-      detail: input.detail?.trim() || null,
-      updatedAt: nowIso(),
-      threadId: thread?.id ?? null,
-      validateUpdatedTask: input.validateUpdatedTask,
-    });
-    await this.quiesceTaskThreads(updated);
+    const terminalRelease = isTerminalTaskStatus(input.status)
+      ? await this.prepareTerminalTaskWrite(task, input.status, {
+          originSessionId: input.sessionId,
+        })
+      : null;
+    let updated: TaskRecord;
+    try {
+      updated = await this.options.sessionDb.setTaskStatus({
+        taskId: task.id,
+        expectedRevision,
+        status: input.status,
+        summary: nonEmpty(input.summary, "Status summary"),
+        detail: input.detail?.trim() || null,
+        updatedAt: nowIso(),
+        threadId: thread?.id ?? null,
+        validateUpdatedTask: input.validateUpdatedTask,
+      });
+    } finally {
+      terminalRelease?.();
+    }
     this.notifyUpdated(updated);
     return updated;
   }
@@ -2871,7 +3007,7 @@ export class TaskCoordinator {
     sessionId?: string;
   }): Promise<TaskRecord> {
     const { task } = input;
-    if (!TERMINAL_TASK_STATUSES.has(task.status)) {
+    if (!isTerminalTaskStatus(task.status)) {
       throw new Error(`Task ${task.id} is not terminal`);
     }
     if (task.revision !== input.expectedRevision) {
@@ -3208,6 +3344,8 @@ export class TaskCoordinator {
     summary: string;
     caveats?: string[];
     sessionId?: string;
+    defaultPendingQuestions?: boolean;
+    deferTerminalUntilOriginSettled?: boolean;
   }): Promise<TaskRecord> {
     return await this.runTaskMutation(
       input.taskId,
@@ -3223,6 +3361,7 @@ export class TaskCoordinator {
     caveats?: string[];
     sessionId?: string;
     defaultPendingQuestions?: boolean;
+    deferTerminalUntilOriginSettled?: boolean;
   }): Promise<TaskRecord> {
     let task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
@@ -3245,10 +3384,38 @@ export class TaskCoordinator {
     const currentMaterial = await this.validateCompletionProposalTask(task);
     const settlementRevisionIds = this.pendingArtifactRevisionSettlementIds(task);
     if (settlementRevisionIds.length > 0) {
+      if (
+        !task.reviewRequired &&
+        input.deferTerminalUntilOriginSettled &&
+        this.isTaskThreadSession(task, input.sessionId)
+      ) {
+        return this.deferSelfOriginTerminalTransition({
+          task,
+          status: "completed",
+          sessionId: input.sessionId,
+          run: async () => {
+            const latest = this.requireTask(task.id, task.workspacePath);
+            if (isTerminalTask(latest)) return latest;
+            return await this.proposeCompletion({
+              taskId: latest.id,
+              workspacePath: latest.workspacePath,
+              expectedRevision: latest.revision,
+              summary: input.summary,
+              ...(input.caveats ? { caveats: input.caveats } : {}),
+              defaultPendingQuestions: input.defaultPendingQuestions,
+            });
+          },
+        });
+      }
       const thread = input.sessionId
         ? task.threads.find((candidate) => candidate.sessionId === input.sessionId)
         : null;
       const updatedAt = nowIso();
+      const terminalRelease = !task.reviewRequired
+        ? await this.prepareTerminalTaskWrite(task, "completed", {
+            originSessionId: input.sessionId,
+          })
+        : null;
       let updated: TaskRecord;
       try {
         updated =
@@ -3273,9 +3440,10 @@ export class TaskCoordinator {
               : undefined,
           });
       } catch (error) {
+        terminalRelease?.();
         throw new AtomicTaskCompletionSettlementError(error);
       }
-      await this.quiesceTaskThreads(updated);
+      terminalRelease?.();
       this.notifyUpdated(updated);
       return updated;
     }
@@ -3287,6 +3455,7 @@ export class TaskCoordinator {
       summary: input.summary,
       detail: input.caveats?.filter(Boolean).join("\n") || undefined,
       sessionId: input.sessionId,
+      deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
       validateUpdatedTask: currentMaterial
         ? async (updatedTask) => {
             await this.assertLiveArtifactEvidenceUnchanged(updatedTask, currentMaterial);
@@ -3298,6 +3467,8 @@ export class TaskCoordinator {
       taskId: ready.id,
       workspacePath: ready.workspacePath,
       expectedRevision: ready.revision,
+      sessionId: input.sessionId,
+      deferTerminalUntilOriginSettled: input.deferTerminalUntilOriginSettled,
     });
   }
 
@@ -3544,6 +3715,7 @@ export class TaskCoordinator {
           summary: directive.summary,
           caveats: directive.caveats,
           sessionId,
+          deferTerminalUntilOriginSettled: true,
         });
         break;
       case "create_thread":

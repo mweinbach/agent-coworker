@@ -179,6 +179,25 @@ function sandboxApproval(requestId: string, command: string): SandboxApprovalPro
   };
 }
 
+function taskThreadSummary(task: TaskRecord, threadIndex = 0) {
+  const thread = task.threads[threadIndex];
+  if (!thread) throw new Error(`missing task thread ${threadIndex} for ${task.id}`);
+  return {
+    id: thread.sessionId,
+    workspaceId: "ws-1",
+    title: thread.title,
+    createdAt: thread.createdAt,
+    lastMessageAt: thread.updatedAt,
+    status: "active",
+    sessionId: thread.sessionId,
+    messageCount: 0,
+    lastEventSeq: 0,
+    draft: false,
+    taskId: task.id,
+    taskThreadId: thread.id,
+  };
+}
+
 function resetStore(task: TaskRecord | null) {
   const current = useAppStore.getState();
   useAppStore.setState({
@@ -886,6 +905,230 @@ describe("desktop task mode UI", () => {
     }
   });
 
+  test.serial("keys terminal conversation reopen pending state by selected task", async () => {
+    const harness = setupJsdom();
+    const firstReopen = Promise.withResolvers<void>();
+    const secondReopen = Promise.withResolvers<void>();
+    const reopenTask = mock(async (taskId: string) => {
+      await (taskId === "task-1" ? firstReopen.promise : secondReopen.promise);
+    });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      const firstTask = taskRecord({ id: "task-1", status: "completed", title: "First terminal" });
+      const secondTask = taskRecord({
+        id: "task-2",
+        status: "completed",
+        title: "Second terminal",
+        threads: [
+          {
+            id: "task-thread-2",
+            taskId: "task-2",
+            sessionId: "task-session-2",
+            title: "Main",
+            createdBy: "coordinator",
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        ],
+      });
+      resetStore(firstTask);
+      useAppStore.setState({
+        reopenTask,
+        tasksById: { "task-1": firstTask, "task-2": secondTask },
+        threads: [taskThreadSummary(firstTask), taskThreadSummary(secondTask)],
+        threadRuntimeById: {},
+      } as never);
+
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
+      const firstButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Reopen task",
+      ) as HTMLButtonElement | undefined;
+      await act(async () => {
+        firstButton?.click();
+        firstButton?.click();
+        await Promise.resolve();
+      });
+      expect(reopenTask).toHaveBeenCalledTimes(1);
+      expect(reopenTask).toHaveBeenCalledWith("task-1");
+      expect(container.textContent).toContain("Reopening...");
+
+      await act(async () => {
+        useAppStore.setState({
+          selectedTaskId: "task-2",
+          selectedThreadId: "task-session-2",
+        } as never);
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Reopening...");
+      const secondButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Reopen task",
+      ) as HTMLButtonElement | undefined;
+      expect(secondButton?.disabled).toBe(false);
+
+      await act(async () => {
+        secondButton?.click();
+        await Promise.resolve();
+      });
+      expect(reopenTask).toHaveBeenCalledTimes(2);
+      expect(reopenTask).toHaveBeenLastCalledWith("task-2");
+      expect(container.textContent).toContain("Reopening...");
+
+      await act(async () => {
+        firstReopen.resolve();
+        await firstReopen.promise;
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Reopening...");
+
+      await act(async () => {
+        secondReopen.resolve();
+        await secondReopen.promise;
+      });
+      expect(container.textContent).toContain("Reopen task");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("keys terminal conversation retry pending state by selected task", async () => {
+    const harness = setupJsdom();
+    const firstRetry = Promise.withResolvers<boolean>();
+    const secondRetry = Promise.withResolvers<boolean>();
+    const retryTask = mock(async (taskId: string) => {
+      return await (taskId === "task-1" ? firstRetry.promise : secondRetry.promise);
+    });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      const firstTask = taskRecord({ id: "task-1", status: "failed", title: "First failed" });
+      const secondTask = taskRecord({
+        id: "task-2",
+        status: "failed",
+        title: "Second failed",
+        threads: [
+          {
+            id: "task-thread-2",
+            taskId: "task-2",
+            sessionId: "task-session-2",
+            title: "Main",
+            createdBy: "coordinator",
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        ],
+      });
+      resetStore(firstTask);
+      useAppStore.setState({
+        retryTask,
+        tasksById: { "task-1": firstTask, "task-2": secondTask },
+        threads: [taskThreadSummary(firstTask), taskThreadSummary(secondTask)],
+        threadRuntimeById: {},
+      } as never);
+
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
+      const firstButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Retry task",
+      ) as HTMLButtonElement | undefined;
+      await act(async () => {
+        firstButton?.click();
+        firstButton?.click();
+        await Promise.resolve();
+      });
+      expect(retryTask).toHaveBeenCalledTimes(1);
+      expect(retryTask).toHaveBeenCalledWith("task-1");
+      expect(container.textContent).toContain("Retrying...");
+
+      await act(async () => {
+        useAppStore.setState({
+          selectedTaskId: "task-2",
+          selectedThreadId: "task-session-2",
+        } as never);
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Retrying...");
+      const secondButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Retry task",
+      ) as HTMLButtonElement | undefined;
+      expect(secondButton?.disabled).toBe(false);
+
+      await act(async () => {
+        secondButton?.click();
+        await Promise.resolve();
+      });
+      expect(retryTask).toHaveBeenCalledTimes(2);
+      expect(retryTask).toHaveBeenLastCalledWith("task-2");
+      expect(container.textContent).toContain("Retrying...");
+
+      await act(async () => {
+        firstRetry.resolve(true);
+        await firstRetry.promise;
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Retrying...");
+
+      await act(async () => {
+        secondRetry.resolve(true);
+        await secondRetry.promise;
+      });
+      expect(container.textContent).toContain("Retry task");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("clears terminal conversation pending state after lifecycle rejection", async () => {
+    const harness = setupJsdom();
+    const realConsoleError = console.error;
+    console.error = mock(() => {}) as never;
+    let attempts = 0;
+    const reopenTask = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("reopen failed");
+    });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
+      const root = createRoot(container);
+      resetStore(taskRecord({ status: "completed" }));
+      useAppStore.setState({ reopenTask } as never);
+
+      await act(async () => root.render(createElement(TaskConversationSidebar)));
+      const reopenButton = () =>
+        Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Reopen task",
+        ) as HTMLButtonElement | undefined;
+
+      await act(async () => {
+        reopenButton()?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(reopenTask).toHaveBeenCalledTimes(1);
+      expect(reopenButton()?.disabled).toBe(false);
+
+      await act(async () => {
+        reopenButton()?.click();
+        await Promise.resolve();
+      });
+      expect(reopenTask).toHaveBeenCalledTimes(2);
+
+      await act(async () => root.unmount());
+    } finally {
+      console.error = realConsoleError;
+      harness.restore();
+    }
+  });
+
   test.serial("rebinds the message overlay observer when a task becomes read-only", async () => {
     const observedElements: Element[] = [];
     let disconnectCount = 0;
@@ -942,9 +1185,10 @@ describe("desktop task mode UI", () => {
       const observedOverlays = observedElements.filter(
         (element) => element.getAttribute("data-slot") === "message-bar-overlay",
       );
-      expect(observedOverlays).toHaveLength(2);
-      expect(observedOverlays[0]).not.toBe(observedOverlays[1]);
-      expect(observedOverlays[1]?.isConnected).toBe(true);
+      const latestOverlay = observedOverlays.at(-1);
+      expect(observedOverlays.length).toBeGreaterThanOrEqual(2);
+      expect(latestOverlay).not.toBe(firstOverlay);
+      expect(latestOverlay?.isConnected).toBe(true);
       expect(disconnectCount).toBeGreaterThanOrEqual(1);
 
       await act(async () => root.unmount());

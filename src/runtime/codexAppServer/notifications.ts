@@ -263,6 +263,7 @@ export function createCodexTurnNotificationRouter(
   let completionSettled = false;
   let completionDisposeExtras = () => {};
   const pendingUsageByTurnId = new Map<string, RuntimeUsage>();
+  let abortSettlementTimeout: ReturnType<typeof setTimeout> | null = null;
 
   const flushPendingUsage = (id: string | undefined) => {
     if (!id) return;
@@ -308,14 +309,16 @@ export function createCodexTurnNotificationRouter(
 
       const onAbort = () => {
         void completion.interrupt?.().catch(() => {});
-        settleReject(new Error("Cancelled by user"));
+        abortSettlementTimeout ??= setTimeout(() => {
+          settleReject(new Error("Timed out waiting for codex app-server turn interruption."));
+        }, 30_000);
       };
 
       if (completion.abortSignal?.aborted) {
         onAbort();
-        return;
+      } else {
+        completion.abortSignal?.addEventListener("abort", onAbort, { once: true });
       }
-      completion.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
       const disposeClose = client.onClose?.(() => {
         const expectedTurnId =
@@ -336,6 +339,10 @@ export function createCodexTurnNotificationRouter(
 
       completionDisposeExtras = () => {
         clearTimeout(timeout);
+        if (abortSettlementTimeout) {
+          clearTimeout(abortSettlementTimeout);
+          abortSettlementTimeout = null;
+        }
         completion.abortSignal?.removeEventListener("abort", onAbort);
         disposeClose?.();
       };

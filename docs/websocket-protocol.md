@@ -448,6 +448,16 @@ Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Code
 
 Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. Task-owned sessions must be preserved by clients outside ordinary chat-list reconciliation. Once a task reaches `completed`, `failed`, or `cancelled`, its task threads reject `turn/start` and `turn/steer` with `task_locked` until an explicit lifecycle operation (`task/reopen` or `task/retry`) moves it back into active work. That terminal rejection is server-authoritative and returned as a JSON-RPC error with code `-32600` plus `error.data: { "category": "task_locked", "source": "session", "lockKind": "terminal_task_thread", "taskId": string, "taskStatus": "completed" | "cancelled" | "failed" }`; clients should render the task read-only and offer only the matching lifecycle action. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace. Active source-chat lock rejections use `error.data: { "category": "task_locked", "source": "session", "lockKind": "active_source_chat", "taskId": string, "taskStatus": TaskStatus, "taskTitle": string }`; clients should navigate to/open the active task instead of offering terminal Reopen/Retry actions.
 
+Task terminalization is visible only after the coordinator has closed new write admissions and the
+affected task-owned turns have settled. While that quiesce is pending, task-thread and source-chat
+write attempts fail closed with the same structured `task_locked` data rather than racing against
+the eventual terminal `task/updated` notification. A `turn/steer` request that was already accepted
+for an active turn can still be dropped asynchronously if a task lock closes before the steer is
+actually committed; in that case the request result stays accepted, but the conversation feed emits
+one projected `error` item with `code: "task_locked"` and the structured `data` described above. No
+queued user message, referenced plugin context, history append, or provider continuation is committed
+for that dropped steer batch.
+
 Task RPCs are authorized in the harness/server. Read-only task methods require the same
 conversation-history permission as `thread/list` and `thread/read`; mutating task methods require
 both conversation access and turn-start access. An omitted `cwd` resolves to the canonical active
@@ -709,6 +719,11 @@ Projected item kinds:
 - `error`
 
 Non-turn feed items such as `system`, `log`, `todos`, and `error` are emitted with `turnId: null`.
+Projected `error` items include optional `data` when the underlying session error carried structured
+data. For `task_locked`, this is the same `lockKind`/`taskId`/`taskStatus` contract returned on
+direct JSON-RPC errors, so clients that render only `item/*` notifications or hydrated
+`thread/read.coworkSnapshot` items can still distinguish terminal task-thread locks from active
+source-chat locks.
 
 Ask/approval prompts still arrive as server requests, but the harness also emits matching projected `system` feed items so snapshots and live feeds stay aligned.
 
@@ -3722,6 +3737,7 @@ Structured error event. Can be emitted in response to any client message or duri
 | `message` | `string` | Human-readable error description |
 | `code` | `ServerErrorCode` | Machine-readable error code (see [ServerErrorCode](#servererrorcode)) |
 | `source` | `ServerErrorSource` | Error origin (see [ServerErrorSource](#servererrorsource)) |
+| `data` | `ServerErrorData?` | Optional structured error payload, for example task lock data with `lockKind`, `taskId`, and `taskStatus` |
 
 ---
 

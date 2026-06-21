@@ -111,7 +111,7 @@ export async function executeToolCall(
 
   try {
     const parsedInput = validateToolInput(toolDef, toolCall.arguments);
-    const result = await toolDef.execute(parsedInput);
+    const result = await toolDef.execute(parsedInput, { abortSignal: params.abortSignal });
     const executionError = extractToolExecutionErrorMessage(result);
     if (executionError) {
       await emitPart({

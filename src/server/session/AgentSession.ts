@@ -1508,6 +1508,13 @@ export class AgentSession {
     this.getTurnExecutionManager().cancel(opts);
   }
 
+  async cancelAndWaitForSettlement(opts?: {
+    includeSubagents?: boolean;
+    timeoutMs?: number;
+  }): Promise<void> {
+    await this.getTurnExecutionManager().cancelAndWaitForSettlement(opts);
+  }
+
   async closeForHistory(opts: { closeSharedCodexClient?: boolean } = {}): Promise<void> {
     this.state.persistenceStatus = "closed";
     if (this.state.config.provider === "codex-cli" && opts.closeSharedCodexClient !== false) {

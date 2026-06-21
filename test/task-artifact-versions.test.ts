@@ -2157,11 +2157,11 @@ describe("task artifact versions", () => {
         });
         await terminalQuiesce.promise;
         expect(harness.coordinator.get(task.id, harness.workspacePath)).toMatchObject({
-          status: terminalStatus,
-          revision: task.revision + 1,
+          status: "working",
+          revision: task.revision,
         });
 
-        const detailAfterTerminal = harness.coordinator.getArtifactDetail({
+        const detailWhileTerminalPending = harness.coordinator.getArtifactDetail({
           taskId: task.id,
           workspacePath: harness.workspacePath,
           artifactId: artifact.id,
@@ -2190,7 +2190,7 @@ describe("task artifact versions", () => {
             workspacePath: harness.workspacePath,
             artifactId: artifact.id,
           }),
-        ).toEqual(detailAfterTerminal);
+        ).toEqual(detailWhileTerminalPending);
       } finally {
         harness.sessionDb.close();
       }
@@ -2242,7 +2242,7 @@ describe("task artifact versions", () => {
         status: "cancelled",
         revision: task.revision + 1,
       });
-      expect(quiesced).toEqual([`cancelled:${terminal.revision}`]);
+      expect(quiesced).toEqual([`cancelled:${task.revision}`]);
     } finally {
       harness.sessionDb.close();
     }

@@ -10,7 +10,11 @@ import { __internal as codexAppServerClientInternal } from "../src/providers/cod
 import { createRuntime } from "../src/runtime";
 import { handleServerRequest } from "../src/runtime/codexAppServer/serverRequests";
 import { VERSION } from "../src/version";
-import { createMockClient, writeMockAppServer } from "./fixtures/codexAppServerMock";
+import {
+  createMockClient,
+  mockInterrupts,
+  writeMockAppServer,
+} from "./fixtures/codexAppServerMock";
 import {
   expectedManagedSofficeShimPath,
   installCodexAppServerTestHooks,
@@ -1106,6 +1110,147 @@ rl.on("line", (line) => {
 
     expect(response).toEqual({ decision: "accept" });
   });
+
+  test("rechecks native Codex command approval after the explicit approval wait", async () => {
+    let locked = false;
+    let gateCalls = 0;
+    const approvalEntered = Promise.withResolvers<void>();
+    const releaseApproval = Promise.withResolvers<void>();
+    const responsePromise = handleServerRequest(
+      {
+        id: "command-approval-race",
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        params: { command: "touch escaped.txt" },
+      },
+      {
+        shellPolicy: "full",
+        yolo: false,
+        assertCanMutate: async (toolName: string) => {
+          expect(toolName).toBe("codex:commandExecution");
+          gateCalls += 1;
+          if (locked) throw new Error("task locked");
+        },
+        approveCommand: async () => {
+          approvalEntered.resolve();
+          await releaseApproval.promise;
+          return true;
+        },
+        log: () => {},
+      } as never,
+    );
+
+    await approvalEntered.promise;
+    locked = true;
+    releaseApproval.resolve();
+
+    await expect(responsePromise).resolves.toEqual({ decision: "decline" });
+    expect(gateCalls).toBe(2);
+  });
+
+  test("rechecks native Codex file approval after yolo auto-approval", async () => {
+    let gateCalls = 0;
+    let approvals = 0;
+    const response = await handleServerRequest(
+      {
+        id: "file-approval-yolo-race",
+        jsonrpc: "2.0",
+        method: "item/fileChange/requestApproval",
+        params: { path: "src/escaped.ts" },
+      },
+      {
+        shellPolicy: "full",
+        yolo: true,
+        assertCanMutate: async (toolName: string) => {
+          expect(toolName).toBe("codex:fileChange");
+          gateCalls += 1;
+          if (gateCalls === 2) throw new Error("task locked");
+        },
+        approveCommand: async () => {
+          approvals += 1;
+          return true;
+        },
+        log: () => {},
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(gateCalls).toBe(2);
+    expect(approvals).toBe(0);
+  });
+
+  for (const nativeKind of ["command", "file"] as const) {
+    test.serial(
+      `interrupts yolo native Codex ${nativeKind} execution when the turn aborts before the request returns`,
+      async () => {
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), `cowork-codex-yolo-${nativeKind}-`));
+        const nativeWritePath = path.join(dir, `${nativeKind}-escaped.txt`);
+        const abortController = new AbortController();
+        const nativeEntered = Promise.withResolvers<void>();
+        const releaseNativeDrain = Promise.withResolvers<void>();
+        mockInterrupts.splice(0);
+        const baseClient = createMockClient();
+        let interrupted = false;
+        let turnStartParams: { approvalPolicy?: string; sandboxPolicy?: unknown } | null = null;
+        codexAppServerClientInternal.setClientFactoryForTests(async () => ({
+          ...baseClient,
+          request: async (method: string, params?: unknown, timeoutMs?: number) => {
+            if (method !== "turn/start") {
+              return await baseClient.request(method, params, timeoutMs);
+            }
+            turnStartParams = params as { approvalPolicy?: string; sandboxPolicy?: unknown };
+            nativeEntered.resolve();
+            await releaseNativeDrain.promise;
+            if (!interrupted) {
+              await fs.writeFile(nativeWritePath, `${nativeKind} side effect escaped`, "utf8");
+            }
+            return {
+              turn: { id: `turn_${nativeKind}`, status: "inProgress", items: [], error: null },
+            };
+          },
+          interruptTurn: async (params) => {
+            interrupted = true;
+            await baseClient.interruptTurn(params);
+          },
+        }));
+
+        try {
+          const runtime = createRuntime(makeConfig(dir));
+          const turnPromise = runtime.runTurn({
+            config: makeConfig(dir),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: `Run native ${nativeKind}` }],
+            tools: {},
+            maxSteps: 1,
+            yolo: true,
+            shellPolicy: "full",
+            abortSignal: abortController.signal,
+          });
+
+          await nativeEntered.promise;
+          expect(turnStartParams).toMatchObject({ approvalPolicy: "never" });
+          abortController.abort();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          expect(interrupted).toBe(true);
+          expect(mockInterrupts).toEqual([expect.objectContaining({ threadId: "thread_1" })]);
+          const settledBeforeNativeRequestSettled = await Promise.race([
+            turnPromise.then(
+              () => true,
+              () => true,
+            ),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25)),
+          ]);
+          expect(settledBeforeNativeRequestSettled).toBe(false);
+
+          releaseNativeDrain.resolve();
+          await expect(turnPromise).rejects.toThrow(/Cancelled by user/);
+          await expect(fs.access(nativeWritePath)).rejects.toThrow();
+        } finally {
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 
   test("declines native Codex approvals when the lifecycle mutation gate is closed", async () => {
     let approvals = 0;

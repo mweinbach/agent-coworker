@@ -62,6 +62,11 @@ rl.on("line", (line) => {
   if (msg.method === "turn/steer") {
     send({ id: msg.id, result: { turnId: msg.params.expectedTurnId } });
     completeTurn([{ type: "userMessage", id: "steer_user_1", content: msg.params.input }]);
+    return;
+  }
+  if (msg.method === "turn/interrupt") {
+    send({ id: msg.id, result: {} });
+    send({ method: "turn/completed", params: { threadId: msg.params.threadId, turn: { id: msg.params.turnId || "turn_1", threadId: msg.params.threadId, status: "cancelled", items: [], error: null } } });
   }
 });
 `,
@@ -624,6 +629,22 @@ export function createMockClient(): CodexAppServerClient {
     },
     interruptTurn: async (params) => {
       mockInterrupts.push(params);
+      const turnId = params.turnId ?? "turn_1";
+      queueMicrotask(() => {
+        sendNotification({
+          method: "turn/completed",
+          params: {
+            threadId: params.threadId,
+            turn: {
+              id: turnId,
+              threadId: params.threadId,
+              status: "cancelled",
+              items: [],
+              error: null,
+            },
+          },
+        });
+      });
     },
     onNotification: (listener) => {
       notificationListeners.add(listener);

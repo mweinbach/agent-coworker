@@ -114,6 +114,28 @@ async function waitForTurnCompleted(rpc: JsonRpcConnection, threadId: string, tu
   );
 }
 
+async function waitForCondition(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(message);
+}
+
+async function waitForFile(pathname: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      await fs.access(pathname);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw new Error(`Timed out waiting for file ${pathname}`);
+}
+
 async function waitForThreadReadToContain(
   rpc: JsonRpcConnection,
   threadId: string,
@@ -373,15 +395,19 @@ describe("server JSON-RPC task terminal turn locks", () => {
         const signal = await manualStarted.promise;
 
         const latest = await readTask(rpc, tmpDir, created.id);
-        const cancelled = await rpc.sendRequest("task/cancel", {
+        const cancelPromise = rpc.sendRequest("task/cancel", {
           cwd: tmpDir,
           taskId: latest.id,
           expectedRevision: latest.revision,
           reason: "Close the task while a turn is running.",
         });
-        expect(cancelled.error).toBeUndefined();
-        expect(cancelled.result.task.status).toBe("cancelled");
+        await waitForCondition(
+          () => signal?.aborted === true,
+          "task cancel did not abort the turn",
+        );
         expect(signal?.aborted).toBe(true);
+        const pendingTerminal = await readTask(rpc, tmpDir, created.id);
+        expect(pendingTerminal.status).toBe("working");
 
         const steer = await rpc.sendRequest("turn/steer", {
           threadId,
@@ -391,6 +417,9 @@ describe("server JSON-RPC task terminal turn locks", () => {
         await expectTaskLocked(steer);
 
         releaseManual.resolve();
+        const cancelled = await cancelPromise;
+        expect(cancelled.error).toBeUndefined();
+        expect(cancelled.result.task.status).toBe("cancelled");
         const completed = await waitForTurnCompleted(rpc, threadId, turnId);
         expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
         const usageNotification = await rpc.waitFor(
@@ -512,17 +541,21 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const signal = await manualStarted.promise;
 
       const latest = await readTask(rpc, tmpDir, created.id);
-      const cancelled = await rpc.sendRequest("task/cancel", {
+      const cancelPromise = rpc.sendRequest("task/cancel", {
         cwd: tmpDir,
         taskId: latest.id,
         expectedRevision: latest.revision,
         reason: "Close the task while a mutating tool is in flight.",
       });
-      expect(cancelled.error).toBeUndefined();
-      expect(cancelled.result.task.status).toBe("cancelled");
+      await waitForCondition(() => signal?.aborted === true, "task cancel did not abort the turn");
       expect(signal?.aborted).toBe(true);
+      const pendingTerminal = await readTask(rpc, tmpDir, created.id);
+      expect(pendingTerminal.status).toBe("working");
 
       releaseManual.resolve();
+      const cancelled = await cancelPromise;
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
       const completed = await waitForTurnCompleted(rpc, threadId, turnId);
       expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
       expect(toolMutationResult).toMatch(/blocked because the turn was cancelled/);
@@ -537,7 +570,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
     }
   }, 20_000);
 
-  test("terminal transition blocks in-flight MCP tool execution before side effects escape", async () => {
+  test("terminal transition waits for non-cooperative MCP execution to settle before committing", async () => {
     const tmpDir = await makeCanonicalTmpProject();
     const mcpWritePath = path.join(tmpDir, "mcp-tool-write.txt");
     let holdNextTurn = false;
@@ -545,7 +578,8 @@ describe("server JSON-RPC task terminal turn locks", () => {
     let mcpExecuteCalls = 0;
     const kickoffCompleted = Promise.withResolvers<void>();
     const manualStarted = Promise.withResolvers<AbortSignal | null>();
-    const releaseManual = Promise.withResolvers<void>();
+    const mcpEntered = Promise.withResolvers<AbortSignal | null>();
+    const releaseMcpWrite = Promise.withResolvers<void>();
     const runTurnImpl = createRunTurn({
       createRuntime: () => ({
         name: "pi",
@@ -555,7 +589,6 @@ describe("server JSON-RPC task terminal turn locks", () => {
             return { text: "kickoff complete", responseMessages: [] };
           }
           manualStarted.resolve(params.abortSignal ?? null);
-          await releaseManual.promise;
           try {
             await params.tools.mcp__local__mutate.execute({});
             mcpMutationResult = "wrote";
@@ -581,10 +614,12 @@ describe("server JSON-RPC task terminal turn locks", () => {
           mcp__local__mutate: {
             description: "Mutates the workspace if not lifecycle-gated.",
             inputSchema: { type: "object", properties: {} },
-            execute: async () => {
+            execute: async (_input: unknown, options?: { abortSignal?: AbortSignal }) => {
               mcpExecuteCalls += 1;
-              await fs.writeFile(mcpWritePath, "mcp side effect escaped", "utf8");
-              return "mcp write escaped";
+              mcpEntered.resolve(options?.abortSignal ?? null);
+              await releaseMcpWrite.promise;
+              await fs.writeFile(mcpWritePath, "mcp side effect settled before terminal", "utf8");
+              return "mcp write settled";
             },
           },
         },
@@ -615,28 +650,204 @@ describe("server JSON-RPC task terminal turn locks", () => {
       expect(started.error).toBeUndefined();
       const turnId = started.result.turn.id;
       const signal = await manualStarted.promise;
+      const toolSignal = await mcpEntered.promise;
+      expect(toolSignal).toBe(signal);
 
       const latest = await readTask(rpc, tmpDir, created.id);
-      const cancelled = await rpc.sendRequest("task/cancel", {
+      const cancelPromise = rpc.sendRequest("task/cancel", {
         cwd: tmpDir,
         taskId: latest.id,
         expectedRevision: latest.revision,
         reason: "Close the task while an MCP tool is in flight.",
       });
+      await waitForCondition(() => signal?.aborted === true, "task cancel did not abort the turn");
+      const settledBeforeMcpSettled = await Promise.race([
+        cancelPromise.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25)),
+      ]);
+      expect(settledBeforeMcpSettled).toBe(false);
+      const duringCancel = await readTask(rpc, tmpDir, created.id);
+      expect(duringCancel.status).toBe("working");
+
+      releaseMcpWrite.resolve();
+      await waitForFile(mcpWritePath);
+      const cancelled = await cancelPromise;
       expect(cancelled.error).toBeUndefined();
       expect(cancelled.result.task.status).toBe("cancelled");
       expect(signal?.aborted).toBe(true);
+      expect(toolSignal?.aborted).toBe(true);
 
-      releaseManual.resolve();
       const completed = await waitForTurnCompleted(rpc, threadId, turnId);
       expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
-      expect(mcpMutationResult).toMatch(/blocked because the turn was cancelled/);
-      expect(mcpExecuteCalls).toBe(0);
-      await expect(fs.access(mcpWritePath)).rejects.toThrow();
+      expect(mcpMutationResult).toBe("wrote");
+      expect(mcpExecuteCalls).toBe(1);
+      await expect(fs.readFile(mcpWritePath, "utf8")).resolves.toBe(
+        "mcp side effect settled before terminal",
+      );
 
       const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
       expect(read.error).toBeUndefined();
-      expect(JSON.stringify(read.result)).not.toContain("mcp side effect escaped");
+      expect(JSON.stringify(read.result)).not.toContain("mcp write settled");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("self-origin terminal directive waits for provider turn settlement before terminal notification", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    const evidencePath = path.join(tmpDir, "self-terminal-evidence.txt");
+    const providerWritePath = path.join(tmpDir, "self-terminal-provider-write.txt");
+    const withTimeout = async <T>(promise: Promise<T>, message: string): Promise<T> =>
+      await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), 2_000)),
+      ]);
+    let holdNextTurn = false;
+    let createdForProvider: TaskRecord | null = null;
+    const kickoffCompleted = Promise.withResolvers<void>();
+    const directiveReturned = Promise.withResolvers<void>();
+    const directiveFailed = Promise.withResolvers<string>();
+    const providerSideEffectEntered = Promise.withResolvers<AbortSignal | null>();
+    const providerWriteCompleted = Promise.withResolvers<void>();
+    const releaseProviderSideEffect = Promise.withResolvers<void>();
+    const runTurnImpl = (async (params: RunTurnParams) => {
+      if (!holdNextTurn) {
+        kickoffCompleted.resolve();
+        return { text: "kickoff complete", responseMessages: [] };
+      }
+      try {
+        const context = params.getTaskContext?.();
+        const workItem = context?.workItems[0] ?? createdForProvider?.workItems[0];
+        const expectedRevision = context?.revision ?? createdForProvider?.revision;
+        if (!workItem || expectedRevision === undefined) {
+          throw new Error("Expected task context with a work item");
+        }
+        await fs.writeFile(evidencePath, "ready for completion", "utf8");
+        const registered = await params.applyTaskDirective?.({
+          type: "register_artifact",
+          idempotencyKey: "self-terminal-register-artifact",
+          expectedRevision,
+          path: "self-terminal-evidence.txt",
+          title: "Self-terminal evidence",
+          kind: "text",
+          workItemId: workItem.id,
+        });
+        if (!registered) throw new Error("Expected register_artifact directive result");
+        const marked = await params.applyTaskDirective?.({
+          type: "mark_work_item",
+          idempotencyKey: "self-terminal-mark-work",
+          expectedRevision: registered.task.revision,
+          workItemId: workItem.id,
+          status: "done",
+          completionEvidence: "Focused regression completed its work item.",
+        });
+        if (!marked) throw new Error("Expected mark_work_item directive result");
+        await params.applyTaskDirective?.({
+          type: "propose_completion",
+          idempotencyKey: "self-terminal-propose-completion",
+          expectedRevision: marked.task.revision,
+          summary: "Self-origin terminal proposal",
+        });
+        directiveReturned.resolve();
+      } catch (error) {
+        directiveFailed.resolve(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      providerSideEffectEntered.resolve(params.abortSignal ?? null);
+      await releaseProviderSideEffect.promise;
+      await fs.writeFile(providerWritePath, "provider side effect settled before terminal", "utf8");
+      providerWriteCompleted.resolve();
+      return {
+        text: "provider turn settled after self-origin terminal proposal",
+        responseMessages: [],
+      };
+    }) as never;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const createdResponse = await rpc.sendRequest("task/create", {
+        ...taskCreateParams(tmpDir, "self-origin-terminal"),
+        workItems: [
+          {
+            key: "verify",
+            title: "Verify self-origin terminal handoff",
+            expectedOutputs: ["self-terminal-evidence.txt"],
+          },
+        ],
+        reviewRequired: false,
+        reviewRounds: 0,
+      });
+      expect(createdResponse.error).toBeUndefined();
+      const created = createdResponse.result.task as TaskRecord;
+      createdForProvider = created;
+      const threadId = created.threads[0]?.sessionId;
+      if (!threadId) throw new Error("Expected primary task thread");
+      await withTimeout(kickoffCompleted.promise, "Timed out waiting for initial task kickoff");
+      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+
+      holdNextTurn = true;
+      const started = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "complete this task from inside the provider turn" }],
+      });
+      expect(started.error).toBeUndefined();
+      const turnId = started.result.turn.id;
+      const directiveOutcome = await withTimeout(
+        Promise.race([
+          directiveReturned.promise.then(() => "ok" as const),
+          directiveFailed.promise.then((message) => `error: ${message}` as const),
+        ]),
+        "Timed out waiting for terminal directive",
+      );
+      expect(directiveOutcome).toBe("ok");
+      const signal = await withTimeout(
+        providerSideEffectEntered.promise,
+        "Timed out waiting for provider side effect entry",
+      );
+      expect(signal?.aborted).toBe(true);
+
+      const beforeSettlement = await readTask(rpc, tmpDir, created.id);
+      expect(beforeSettlement.status).not.toBe("completed");
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "task/updated" &&
+            message.params.task?.id === created.id &&
+            message.params.task?.status === "completed",
+          100,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      const completedTaskUpdate = rpc.waitFor(
+        (message) =>
+          message.method === "task/updated" &&
+          message.params.task?.id === created.id &&
+          message.params.task?.status === "completed",
+      );
+      releaseProviderSideEffect.resolve();
+      const terminalBeforeWrite = await Promise.race([
+        completedTaskUpdate.then(() => true),
+        providerWriteCompleted.promise.then(() => false),
+      ]);
+      expect(terminalBeforeWrite).toBe(false);
+      await waitForFile(providerWritePath);
+      await completedTaskUpdate;
+      const completed = await waitForTurnCompleted(rpc, threadId, turnId);
+      expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+      const finalTask = await readTask(rpc, tmpDir, created.id);
+      expect(finalTask.status).toBe("completed");
+      await expect(fs.readFile(providerWritePath, "utf8")).resolves.toBe(
+        "provider side effect settled before terminal",
+      );
       rpc.close();
     } finally {
       await stopTestServer(server);
@@ -700,17 +911,21 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const signal = await manualStarted.promise;
 
       const latest = await readTask(rpc, tmpDir, created.id);
-      const cancelled = await rpc.sendRequest("task/cancel", {
+      const cancelPromise = rpc.sendRequest("task/cancel", {
         cwd: tmpDir,
         taskId: latest.id,
         expectedRevision: latest.revision,
         reason: "Close the task before invalid continuation fallback retry.",
       });
-      expect(cancelled.error).toBeUndefined();
-      expect(cancelled.result.task.status).toBe("cancelled");
+      await waitForCondition(() => signal?.aborted === true, "task cancel did not abort the turn");
       expect(signal?.aborted).toBe(true);
+      const pendingTerminal = await readTask(rpc, tmpDir, created.id);
+      expect(pendingTerminal.status).toBe("working");
 
       releaseManual.resolve();
+      const cancelled = await cancelPromise;
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result.task.status).toBe("cancelled");
       const completed = await waitForTurnCompleted(rpc, threadId, turnId);
       expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
       expect(activeTurnCalls).toBe(1);
@@ -931,6 +1146,121 @@ describe("server JSON-RPC task terminal turn locks", () => {
       await waitForTurnCompleted(sourceRpc, sourceThreadId, releasedSourceTurn.result.turn.id);
       sourceRpc.close();
       ordinaryRpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("queued source chat steers are rejected if createTask locks the source before drain", async () => {
+    const tmpDir = await makeCanonicalTmpProject();
+    let sourceProviderPasses = 0;
+    let sourceThreadIdForProvider: string | null = null;
+    const providerEntered = Promise.withResolvers<void>();
+    const releasePromotion = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: RunTurnParams) => {
+          if (params.sessionId !== sourceThreadIdForProvider) {
+            return { text: "task thread kickoff", responseMessages: [] };
+          }
+          sourceProviderPasses += 1;
+          if (sourceProviderPasses === 1) {
+            providerEntered.resolve();
+            await releasePromotion.promise;
+            const result = await params.createTask?.({
+              idempotencyKey: "source-chat-queued-steer",
+              title: "Queued steer source lock",
+              objective: "Prove queued source-chat steers cannot drain after task promotion.",
+              context: "Created through the real chat createTask path while a steer is queued.",
+              requirements: [
+                {
+                  kind: "acceptance_criterion",
+                  text: "Queued steers are cleared with task_locked after source promotion.",
+                },
+              ],
+              workItems: [
+                {
+                  key: "verify",
+                  title: "Verify queued steer lock",
+                  expectedOutputs: ["queued-steer-lock.txt"],
+                },
+              ],
+              decisions: [],
+              reviewRequired: false,
+              reviewRounds: 0,
+            });
+            if (!result) throw new Error("createTask tool path was not registered");
+            return { text: "promotion complete", responseMessages: [] };
+          }
+          return {
+            text: "queued steer escaped after source lock",
+            responseMessages: [],
+          };
+        }) as never,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      expect(started.error).toBeUndefined();
+      const sourceThreadId = started.result.thread.id;
+      sourceThreadIdForProvider = sourceThreadId;
+
+      const promotionTurn = await rpc.sendRequest("turn/start", {
+        threadId: sourceThreadId,
+        input: [{ type: "text", text: "promote this chat to a task" }],
+      });
+      expect(promotionTurn.error).toBeUndefined();
+      const turnId = promotionTurn.result.turn.id;
+      await providerEntered.promise;
+
+      const steer = await rpc.sendRequest("turn/steer", {
+        threadId: sourceThreadId,
+        turnId,
+        input: [{ type: "text", text: "queued steer should not survive promotion" }],
+      });
+      expect(steer.error).toBeUndefined();
+      const secondSteer = await rpc.sendRequest("turn/steer", {
+        threadId: sourceThreadId,
+        turnId,
+        input: [{ type: "text", text: "second queued steer should be cleared too" }],
+      });
+      expect(secondSteer.error).toBeUndefined();
+      releasePromotion.resolve();
+
+      const createdNotification = await rpc.waitFor((message) => message.method === "task/created");
+      const taskId = createdNotification.params.task.id;
+      const lockError = await rpc.waitFor(
+        (message) =>
+          message.method === "item/started" &&
+          message.params.item?.type === "error" &&
+          message.params.item?.code === "task_locked" &&
+          message.params.item?.data?.lockKind === "active_source_chat",
+      );
+      await waitForTurnCompleted(rpc, sourceThreadId, turnId);
+
+      expect(sourceProviderPasses).toBe(1);
+      expect(lockError.params.item.data).toEqual(
+        expect.objectContaining({
+          category: "task_locked",
+          source: "session",
+          lockKind: "active_source_chat",
+          taskId,
+          taskStatus: "working",
+          taskTitle: "Queued steer source lock",
+        }),
+      );
+      const read = await rpc.sendRequest("thread/read", {
+        threadId: sourceThreadId,
+        includeTurns: true,
+      });
+      expect(read.error).toBeUndefined();
+      const serializedThread = JSON.stringify(read.result);
+      expect(serializedThread).not.toContain("queued steer should not survive promotion");
+      expect(serializedThread).not.toContain("second queued steer should be cleared too");
+      expect(serializedThread).not.toContain("queued steer escaped after source lock");
+      rpc.close();
     } finally {
       await stopTestServer(server);
     }

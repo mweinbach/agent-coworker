@@ -26,7 +26,11 @@ export type PartialTurnError = Error & {
 export type RuntimeToolDefinition = {
   description?: string;
   inputSchema?: unknown;
-  execute: (input: unknown) => Promise<unknown> | unknown;
+  execute: (input: unknown, options?: RuntimeToolExecutionOptions) => Promise<unknown> | unknown;
+};
+
+export type RuntimeToolExecutionOptions = {
+  abortSignal?: AbortSignal;
 };
 
 export type RuntimeToolMap = Record<string, RuntimeToolDefinition>;

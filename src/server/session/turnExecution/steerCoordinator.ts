@@ -15,6 +15,7 @@ import type {
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import type { HistoryManager } from "../HistoryManager";
 import type { SessionContext } from "../SessionContext";
+import type { TaskLockError } from "../taskLocks";
 import {
   type ReferencedSkillContext,
   resolveReferencedPlugins,
@@ -62,6 +63,7 @@ export type SteerCoordinatorDeps = {
     inputParts?: OrderedInputPart[],
   ) => Promise<string | Array<Record<string, unknown>>>;
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
+  getTaskLock?: () => TaskLockError | null;
 };
 
 export type SteerCoordinator = {
@@ -129,6 +131,13 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
   const { context, historyManager } = deps;
 
   const log = (line: string) => context.emit({ type: "log", sessionId: context.id, line });
+
+  const emitTaskLockIfPresent = (): boolean => {
+    const taskLock = deps.getTaskLock?.() ?? null;
+    if (!taskLock) return false;
+    context.emitError("task_locked", "session", taskLock.message, taskLock.data);
+    return true;
+  };
 
   const mergeReferencedPlugins = (incoming: ReferencedPluginContext[]) => {
     if (incoming.length === 0) return;
@@ -198,6 +207,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       context.emitError(classified.code, classified.source, context.formatError(error));
       return;
     }
+    if (emitTaskLockIfPresent()) return;
     const activeSteerHandler = context.state.activeSteerHandler;
     if (activeSteerHandler) {
       try {
@@ -207,6 +217,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
           content,
           renderSteerReferenceContext(resolvedReferences),
         );
+        if (emitTaskLockIfPresent()) return;
         await activeSteerHandler({ text, expectedTurnId: currentTurnId, content: deliveryContent });
         // Persist the model-facing content (with any forced-skill text folded in)
         // as plain text — accepted by all providers, unlike synthetic tool calls.
@@ -232,6 +243,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       }
       return;
     }
+    if (emitTaskLockIfPresent()) return;
     const nextPendingSteerAttachmentBase64Size =
       context.state.pendingSteers.reduce(
         (total, steer) =>
@@ -276,13 +288,18 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     messages: ModelMessage[];
     committedCount: number;
   }> => {
-    const drained = context.state.pendingSteers.splice(0);
+    const drained = [...context.state.pendingSteers];
     if (drained.length === 0) return { messages: [], committedCount: 0 };
+    if (emitTaskLockIfPresent()) {
+      context.state.pendingSteers.splice(0);
+      return { messages: [], committedCount: 0 };
+    }
 
     const steerMessages: ModelMessage[] = [];
+    const pluginBatches: ReferencedPluginContext[][] = [];
     for (const steer of drained) {
       const resolvedReferences = await resolveSteerReferences(steer.references);
-      mergeReferencedPlugins(resolvedReferences.plugins);
+      pluginBatches.push(resolvedReferences.plugins);
       const referenceContext = renderSteerReferenceContext(resolvedReferences);
       let content: ModelMessage["content"] = await deps.buildUserMessageContent(
         steer.text,
@@ -294,6 +311,12 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       }
       steerMessages.push({ role: "user", content });
     }
+    if (emitTaskLockIfPresent()) {
+      context.state.pendingSteers.splice(0);
+      return { messages: [], committedCount: 0 };
+    }
+    context.state.pendingSteers.splice(0, drained.length);
+    for (const plugins of pluginBatches) mergeReferencedPlugins(plugins);
     historyManager.appendMessagesToHistory(steerMessages);
     for (const steer of drained) {
       context.emit({

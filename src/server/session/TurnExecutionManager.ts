@@ -5,7 +5,7 @@ import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
 import type { SessionContext } from "./SessionContext";
 import type { SessionMetadataManager } from "./SessionMetadataManager";
-import { getActiveSourceChatLock, getTaskThreadLock } from "./taskLocks";
+import { getSessionTaskLock } from "./taskLocks";
 import {
   createUserMessageTurnRunner,
   type UserMessageTurnRunner,
@@ -20,6 +20,7 @@ import {
 export class TurnExecutionManager {
   private readonly steerCoordinator: SteerCoordinator;
   private readonly userMessageTurnRunner: UserMessageTurnRunner;
+  private activeTurnSettlement: Promise<void> | null = null;
 
   constructor(
     private readonly context: SessionContext,
@@ -61,6 +62,7 @@ export class TurnExecutionManager {
       validateUploadedFileAttachments: attachmentHelpers.validateUploadedFileAttachments,
       buildUserMessageContent: attachmentHelpers.buildUserMessageContent,
       classifyTurnError,
+      getTaskLock: () => getSessionTaskLock(this.context.deps.sessionDb, this.context.id),
     });
 
     this.userMessageTurnRunner = createUserMessageTurnRunner({
@@ -88,19 +90,9 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
-    const taskThreadLock = getTaskThreadLock(this.context.deps.sessionDb, this.context.id);
-    if (taskThreadLock) {
-      this.context.emitError("task_locked", "session", taskThreadLock.message, taskThreadLock.data);
-      return;
-    }
-    const activeSourceLock = getActiveSourceChatLock(this.context.deps.sessionDb, this.context.id);
-    if (activeSourceLock) {
-      this.context.emitError(
-        "task_locked",
-        "session",
-        activeSourceLock.message,
-        activeSourceLock.data,
-      );
+    const taskLock = getSessionTaskLock(this.context.deps.sessionDb, this.context.id);
+    if (taskLock) {
+      this.context.emitError("task_locked", "session", taskLock.message, taskLock.data);
       return;
     }
     return await this.steerCoordinator.sendSteerMessage(
@@ -121,22 +113,12 @@ export class TurnExecutionManager {
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
   ) {
-    const taskThreadLock = getTaskThreadLock(this.context.deps.sessionDb, this.context.id);
-    if (taskThreadLock) {
-      this.context.emitError("task_locked", "session", taskThreadLock.message, taskThreadLock.data);
+    const taskLock = getSessionTaskLock(this.context.deps.sessionDb, this.context.id);
+    if (taskLock) {
+      this.context.emitError("task_locked", "session", taskLock.message, taskLock.data);
       return;
     }
-    const activeSourceLock = getActiveSourceChatLock(this.context.deps.sessionDb, this.context.id);
-    if (activeSourceLock) {
-      this.context.emitError(
-        "task_locked",
-        "session",
-        activeSourceLock.message,
-        activeSourceLock.data,
-      );
-      return;
-    }
-    return await this.userMessageTurnRunner.sendUserMessage(
+    const turnPromise = this.userMessageTurnRunner.sendUserMessage(
       text,
       clientMessageId,
       displayText,
@@ -144,6 +126,19 @@ export class TurnExecutionManager {
       inputParts,
       references,
     );
+    let trackedSettlement!: Promise<void>;
+    trackedSettlement = turnPromise
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        if (this.activeTurnSettlement === trackedSettlement) {
+          this.activeTurnSettlement = null;
+        }
+      });
+    this.activeTurnSettlement = trackedSettlement;
+    return await turnPromise;
   }
 
   handleAskResponse(requestId: string, answer: string): boolean {
@@ -166,5 +161,46 @@ export class TurnExecutionManager {
       this.context.state.abortController.abort();
     }
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
+  }
+
+  async cancelAndWaitForSettlement(opts?: {
+    includeSubagents?: boolean;
+    timeoutMs?: number;
+  }): Promise<void> {
+    this.cancel({ includeSubagents: opts?.includeSubagents });
+    const settlement = this.activeTurnSettlement;
+    const timeoutMs = opts?.timeoutMs ?? 30_000;
+    if (!settlement) {
+      if (!this.context.state.running) return;
+      await new Promise<void>((resolve, reject) => {
+        const startedAt = Date.now();
+        const interval = setInterval(() => {
+          if (!this.context.state.running) {
+            clearInterval(interval);
+            resolve();
+            return;
+          }
+          if (Date.now() - startedAt >= timeoutMs) {
+            clearInterval(interval);
+            reject(new Error("Timed out waiting for running turn to settle after cancellation."));
+          }
+        }, 25);
+      });
+      return;
+    }
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      await Promise.race([
+        settlement,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Timed out waiting for turn settlement after cancellation.")),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 }

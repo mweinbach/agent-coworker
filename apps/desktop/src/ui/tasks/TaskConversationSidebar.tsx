@@ -42,6 +42,12 @@ function terminalConversationCopy(status: TaskStatus): { title: string; detail: 
   };
 }
 
+type LifecycleAction = "reopen" | "retry";
+
+function lifecycleActionKey(taskId: string, action: LifecycleAction): string {
+  return `${taskId}:${action}`;
+}
+
 export function TaskConversationSidebar() {
   const selectedThreadId = useAppStore((state) => state.selectedThreadId);
   const task = useAppStore((state) =>
@@ -54,9 +60,8 @@ export function TaskConversationSidebar() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [threadTitle, setThreadTitle] = useState("");
   const [creating, setCreating] = useState(false);
-  const [reopening, setReopening] = useState(false);
-  const [retrying, setRetrying] = useState(false);
-  const lifecycleActionInFlightRef = useRef(false);
+  const [pendingLifecycleActions, setPendingLifecycleActions] = useState<Record<string, true>>({});
+  const lifecycleActionInFlightRef = useRef(new Set<string>());
 
   const terminal = task ? isTerminalTaskStatus(task.status) : false;
   const terminalCopy = task && terminal ? terminalConversationCopy(task.status) : null;
@@ -70,32 +75,44 @@ export function TaskConversationSidebar() {
   const terminalNoticeId = `task-terminal-lock-${task.id}`;
 
   const restoreTaskWrites = async () => {
-    if (!terminal || lifecycleActionInFlightRef.current) return;
-    lifecycleActionInFlightRef.current = true;
-    if (task.status === "failed") {
-      setRetrying(true);
-      try {
-        await retryTask(task.id);
-      } finally {
-        lifecycleActionInFlightRef.current = false;
-        setRetrying(false);
-      }
-      return;
-    }
-    setReopening(true);
+    if (!terminal) return;
+    const action: LifecycleAction = task.status === "failed" ? "retry" : "reopen";
+    const key = lifecycleActionKey(task.id, action);
+    if (lifecycleActionInFlightRef.current.has(key)) return;
+    lifecycleActionInFlightRef.current.add(key);
+    setPendingLifecycleActions((current) => ({ ...current, [key]: true }));
     try {
-      await reopenTask(task.id);
+      if (action === "retry") {
+        await retryTask(task.id);
+      } else {
+        await reopenTask(task.id);
+      }
+    } catch (error) {
+      console.error("Task lifecycle action failed", error);
     } finally {
-      lifecycleActionInFlightRef.current = false;
-      setReopening(false);
+      lifecycleActionInFlightRef.current.delete(key);
+      setPendingLifecycleActions((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
     }
   };
 
+  const terminalActionKind: LifecycleAction | null = terminal
+    ? task.status === "failed"
+      ? "retry"
+      : "reopen"
+    : null;
+  const terminalActionPending =
+    terminalActionKind !== null
+      ? pendingLifecycleActions[lifecycleActionKey(task.id, terminalActionKind)] === true
+      : false;
   const terminalAction = terminal
     ? {
         label: task.status === "failed" ? "Retry task" : "Reopen task",
         pendingLabel: task.status === "failed" ? "Retrying..." : "Reopening...",
-        pending: task.status === "failed" ? retrying : reopening,
+        pending: terminalActionPending,
         icon: <RotateCcwIcon data-icon="inline-start" />,
         pendingIcon: <Spinner data-icon="inline-start" />,
         onClick: () => void restoreTaskWrites(),

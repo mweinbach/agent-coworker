@@ -329,13 +329,19 @@ export async function createAgentServerRuntime(
       const cwd = typeof params.cwd === "string" ? params.cwd : null;
       if (cwd) taskSubscribers.notify(cwd, method, params);
     },
-    quiesceTaskThreads: (task, reason) => {
+    quiesceTaskThreads: async (task, reason) => {
+      const waits: Promise<void>[] = [];
       for (const thread of task.threads) {
         const binding = registry.sessionBindings.get(thread.sessionId);
         const runtime = binding?.runtime;
         if (!runtime) continue;
         try {
-          runtime.turns.cancel({ includeSubagents: true });
+          waits.push(
+            runtime.turns.cancelAndWaitForSettlement({
+              includeSubagents: true,
+              timeoutMs: 30_000,
+            }),
+          );
         } catch {
           try {
             runtime.lifecycle.dispose(`task ${task.id} ${reason}`, {
@@ -346,6 +352,7 @@ export async function createAgentServerRuntime(
           }
         }
       }
+      await Promise.all(waits);
     },
   });
   const threadJournal = new ThreadJournal(sessionDb);

@@ -48,10 +48,12 @@ async function requestWithAbort<T>(
   params: unknown,
   timeoutMs: number,
   abortSignal?: AbortSignal,
+  opts: { rejectOnAbort?: boolean } = {},
 ): Promise<T> {
   const requestPromise = client.request(method, params, timeoutMs) as Promise<T>;
   if (!abortSignal) return requestPromise;
   if (abortSignal.aborted) throw new Error("Cancelled by user");
+  if (opts.rejectOnAbort === false) return await requestPromise;
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new Error("Cancelled by user"));
     abortSignal.addEventListener("abort", onAbort, { once: true });
@@ -227,6 +229,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
             },
             CODEX_STARTUP_RPC_TIMEOUT_MS,
             params.abortSignal,
+            { rejectOnAbort: false },
           );
 
           const startedTurn = asRecord(asRecord(turnResult)?.turn);
@@ -255,6 +258,9 @@ export function createCodexAppServerRuntime(): LlmRuntime {
             });
           }
           const finalTurn = await completion;
+          if (params.abortSignal?.aborted) {
+            throw new Error("Cancelled by user");
+          }
 
           const text = assistantTextFromTurn(finalTurn) || notificationRouter.assistantText();
           const reasoningText = reasoningTextFromTurn(finalTurn);

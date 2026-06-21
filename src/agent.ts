@@ -205,12 +205,13 @@ function mergeToolSets(
 function wrapToolSetWithMutationGate(
   tools: Record<string, any>,
   assertCanMutate: RunTurnParams["assertCanMutate"],
+  abortSignal?: AbortSignal,
 ): Record<string, any> {
   if (!assertCanMutate) return tools;
   return Object.fromEntries(
     Object.entries(tools).map(([name, tool]) => [
       name,
-      wrapToolWithMutationGate(name, tool, assertCanMutate),
+      wrapToolWithMutationGate(name, tool, assertCanMutate, abortSignal),
     ]),
   );
 }
@@ -219,6 +220,7 @@ function wrapToolWithMutationGate(
   name: string,
   tool: unknown,
   assertCanMutate: NonNullable<RunTurnParams["assertCanMutate"]>,
+  abortSignal?: AbortSignal,
 ): unknown {
   if ((typeof tool !== "object" && typeof tool !== "function") || tool === null) return tool;
   const record = tool as Record<string, unknown>;
@@ -228,7 +230,19 @@ function wrapToolWithMutationGate(
     ...record,
     execute: async (...args: unknown[]) => {
       await assertCanMutate(name);
-      return await execute.call(tool, ...args);
+      const input = args[0];
+      const executionOptions =
+        args.length > 1 && typeof args[1] === "object" && args[1] !== null
+          ? { ...(args[1] as Record<string, unknown>), ...(abortSignal ? { abortSignal } : {}) }
+          : abortSignal
+            ? { abortSignal }
+            : args[1];
+      const result = await execute.call(
+        tool,
+        input,
+        ...(executionOptions === undefined ? [] : [executionOptions]),
+      );
+      return result;
     },
   };
 }
@@ -570,7 +584,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const filteredTools = params.agentProfile
       ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
       : roleFilteredTools;
-    const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate);
+    const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
     const mcpToolNames = Object.keys(tools)
       .filter((name) => name.startsWith("mcp__"))
       .sort();

@@ -303,6 +303,7 @@ export function createUserMessageTurnRunner(
         }
 
         if (context.state.abortController?.signal.aborted) {
+          mergeTurnUsage(res.usage);
           context.state.pendingSteers.splice(0);
           context.state.currentTurnOutcome = "cancelled";
           context.state.acceptingSteers = false;

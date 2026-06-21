@@ -314,7 +314,15 @@ describe("server JSON-RPC task terminal turn locks", () => {
           if (!params.abortSignal?.aborted) {
             await fs.writeFile(lateWritePath, "late write escaped", "utf8");
           }
-          return { text: "late assistant output escaped", responseMessages: [] };
+          return {
+            text: "late assistant output escaped",
+            responseMessages: [],
+            usage: {
+              promptTokens: 11,
+              completionTokens: 7,
+              totalTokens: 18,
+            },
+          };
         }) as never,
       }),
     );
@@ -359,6 +367,20 @@ describe("server JSON-RPC task terminal turn locks", () => {
         releaseManual.resolve();
         const completed = await waitForTurnCompleted(rpc, threadId, turnId);
         expect(completed.params.turn).toMatchObject({ id: turnId, status: "interrupted" });
+        const usageNotification = await rpc.waitFor(
+          (message) =>
+            message.method === "cowork/session/turnUsage" &&
+            message.params.sessionId === threadId &&
+            message.params.turnId === turnId,
+        );
+        expect(usageNotification.params).toMatchObject({
+          type: "turn_usage",
+          usage: {
+            promptTokens: 11,
+            completionTokens: 7,
+            totalTokens: 18,
+          },
+        });
         await expect(
           rpc.waitFor(
             (message) =>

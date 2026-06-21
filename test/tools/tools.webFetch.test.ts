@@ -383,6 +383,41 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("sanitizes the final URL in untrusted frame opener text", async () => {
+    const dir = await tmpDir();
+    let requestCount = 0;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://evil.test/final]x[bracket" },
+        });
+      }
+
+      return new Response("safe body", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/start", maxLength: 50000 });
+      const openerLine = out.split("\n")[0];
+
+      expect(out.split("[BEGIN UNTRUSTED WEB CONTENT").length - 1).toBe(1);
+      expect(out.split("[END UNTRUSTED WEB CONTENT]").length - 1).toBe(1);
+      expect(openerLine).toContain("https://evil.test/final x bracket");
+      expect(openerLine).not.toContain("final]x[bracket");
+      expect(out).toContain("safe body");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("downloads markdown documents when served with text MIME and a supported document filename", async () => {
     const dir = await tmpDir();
     const cases = [
@@ -1258,17 +1293,17 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("DNS-pinning: initial fetch is called with an IP-addressed URL", async () => {
+  test("DNS-pinning: initial fetch is called with an IP-addressed URL and original Host", async () => {
     const dir = await tmpDir();
 
     // Set up DNS mock to return a known public IP
     webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
 
     const originalFetch = globalThis.fetch;
-    const fetchCalls: string[] = [];
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
+    const fetchCalls: { url: string; host: string | null }[] = [];
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const fetchUrl = toFetchUrl(input);
-      fetchCalls.push(fetchUrl);
+      fetchCalls.push({ url: fetchUrl, host: new Headers(init?.headers).get("host") });
       return new Response("<html><body><article><p>Pinned locally</p></article></body></html>", {
         status: 200,
         headers: { "Content-Type": "text/html" },
@@ -1281,9 +1316,10 @@ describe("webFetch tool", () => {
 
       // The fetch should have been called with an IP address instead of the hostname
       expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
-      const calledUrl = fetchCalls[0];
-      expect(calledUrl).toContain("93.184.216.34");
-      expect(calledUrl).not.toContain("example.com");
+      expect(fetchCalls[0]).toEqual({
+        url: "https://93.184.216.34/page",
+        host: "example.com",
+      });
     } finally {
       globalThis.fetch = originalFetch;
       webSafetyInternal.resetDnsLookup();

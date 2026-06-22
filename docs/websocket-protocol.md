@@ -2337,7 +2337,7 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 | `rawPart` | `unknown?` | Optional raw provider/runtime part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
 
 Notes:
-- When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload.
+- When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload. The `skill` tool and every `read` result are exempt so complete `SKILL.md` instructions, references, and script source remain inline.
 - `preview` is a fixed inline preview of the first 5,000 characters plus a truncation note when additional content was written to disk.
 - The runtime emits a companion `file` chunk with `{ "kind": "tool-output-overflow", "toolName": "...", "toolCallId": "...", "path": "...", "chars": 12345, "preview": "..." }`.
 
@@ -3632,7 +3632,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied. Defaults to `false`. |
 | `config.advancedMemory` | `boolean` | Whether file-based advanced memory is enabled for the live session. This is a global persisted default, not a per-workspace toggle. Defaults to `false`. |
 | `config.memoryGenerationModel` | `string` | Explicit model id or `provider:modelId` ref used for advanced-memory generation; omitted when the session inherits the active model. |
-| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
+| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). The `skill` tool and all file content returned by `read` (including skill references and script source) stay inline regardless of this threshold. |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.preferredChildModel` | `string` | Normalized same-provider fallback model identifier used for legacy/default suggestion state |
 | `config.childModelRoutingMode` | `"same-provider" \| "cross-provider-allowlist"` | Workspace child-routing policy |

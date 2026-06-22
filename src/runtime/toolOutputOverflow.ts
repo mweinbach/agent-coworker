@@ -13,8 +13,9 @@ type OverflowSummaryField = "exitCode" | "ok" | "count" | "provider";
 const SUMMARY_FIELDS: OverflowSummaryField[] = ["exitCode", "ok", "count", "provider"];
 const PRIVATE_SCRATCHPAD_DIR_MODE = 0o700;
 const PRIVATE_SCRATCHPAD_FILE_MODE = 0o600;
-// `read` is intentionally exempt so the model can inspect large file contents inline.
-const TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS = new Set(["read"]);
+// `read` and `skill` are intentionally exempt so the model receives complete
+// SKILL.md instructions plus any requested reference or script source inline.
+const TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS = new Set(["read", "skill"]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;

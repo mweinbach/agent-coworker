@@ -55,9 +55,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-15
             label: macOS
             artifact_name: desktop-release-macos
+            build_arch: arm64
           - os: windows-latest
             label: Windows x64
             artifact_name: desktop-release-windows-x64
@@ -194,6 +195,14 @@ jobs:
           chmod 600 "$key_path"
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
+      - name: Verify native macOS sandbox and runtime
+        if: ${{ runner.os == 'macOS' }}
+        run: >
+          bun test
+          test/platform/sandbox.enforcement.integration.test.ts
+          test/platform/sandbox.test.ts
+          test/coworkRuntime.test.ts
+
       - name: Build macOS desktop artifacts
         if: ${{ runner.os == 'macOS' }}
         env:
@@ -204,7 +213,9 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: bun run desktop:build -- --publish never
+          COWORK_BUILD_PLATFORM: darwin
+          COWORK_BUILD_ARCH: arm64
+        run: bun run desktop:build -- --publish never --arm64
 
       - name: Build Windows desktop artifacts
         if: ${{ runner.os == 'Windows' }}
@@ -284,6 +295,7 @@ jobs:
             exit 1
           fi
 
+          codesign --verify --deep --strict --verbose=4 "$app_path"
           xcrun stapler validate "$app_path"
           spctl -a -vv --type exec "$app_path"
 

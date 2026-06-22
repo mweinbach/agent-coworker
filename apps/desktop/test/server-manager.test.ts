@@ -857,8 +857,9 @@ describe("desktop server manager startup mode", () => {
     expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
   });
 
-  test("server startup timeout leaves room for first-run runtime bootstrap", () => {
-    expect(__internal.getServerStartupTimeoutMs({})).toBe(45_000);
+  test("packaged server startup leaves room for first-run runtime bootstrap", () => {
+    expect(__internal.getServerStartupTimeoutMs({}, false)).toBe(45_000);
+    expect(__internal.getServerStartupTimeoutMs({}, true)).toBe(300_000);
     expect(
       __internal.getServerStartupTimeoutMs({
         COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "1",

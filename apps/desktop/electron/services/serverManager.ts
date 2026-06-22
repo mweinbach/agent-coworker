@@ -47,6 +47,7 @@ import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 import { writeWindowsSandboxReadiness } from "./windowsSandboxReadiness";
 
 const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 45_000;
+const PACKAGED_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
 const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_LIMIT = 16_384;
@@ -534,10 +535,13 @@ async function gracefulKill(child: ServerChildProcess): Promise<void> {
   await waitForExit(child, 1_000);
 }
 
-function getServerStartupTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+function getServerStartupTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+  isPackaged = app.isPackaged,
+): number {
   const parsed = Number(env.COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_SERVER_STARTUP_TIMEOUT_MS;
+    return isPackaged ? PACKAGED_SERVER_STARTUP_TIMEOUT_MS : DEFAULT_SERVER_STARTUP_TIMEOUT_MS;
   }
   return Math.min(
     MAX_SERVER_STARTUP_TIMEOUT_MS,

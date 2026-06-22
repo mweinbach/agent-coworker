@@ -134,6 +134,28 @@ jobs:
           apps/desktop/test/sidecar.test.ts
           apps/desktop/test/server-manager.test.ts
 
+  macos-smoke:
+    name: macOS ARM64 smoke
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: macOS sandbox and runtime enforcement
+        run: >
+          bun test
+          test/platform/sandbox.enforcement.integration.test.ts
+          test/platform/sandbox.test.ts
+          test/tools/tools.bash.test.ts
+          test/coworkRuntime.test.ts
+          test/build-desktop-resources.test.ts
+          apps/desktop/test/sidecar.test.ts
+          apps/desktop/test/server-manager.test.ts
+
   remote-mcp-smoke:
     name: Remote MCP smoke
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork

@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
@@ -408,6 +409,70 @@ describe("antigravity runtime", () => {
     expect(emittedParts.some((p) => p.type === "tool-input-end")).toBe(true);
     expect(emittedParts.some((p) => p.type === "tool-call")).toBe(true);
     expect(emittedParts.some((p) => p.type === "tool-result")).toBe(true);
+  });
+
+  test("validates Zod tool input before executing model-supplied arguments", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
+    const runtime = createAntigravityRuntime({ platform: "linux" });
+    let executeCalls = 0;
+
+    (Agent as any).__setChatMockImpl(async () => {
+      return {
+        getChunks: async function* () {
+          yield new Text(0, "No tool needed.");
+        },
+        usageMetadata: {
+          promptTokenCount: 2,
+          candidatesTokenCount: 3,
+          totalTokenCount: 5,
+        },
+      };
+    });
+
+    const emittedParts: any[] = [];
+    const params = makeParams(makeConfig(homeDir), {
+      onModelStreamPart: (part) => {
+        emittedParts.push(part);
+      },
+      tools: {
+        boundedTool: {
+          description: "A bounded test tool",
+          inputSchema: z.object({
+            limit: z.number().int().min(1).max(5),
+          }),
+          execute: async () => {
+            executeCalls++;
+            return "should not run";
+          },
+        },
+      },
+    });
+
+    process.env.GEMINI_API_KEY = "test-key";
+    const turnPromise = runtime.runTurn(params);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const capturedAgent = (Agent as any).getLastInstance();
+    expect(capturedAgent).toBeDefined();
+    const boundedTool = capturedAgent.config.tools.find((t: any) => t.name === "boundedTool");
+    expect(boundedTool).toBeDefined();
+
+    await expect(boundedTool.execute({ limit: 6 })).rejects.toThrow(/5|less than or equal|Too big/);
+
+    expect(executeCalls).toBe(0);
+    expect(
+      emittedParts.some(
+        (part) =>
+          part.type === "tool-error" &&
+          part.toolName === "boundedTool" &&
+          typeof part.error === "string",
+      ),
+    ).toBe(true);
+    expect(emittedParts.some((part) => part.type === "tool-result")).toBe(false);
+
+    const result = await turnPromise;
+    expect(result.text).toBe("No tool needed.");
   });
 
   test("isHiddenPath mirrors localharness URI hidden check (any '.' segment)", () => {

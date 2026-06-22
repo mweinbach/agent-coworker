@@ -119,7 +119,7 @@ async function runtimeArchive(
       size: Buffer.byteLength(content),
       sha256: sha256(content),
     }))
-    .sort((left, right) => left.path.localeCompare(right.path));
+    .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   const closureForPath = (candidate: string): string[] => {
     const prefix = `${candidate}/`;
     return integrityFiles

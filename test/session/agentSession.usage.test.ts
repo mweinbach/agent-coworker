@@ -830,9 +830,9 @@ describe("AgentSession", () => {
       const session = AgentSession.fromPersisted({
         persisted: {
           sessionId: "persisted-provider-options",
-          sessionKind: "root",
-          parentSessionId: null,
-          role: null,
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
           title: "Persisted",
           titleSource: "manual",
           titleModel: null,

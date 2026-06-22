@@ -11,6 +11,10 @@ import { captureWorkspaceControlOutcome, sendSessionMutationError } from "./outc
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
+// Codex app-server can spend up to one minute starting login, ten minutes
+// waiting for the browser callback, and another minute refreshing the account.
+const PROVIDER_AUTH_CALLBACK_TIMEOUT_MS = 13 * 60_000;
+
 export function createProviderRouteHandlers(
   context: JsonRpcRouteContext,
 ): JsonRpcRequestHandlerMap {
@@ -173,6 +177,7 @@ export function createProviderRouteHandlers(
           event.type === "provider_auth_result" &&
           event.provider === provider &&
           event.methodId === methodId,
+        PROVIDER_AUTH_CALLBACK_TIMEOUT_MS,
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);

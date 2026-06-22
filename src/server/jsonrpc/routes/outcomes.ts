@@ -25,11 +25,13 @@ export async function captureBindingOutcome<T extends SessionEvent>(
   binding: SessionBinding,
   action: () => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
+  timeoutMs?: number,
 ): Promise<JsonRpcSessionOutcome<T>> {
   return await context.events.capture(
     binding,
     async () => await action(),
     isOutcomeEvent(context, predicate),
+    timeoutMs,
   );
 }
 
@@ -88,11 +90,18 @@ export async function captureWorkspaceControlOutcome<T extends SessionEvent>(
   cwd: string,
   action: (runtime: SessionRuntime) => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
+  timeoutMs?: number,
 ): Promise<JsonRpcSessionOutcome<T>> {
   return await context.workspaceControl.withSession(
     cwd,
     async (binding, session) =>
-      await captureBindingOutcome(context, binding, async () => await action(session), predicate),
+      await captureBindingOutcome(
+        context,
+        binding,
+        async () => await action(session),
+        predicate,
+        timeoutMs,
+      ),
   );
 }
 

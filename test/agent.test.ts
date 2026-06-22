@@ -89,6 +89,7 @@ function makeParams(overrides: Partial<RunTurnParams> = {}): RunTurnParams {
     config: makeConfig(),
     system: "You are a helpful assistant.",
     messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] as any[],
+    toolEnv: { COWORK_DISABLE_RUNTIME: "1" },
     log: mock(() => {}),
     askUser: mock(async () => "yes"),
     approveCommand: mock(async () => true),
@@ -241,6 +242,7 @@ describe("runTurn", () => {
         enableMcp: true,
         toolEnv: {
           PATH: "/tmp/cowork-managed-bin",
+          COWORK_DISABLE_RUNTIME: "1",
           COWORK_TEST_TOOL_ENV: "preserved",
         },
         system:
@@ -353,6 +355,7 @@ describe("runTurn", () => {
         config,
         toolEnv: {
           PATH: "/usr/bin",
+          COWORK_DISABLE_RUNTIME: "1",
           COWORK_RUNTIME_NODE: nodePath,
           COWORK_RUNTIME_NODE_MODULES: nodeModulesPath,
           COWORK_RUNTIME_NODE_RESOLVER: resolverPath,

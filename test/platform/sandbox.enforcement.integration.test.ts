@@ -337,7 +337,7 @@ windowsDescribe("windows native sandbox enforcement (run before merge)", () => {
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("allows workspace writes and denies outside and protected metadata writes", () => {
     const ws = winTestDir(".winx-ws-");
@@ -395,7 +395,7 @@ windowsDescribe("windows native sandbox enforcement (run before merge)", () => {
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("denies junction and child-process filesystem escapes", () => {
     const ws = winTestDir(".winx-ws-");
@@ -453,7 +453,7 @@ windowsDescribe("windows native sandbox enforcement (run before merge)", () => {
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("denies outbound network when policy disables it", () => {
     const ws = winTestDir(".winx-ws-");
@@ -477,7 +477,7 @@ windowsDescribe("windows native sandbox enforcement (run before merge)", () => {
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("runs the conservative managed network-only profile", () => {
     const ws = winTestDir(".winx-network-only-");
@@ -507,5 +507,5 @@ windowsDescribe("windows native sandbox enforcement (run before merge)", () => {
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });

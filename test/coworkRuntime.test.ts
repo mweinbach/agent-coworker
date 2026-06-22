@@ -316,6 +316,40 @@ describe("Cowork unified runtime", () => {
     );
   });
 
+  test("serializes concurrent runtime bootstrap attempts", async () => {
+    const root = await tempRoot("concurrent-bootstrap");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const logs: string[] = [];
+
+    const results = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        ensureCoworkRuntimeReady({
+          homedir: home,
+          env: {},
+          version: "2026-06-21",
+          archivePath: archive.archivePath,
+          expectedSha256: archive.sha256,
+          execute: false,
+          trustedKeys,
+          log: (line) => logs.push(line),
+        }),
+      ),
+    );
+
+    expect(results.filter((result) => result?.source === "downloaded")).toHaveLength(1);
+    expect(results.filter((result) => result?.source === "installed")).toHaveLength(2);
+    expect(new Set(results.map((result) => result?.runtimeDir))).toEqual(
+      new Set([path.join(home, ".cowork", "runtime", "2026-06-21")]),
+    );
+    expect(logs.some((line) => line.includes("Waiting for Cowork runtime"))).toBe(true);
+    await expect(
+      fs.stat(path.join(home, ".cowork", "runtime", ".bootstrap.lock")),
+    ).rejects.toThrow();
+    const runtimeRootEntries = await fs.readdir(path.join(home, ".cowork", "runtime"));
+    expect(runtimeRootEntries.some((entry) => entry.startsWith(".staging-"))).toBe(false);
+  });
+
   test("uses the confirmed current version when a replacement cannot be installed", async () => {
     const root = await tempRoot("fallback");
     const home = path.join(root, "home");

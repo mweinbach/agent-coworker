@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { withCoworkRuntimeBootstrapLock } from "./bootstrapLock";
 import { cleanupLegacyCoworkRuntimes } from "./cleanup";
 import { checksumFromText, downloadRuntimeRelease } from "./download";
 import {
@@ -144,6 +144,47 @@ async function resolveFallback(opts: {
   return null;
 }
 
+async function resolveDesiredRuntime(opts: {
+  version: string;
+  home: string;
+  host?: RuntimeHost;
+  env: Record<string, string | undefined>;
+  execute: boolean;
+  force: boolean;
+  trustedKeys: TrustedRuntimeKeys;
+  log?: (line: string) => void;
+}): Promise<CoworkRuntimeSetupResult | null> {
+  if (opts.force) return null;
+  const runtimeDir = installedRuntimeDir(opts.version, opts.home);
+  const stat = await fs.stat(runtimeDir).catch(() => null);
+  if (!stat?.isDirectory()) return null;
+  const pointer = await readCurrentRuntimePointer(opts.home).catch(() => null);
+  const alreadyConfirmed =
+    pointer?.version === opts.version && typeof pointer.confirmedAt === "string";
+  if (
+    !(await confirmAndActivate({
+      runtimeDir,
+      home: opts.home,
+      host: opts.host,
+      env: opts.env,
+      execute: alreadyConfirmed ? false : opts.execute,
+      trustedKeys: opts.trustedKeys,
+    }).catch(() => false))
+  ) {
+    opts.log?.(
+      `Installed Cowork runtime ${opts.version} is invalid; attempting a clean replacement.`,
+    );
+    return null;
+  }
+  await cleanupLegacyCoworkRuntimes({ home: opts.home, log: opts.log });
+  return await setupResult({
+    runtimeDir,
+    baseEnv: opts.env,
+    source: "installed",
+    trustedKeys: opts.trustedKeys,
+  });
+}
+
 export async function ensureCoworkRuntimeReady(
   opts: {
     homedir?: string;
@@ -186,31 +227,18 @@ export async function ensureCoworkRuntimeReady(
   ).trim();
   assertRuntimeVersion(version);
   const desiredDir = installedRuntimeDir(version, home);
-  const pointer = await readCurrentRuntimePointer(home).catch(() => null);
-  const desiredExists = await fs.stat(desiredDir).catch(() => null);
-  if (desiredExists?.isDirectory() && !opts.force && !isTruthy(env[FORCE_ENV])) {
-    const alreadyConfirmed =
-      pointer?.version === version && typeof pointer.confirmedAt === "string";
-    if (
-      await confirmAndActivate({
-        runtimeDir: desiredDir,
-        home,
-        host,
-        env,
-        execute: alreadyConfirmed ? false : execute,
-        trustedKeys,
-      }).catch(() => false)
-    ) {
-      await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
-      return await setupResult({
-        runtimeDir: desiredDir,
-        baseEnv: env,
-        source: "installed",
-        trustedKeys,
-      });
-    }
-    opts.log?.(`Installed Cowork runtime ${version} is invalid; attempting a clean replacement.`);
-  }
+  const forceRequested = opts.force === true || isTruthy(env[FORCE_ENV]);
+  const existing = await resolveDesiredRuntime({
+    version,
+    home,
+    host,
+    env,
+    execute,
+    force: forceRequested,
+    trustedKeys,
+    log: opts.log,
+  });
+  if (existing) return existing;
 
   const asset = resolveRuntimeAssetForHost(host);
   const archivePath = (opts.archivePath ?? env[ARCHIVE_PATH_ENV])?.trim();
@@ -220,88 +248,113 @@ export async function ensureCoworkRuntimeReady(
     DEFAULT_COWORK_RUNTIME_REPOSITORY
   ).trim();
   const releaseTag = (opts.releaseTag ?? env[RELEASE_TAG_ENV])?.trim() || undefined;
-  const force = opts.force === true || isTruthy(env[FORCE_ENV]) || Boolean(desiredExists);
   try {
-    let installed: Awaited<ReturnType<typeof installRuntimeArchive>>;
-    if (archivePath) {
-      const resolvedArchive = path.resolve(archivePath);
-      const expectedSha256 = await expectedChecksumForArchive(
-        resolvedArchive,
-        opts.expectedSha256 ?? env[ARCHIVE_SHA256_ENV],
-      );
-      installed = await installRuntimeArchive({
-        archivePath: resolvedArchive,
-        expectedSha256,
-        expectedVersion: version,
-        expectedAsset: asset,
+    return await withCoworkRuntimeBootstrapLock(
+      {
         home,
-        force,
-        execute,
-        host,
-        env,
-        log: opts.log,
-        trustedKeys,
-      });
-    } else {
-      const allowNetwork =
-        opts.allowNetwork ??
-        (isTruthy(env[ALLOW_NETWORK_ENV]) || env.COWORK_DESKTOP_BUNDLE === "1");
-      if (!allowNetwork) {
-        const fallback = await resolveFallback({
+        version,
+        onWait: (owner) =>
+          opts.log?.(
+            `Waiting for Cowork runtime ${version} bootstrap${owner ? ` owned by process ${owner.pid}` : ""}.`,
+          ),
+      },
+      async () => {
+        const installedByPeer = await resolveDesiredRuntime({
+          version,
           home,
           host,
           env,
           execute,
+          force: forceRequested,
           trustedKeys,
           log: opts.log,
         });
-        if (!fallback)
-          opts.log?.("Cowork runtime is unavailable and network bootstrap is disabled.");
-        if (!fallback) return null;
+        if (installedByPeer) return installedByPeer;
+
+        const desiredExists = await fs.stat(desiredDir).catch(() => null);
+        const force = forceRequested || Boolean(desiredExists);
+        let installed: Awaited<ReturnType<typeof installRuntimeArchive>>;
+        if (archivePath) {
+          const resolvedArchive = path.resolve(archivePath);
+          const expectedSha256 = await expectedChecksumForArchive(
+            resolvedArchive,
+            opts.expectedSha256 ?? env[ARCHIVE_SHA256_ENV],
+          );
+          installed = await installRuntimeArchive({
+            archivePath: resolvedArchive,
+            expectedSha256,
+            expectedVersion: version,
+            expectedAsset: asset,
+            home,
+            force,
+            execute,
+            host,
+            env,
+            log: opts.log,
+            trustedKeys,
+          });
+        } else {
+          const allowNetwork =
+            opts.allowNetwork ??
+            (isTruthy(env[ALLOW_NETWORK_ENV]) || env.COWORK_DESKTOP_BUNDLE === "1");
+          if (!allowNetwork) {
+            const fallback = await resolveFallback({
+              home,
+              host,
+              env,
+              execute,
+              trustedKeys,
+              log: opts.log,
+            });
+            if (!fallback)
+              opts.log?.("Cowork runtime is unavailable and network bootstrap is disabled.");
+            if (!fallback) return null;
+            await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
+            return await setupResult({
+              runtimeDir: fallback,
+              baseEnv: env,
+              source: "fallback",
+              trustedKeys,
+            });
+          }
+
+          const downloaded = await downloadRuntimeRelease({
+            repository,
+            version,
+            tag: releaseTag,
+            asset,
+            host,
+            fetchImpl: opts.fetchImpl,
+            log: opts.log,
+          });
+          try {
+            installed = await installRuntimeArchive({
+              archivePath: downloaded.archivePath,
+              expectedSha256: downloaded.expectedSha256,
+              expectedVersion: version,
+              expectedAsset: asset,
+              home,
+              force,
+              execute,
+              host,
+              env,
+              log: opts.log,
+              trustedKeys,
+            });
+          } finally {
+            await downloaded.cleanup();
+          }
+        }
+
         await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
         return await setupResult({
-          runtimeDir: fallback,
+          runtimeDir: installed.runtimeDir,
           baseEnv: env,
-          source: "fallback",
+          source: "downloaded",
           trustedKeys,
         });
-      }
-
-      const downloaded = await downloadRuntimeRelease({
-        repository,
-        version,
-        tag: releaseTag,
-        asset,
-        host,
-        fetchImpl: opts.fetchImpl,
-        log: opts.log,
-      });
-      try {
-        installed = await installRuntimeArchive({
-          archivePath: downloaded.archivePath,
-          expectedSha256: downloaded.expectedSha256,
-          expectedVersion: version,
-          expectedAsset: asset,
-          home,
-          force,
-          execute,
-          host,
-          env,
-          log: opts.log,
-          trustedKeys,
-        });
-      } finally {
-        await downloaded.cleanup();
-      }
-    }
-
-    await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
-    return await setupResult({
-      runtimeDir: installed.runtimeDir,
-      baseEnv: env,
-      source: "downloaded",
-      trustedKeys,
-    });
+      },
+    );
   } catch (error) {
     opts.log?.(
       `Cowork runtime ${version} could not be installed: ${error instanceof Error ? error.message : String(error)}`,

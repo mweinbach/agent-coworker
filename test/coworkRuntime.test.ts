@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { loadConfig } from "../src/config";
 import {
+  buildRuntimeEnv,
   ensureCoworkRuntimeReady,
   installRuntimeArchive,
+  invalidateRuntimeTrust,
   listInstalledRuntimes,
+  releaseAllRuntimeTrust,
   resolveCurrentRuntime,
   resolveRuntimeAssetForHost,
   runtimeAssetFileName,
@@ -17,6 +21,16 @@ import { buildPluginCatalogSnapshot } from "../src/plugins";
 import { S_IFREG, writeZip } from "./fixtures/zipBuilder";
 
 const temporaryRoots: string[] = [];
+const TEST_RUNTIME_KEY_ID = "cowork-runtime-test";
+const TEST_RUNTIME_KEY_PAIR = generateKeyPairSync("ed25519", {
+  privateKeyEncoding: { format: "pem", type: "pkcs8" },
+  publicKeyEncoding: { format: "pem", type: "spki" },
+});
+const trustedKeys = { [TEST_RUNTIME_KEY_ID]: TEST_RUNTIME_KEY_PAIR.publicKey };
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 
 async function tempRoot(label: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `cowork-unified-runtime-${label}-`));
@@ -56,6 +70,7 @@ async function runtimeArchive(
     "cowork/node-resolver/register.mjs": "export {};\n",
     [sofficePath]: "managed soffice launcher",
     [libreOfficeBinary]: "private libreoffice executable",
+    "dependencies/libreoffice/program/filter.dll": "trusted filter dll",
     "dependencies/libreoffice/cowork-libreoffice.json": '{"schemaVersion":1,"version":"26.2.3"}\n',
   };
   const unpackedBytes = Object.values(files).reduce(
@@ -63,7 +78,7 @@ async function runtimeArchive(
     0,
   );
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     version,
     createdAt: `${version}T00:00:00.000Z`,
     asset,
@@ -89,17 +104,66 @@ async function runtimeArchive(
       libreOfficeBinary,
     },
     payload: { fileCount: Object.keys(files).length, unpackedBytes },
+    integrity: {
+      algorithm: "Ed25519",
+      keyId: TEST_RUNTIME_KEY_ID,
+      manifest: "runtime-integrity.json",
+      signature: "runtime-integrity.sig",
+    },
   };
+  const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
+  const integrityFiles = [...Object.entries(files), ["runtime.json", manifestJson] as const]
+    .map(([filePath, content]) => ({
+      path: filePath,
+      kind: "file" as const,
+      size: Buffer.byteLength(content),
+      sha256: sha256(content),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const closureForPath = (candidate: string): string[] => {
+    const prefix = `${candidate}/`;
+    return integrityFiles
+      .filter((entry) => entry.path === candidate || entry.path.startsWith(prefix))
+      .map((entry) => entry.path);
+  };
+  const integrity = {
+    schemaVersion: 2,
+    algorithm: "Ed25519",
+    keyId: TEST_RUNTIME_KEY_ID,
+    runtimeVersion: version,
+    asset,
+    files: integrityFiles,
+    components: {},
+    entrypoints: Object.fromEntries(
+      Object.entries(manifest.paths).map(([name, candidate]) => [name, closureForPath(candidate)]),
+    ),
+  };
+  const integrityJson = `${JSON.stringify(integrity, null, 2)}\n`;
+  const signatureJson = `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      algorithm: "Ed25519",
+      keyId: TEST_RUNTIME_KEY_ID,
+      signature: sign(null, Buffer.from(integrityJson), TEST_RUNTIME_KEY_PAIR.privateKey).toString(
+        "base64",
+      ),
+    },
+    null,
+    2,
+  )}\n`;
   const archiveDir = path.join(root, version);
   await fs.mkdir(archiveDir, { recursive: true });
   const archivePath = await writeZip(archiveDir, [
     ...Object.entries(files).map(([name, data]) => ({ name, data, unixMode: S_IFREG | 0o755 })),
-    { name: "runtime.json", data: `${JSON.stringify(manifest, null, 2)}\n` },
+    { name: "runtime.json", data: manifestJson },
+    { name: "runtime-integrity.json", data: integrityJson },
+    { name: "runtime-integrity.sig", data: signatureJson },
   ]);
   return { archivePath, sha256: await sha256File(archivePath) };
 }
 
 afterEach(async () => {
+  releaseAllRuntimeTrust();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -152,11 +216,15 @@ describe("Cowork unified runtime", () => {
       archivePath: archive.archivePath,
       expectedSha256: archive.sha256,
       execute: false,
+      trustedKeys,
     });
 
     expect(result?.runtimeDir).toBe(path.join(home, ".cowork", "runtime", "2026-06-21"));
     expect(result?.runtimeEnv.COWORK_RUNTIME_NODE_MODULES).toContain(
       path.join("dependencies", "node", "node_modules"),
+    );
+    expect(result?.runtimeEnv.NODE_PATH).toContain(
+      path.join("node_modules", ".pnpm", "node_modules"),
     );
     expect(result?.runtimeEnv.PYTHONDONTWRITEBYTECODE).toBe("1");
     expect(result?.runtimeEnv.COWORK_RUNTIME_SOFFICE).toContain("soffice");
@@ -236,6 +304,7 @@ describe("Cowork unified runtime", () => {
         expectedVersion: version,
         home,
         execute: false,
+        trustedKeys,
       });
     }
     expect((await listInstalledRuntimes(home)).map((runtime) => runtime.version)).toEqual([
@@ -256,6 +325,7 @@ describe("Cowork unified runtime", () => {
       expectedSha256: currentArchive.sha256,
       home,
       execute: false,
+      trustedKeys,
     });
 
     const brokenArchive = await runtimeArchive(path.join(root, "broken"), "2026-06-21");
@@ -266,8 +336,82 @@ describe("Cowork unified runtime", () => {
       archivePath: brokenArchive.archivePath,
       expectedSha256: "0".repeat(64),
       execute: false,
+      trustedKeys,
     });
     expect(result?.source).toBe("fallback");
     expect(result?.manifest.version).toBe("2026-06-20");
+  });
+
+  test("rechecks entrypoints on every call and invalidates recursive dependency trust", async () => {
+    const root = await tempRoot("tamper");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+
+    await buildRuntimeEnv(installed.runtimeDir, {}, process.platform, trustedKeys);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(installed.runtimeDir, "runtime.json"), "utf8"),
+    );
+    await fs.writeFile(
+      path.join(installed.runtimeDir, ...manifest.paths.node.split("/")),
+      "replaced node",
+    );
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, process.platform, trustedKeys),
+    ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+
+    releaseAllRuntimeTrust();
+    await fs.rm(installed.runtimeDir, { recursive: true, force: true });
+    const restored = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      force: true,
+      execute: false,
+      trustedKeys,
+    });
+    await buildRuntimeEnv(restored.runtimeDir, {}, process.platform, trustedKeys);
+    await fs.writeFile(
+      path.join(restored.runtimeDir, "dependencies", "libreoffice", "program", "filter.dll"),
+      "mutated filter dll",
+    );
+    await Bun.sleep(75);
+    await expect(
+      buildRuntimeEnv(restored.runtimeDir, {}, process.platform, trustedKeys),
+    ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+  });
+
+  test("blocks signature tampering and unexpected files before managed execution", async () => {
+    const root = await tempRoot("integrity-boundary");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    await fs.writeFile(path.join(installed.runtimeDir, "unexpected.exe"), "surprise");
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, process.platform, trustedKeys),
+    ).rejects.toThrow("Unexpected runtime file");
+
+    await fs.rm(path.join(installed.runtimeDir, "unexpected.exe"));
+    const signaturePath = path.join(installed.runtimeDir, "runtime-integrity.sig");
+    const envelope = JSON.parse(await fs.readFile(signaturePath, "utf8"));
+    envelope.signature = Buffer.alloc(64).toString("base64");
+    await fs.writeFile(signaturePath, `${JSON.stringify(envelope, null, 2)}\n`);
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, process.platform, trustedKeys),
+    ).rejects.toThrow("signature is invalid");
   });
 });

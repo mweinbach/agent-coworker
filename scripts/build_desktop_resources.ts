@@ -15,7 +15,12 @@ import {
   shouldUseBundledBunRuntime,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "../src/platform/sandbox/windows";
 import {
   buildBunBundle,
   copyDir,
@@ -178,17 +183,56 @@ async function syncWindowsSandboxHelper(opts: {
   platform: NodeJS.Platform;
   arch: string;
   commandRunner?: typeof runCommand;
+  forceBuild?: boolean;
 }): Promise<void> {
+  const destinationDir = path.dirname(opts.dest);
+  const binaryNames = [
+    WINDOWS_SANDBOX_HELPER_NAME,
+    WINDOWS_SANDBOX_SETUP_NAME,
+    WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  ];
+  const manifestDest = path.join(destinationDir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
   if (opts.platform !== "win32" || opts.nextFingerprint === null) {
-    await fs.rm(opts.dest, { force: true });
-    console.log("[resources] Windows sandbox helper: disabled");
+    await Promise.all([
+      ...binaryNames.map((name) => fs.rm(path.join(destinationDir, name), { force: true })),
+      fs.rm(manifestDest, { force: true }),
+    ]);
+    console.log("[resources] Windows sandbox helpers: disabled");
     return;
   }
 
+  const cachedBundleIsValid = await (async () => {
+    try {
+      const manifest = JSON.parse(await fs.readFile(manifestDest, "utf8")) as {
+        schemaVersion?: unknown;
+        rustTarget?: unknown;
+        files?: Record<string, unknown>;
+      };
+      if (
+        manifest.schemaVersion !== 1 ||
+        manifest.rustTarget !== resolveWindowsRustTarget(opts.arch)
+      ) {
+        return false;
+      }
+      for (const name of binaryNames) {
+        const expected = manifest.files?.[name];
+        if (typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) return false;
+        const actual = createHash("sha256")
+          .update(await fs.readFile(path.join(destinationDir, name)))
+          .digest("hex");
+        if (actual !== expected) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   const needsBuild =
-    opts.previousFingerprint !== opts.nextFingerprint || !(await pathExists(opts.dest));
+    opts.forceBuild === true ||
+    opts.previousFingerprint !== opts.nextFingerprint ||
+    !cachedBundleIsValid;
   if (!needsBuild) {
-    console.log("[resources] Windows sandbox helper: cached");
+    console.log("[resources] Windows sandbox helpers: cached");
     return;
   }
 
@@ -200,26 +244,54 @@ async function syncWindowsSandboxHelper(opts: {
     cwd: opts.root,
   });
   await runner(
-    ["cargo", "build", "--release", "--manifest-path", manifestPath, "--target", rustTarget],
+    [
+      "cargo",
+      "build",
+      "--release",
+      "--bins",
+      "--manifest-path",
+      manifestPath,
+      "--target",
+      rustTarget,
+    ],
     {
       cwd: opts.root,
+      ...(opts.forceBuild
+        ? {
+            env: {
+              ...process.env,
+              COWORK_SANDBOX_BUILD_NONCE: `${Date.now()}-${process.pid}`,
+            },
+          }
+        : {}),
     },
   );
 
-  const builtHelper = path.join(
-    crateDir,
-    "target",
-    rustTarget,
-    "release",
-    WINDOWS_SANDBOX_HELPER_NAME,
-  );
-  if (!(await pathExists(builtHelper))) {
-    throw new Error(`Windows sandbox helper build did not produce ${builtHelper}`);
+  const releaseDir = path.join(crateDir, "target", rustTarget, "release");
+  const builtBinaries = binaryNames.map((name) => ({ name, path: path.join(releaseDir, name) }));
+  for (const binary of builtBinaries) {
+    if (!(await pathExists(binary.path))) {
+      throw new Error(`Windows sandbox build did not produce ${binary.path}`);
+    }
   }
 
-  await fs.mkdir(path.dirname(opts.dest), { recursive: true });
-  await fs.copyFile(builtHelper, opts.dest);
-  console.log(`[resources] Windows sandbox helper: updated ${path.relative(opts.root, opts.dest)}`);
+  await fs.mkdir(destinationDir, { recursive: true });
+  const files: Record<string, string> = {};
+  for (const binary of builtBinaries) {
+    const destination = path.join(destinationDir, binary.name);
+    await fs.copyFile(binary.path, destination);
+    files[binary.name] = createHash("sha256")
+      .update(await fs.readFile(destination))
+      .digest("hex");
+  }
+  await fs.writeFile(
+    manifestDest,
+    `${JSON.stringify({ schemaVersion: 1, rustTarget, files }, null, 2)}\n`,
+    "utf8",
+  );
+  console.log(
+    `[resources] Windows sandbox helpers: updated ${path.relative(opts.root, destinationDir)}`,
+  );
 }
 
 function resolveWindowsRustTarget(arch: string): string {
@@ -423,7 +495,11 @@ async function syncFoundationModelsSdk(opts: {
 }
 
 async function main() {
-  const target = resolveBuildTarget(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  const forceWindowsSandboxBuild = rawArgs.includes("--force-windows-sandbox-build");
+  const target = resolveBuildTarget(
+    rawArgs.filter((arg) => arg !== "--force-windows-sandbox-build"),
+  );
   const { platform, arch } = target;
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
@@ -472,7 +548,10 @@ async function main() {
       ? [
           path.join(root, "crates", "cowork-win-sandbox", "Cargo.toml"),
           path.join(root, "crates", "cowork-win-sandbox", "Cargo.lock"),
+          path.join(root, "crates", "cowork-win-sandbox", "build.rs"),
+          path.join(root, "crates", "cowork-win-sandbox", "codex-windows-sandbox-setup.manifest"),
           path.join(root, "crates", "cowork-win-sandbox", "src"),
+          path.join(root, "crates", "cowork-win-sandbox", "vendor"),
         ]
       : null;
   const windowsSandboxHelperFingerprint = windowsSandboxHelperInputs
@@ -631,6 +710,7 @@ async function main() {
     nextFingerprint: windowsSandboxHelperFingerprint,
     platform,
     arch,
+    forceBuild: forceWindowsSandboxBuild,
   });
 
   const docsDest = path.join(distDir, "docs");

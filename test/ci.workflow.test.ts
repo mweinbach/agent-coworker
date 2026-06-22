@@ -45,15 +45,23 @@ describe("main CI workflow", () => {
 
   test("runs Windows path and desktop smoke coverage", () => {
     expect(workflow).toContain("windows-smoke:");
-    expect(workflow).toContain("runs-on: windows-latest");
+    expect(workflow).toContain("runner: windows-latest");
+    expect(workflow).toContain("runner: windows-11-arm");
+    expect(workflow).toContain("runs-on: ${{ matrix.runner }}");
     expect(workflow).toContain("- name: Windows sandbox helper enforcement");
     expect(workflow).toContain(
-      "cargo build --release --manifest-path crates\\cowork-win-sandbox\\Cargo.toml",
+      "cargo build --release --bins --manifest-path crates\\cowork-win-sandbox\\Cargo.toml",
     );
     expect(workflow).toContain(
-      '$helperPath = Join-Path (Get-Location) "crates\\cowork-win-sandbox\\target\\release\\cowork-win-sandbox.exe"',
+      '$binaryRoot = Join-Path (Get-Location) "crates\\cowork-win-sandbox\\target\\release"',
     );
-    expect(workflow).toContain("COWORK_WIN_SANDBOX_HELPER=$helperPath");
+    expect(workflow).toContain('$helperPath = Join-Path $binaryRoot "cowork-win-sandbox.exe"');
+    expect(workflow).toContain("$env:COWORK_WIN_SANDBOX_HELPER = $helperPath");
+    expect(workflow).toContain("COWORK_WIN_SANDBOX_HELPER_SHA256");
+    expect(workflow).toContain("COWORK_WIN_SANDBOX_SETUP_SHA256");
+    expect(workflow).toContain("COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256");
+    expect(workflow).toContain('RUN_WINDOWS_SANDBOX_INTEGRATION = "1"');
+    expect(workflow).toContain("$helperPath setup --sandbox-home");
     expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER=%CD%");
     expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
     expect(workflow).toContain("test/platform/sandbox.test.ts");

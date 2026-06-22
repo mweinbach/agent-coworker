@@ -14,7 +14,7 @@ export type RuntimeHost = {
 };
 
 export type CoworkRuntimeManifest = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   version: string;
   createdAt: string;
   asset: RuntimeAssetId;
@@ -50,6 +50,8 @@ export type CoworkRuntimeManifest = {
     git?: string;
     pdfinfo?: string;
     pdftoppm?: string;
+    heifConvert?: string;
+    jxrDecApp?: string;
     popplerBin?: string;
     soffice?: string;
     libreOffice?: string;
@@ -59,6 +61,36 @@ export type CoworkRuntimeManifest = {
     fileCount: number;
     unpackedBytes: number;
   };
+  /** Present and required for schema 2. Schema 1 remains diagnostics-only. */
+  integrity?: {
+    algorithm: "Ed25519";
+    keyId: string;
+    manifest: "runtime-integrity.json";
+    signature: "runtime-integrity.sig";
+  };
+};
+
+export type TrustedCoworkRuntimeManifest = CoworkRuntimeManifest & {
+  schemaVersion: 2;
+  integrity: NonNullable<CoworkRuntimeManifest["integrity"]>;
+};
+
+export type RuntimeIntegrityFile = {
+  path: string;
+  kind: "file" | "symlink";
+  size: number;
+  sha256: string;
+};
+
+export type RuntimeIntegrityManifest = {
+  schemaVersion: 2;
+  algorithm: "Ed25519";
+  keyId: string;
+  runtimeVersion: string;
+  asset: RuntimeAssetId;
+  files: RuntimeIntegrityFile[];
+  components: Record<string, string[]>;
+  entrypoints: Record<string, string[]>;
 };
 
 export type InstalledRuntimePointer = {

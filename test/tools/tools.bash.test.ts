@@ -141,10 +141,13 @@ describe("bash tool", () => {
       platform: "win32",
       env: {
         Path: "C:\\Windows\\System32",
+        COWORK_RUNTIME_BIN: "C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\bin",
         COWORK_RUNTIME_NODE:
           "C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\node\\bin\\node.exe",
         COWORK_RUNTIME_PYTHON:
           "C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python\\python.exe",
+        COWORK_RUNTIME_POPPLER_BIN:
+          "C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\poppler\\Library\\bin",
       },
       execRunner: async (file: string, args: string[]) => {
         seen.push({ file, args });
@@ -154,7 +157,7 @@ describe("bash tool", () => {
 
     const commandArg = seen[0]?.args.at(-1);
     expect(commandArg).toContain(
-      "$env:PATH = 'C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\node\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python\\Scripts' + ';' + $env:PATH",
+      "$env:PATH = 'C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\node\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python\\Scripts;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\poppler\\Library\\bin' + ';' + $env:PATH",
     );
     expect(commandArg?.endsWith("node --version; python --version")).toBe(true);
     expect(result.stdout).toContain("Python 3.12.13");
@@ -241,6 +244,35 @@ describe("bash tool", () => {
     expect(observedEnv?.COWORK_SANDBOX).toBeDefined();
   });
 
+  test("sandboxed Windows env preserves Path casing and every public runtime pointer", () => {
+    const source = {
+      Path: "C:\\runtime\\bin;C:\\Windows\\System32",
+      COWORK_RUNTIME_DIR: "C:\\runtime",
+      COWORK_RUNTIME_VERSION: "2026-06-21",
+      COWORK_RUNTIME_ASSET: "cowork-runtime-windows-x64.zip",
+      COWORK_RUNTIME_BIN: "C:\\runtime\\bin",
+      COWORK_RUNTIME_NODE: "C:\\runtime\\node.exe",
+      COWORK_RUNTIME_PYTHON: "C:\\runtime\\python.exe",
+      COWORK_RUNTIME_NODE_MODULES: "C:\\runtime\\node_modules",
+      COWORK_RUNTIME_NODE_RESOLVER: "C:\\runtime\\resolver.mjs",
+      COWORK_RUNTIME_POPPLER_BIN: "C:\\runtime\\poppler",
+      COWORK_RUNTIME_SOFFICE: "C:\\runtime\\soffice.exe",
+      COWORK_RUNTIME_LIBREOFFICE_DIR: "C:\\runtime\\LibreOffice",
+      COWORK_RUNTIME_LIBREOFFICE_BINARY: "C:\\runtime\\LibreOffice\\program\\soffice.exe",
+      OPENAI_API_KEY: "must-not-leak",
+    };
+
+    const filtered = bashInternal.minimalSandboxEnv(source);
+
+    expect(filtered.Path).toBe(source.Path);
+    expect(filtered.PATH).toBeUndefined();
+    for (const [key, value] of Object.entries(source)) {
+      if (key === "OPENAI_API_KEY" || key === "Path") continue;
+      expect(filtered[key]).toBe(value);
+    }
+    expect(filtered.OPENAI_API_KEY).toBeUndefined();
+  });
+
   test("passes tool environment into shell execution", async () => {
     const dir = await tmpDir();
     let observedEnv: Record<string, string | undefined> | undefined;
@@ -304,16 +336,15 @@ describe("bash tool", () => {
     expect(calls).toEqual([]);
     expect(result.exitCode).toBe(1);
     expect(result.errorCode).toBe("SANDBOX_REQUIRED");
-    expect(result.stderr).toContain("requires filesystem/network enforcement");
-    expect(result.sandboxWarning).toContain("filesystem and network scoping are not yet enforced");
+    expect(result.stderr).toContain("not ready for filesystem, network, process, integrity");
+    expect(result.sandboxWarning).toContain(
+      "not ready for filesystem, network, process, integrity",
+    );
   });
 
   test("refuses unscoped Windows workspace-write under the non-enforcing helper when approval is declined", async () => {
-    // The Windows helper applies restricted-token + Job Object process
-    // containment but does NOT enforce writable roots or the network policy, so
-    // ordinary workspace-write must NOT run under it silently. With
-    // requireBackend=false it requires explicit unsandboxed approval and is
-    // refused (helper never executed) when the user declines.
+    // A helper without probed filesystem/network/process/integrity enforcement
+    // must never execute. The only available fallback is an explicit user escape.
     const calls: string[] = [];
     const approve = mock(async () => false);
     const result = await bashInternal.runShellCommandWithExec({
@@ -335,10 +366,12 @@ describe("bash tool", () => {
     expect(calls).toEqual([]); // declined → never executed under the non-enforcing helper
     expect(result.exitCode).toBe(1);
     expect(result.errorCode).toBe("SANDBOX_REQUIRED");
-    expect(result.sandboxWarning).toContain("filesystem and network scoping are not yet enforced");
+    expect(result.sandboxWarning).toContain(
+      "not ready for filesystem, network, process, integrity",
+    );
   });
 
-  test("runs unscoped Windows workspace-write under the helper only after unsandboxed approval", async () => {
+  test("never executes an unverified Windows helper even after unsandboxed approval", async () => {
     const calls: string[] = [];
     const approve = mock(async () => true);
     const result = await bashInternal.runShellCommandWithExec({
@@ -357,10 +390,44 @@ describe("bash tool", () => {
     });
 
     expect(approve).toHaveBeenCalled();
-    // Approved → still wrapped by the helper for process containment.
-    expect(calls).toEqual(["C:/h/helper.exe"]);
+    // Approved escape runs the shell directly; an unverified helper is never in
+    // the execution chain where it could infect the host.
+    expect(calls).toEqual(["pwsh"]);
     expect(result.exitCode).toBe(0);
-    expect(result.sandbox).toBe("windows-restricted");
+    expect(result.sandbox).toBe("none");
+  });
+
+  test("runs healthy Windows sandbox commands without an escape approval", async () => {
+    const calls: string[] = [];
+    const approve = mock(async () => true);
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/work",
+      platform: "win32",
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: false },
+      requireBackend: true,
+      capabilities: {
+        seatbelt: false,
+        bwrapPath: null,
+        windowsHelperPath: "C:/h/helper.exe",
+        windowsSandboxHome: "C:/Users/test/.cowork",
+        windowsEnforcement: {
+          filesystem: true,
+          network: true,
+          process: true,
+          integrity: true,
+        },
+      },
+      approveUnsandboxed: approve,
+      execRunner: async (file: string) => {
+        calls.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(approve).not.toHaveBeenCalled();
+    expect(calls).toEqual(["C:/h/helper.exe"]);
+    expect(result.sandbox).toBe("windows-sandbox");
   });
 
   test("requires approval before the unsandboxed fallback (requireBackend=false)", async () => {
@@ -553,8 +620,8 @@ describe("bash tool", () => {
   });
 
   test("hard-floor scoped child fails closed under a non-enforcing (Windows-like) backend", async () => {
-    // A backend that runs the command but does not enforce scope (enforcesScope
-    // falsy) must not satisfy a hard floor — the run is refused, not executed.
+    // A backend that runs the command but does not report every required
+    // capability must not satisfy a hard floor — the run is refused, not executed.
     const calls: string[] = [];
     const result = await bashInternal.runShellCommandWithExec({
       command: "rm -rf /",

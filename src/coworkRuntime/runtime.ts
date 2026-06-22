@@ -4,9 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-
+import {
+  primeVerifiedRuntimeTrust,
+  RUNTIME_INTEGRITY_MANIFEST_FILE,
+  RUNTIME_INTEGRITY_SIGNATURE_FILE,
+  type TrustedRuntimeKeys,
+  verifyRuntimeIntegrity,
+  verifyRuntimeIntegrityForUse,
+} from "./integrity";
 import { RUNTIME_MANIFEST_FILE, readRuntimeManifest } from "./manifest";
 import { assertHostCompatible } from "./platform";
+import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
 import type { CoworkRuntimeManifest, RuntimeHost, RuntimeVerification } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -40,9 +48,30 @@ export async function buildRuntimeEnv(
   runtimeDir: string,
   baseEnv: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
+  trustedKeys: TrustedRuntimeKeys = TRUSTED_COWORK_RUNTIME_KEYS,
 ): Promise<Record<string, string>> {
   const resolvedRuntimeDir = path.resolve(runtimeDir);
   const manifest = await readRuntimeManifest(resolvedRuntimeDir);
+  const directEntrypoints = [
+    "node",
+    "python",
+    "nodeResolver",
+    "git",
+    "pnpm",
+    "pdfinfo",
+    "pdftoppm",
+    "heifConvert",
+    "jxrDecApp",
+    "soffice",
+    "libreOfficeBinary",
+  ].filter((name) => manifest.paths[name as keyof typeof manifest.paths] !== undefined);
+  await verifyRuntimeIntegrityForUse({
+    root: resolvedRuntimeDir,
+    manifest,
+    trustedKeys,
+    entrypoints: directEntrypoints,
+    components: "all",
+  });
   const absolute = (relative: string): string => resolveManifestPath(resolvedRuntimeDir, relative);
   const pathKey = pathKeyForEnv(baseEnv);
   const pythonDir = path.dirname(absolute(manifest.paths.python));
@@ -55,6 +84,7 @@ export async function buildRuntimeEnv(
     ...(manifest.paths.popplerBin ? [absolute(manifest.paths.popplerBin)] : []),
   ];
   const nodeModules = absolute(manifest.paths.nodeModules);
+  const pnpmHoistedModules = path.join(nodeModules, ".pnpm", "node_modules");
   const resolverOption = `--import=${pathToFileURL(absolute(manifest.paths.nodeResolver)).href}`;
 
   const result: Record<string, string> = {};
@@ -65,7 +95,10 @@ export async function buildRuntimeEnv(
   const currentPath = baseEnv[pathKey]?.split(delimiter) ?? [];
   const currentNodePath = baseEnv.NODE_PATH?.split(delimiter) ?? [];
   result[pathKey] = dedupePathEntries([...pathDirs, ...currentPath], platform).join(delimiter);
-  result.NODE_PATH = dedupePathEntries([nodeModules, ...currentNodePath], platform).join(delimiter);
+  result.NODE_PATH = dedupePathEntries(
+    [nodeModules, pnpmHoistedModules, ...currentNodePath],
+    platform,
+  ).join(delimiter);
   result.NODE_OPTIONS = appendNodeOption(baseEnv.NODE_OPTIONS, resolverOption);
   result.PYTHONDONTWRITEBYTECODE = "1";
   result.COWORK_RUNTIME_DIR = resolvedRuntimeDir;
@@ -74,6 +107,7 @@ export async function buildRuntimeEnv(
   result.COWORK_RUNTIME_BIN = absolute(manifest.paths.bin);
   result.COWORK_RUNTIME_NODE = absolute(manifest.paths.node);
   result.COWORK_RUNTIME_PYTHON = absolute(manifest.paths.python);
+  if (manifest.paths.git) result.COWORK_RUNTIME_GIT = absolute(manifest.paths.git);
   result.COWORK_RUNTIME_NODE_MODULES = nodeModules;
   result.COWORK_RUNTIME_NODE_RESOLVER = absolute(manifest.paths.nodeResolver);
   if (manifest.paths.popplerBin) {
@@ -98,7 +132,16 @@ async function payloadStats(
   const visit = async (directory: string): Promise<void> => {
     const entries = await fs.readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
-      if (directory === runtimeDir && entry.name === RUNTIME_MANIFEST_FILE) continue;
+      if (
+        directory === runtimeDir &&
+        [
+          RUNTIME_MANIFEST_FILE,
+          RUNTIME_INTEGRITY_MANIFEST_FILE,
+          RUNTIME_INTEGRITY_SIGNATURE_FILE,
+        ].includes(entry.name)
+      ) {
+        continue;
+      }
       const absolute = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         await visit(absolute);
@@ -167,6 +210,8 @@ export async function verifyRuntime(opts: {
   execute?: boolean;
   host?: RuntimeHost;
   env?: Record<string, string | undefined>;
+  trustedKeys?: TrustedRuntimeKeys;
+  cacheTrust?: boolean;
 }): Promise<RuntimeVerification> {
   const runtimeDir = path.resolve(opts.runtimeDir);
   const errors: string[] = [];
@@ -183,6 +228,17 @@ export async function verifyRuntime(opts: {
       errors: [error instanceof Error ? error.message : String(error)],
       checks,
     };
+  }
+
+  try {
+    const integrity = await verifyRuntimeIntegrity({
+      root: runtimeDir,
+      manifest,
+      trustedKeys: opts.trustedKeys ?? TRUSTED_COWORK_RUNTIME_KEYS,
+    });
+    checks.integrity = `${integrity.fileCount} files signed by ${integrity.keyId}`;
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
   }
 
   for (const [name, relative] of Object.entries(manifest.paths)) {
@@ -210,9 +266,21 @@ export async function verifyRuntime(opts: {
     }
   }
 
+  if (errors.length === 0 && (opts.cacheTrust === true || opts.execute === true)) {
+    primeVerifiedRuntimeTrust(
+      runtimeDir,
+      manifest.components.map((component) => component.id),
+    );
+  }
+
   if (opts.execute && errors.length === 0) {
     try {
-      const env = await buildRuntimeEnv(runtimeDir, opts.env);
+      const env = await buildRuntimeEnv(
+        runtimeDir,
+        opts.env,
+        process.platform,
+        opts.trustedKeys ?? TRUSTED_COWORK_RUNTIME_KEYS,
+      );
       const node = resolveManifestPath(runtimeDir, manifest.paths.node);
       const python = resolveManifestPath(runtimeDir, manifest.paths.python);
       checks.nodeVersion = await commandVersion(node, ["--version"], env);

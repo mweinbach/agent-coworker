@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,10 @@ import {
   describeSandboxDenial,
   isLikelySandboxDenied,
 } from "../../src/platform/sandbox/denied";
-import { findBwrapProbeCommand } from "../../src/platform/sandbox/detect";
+import {
+  findBwrapProbeCommand,
+  probeWindowsSandboxBundle,
+} from "../../src/platform/sandbox/detect";
 import {
   DEFAULT_SANDBOX_CONFIG,
   detectCapabilities,
@@ -1055,7 +1059,7 @@ describe("SandboxManager.transform", () => {
     expect(r.warning).toContain("cowork-win-sandbox");
   });
 
-  test("win32 runs under the restricted-token helper with a partial-containment warning", () => {
+  test("win32 refuses a helper that has not passed every requested enforcement probe", () => {
     const helper = "C:/h/cowork-win-sandbox.exe";
     const r = mgr.transform({
       ...INNER,
@@ -1064,13 +1068,32 @@ describe("SandboxManager.transform", () => {
       platform: "win32",
       capabilities: caps({ windowsHelperPath: helper }),
     });
-    // The helper IS selected (process containment), wrapping the inner command.
-    expect(r.sandbox).toBe("windows-restricted");
+    expect(r.sandbox).toBe("none");
+    expect(r.unsandboxed).toBe(true);
+    expect(r.warning).toContain("not ready for filesystem, network, process, integrity");
+  });
+
+  test("win32 wraps without a degraded warning after all enforcement probes pass", () => {
+    const helper = "C:/h/cowork-win-sandbox.exe";
+    const enforcement = { filesystem: true, network: true, process: true, integrity: true };
+    const r = mgr.transform({
+      ...INNER,
+      policy: { kind: "workspace-write", writableRoots: ["C:/w"], network: false },
+      cwd: "C:/w",
+      platform: "win32",
+      capabilities: caps({
+        windowsHelperPath: helper,
+        windowsSandboxHome: "C:/Users/test/.cowork",
+        windowsEnforcement: enforcement,
+      }),
+    });
+    expect(r.sandbox).toBe("windows-sandbox");
     expect(r.unsandboxed).toBe(false);
     expect(r.file).toBe(helper);
-    expect(r.args).toContain("--mode");
-    // ...but it does not enforce FS/network scoping, which must be surfaced.
-    expect(r.warning).toContain("filesystem and network scoping are not yet enforced");
+    expect(r.args[0]).toBe("run");
+    expect(r.args).toContain("--sandbox-home");
+    expect(r.enforcement).toEqual(enforcement);
+    expect(r.warning).toBeUndefined();
   });
 });
 
@@ -1079,6 +1102,35 @@ describe("sandbox detection", () => {
     const probe = findBwrapProbeCommand((p) => p === "/run/current-system/sw/bin/env");
     expect(probe).toBe("/run/current-system/sw/bin/env");
     expect(probe).not.toBe(process.execPath);
+  });
+
+  test("blocks a replaced Windows sandbox binary before probe or execution", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cowork-sandbox-integrity-"));
+    const helper = path.join(root, "cowork-win-sandbox.exe");
+    const setup = path.join(root, "codex-windows-sandbox-setup.exe");
+    const runner = path.join(root, "codex-command-runner.exe");
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    try {
+      fs.writeFileSync(helper, "replaced");
+      fs.writeFileSync(setup, "setup");
+      fs.writeFileSync(runner, "runner");
+      const result = probeWindowsSandboxBundle(helper, {
+        COWORK_WIN_SANDBOX_HELPER_SHA256: digest("trusted-helper"),
+        COWORK_WIN_SANDBOX_SETUP: setup,
+        COWORK_WIN_SANDBOX_SETUP_SHA256: digest("setup"),
+        COWORK_WIN_SANDBOX_COMMAND_RUNNER: runner,
+        COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256: digest("runner"),
+      });
+      expect(result.enforcement).toEqual({
+        filesystem: false,
+        network: false,
+        process: false,
+        integrity: false,
+      });
+      expect(result.warning).toContain("SHA-256 mismatch");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

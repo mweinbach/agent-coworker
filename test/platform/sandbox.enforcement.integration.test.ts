@@ -12,13 +12,12 @@ import { buildWindowsSandboxCommand } from "../../src/platform/sandbox/windows";
 /**
  * Real OS-sandbox ENFORCEMENT tests. Unlike the unit tests (which only assert
  * the generated argv/policy text), these spawn the actual platform sandbox —
- * macOS `sandbox-exec`, Linux bubblewrap, the Windows restricted-token helper —
+ * macOS `sandbox-exec`, Linux bubblewrap, or the Windows capability/WFP helper —
  * and assert writes are allowed/denied as the policy promises.
  *
- * They are gated by platform AND backend availability, so the Linux CI image
- * skips bubblewrap unless it is installed and usable. Run them on macOS / Windows
- * (and a bubblewrap-capable Linux host) before merging to verify the SBPL/bwrap
- * policies are accepted and enforced on real kernels.
+ * They are gated by platform and backend availability. Windows additionally
+ * requires RUN_WINDOWS_SANDBOX_INTEGRATION=1 because its one-time setup invokes
+ * UAC and installs WFP state. Run them on native target hosts before release.
  */
 
 function tmpDir(prefix: string): string {
@@ -276,31 +275,235 @@ bwrapDescribe("bubblewrap enforcement (Linux)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Windows — restricted-token helper
+// Windows — capability ACL + WFP + restricted-token/Job Object helper
 // ---------------------------------------------------------------------------
 const winHelperPath =
   process.env.COWORK_WIN_SANDBOX_HELPER ??
   path.resolve("crates/cowork-win-sandbox/target/release/cowork-win-sandbox.exe");
 const windowsDescribe =
-  process.platform === "win32" && fs.existsSync(winHelperPath) ? describe : describe.skip;
+  process.platform === "win32" &&
+  process.env.RUN_WINDOWS_SANDBOX_INTEGRATION === "1" &&
+  fs.existsSync(winHelperPath)
+    ? describe
+    : describe.skip;
+const winSandboxHome = path.resolve(
+  process.env.COWORK_WIN_SANDBOX_HOME ?? path.join(os.homedir(), ".cowork"),
+);
 
-windowsDescribe("windows restricted-token helper (run before merge)", () => {
-  // v1 of the helper provides restricted-token + Job Object process containment
-  // only; per-root FS ACL scoping and WFP network isolation are tracked TODOs, so
-  // FS allow/deny is not asserted yet — this verifies the spawn path works and
-  // the handle-cleanup paths don't crash on a real Win32 kernel.
-  test("runs a command under the restricted token and returns its output", () => {
-    const ws = tmpDir("winx-ws-");
+function winTestDir(prefix: string): string {
+  // Windows workspace-write intentionally permits the host TEMP/TMP root. Put
+  // denial targets beside the checkout so they remain outside both allowed
+  // roots while still being disposable by the test process.
+  return fs.mkdtempSync(path.join(process.cwd(), prefix));
+}
+
+function runWindowsSandbox(ws: string, file: string, args: string[]): ReturnType<typeof spawnSync> {
+  const command = buildWindowsSandboxCommand(
+    { file, args },
+    workspacePolicy(ws),
+    ws,
+    winHelperPath,
+    winSandboxHome,
+  );
+  return spawnSync(command.file, command.args, { encoding: "utf8", timeout: 30_000 });
+}
+
+function powershellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function powershellWriteScript(target: string, value = "ok"): string {
+  return `$ErrorActionPreference='Stop'; Set-Content -LiteralPath ${powershellLiteral(target)} -Value ${powershellLiteral(value)}`;
+}
+
+windowsDescribe("windows native sandbox enforcement (run before merge)", () => {
+  test("reports all requested kernel enforcement dimensions ready", () => {
+    const ws = winTestDir(".winx-probe-");
     try {
-      const { file, args } = buildWindowsSandboxCommand(
-        { file: "cmd.exe", args: ["/c", "echo", "cowork-ok"] },
-        workspacePolicy(ws),
-        ws,
+      const probe = spawnSync(
         winHelperPath,
+        ["probe", "--sandbox-home", winSandboxHome, "--cwd", ws],
+        { encoding: "utf8", timeout: 30_000 },
       );
-      const result = spawnSync(file, args, { encoding: "utf8", timeout: 30_000 });
+      expect(probe.status).toBe(0);
+      expect(JSON.parse(probe.stdout.trim())).toMatchObject({
+        ready: true,
+        filesystem: true,
+        network: true,
+        process: true,
+        integrity: true,
+        setup_required: false,
+      });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("allows workspace writes and denies outside and protected metadata writes", () => {
+    const ws = winTestDir(".winx-ws-");
+    const outside = winTestDir(".winx-outside-");
+    fs.mkdirSync(path.join(ws, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(ws, ".codex"), { recursive: true });
+    fs.mkdirSync(path.join(ws, ".cowork"), { recursive: true });
+    try {
+      const allowed = path.join(ws, "allowed.txt");
+      expect(
+        runWindowsSandbox(ws, "powershell.exe", [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          powershellWriteScript(allowed),
+        ]).status,
+      ).toBe(0);
+      expect(fs.readFileSync(allowed, "utf8")).toContain("ok");
+
+      const tempAllowed = path.join(
+        os.tmpdir(),
+        `winx-temp-allowed-${process.pid}-${Date.now()}.txt`,
+      );
+      try {
+        expect(
+          runWindowsSandbox(ws, "powershell.exe", [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            powershellWriteScript(tempAllowed),
+          ]).status,
+        ).toBe(0);
+        expect(fs.readFileSync(tempAllowed, "utf8")).toContain("ok");
+      } finally {
+        fs.rmSync(tempAllowed, { force: true });
+      }
+
+      for (const denied of [
+        path.join(outside, "denied.txt"),
+        path.join(ws, ".git", "config"),
+        path.join(ws, ".codex", "state.json"),
+        path.join(ws, ".cowork", "state.json"),
+      ]) {
+        expect(
+          runWindowsSandbox(ws, "powershell.exe", [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            powershellWriteScript(denied),
+          ]).status,
+        ).not.toBe(0);
+        expect(fs.existsSync(denied)).toBe(false);
+      }
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("denies junction and child-process filesystem escapes", () => {
+    const ws = winTestDir(".winx-ws-");
+    const outside = winTestDir(".winx-outside-");
+    const junction = path.join(ws, "junction");
+    const linked = path.join(junction, "linked-escape.txt");
+    const childEscape = path.join(outside, "child-escape.txt");
+    const junctionResult = spawnSync("cmd.exe", ["/d", "/c", "mklink", "/J", junction, outside], {
+      encoding: "utf8",
+    });
+    expect(junctionResult.status).toBe(0);
+    try {
+      expect(
+        runWindowsSandbox(ws, "powershell.exe", [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          powershellWriteScript(linked, "escape"),
+        ]).status,
+      ).not.toBe(0);
+      expect(fs.existsSync(linked)).toBe(false);
+
+      const childScript = path.join(ws, "spawn-child.ps1");
+      const childMarker = path.join(ws, "child-ran.txt");
+      const childCommand = [
+        "$ErrorActionPreference='Stop'",
+        `Set-Content -LiteralPath ${powershellLiteral(childMarker)} -Value ran`,
+        `Set-Content -LiteralPath ${powershellLiteral(childEscape)} -Value escape`,
+      ].join("; ");
+      fs.writeFileSync(
+        childScript,
+        [
+          `$childCommand = ${powershellLiteral(childCommand)}`,
+          "& powershell.exe -NoProfile -NonInteractive -Command $childCommand",
+          "exit $LASTEXITCODE",
+        ].join("\r\n"),
+      );
+      const childResult = runWindowsSandbox(ws, "powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        childScript,
+      ]);
+      expect(childResult.status).not.toBe(0);
+      if (!fs.existsSync(childMarker)) {
+        throw new Error(
+          `Sandbox child did not reach its in-workspace marker. stdout=${childResult.stdout} stderr=${childResult.stderr}`,
+        );
+      }
+      expect(fs.existsSync(childEscape)).toBe(false);
+    } finally {
+      fs.rmSync(junction, { recursive: true, force: true });
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("denies outbound network when policy disables it", () => {
+    const ws = winTestDir(".winx-ws-");
+    try {
+      const networkProbe = [
+        "$client = [System.Net.Sockets.TcpClient]::new()",
+        "try {",
+        "  $task = $client.ConnectAsync('1.1.1.1', 443)",
+        "  if ($task.Wait(5000) -and $client.Connected) { exit 0 }",
+        "  exit 9",
+        "} catch { exit 9 } finally { $client.Dispose() }",
+      ].join("; ");
+      expect(
+        runWindowsSandbox(ws, "powershell.exe", [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          networkProbe,
+        ]).status,
+      ).not.toBe(0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("runs the conservative managed network-only profile", () => {
+    const ws = winTestDir(".winx-network-only-");
+    const output = path.join(ws, "network-only.txt");
+    try {
+      const result = spawnSync(
+        winHelperPath,
+        [
+          "run",
+          "--mode",
+          "network-only",
+          "--sandbox-home",
+          winSandboxHome,
+          "--cwd",
+          ws,
+          "--",
+          "powershell.exe",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          powershellWriteScript(output),
+        ],
+        { encoding: "utf8", timeout: 30_000 },
+      );
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("cowork-ok");
+      expect(fs.readFileSync(output, "utf8")).toContain("ok");
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

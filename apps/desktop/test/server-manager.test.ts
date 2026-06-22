@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "../../../src/platform/sandbox/windows";
 
 import {
   resolvePackagedSidecarFilename,
@@ -668,17 +676,37 @@ describe("desktop server manager startup mode", () => {
     const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-sandbox-helper-"));
     const sidecar = path.join(dir, resolvePackagedSidecarFilename(process.platform, process.arch));
-    const helper = path.join(dir, "cowork-win-sandbox.exe");
+    const helper = path.join(dir, WINDOWS_SANDBOX_HELPER_NAME);
+    const setup = path.join(dir, WINDOWS_SANDBOX_SETUP_NAME);
+    const commandRunner = path.join(dir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME);
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
     try {
       delete process.env.COWORK_WIN_SANDBOX_HELPER;
       process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
       await fs.writeFile(sidecar, "");
-      await fs.writeFile(helper, "");
+      await fs.writeFile(helper, "helper");
+      await fs.writeFile(setup, "setup");
+      await fs.writeFile(commandRunner, "runner");
+      await fs.writeFile(
+        path.join(dir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME),
+        JSON.stringify({
+          schemaVersion: 1,
+          files: {
+            [WINDOWS_SANDBOX_HELPER_NAME]: digest("helper"),
+            [WINDOWS_SANDBOX_SETUP_NAME]: digest("setup"),
+            [WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]: digest("runner"),
+          },
+        }),
+      );
 
       expect(__internal.findBundledWindowsSandboxHelper()).toBe(helper);
       if (process.platform === "win32") {
-        expect(__internal.buildServerEnv().COWORK_WIN_SANDBOX_HELPER).toBe(helper);
+        const env = __internal.buildServerEnv();
+        expect(env.COWORK_WIN_SANDBOX_HELPER).toBe(helper);
+        expect(env.COWORK_WIN_SANDBOX_HELPER_SHA256).toBe(digest("helper"));
+        expect(env.COWORK_WIN_SANDBOX_SETUP).toBe(setup);
+        expect(env.COWORK_WIN_SANDBOX_COMMAND_RUNNER).toBe(commandRunner);
       }
     } finally {
       if (previousHelper === undefined) delete process.env.COWORK_WIN_SANDBOX_HELPER;
@@ -689,6 +717,109 @@ describe("desktop server manager startup mode", () => {
         process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
       }
       await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("records UAC cancellation and does not repeat setup prompts in one desktop session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-sandbox-readiness-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    const actions: string[] = [];
+    __internal.resetWindowsSandboxSetupAttemptForTests();
+    const bundle = {
+      helperPath: "C:\\trusted\\cowork-win-sandbox.exe",
+      helperSha256: "a".repeat(64),
+      setupPath: "C:\\trusted\\codex-windows-sandbox-setup.exe",
+      setupSha256: "b".repeat(64),
+      commandRunnerPath: "C:\\trusted\\codex-command-runner.exe",
+      commandRunnerSha256: "c".repeat(64),
+    };
+    const runHelper = async (_helperPath: string, args: string[]) => {
+      actions.push(args[0]!);
+      return args[0] === "probe"
+        ? {
+            code: 3,
+            stdout:
+              '{"ready":false,"filesystem":false,"network":false,"process":false,"integrity":true,"setup_required":true}',
+            stderr: "",
+          }
+        : { code: 2, stdout: "", stderr: "orchestrator_helper_launch_canceled" };
+    };
+
+    try {
+      await __internal.ensureWindowsSandboxReady(workspace, {
+        platform: "win32",
+        userDataDir: root,
+        resolveBundle: () => bundle,
+        runHelper,
+      });
+      const readiness = JSON.parse(
+        await fs.readFile(path.join(root, "windows-sandbox", "readiness.json"), "utf8"),
+      );
+      expect(actions).toEqual(["probe", "setup"]);
+      expect(readiness).toMatchObject({
+        state: "setup-failed",
+        bundleTrusted: true,
+        setupRequired: true,
+      });
+
+      actions.splice(0);
+      await __internal.ensureWindowsSandboxReady(workspace, {
+        platform: "win32",
+        userDataDir: root,
+        resolveBundle: () => bundle,
+        runHelper,
+      });
+      expect(actions).toEqual(["probe"]);
+    } finally {
+      __internal.resetWindowsSandboxSetupAttemptForTests();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("records a stale sandbox setup upgrade only after every native probe passes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-sandbox-readiness-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    __internal.resetWindowsSandboxSetupAttemptForTests();
+    try {
+      await __internal.ensureWindowsSandboxReady(workspace, {
+        platform: "win32",
+        userDataDir: root,
+        resolveBundle: () => ({
+          helperPath: "C:\\trusted\\cowork-win-sandbox.exe",
+          helperSha256: "a".repeat(64),
+          setupPath: "C:\\trusted\\codex-windows-sandbox-setup.exe",
+          setupSha256: "b".repeat(64),
+          commandRunnerPath: "C:\\trusted\\codex-command-runner.exe",
+          commandRunnerSha256: "c".repeat(64),
+        }),
+        runHelper: async (_helperPath: string, args: string[]) =>
+          args[0] === "probe"
+            ? {
+                code: 3,
+                stdout:
+                  '{"ready":false,"filesystem":false,"network":false,"process":false,"integrity":true,"setup_required":true}',
+                stderr: "",
+              }
+            : {
+                code: 0,
+                stdout:
+                  '{"ready":true,"filesystem":true,"network":true,"process":true,"integrity":true,"setup_required":false}',
+                stderr: "",
+              },
+      });
+      const readiness = JSON.parse(
+        await fs.readFile(path.join(root, "windows-sandbox", "readiness.json"), "utf8"),
+      );
+      expect(readiness).toMatchObject({
+        state: "ready",
+        setupRequired: false,
+        enforcement: { filesystem: true, network: true, process: true, integrity: true },
+      });
+    } finally {
+      __internal.resetWindowsSandboxSetupAttemptForTests();
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

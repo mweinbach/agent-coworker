@@ -17,15 +17,15 @@ src/platform/sandbox/
   index.ts      SandboxManager.transform({file,args,policy,cwd}) -> wrapped {file,args,env}
   seatbelt.ts   macOS: /usr/bin/sandbox-exec -p <.sbpl> -D... -- <cmd>
   bwrap.ts      Linux: bwrap <mounts> --unshare-net? -- <cmd>
-  windows.ts    Windows: cowork-win-sandbox.exe --mode ... -- <cmd>
-  detect.ts     capability probes (sandbox-exec / bwrap / helper)
+  windows.ts    Windows: cowork-win-sandbox.exe run --mode ... -- <cmd>
+  detect.ts     capability and integrity probes (sandbox-exec / bwrap / helper bundle)
   denied.ts     isLikelySandboxDenied(output) for escalate-on-failure
-crates/cowork-win-sandbox/   Windows native helper (restricted token + Job Object)
+crates/cowork-win-sandbox/   Windows setup, sandbox, and command-runner helpers
 ```
 
 `SandboxManager.transform()` is the single abstraction every platform flows
 through. Given the command argv and a policy it selects a backend
-(`macos-seatbelt` | `linux-bwrap` | `windows-restricted` | `none`) and prepends
+(`macos-seatbelt` | `linux-bwrap` | `windows-sandbox` | `none`) and prepends
 the appropriate wrapper, mirroring Codex's `SandboxManager::transform`. The bash
 tool (`src/tools/bash.ts`) is the single integration point: it wraps the shell
 candidate before spawning and attaches marker env vars (`COWORK_SANDBOX`,
@@ -96,9 +96,9 @@ creates a directory bind source rather than an empty file.
 - `requireBackend`: fail closed when the selected OS sandbox backend is unavailable
   or cannot enforce filesystem/network scope (default `false`; set `true` to fail
   closed instead of allowing an explicitly degraded fallback). With the default
-  `false`, hard-floor contexts still fail closed and a non-enforcing fallback
-  (no backend, or the Windows process-containment-only helper) requires explicit
-  unsandboxed approval before running and surfaces a `[sandbox] …` warning.
+  `false`, hard-floor contexts still fail closed and a missing, stale, or
+  integrity-failed backend requires explicit unsandboxed approval before running
+  and surfaces a `[sandbox] …` warning.
 - env override: `AGENT_SANDBOX=<mode>`
 
 ## Escalate-on-failure
@@ -137,25 +137,27 @@ filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
   nested submodule/worktree metadata, but it does not fabricate missing metadata
   mountpoints because doing so can create host directories during sandbox setup.
   Prefer narrow `targetPaths` when a child must not create new metadata paths.
-- **Windows — restricted token** (`crates/cowork-win-sandbox`): a native helper
-  runs the child under a restricted (LUA) token inside a kill-on-close Job
-  Object, providing **process containment only**. Per-root ACL filesystem scoping
-  and WFP network isolation are tracked TODOs, so workspace-write / read-only
-  path scoping is **not** enforced yet. `no-project-write` maps through the
-  helper's existing read-only flag until filesystem scoping exists. With
-  `requireBackend: true`, bash fails closed instead of treating that helper as an
-  enforcing backend. With the default `requireBackend: false`, hard-floor
-  contexts (read-only / no-project-write roles and scoped `targetPaths` children)
-  still fail closed, while an unscoped `workspace-write` (or no-network) command
-  requires explicit unsandboxed approval — the same protected `sandbox_denied`
-  path used when no backend exists — before it runs, because the helper would
-  otherwise grant full filesystem/network access despite the policy. Approved
-  commands still run under the helper for process containment and surface a
-  `[sandbox] …` warning. CI builds the helper and runs the
-  Windows sandbox smoke tests so the current fail-closed/degraded behavior stays
-  covered until full filesystem enforcement lands. Desktop Windows resource
-  builds compile and copy `cowork-win-sandbox.exe` into the packaged
-  `resources/binaries` directory.
+- **Windows — capability ACLs + WFP** (`crates/cowork-win-sandbox`): the runner is
+  pinned to the OpenAI Codex Windows sandbox implementation. A one-time elevated
+  `setup` provisions dedicated online/offline identities, capability-SID ACLs,
+  WFP network rules, and versioned readiness state. `run` launches the child with
+  the appropriate restricted token inside a kill-on-close Job Object. Writable
+  roots are limited to the resolved workspace/`targetPaths` plus TEMP/TMP;
+  protected `.git`, `.agents`, `.codex`, and `.cowork` roots are denied. The
+  native `probe` must demonstrate workspace and temp writes, outside/metadata/
+  junction/child escape denial, and network denial before the server reports
+  filesystem, network, process, and integrity enforcement.
+
+  Desktop resources contain `cowork-win-sandbox.exe`,
+  `codex-windows-sandbox-setup.exe`, `codex-command-runner.exe`, and a SHA-256
+  manifest. Development rebuilds the bundle and passes absolute paths plus all
+  three hashes to the source server. Packaged builds additionally require valid
+  Authenticode signatures; the release workflow refuses unsigned Windows
+  artifacts. A missing helper, hash/signature mismatch, cancelled UAC prompt, or
+  failed/stale probe leaves restricted commands fail-closed and records repair
+  diagnostics. Only the setup/health path runs automatically in that state;
+  free-form shell execution still requires the explicit sandbox-escape approval
+  where policy permits it.
 
 ## Verification
 
@@ -169,7 +171,9 @@ filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
   `bwrap`/user namespaces). Run it before merging:
   - macOS: `bun test test/platform/sandbox.enforcement.integration.test.ts`
   - Linux (bubblewrap host): same command (auto-detects `bwrap`).
-  - Windows: build the helper (`cargo build --release --manifest-path
-    crates/cowork-win-sandbox/Cargo.toml`), then point
-    `COWORK_WIN_SANDBOX_HELPER` at the `.exe` (or use the packaged/default
-    `resources/binaries` lookup) and run the same command.
+  - Windows: build all helpers (`cargo build --release --bins --manifest-path
+    crates/cowork-win-sandbox/Cargo.toml`), set the three absolute
+    `COWORK_WIN_SANDBOX_*` paths and SHA-256 values, opt in with
+    `RUN_WINDOWS_SANDBOX_INTEGRATION=1`, and run the same command after one-time
+    setup. CI runs this suite natively on both x64 (`windows-latest`) and ARM64
+    (`windows-11-arm`).

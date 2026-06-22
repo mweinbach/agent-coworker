@@ -53,9 +53,23 @@ const SANDBOX_ENV_ALLOWLIST = new Set([
   // point at the managed node_modules / ESM resolver. They are NOT baked into the
   // shell prelude, so they must survive the allowlist or sandboxed helper commands
   // fail to find the runtime.
+  "COWORK_RUNTIME_DIR",
+  "COWORK_RUNTIME_VERSION",
+  "COWORK_RUNTIME_ASSET",
+  "COWORK_RUNTIME_BIN",
+  "COWORK_RUNTIME_NODE",
+  "COWORK_RUNTIME_PYTHON",
+  "COWORK_RUNTIME_GIT",
   "COWORK_RUNTIME_NODE_MODULES",
   "COWORK_RUNTIME_NODE_RESOLVER",
+  "COWORK_RUNTIME_POPPLER_BIN",
+  "COWORK_RUNTIME_SOFFICE",
+  "COWORK_RUNTIME_LIBREOFFICE_DIR",
+  "COWORK_RUNTIME_LIBREOFFICE_BINARY",
   "NODE_OPTIONS",
+  "NODE_PATH",
+  "PYTHONDONTWRITEBYTECODE",
+  "SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION",
 ]);
 
 // Patterns that may indicate secrets in command output (redacted in logs only).
@@ -88,9 +102,17 @@ function redactSecrets(text: string): string {
 
 function minimalSandboxEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
+  const sourceKeys = Object.keys(source);
   for (const key of SANDBOX_ENV_ALLOWLIST) {
-    const value = source[key];
-    if (typeof value === "string") env[key] = value;
+    // Environment keys are case-insensitive on Windows, but Node preserves the
+    // spelling it inherited (normally `Path`, not `PATH`). Preserve that exact
+    // key so passing an explicit child env never drops the Windows search path.
+    const sourceKey =
+      (Object.hasOwn(source, key) ? key : undefined) ??
+      sourceKeys.find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+    if (!sourceKey || Object.hasOwn(env, sourceKey)) continue;
+    const value = source[sourceKey];
+    if (typeof value === "string") env[sourceKey] = value;
   }
   return env;
 }
@@ -307,18 +329,22 @@ async function runShellCommandWithExec(
 
   const requiresSandboxEnforcement =
     policy !== undefined && (policy.kind !== "danger-full-access" || !policyAllowsNetwork(policy));
-  const backendDoesNotEnforceScope =
-    !transformed || transformed.sandbox === "none" || transformed.enforcesScope !== true;
+  const backendDoesNotEnforcePolicy =
+    !transformed ||
+    transformed.sandbox === "none" ||
+    !transformed.enforcement.integrity ||
+    !transformed.enforcement.process ||
+    (policy?.kind !== "danger-full-access" && !transformed.enforcement.filesystem) ||
+    (policy !== undefined && !policyAllowsNetwork(policy) && !transformed.enforcement.network);
 
-  // Hard-floor contexts (read-only roles, scoped children) require a backend that
-  // actually ENFORCES the policy, not just process containment. A non-enforcing
-  // backend (e.g. the Windows restricted-token helper) or no backend must fail
-  // closed — never run such a context unenforced, and never offer a fallback.
+  // Hard-floor contexts (read-only roles, scoped children) require every policy
+  // dimension to be enforced. A degraded or missing backend must fail closed —
+  // never run such a context unenforced, and never offer a fallback.
   if (
     policy &&
     requiresSandboxEnforcement &&
     opts.requireEnforcingBackend &&
-    backendDoesNotEnforceScope
+    backendDoesNotEnforcePolicy
   ) {
     return {
       stdout: "",
@@ -330,10 +356,10 @@ async function runShellCommandWithExec(
     };
   }
 
-  // Fail closed when configured to require an enforcing backend. A helper that
-  // only contains the process (currently Windows) is a degraded opt-in path when
-  // `requireBackend` is false, not enough to satisfy the default safety contract.
-  if (policy && requiresSandboxEnforcement && opts.requireBackend && backendDoesNotEnforceScope) {
+  // Fail closed when configured to require an enforcing backend. A backend whose
+  // native probe cannot prove the requested dimensions is not enough to satisfy
+  // the default safety contract.
+  if (policy && requiresSandboxEnforcement && opts.requireBackend && backendDoesNotEnforcePolicy) {
     const reason = transformed?.warning ?? "OS sandbox backend unavailable";
     const stderr =
       transformed && transformed.sandbox !== "none"
@@ -350,10 +376,9 @@ async function runShellCommandWithExec(
   }
 
   // A restrictive policy whose backend does NOT enforce filesystem/network scope
-  // is effectively unsandboxed for FS/network. This is either no backend at all
-  // (`sandbox === "none"`) or a process-containment-only helper (the Windows
-  // restricted-token helper, which discards writable roots and the network
-  // policy). Running it grants full filesystem/network access despite
+  // is effectively unsandboxed for FS/network. This includes no backend at all
+  // (`sandbox === "none"`) and any backend that fails its native capability or
+  // integrity probe. Running it grants full filesystem/network access despite
   // workspace-write / no-network expectations, so require explicit unsandboxed
   // approval BEFORE executing — mirroring the escalate-on-failure prompt —
   // rather than silently running under it and only warning afterwards. The
@@ -363,7 +388,7 @@ async function runShellCommandWithExec(
   if (
     policy &&
     requiresSandboxEnforcement &&
-    backendDoesNotEnforceScope &&
+    backendDoesNotEnforcePolicy &&
     opts.approveUnsandboxed
   ) {
     if (!(await opts.approveUnsandboxed())) {
@@ -379,10 +404,8 @@ async function runShellCommandWithExec(
     await opts.assertCanMutate?.();
   }
 
-  // A backend is present and either enforcing (Seatbelt/bwrap) or the unsandboxed
-  // fallback was approved above. Run the (possibly wrapped) command. For the
-  // non-enforcing Windows helper this still adds restricted-token + Job Object
-  // process containment on top of the now-approved full FS/network access.
+  // A backend is present and either enforcing or the unsandboxed fallback was
+  // approved above. Run the possibly wrapped command.
   if (policy && transformed && transformed.sandbox !== "none") {
     const result = await opts.execRunner(transformed.file, transformed.args, {
       cwd: opts.cwd,
@@ -599,9 +622,8 @@ export function createBashTool(ctx: ToolContext) {
 
       // Surface the sandbox warning in the command output (not just logs) so the
       // model/user can see enforcement was degraded. Excluded for the fail-closed
-      // case, which already explains itself. When a partial backend ran the
-      // command (e.g. the Windows restricted-token helper), don't claim it ran
-      // "without an OS sandbox" — show the warning verbatim instead.
+      // case, which already explains itself. If a partial backend ever ran the
+      // command, do not claim it ran without a sandbox; show its warning verbatim.
       const surfaceWarning =
         result.sandboxWarning !== undefined && result.errorCode !== "SANDBOX_REQUIRED";
       const sandboxNotice = !surfaceWarning
@@ -628,6 +650,7 @@ export function createBashTool(ctx: ToolContext) {
 export const __internal = {
   buildBashToolDescription,
   buildShellExecutionPlan: buildPlatformShellExecutionPlan,
+  minimalSandboxEnv,
   runShellCommandWithExec,
   setRunShellCommandForTests(runner: (opts: RunShellCommandOpts) => Promise<ShellRunResult>) {
     runShellCommandOverrideForTests = runner;

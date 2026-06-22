@@ -27,6 +27,13 @@ function dedupePathDirs(pathDirs: string[], platform: NodeJS.Platform): string[]
   return out;
 }
 
+function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
+  const exact = env[name];
+  if (exact !== undefined) return exact;
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key ? env[key] : undefined;
+}
+
 export function buildPlatformShellExecutionPlan(
   platform: NodeJS.Platform,
   command: string,
@@ -72,10 +79,16 @@ export function buildPlatformShellCommandWithRuntimePrelude(opts: {
   let command = opts.command;
   const env = opts.env || process.env;
   const pathImpl = pathImplForPlatform(opts.platform);
-  const runtimePython = env.COWORK_RUNTIME_PYTHON;
-  const runtimeNode = env.COWORK_RUNTIME_NODE;
+  const runtimeBin = envValue(env, "COWORK_RUNTIME_BIN");
+  const runtimePython = envValue(env, "COWORK_RUNTIME_PYTHON");
+  const runtimeNode = envValue(env, "COWORK_RUNTIME_NODE");
+  const runtimeGit = envValue(env, "COWORK_RUNTIME_GIT");
+  const runtimePopplerBin = envValue(env, "COWORK_RUNTIME_POPPLER_BIN");
 
   const pathDirs: string[] = [];
+  if (runtimeBin) {
+    pathDirs.push(runtimeBin);
+  }
   if (runtimeNode) {
     pathDirs.push(pathImpl.dirname(runtimeNode));
   }
@@ -85,6 +98,12 @@ export function buildPlatformShellCommandWithRuntimePrelude(opts: {
     if (opts.platform === "win32") {
       pathDirs.push(pathImpl.join(pythonDir, "Scripts"));
     }
+  }
+  if (runtimeGit) {
+    pathDirs.push(pathImpl.dirname(runtimeGit));
+  }
+  if (runtimePopplerBin) {
+    pathDirs.push(runtimePopplerBin);
   }
 
   const uniquePathDirs = dedupePathDirs(pathDirs, opts.platform);

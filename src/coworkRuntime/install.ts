@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { extractRuntimeArchive, sha256File } from "./archive";
+import { releaseRuntimeTrust, type TrustedRuntimeKeys } from "./integrity";
 import { readRuntimeManifest } from "./manifest";
 import { assertRuntimeVersion } from "./platform";
 import { verifyRuntime } from "./runtime";
+import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
 import type { InstalledRuntimePointer, RuntimeHost } from "./types";
 
 export const CURRENT_RUNTIME_FILE = "current.json";
@@ -104,6 +106,7 @@ export async function pruneInstalledRuntimes(
   const removed: Array<{ version: string; path: string }> = [];
   for (const runtime of installed) {
     if (retained.has(runtime.version)) continue;
+    releaseRuntimeTrust(runtime.path);
     await fs.rm(runtime.path, { recursive: true, force: true });
     removed.push({ version: runtime.version, path: runtime.path });
   }
@@ -122,6 +125,7 @@ export async function installRuntimeArchive(opts: {
   host?: RuntimeHost;
   env?: Record<string, string | undefined>;
   log?: (line: string) => void;
+  trustedKeys?: TrustedRuntimeKeys;
 }): Promise<{ runtimeDir: string; version: string; activated: boolean }> {
   const archivePath = path.resolve(opts.archivePath);
   const expected = opts.expectedSha256.trim().toLowerCase();
@@ -148,6 +152,7 @@ export async function installRuntimeArchive(opts: {
       runtimeDir: staging,
       deep: true,
       host: opts.host,
+      trustedKeys: opts.trustedKeys ?? TRUSTED_COWORK_RUNTIME_KEYS,
     });
     if (!stagedVerification.ok || !stagedVerification.manifest) {
       throw new Error(
@@ -172,6 +177,7 @@ export async function installRuntimeArchive(opts: {
     }
     if (existing) {
       backup = `${destination}.replaced-${randomUUID()}`;
+      releaseRuntimeTrust(destination);
       await fs.rename(destination, backup);
     }
     await fs.rename(staging, destination);
@@ -183,6 +189,7 @@ export async function installRuntimeArchive(opts: {
       execute: opts.execute !== false,
       host: opts.host,
       env: opts.env,
+      trustedKeys: opts.trustedKeys ?? TRUSTED_COWORK_RUNTIME_KEYS,
     });
     if (!executableVerification.ok) {
       throw new Error(
@@ -205,6 +212,7 @@ export async function installRuntimeArchive(opts: {
   } catch (error) {
     await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
     if (destination && promoted) {
+      releaseRuntimeTrust(destination);
       await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
     }
     if (destination && backup) {

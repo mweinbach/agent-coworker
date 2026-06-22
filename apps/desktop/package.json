@@ -13,7 +13,7 @@
   "scripts": {
     "electron-vite": "bun --bun ../../node_modules/electron-vite/bin/electron-vite.js",
     "electron:ensure": "bun scripts/ensureElectronInstalled.ts",
-    "dev": "bun run --cwd ../.. build:desktop-resources && bun run electron:ensure && bun run electron-vite -- dev",
+    "dev": "bun run --cwd ../.. build:desktop-resources -- --force-windows-sandbox-build && bun run electron:ensure && bun run electron-vite -- dev",
     "build": "bun run --cwd ../.. build:desktop-resources && bun run electron:ensure && bun run electron-vite -- build && electron-builder --config electron-builder.yml",
     "build:dir": "bun run --cwd ../.. build:desktop-resources && bun run electron:ensure && bun run electron-vite -- build && electron-builder --dir --config electron-builder.yml",
     "preview": "bun run electron:ensure && bun run electron-vite -- preview",

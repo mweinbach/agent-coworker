@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/desktop-release.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
+const builderConfig = readFileSync(
+  new URL("../apps/desktop/electron-builder.yml", import.meta.url),
+  "utf8",
+);
 
 describe("desktop release workflow", () => {
   test("runs validation for tag-triggered releases before packaging", () => {
@@ -28,7 +32,7 @@ describe("desktop release workflow", () => {
       /- name: Build macOS desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}[\s\S]*?CSC_KEY_PASSWORD: \$\{\{ secrets\.CSC_KEY_PASSWORD \}\}/,
     );
     expect(workflow).toMatch(
-      /- name: Build Windows desktop artifacts[\s\S]*?if \(\$env:WIN_CSC_LINK -and \$env:WIN_CSC_KEY_PASSWORD\)[\s\S]*?\$env:CSC_LINK = \$env:WIN_CSC_LINK[\s\S]*?\$env:CSC_KEY_PASSWORD = \$env:WIN_CSC_KEY_PASSWORD/,
+      /- name: Build Windows desktop artifacts[\s\S]*?\$env:CSC_LINK = \$env:WIN_CSC_LINK[\s\S]*?\$env:CSC_KEY_PASSWORD = \$env:WIN_CSC_KEY_PASSWORD/,
     );
     expect(workflow).not.toMatch(
       /- name: Build Windows desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}/,
@@ -73,12 +77,24 @@ describe("desktop release workflow", () => {
     expect(workflow).toMatch(
       /- name: Stage Windows desktop release assets[\s\S]*?apps\/desktop\/release\/\*-win-\$\{\{ matrix\.build_arch \}\}\.exe[\s\S]*?Copy-Item "apps\/desktop\/release\/latest\.yml" -Destination \(Join-Path \$stagingDir "\$\{\{ matrix\.updater_metadata_name \}\}"\)/,
     );
+    expect(workflow).toContain("- name: Validate Windows signing inputs");
+    expect(workflow).toContain("Unsigned Windows production releases are forbidden");
     expect(workflow).toContain(
-      "Windows signing secrets configured; publishing signed installer plus updater metadata.",
+      "Publishing Authenticode-signed installer, trusted helpers, and updater metadata.",
     );
-    expect(workflow).toContain(
-      "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata.",
-    );
+    expect(workflow).not.toContain("publishing unsigned installer");
+  });
+
+  test("verifies Authenticode and post-signing hashes for every sandbox helper", () => {
+    expect(workflow).toContain("cowork-win-sandbox.exe");
+    expect(workflow).toContain("codex-windows-sandbox-setup.exe");
+    expect(workflow).toContain("codex-command-runner.exe");
+    expect(workflow).toContain("Get-AuthenticodeSignature -LiteralPath $filePath");
+    expect(workflow).toContain("cowork-win-sandbox.sha256.json");
+    expect(workflow).toContain("Post-signing sandbox hash mismatch");
+    expect(builderConfig).toContain("afterPack: scripts/afterPack.cjs");
+    expect(builderConfig).toContain("forceCodeSigning: true");
+    expect(builderConfig).toContain("verifyUpdateCodeSignature: true");
   });
 
   test("ARM64 unpacked artifact is for smoke only and excluded from publish download glob", () => {

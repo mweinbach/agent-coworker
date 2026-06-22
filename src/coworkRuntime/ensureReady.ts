@@ -13,13 +13,15 @@ import {
   readCurrentRuntimePointer,
   resolveCurrentRuntime,
 } from "./install";
+import type { TrustedRuntimeKeys } from "./integrity";
 import { readRuntimeManifest } from "./manifest";
 import { assertRuntimeVersion, resolveRuntimeAssetForHost } from "./platform";
 import { buildRuntimeEnv, verifyRuntime } from "./runtime";
+import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
 import type { CoworkRuntimeSetupResult, RuntimeHost } from "./types";
 
 export const DEFAULT_COWORK_RUNTIME_REPOSITORY = "mweinbach/cowork-runtime";
-export const DEFAULT_COWORK_RUNTIME_VERSION = "2026-06-21";
+export const DEFAULT_COWORK_RUNTIME_VERSION = "2026-06-22";
 export const COWORK_RUNTIME_INSTRUCTIONS_HEADING = "## Cowork Runtime";
 
 const DISABLE_ENV = "COWORK_DISABLE_RUNTIME";
@@ -46,12 +48,18 @@ async function setupResult(opts: {
   runtimeDir: string;
   baseEnv: Record<string, string | undefined>;
   source: CoworkRuntimeSetupResult["source"];
+  trustedKeys: TrustedRuntimeKeys;
 }): Promise<CoworkRuntimeSetupResult> {
   const manifest = await readRuntimeManifest(opts.runtimeDir);
   return {
     runtimeDir: opts.runtimeDir,
     manifest,
-    runtimeEnv: await buildRuntimeEnv(opts.runtimeDir, opts.baseEnv),
+    runtimeEnv: await buildRuntimeEnv(
+      opts.runtimeDir,
+      opts.baseEnv,
+      process.platform,
+      opts.trustedKeys,
+    ),
     source: opts.source,
   };
 }
@@ -61,12 +69,15 @@ async function verifyInstalledRuntime(opts: {
   host?: RuntimeHost;
   env: Record<string, string | undefined>;
   execute: boolean;
+  trustedKeys: TrustedRuntimeKeys;
 }): Promise<boolean> {
   const verification = await verifyRuntime({
     runtimeDir: opts.runtimeDir,
     execute: opts.execute,
     host: opts.host,
     env: opts.env,
+    trustedKeys: opts.trustedKeys,
+    cacheTrust: true,
   });
   return verification.ok;
 }
@@ -93,6 +104,7 @@ async function confirmAndActivate(opts: {
   host?: RuntimeHost;
   env: Record<string, string | undefined>;
   execute: boolean;
+  trustedKeys: TrustedRuntimeKeys;
 }): Promise<boolean> {
   if (!(await verifyInstalledRuntime(opts))) return false;
   const manifest = await readRuntimeManifest(opts.runtimeDir);
@@ -106,6 +118,7 @@ async function resolveFallback(opts: {
   host?: RuntimeHost;
   env: Record<string, string | undefined>;
   execute: boolean;
+  trustedKeys: TrustedRuntimeKeys;
   log?: (line: string) => void;
 }): Promise<string | null> {
   const current = await resolveCurrentRuntime(opts.home).catch(() => null);
@@ -121,6 +134,7 @@ async function resolveFallback(opts: {
         host: opts.host,
         env: opts.env,
         execute: opts.execute,
+        trustedKeys: opts.trustedKeys,
       }).catch(() => false)
     ) {
       opts.log?.(`Using fallback Cowork runtime at ${candidate}`);
@@ -145,6 +159,7 @@ export async function ensureCoworkRuntimeReady(
     host?: RuntimeHost;
     fetchImpl?: typeof fetch;
     log?: (line: string) => void;
+    trustedKeys?: TrustedRuntimeKeys;
   } = {},
 ): Promise<CoworkRuntimeSetupResult | null> {
   const env = { ...(opts.env ?? process.env) };
@@ -152,15 +167,16 @@ export async function ensureCoworkRuntimeReady(
   const home = path.resolve(opts.homedir ?? os.homedir());
   const host = opts.host ?? process;
   const execute = opts.execute !== false;
+  const trustedKeys = opts.trustedKeys ?? TRUSTED_COWORK_RUNTIME_KEYS;
   const explicitRuntimeDir = env.COWORK_RUNTIME_DIR?.trim();
 
   if (explicitRuntimeDir) {
     const runtimeDir = path.resolve(explicitRuntimeDir);
-    if (!(await verifyInstalledRuntime({ runtimeDir, host, env, execute }))) {
+    if (!(await verifyInstalledRuntime({ runtimeDir, host, env, execute, trustedKeys }))) {
       throw new Error(`Explicit Cowork runtime failed verification: ${runtimeDir}`);
     }
     await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
-    return await setupResult({ runtimeDir, baseEnv: env, source: "explicit" });
+    return await setupResult({ runtimeDir, baseEnv: env, source: "explicit", trustedKeys });
   }
 
   const version = (
@@ -182,10 +198,16 @@ export async function ensureCoworkRuntimeReady(
         host,
         env,
         execute: alreadyConfirmed ? false : execute,
+        trustedKeys,
       }).catch(() => false)
     ) {
       await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
-      return await setupResult({ runtimeDir: desiredDir, baseEnv: env, source: "installed" });
+      return await setupResult({
+        runtimeDir: desiredDir,
+        baseEnv: env,
+        source: "installed",
+        trustedKeys,
+      });
     }
     opts.log?.(`Installed Cowork runtime ${version} is invalid; attempting a clean replacement.`);
   }
@@ -218,18 +240,31 @@ export async function ensureCoworkRuntimeReady(
         host,
         env,
         log: opts.log,
+        trustedKeys,
       });
     } else {
       const allowNetwork =
         opts.allowNetwork ??
         (isTruthy(env[ALLOW_NETWORK_ENV]) || env.COWORK_DESKTOP_BUNDLE === "1");
       if (!allowNetwork) {
-        const fallback = await resolveFallback({ home, host, env, execute, log: opts.log });
+        const fallback = await resolveFallback({
+          home,
+          host,
+          env,
+          execute,
+          trustedKeys,
+          log: opts.log,
+        });
         if (!fallback)
           opts.log?.("Cowork runtime is unavailable and network bootstrap is disabled.");
         if (!fallback) return null;
         await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
-        return await setupResult({ runtimeDir: fallback, baseEnv: env, source: "fallback" });
+        return await setupResult({
+          runtimeDir: fallback,
+          baseEnv: env,
+          source: "fallback",
+          trustedKeys,
+        });
       }
 
       const downloaded = await downloadRuntimeRelease({
@@ -253,6 +288,7 @@ export async function ensureCoworkRuntimeReady(
           host,
           env,
           log: opts.log,
+          trustedKeys,
         });
       } finally {
         await downloaded.cleanup();
@@ -264,15 +300,28 @@ export async function ensureCoworkRuntimeReady(
       runtimeDir: installed.runtimeDir,
       baseEnv: env,
       source: "downloaded",
+      trustedKeys,
     });
   } catch (error) {
     opts.log?.(
       `Cowork runtime ${version} could not be installed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    const fallback = await resolveFallback({ home, host, env, execute, log: opts.log });
+    const fallback = await resolveFallback({
+      home,
+      host,
+      env,
+      execute,
+      trustedKeys,
+      log: opts.log,
+    });
     if (!fallback) return null;
     await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
-    return await setupResult({ runtimeDir: fallback, baseEnv: env, source: "fallback" });
+    return await setupResult({
+      runtimeDir: fallback,
+      baseEnv: env,
+      source: "fallback",
+      trustedKeys,
+    });
   }
 }
 
@@ -282,18 +331,34 @@ export async function prepareCoworkRuntimeToolEnv(opts: {
   log?: (line: string) => void;
 }): Promise<Record<string, string | undefined>> {
   const env = { ...(opts.env ?? process.env) };
-  if (isTruthy(env[DISABLE_ENV]) || envValue(env, "COWORK_RUNTIME_NODE_MODULES")) return env;
+  if (isTruthy(env[DISABLE_ENV])) return env;
   const home = path.resolve(opts.homedir ?? os.homedir());
   const explicit = envValue(env, "COWORK_RUNTIME_DIR")?.trim();
   const runtimeDir = explicit
     ? path.resolve(explicit)
     : await resolveCurrentRuntime(home).catch(() => null);
-  if (!runtimeDir) return env;
-  const verification = await verifyRuntime({ runtimeDir });
-  if (!verification.ok) return env;
-  Object.assign(env, await buildRuntimeEnv(runtimeDir, env));
+  if (!runtimeDir) {
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase().startsWith("COWORK_RUNTIME_")) delete env[key];
+    }
+    return env;
+  }
+  try {
+    Object.assign(
+      env,
+      await buildRuntimeEnv(runtimeDir, env, process.platform, TRUSTED_COWORK_RUNTIME_KEYS),
+    );
+  } catch (error) {
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase().startsWith("COWORK_RUNTIME_")) delete env[key];
+    }
+    opts.log?.(
+      `Blocked untrusted Cowork runtime at ${runtimeDir}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return env;
+  }
   opts.log?.(
-    `Wired Cowork runtime ${verification.manifest?.version ?? "unknown"} into the tool environment.`,
+    `Wired Cowork runtime ${env.COWORK_RUNTIME_VERSION ?? "unknown"} into the tool environment.`,
   );
   return env;
 }

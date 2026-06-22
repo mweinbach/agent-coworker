@@ -62,9 +62,17 @@ jobs:
         run: bun run test:stable -- --max-concurrency 1
 
   windows-smoke:
-    name: Windows smoke
-    runs-on: windows-latest
-    timeout-minutes: 20
+    name: Windows smoke (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -79,9 +87,33 @@ jobs:
           if (!$vsPath) { throw "Visual Studio installation not found" }
           $devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
           $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-          $helperPath = Join-Path (Get-Location) "crates\cowork-win-sandbox\target\release\cowork-win-sandbox.exe"
-          $command = "`"$devCmd`" -arch=$arch -host_arch=$arch && cargo build --release --manifest-path crates\cowork-win-sandbox\Cargo.toml && set `"COWORK_WIN_SANDBOX_HELPER=$helperPath`" && bun test test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts"
+          $command = "`"$devCmd`" -arch=$arch -host_arch=$arch && cargo build --release --bins --manifest-path crates\cowork-win-sandbox\Cargo.toml"
           cmd /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $binaryRoot = Join-Path (Get-Location) "crates\cowork-win-sandbox\target\release"
+          $helperPath = Join-Path $binaryRoot "cowork-win-sandbox.exe"
+          $setupPath = Join-Path $binaryRoot "codex-windows-sandbox-setup.exe"
+          $commandRunnerPath = Join-Path $binaryRoot "codex-command-runner.exe"
+          foreach ($path in @($helperPath, $setupPath, $commandRunnerPath)) {
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing Windows sandbox binary: $path" }
+          }
+
+          $env:COWORK_WIN_SANDBOX_HELPER = $helperPath
+          $env:COWORK_WIN_SANDBOX_SETUP = $setupPath
+          $env:COWORK_WIN_SANDBOX_COMMAND_RUNNER = $commandRunnerPath
+          $env:COWORK_WIN_SANDBOX_HELPER_SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $helperPath).Hash.ToLowerInvariant()
+          $env:COWORK_WIN_SANDBOX_SETUP_SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $setupPath).Hash.ToLowerInvariant()
+          $env:COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $commandRunnerPath).Hash.ToLowerInvariant()
+          $env:COWORK_WIN_SANDBOX_HOME = Join-Path $env:RUNNER_TEMP "cowork-windows-sandbox"
+          $env:RUN_WINDOWS_SANDBOX_INTEGRATION = "1"
+          $setupWorkspace = Join-Path $env:RUNNER_TEMP "cowork-windows-sandbox-setup-workspace"
+          New-Item -ItemType Directory -Force -Path $setupWorkspace | Out-Null
+
+          & $helperPath setup --sandbox-home $env:COWORK_WIN_SANDBOX_HOME --cwd $setupWorkspace --mode workspace-write --writable-root $setupWorkspace
+          if ($LASTEXITCODE -ne 0) { throw "Windows sandbox setup or enforcement probe failed with exit code $LASTEXITCODE" }
+
+          bun test test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Windows path and desktop smoke tests

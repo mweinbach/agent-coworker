@@ -1,28 +1,44 @@
 [package]
 name = "cowork-win-sandbox"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-description = "Windows sandbox helper for agent-coworker (restricted token + Job Object)."
+version = "0.2.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Windows sandbox runner for agent-coworker (capability ACLs, WFP, restricted identities, Job Objects)."
+build = "build.rs"
 
 [[bin]]
 name = "cowork-win-sandbox"
 path = "src/main.rs"
 
-# Win32 APIs are only pulled in when targeting Windows. On other hosts the crate
-# still builds (the helper just refuses to run), which lets CI typecheck/build
-# the scaffolding on Linux/macOS.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_System_Threading",
-    "Win32_System_JobObjects",
-    "Win32_System_SystemServices",
-    "Win32_System_Diagnostics_Debug",
-] }
+anyhow = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+dirs-next = "2.0"
+rand = { version = "0.8", default-features = false, features = ["std", "small_rng"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "macros", "signal", "sync", "time"] }
+codex-windows-sandbox = { git = "https://github.com/openai/codex.git", rev = "eb8c1ee85f18d055d00b3a0912dd0e55e62a82e8" }
+codex-protocol = { package = "codex-protocol", git = "https://github.com/openai/codex.git", rev = "eb8c1ee85f18d055d00b3a0912dd0e55e62a82e8" }
+codex-utils-absolute-path = { package = "codex-utils-absolute-path", git = "https://github.com/openai/codex.git", rev = "eb8c1ee85f18d055d00b3a0912dd0e55e62a82e8" }
+codex-utils-pty = { package = "codex-utils-pty", git = "https://github.com/openai/codex.git", rev = "eb8c1ee85f18d055d00b3a0912dd0e55e62a82e8" }
+codex-otel = { package = "codex-otel", git = "https://github.com/openai/codex.git", rev = "eb8c1ee85f18d055d00b3a0912dd0e55e62a82e8" }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_NetworkManagement_WindowsFirewall", "Win32_System_Com", "Win32_System_Variant"] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_NetworkManagement_NetManagement", "Win32_NetworkManagement_WindowsFilteringPlatform", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authentication_Identity", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Rpc", "Win32_System_StationsAndDesktops", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.27"
 
 [profile.release]
 opt-level = "z"
 lto = true
 strip = true
+
+[patch.crates-io]
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "e5e64b86722c5453c4038131c3193faa49a648ad" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+
+[patch."https://github.com/openai/codex.git"]
+codex-utils-pty = { path = "vendor/codex-utils-pty" }

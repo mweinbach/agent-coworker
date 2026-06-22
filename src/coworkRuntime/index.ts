@@ -3,6 +3,7 @@ export * from "./cleanup";
 export * from "./download";
 export * from "./ensureReady";
 export * from "./install";
+export * from "./integrity";
 export * from "./libreOffice";
 export * from "./manifest";
 export * from "./platform";

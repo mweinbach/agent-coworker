@@ -1,5 +1,5 @@
-import { type ChildProcessByStdio, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -7,6 +7,12 @@ import type { Readable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
 import { findWindowsHelper } from "../../../../src/platform/sandbox/detect";
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "../../../../src/platform/sandbox/windows";
 import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   captureError,
@@ -38,6 +44,7 @@ import {
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
+import { writeWindowsSandboxReadiness } from "./windowsSandboxReadiness";
 
 const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 45_000;
 const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
@@ -45,6 +52,7 @@ const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const MIRROR_SERVER_OUTPUT_PREFIX = "[cowork-server";
+let windowsSandboxSetupAttempted = false;
 
 const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
 const CRASH_REPORTING_ENV_PREFIXES = ["COWORK_SENTRY_", "SENTRY_"] as const;
@@ -246,6 +254,208 @@ function getSidecarSearchDirs(): string[] {
 
 function findBundledWindowsSandboxHelper(): string | null {
   return findWindowsHelper(getSidecarSearchDirs(), process.env);
+}
+
+const windowsSandboxHashManifestSchema = z.object({
+  schemaVersion: z.literal(1),
+  files: z.object({
+    [WINDOWS_SANDBOX_HELPER_NAME]: z.string().regex(/^[a-f0-9]{64}$/),
+    [WINDOWS_SANDBOX_SETUP_NAME]: z.string().regex(/^[a-f0-9]{64}$/),
+    [WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]: z.string().regex(/^[a-f0-9]{64}$/),
+  }),
+});
+
+function findBundledWindowsSandboxBundle(): {
+  helperPath: string;
+  helperSha256: string;
+  setupPath: string;
+  setupSha256: string;
+  commandRunnerPath: string;
+  commandRunnerSha256: string;
+} | null {
+  for (const dir of getSidecarSearchDirs()) {
+    const manifestPath = path.join(dir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
+    try {
+      const manifest = windowsSandboxHashManifestSchema.parse(
+        JSON.parse(fs.readFileSync(manifestPath, "utf8")),
+      );
+      const helperPath = path.join(dir, WINDOWS_SANDBOX_HELPER_NAME);
+      const setupPath = path.join(dir, WINDOWS_SANDBOX_SETUP_NAME);
+      const commandRunnerPath = path.join(dir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME);
+      if (
+        ![helperPath, setupPath, commandRunnerPath].every((candidate) => fs.existsSync(candidate))
+      ) {
+        continue;
+      }
+      const binaries = [
+        [helperPath, manifest.files[WINDOWS_SANDBOX_HELPER_NAME]],
+        [setupPath, manifest.files[WINDOWS_SANDBOX_SETUP_NAME]],
+        [commandRunnerPath, manifest.files[WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]],
+      ] as const;
+      if (
+        binaries.some(
+          ([filePath, expected]) =>
+            createHash("sha256").update(fs.readFileSync(filePath)).digest("hex") !== expected,
+        )
+      ) {
+        continue;
+      }
+      if (
+        app.isPackaged &&
+        binaries.some(([filePath]) => {
+          const signature = spawnSync(
+            "powershell.exe",
+            [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($signature.Status -eq 'Valid') { exit 0 }; exit 1",
+              filePath,
+            ],
+            { windowsHide: true, stdio: "ignore", timeout: 15_000 },
+          );
+          return signature.status !== 0;
+        })
+      ) {
+        continue;
+      }
+      return {
+        helperPath,
+        helperSha256: manifest.files[WINDOWS_SANDBOX_HELPER_NAME],
+        setupPath,
+        setupSha256: manifest.files[WINDOWS_SANDBOX_SETUP_NAME],
+        commandRunnerPath,
+        commandRunnerSha256: manifest.files[WINDOWS_SANDBOX_COMMAND_RUNNER_NAME],
+      };
+    } catch {
+      // A missing or malformed manifest is never a trusted helper bundle.
+    }
+  }
+  return null;
+}
+
+function runWindowsSandboxHelper(
+  helperPath: string,
+  args: string[],
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(helperPath, args, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.on("data", (chunk: string) => (stderr += chunk));
+    child.once("error", (error) => resolve({ code: null, stdout, stderr: error.message }));
+    child.once("exit", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+async function ensureWindowsSandboxReady(
+  workspacePath: string,
+  overrides: {
+    platform?: NodeJS.Platform;
+    userDataDir?: string;
+    resolveBundle?: typeof findBundledWindowsSandboxBundle;
+    runHelper?: typeof runWindowsSandboxHelper;
+  } = {},
+): Promise<void> {
+  if ((overrides.platform ?? process.platform) !== "win32") return;
+  const userDataDir = overrides.userDataDir ?? app.getPath("userData");
+  const runHelper = overrides.runHelper ?? runWindowsSandboxHelper;
+  const noEnforcement = {
+    filesystem: false,
+    network: false,
+    process: false,
+    integrity: false,
+  };
+  const bundle = (overrides.resolveBundle ?? findBundledWindowsSandboxBundle)();
+  if (!bundle) {
+    logServerManagerEvent("windows sandbox bundle missing or failed integrity verification");
+    await writeWindowsSandboxReadiness(userDataDir, {
+      state: "bundle-untrusted",
+      bundleTrusted: false,
+      setupRequired: true,
+      enforcement: noEnforcement,
+      message:
+        "Sandbox helper bundle is missing or failed integrity verification. Reinstall or repair Cowork.",
+    });
+    return;
+  }
+  const sandboxHome = path.join(userDataDir, "windows-sandbox");
+  const commonArgs = ["--sandbox-home", sandboxHome, "--cwd", path.resolve(workspacePath)];
+  const probe = await runHelper(bundle.helperPath, ["probe", ...commonArgs]);
+  const parseEnforcement = (stdout: string) => {
+    try {
+      const value = JSON.parse(stdout) as Record<string, unknown>;
+      return {
+        filesystem: value.filesystem === true,
+        network: value.network === true,
+        process: value.process === true,
+        integrity: value.integrity === true,
+      };
+    } catch {
+      return noEnforcement;
+    }
+  };
+  if (probe.code === 0) {
+    await writeWindowsSandboxReadiness(userDataDir, {
+      state: "ready",
+      bundleTrusted: true,
+      setupRequired: false,
+      enforcement: parseEnforcement(probe.stdout),
+      message: "Windows sandbox integrity and enforcement probes passed.",
+    });
+    return;
+  }
+
+  await writeWindowsSandboxReadiness(userDataDir, {
+    state: "setup-required",
+    bundleTrusted: true,
+    setupRequired: true,
+    enforcement: parseEnforcement(probe.stdout),
+    message: "Windows sandbox needs one-time administrator setup or repair.",
+  });
+
+  logServerManagerEvent("windows sandbox requires one-time setup or repair", {
+    probeCode: probe.code,
+    probeError: probe.stderr.trim().slice(0, 500),
+  });
+  if (windowsSandboxSetupAttempted) return;
+  windowsSandboxSetupAttempted = true;
+  const setup = await runHelper(bundle.helperPath, [
+    "setup",
+    ...commonArgs,
+    "--mode",
+    "workspace-write",
+    "--writable-root",
+    path.resolve(workspacePath),
+  ]);
+  if (setup.code !== 0) {
+    logServerManagerEvent("windows sandbox setup was cancelled or failed", {
+      setupCode: setup.code,
+      setupError: setup.stderr.trim().slice(0, 500),
+    });
+    await writeWindowsSandboxReadiness(userDataDir, {
+      state: "setup-failed",
+      bundleTrusted: true,
+      setupRequired: true,
+      enforcement: parseEnforcement(setup.stdout),
+      message: "Windows sandbox setup was cancelled or failed. Restricted commands remain blocked.",
+    });
+    return;
+  }
+  await writeWindowsSandboxReadiness(userDataDir, {
+    state: "ready",
+    bundleTrusted: true,
+    setupRequired: false,
+    enforcement: parseEnforcement(setup.stdout),
+    message: "Windows sandbox setup and enforcement probes passed.",
+  });
+  logServerManagerEvent("windows sandbox setup and enforcement probe completed");
 }
 
 function findSidecarLaunchCommand() {
@@ -558,8 +768,8 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
-  const bundledWindowsSandboxHelper =
-    process.platform === "win32" ? findBundledWindowsSandboxHelper() : null;
+  const bundledWindowsSandbox =
+    process.platform === "win32" ? findBundledWindowsSandboxBundle() : null;
   const telemetryConsentEnv = withoutInheritedTelemetryConsentEnv(process.env);
   const privacyTelemetrySettings = resolveTelemetryConsent({
     settings: opts.privacyTelemetrySettings,
@@ -586,8 +796,17 @@ function buildServerEnv(
     ...(bundledWindowsAiElectron
       ? { COWORK_WINDOWS_AI_ELECTRON_DIR: bundledWindowsAiElectron }
       : {}),
-    ...(bundledWindowsSandboxHelper
-      ? { COWORK_WIN_SANDBOX_HELPER: bundledWindowsSandboxHelper }
+    ...(bundledWindowsSandbox
+      ? {
+          COWORK_WIN_SANDBOX_HELPER: bundledWindowsSandbox.helperPath,
+          COWORK_WIN_SANDBOX_HELPER_SHA256: bundledWindowsSandbox.helperSha256,
+          COWORK_WIN_SANDBOX_SETUP: bundledWindowsSandbox.setupPath,
+          COWORK_WIN_SANDBOX_SETUP_SHA256: bundledWindowsSandbox.setupSha256,
+          COWORK_WIN_SANDBOX_COMMAND_RUNNER: bundledWindowsSandbox.commandRunnerPath,
+          COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256: bundledWindowsSandbox.commandRunnerSha256,
+          COWORK_WIN_SANDBOX_HOME: path.join(app.getPath("userData"), "windows-sandbox"),
+          COWORK_WIN_SANDBOX_REQUIRE_AUTHENTICODE: app.isPackaged ? "1" : "0",
+        }
       : {}),
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
@@ -858,6 +1077,8 @@ export class ServerManager {
       workspacePath,
       yolo,
     });
+
+    await ensureWindowsSandboxReady(workspacePath);
 
     const attemptCount = getSourceStartupAttemptCount(useSource);
     let previousError: unknown = null;
@@ -1231,6 +1452,7 @@ export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
   findBundledFoundationModelsSdkDir,
+  findBundledWindowsSandboxBundle,
   findBundledWindowsSandboxHelper,
   findBundledWindowsAiElectronDir,
   findSidecarLaunchCommand,
@@ -1240,6 +1462,10 @@ export const __internal = {
   appendBrowserAccessToken,
   buildHarnessTerminalLogsEnv,
   createServerOutputMirror,
+  ensureWindowsSandboxReady,
+  resetWindowsSandboxSetupAttemptForTests: () => {
+    windowsSandboxSetupAttempted = false;
+  },
   getSourceStartupAttemptCount,
   isLikelyBunSegfault,
   logServerManagerEvent,

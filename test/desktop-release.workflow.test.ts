@@ -39,6 +39,18 @@ describe("desktop release workflow", () => {
     );
   });
 
+  test("builds and strictly verifies the native Apple Silicon release", () => {
+    expect(workflow).toContain("- os: macos-15");
+    expect(workflow).toMatch(/label: macOS[\s\S]*?build_arch: arm64/);
+    expect(workflow).toContain("- name: Verify native macOS sandbox and runtime");
+    expect(workflow).toMatch(
+      /- name: Build macOS desktop artifacts[\s\S]*?COWORK_BUILD_PLATFORM: darwin[\s\S]*?COWORK_BUILD_ARCH: arm64[\s\S]*?desktop:build -- --publish never --arm64/,
+    );
+    expect(workflow).toContain('codesign --verify --deep --strict --verbose=4 "$app_path"');
+    expect(workflow).toContain('xcrun stapler validate "$app_path"');
+    expect(workflow).toContain('spctl -a -vv --type exec "$app_path"');
+  });
+
   test("passes only public telemetry variables into desktop package builds", () => {
     const packageJob = workflow.match(/package:[\s\S]*?\n {2}smoke-windows-arm64:/)?.[0] ?? "";
 

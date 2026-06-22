@@ -75,6 +75,16 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("test/h3.pairing-store.test.ts");
   });
 
+  test("runs native macOS sandbox and runtime coverage on Apple Silicon", () => {
+    expect(workflow).toContain("macos-smoke:");
+    expect(workflow).toContain("name: macOS ARM64 smoke");
+    expect(workflow).toContain("runs-on: macos-15");
+    expect(workflow).toContain("- name: macOS sandbox and runtime enforcement");
+    expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
+    expect(workflow).toContain("test/coworkRuntime.test.ts");
+    expect(workflow).toContain("apps/desktop/test/server-manager.test.ts");
+  });
+
   test("runs the mobile install, typecheck, autolinking, and export lane", () => {
     expect(workflow).toContain("mobile:");
     expect(workflow).toContain("name: Mobile");

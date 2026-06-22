@@ -200,13 +200,30 @@ export function probeWindowsSandboxBundle(
  * from the {@link SandboxManager} so they can be injected/mocked in tests.
  */
 
-/** Whether `/usr/bin/sandbox-exec` exists (macOS Seatbelt). */
+let macosSeatbeltTrusted: boolean | undefined;
+
+/** Whether the fixed macOS Seatbelt executable is owned and signed by Apple. */
 export function hasSeatbelt(): boolean {
+  if (macosSeatbeltTrusted !== undefined) return macosSeatbeltTrusted;
+  let trusted = false;
   try {
-    return fs.existsSync(MACOS_SEATBELT_EXECUTABLE);
+    const stat = fs.statSync(MACOS_SEATBELT_EXECUTABLE);
+    const signature = spawnSync(
+      "/usr/bin/codesign",
+      ["--verify", "--strict", "-R=anchor apple", MACOS_SEATBELT_EXECUTABLE],
+      { stdio: "ignore", timeout: 15_000 },
+    );
+    trusted =
+      stat.isFile() &&
+      stat.uid === 0 &&
+      (stat.mode & 0o022) === 0 &&
+      fs.realpathSync(MACOS_SEATBELT_EXECUTABLE) === MACOS_SEATBELT_EXECUTABLE &&
+      signature.status === 0;
   } catch {
-    return false;
+    trusted = false;
   }
+  macosSeatbeltTrusted = trusted;
+  return trusted;
 }
 
 /**

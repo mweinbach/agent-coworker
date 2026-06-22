@@ -121,7 +121,8 @@ filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
   params (so the exclusion is relative to the root — a workspace that merely lives
   under a `.cowork` ancestor, e.g. `~/.cowork/chats/<id>`, is not wrongly denied):
   the direct `.git`/`.cowork` children plus any existing nested ones, matching the
-  bwrap backend.
+  bwrap backend. Capability detection accepts only the fixed, root-owned,
+  non-writable `/usr/bin/sandbox-exec` after its Apple code signature verifies.
 - **Linux — bubblewrap** (`bwrap.ts`): `--ro-bind / /` for reads, `--bind` per
   writable root, `--ro-bind` to re-protect `.git`/`.cowork`, `--unshare-net` when
   network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is
@@ -177,3 +178,7 @@ filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
     `RUN_WINDOWS_SANDBOX_INTEGRATION=1`, and run the same command after one-time
     setup. CI runs this suite natively on both x64 (`windows-latest`) and ARM64
     (`windows-11-arm`).
+
+CI also runs the macOS enforcement suite on the native ARM64 `macos-15` runner,
+including system-binary trust, symlink and child-process escape denial, and a
+loopback network-denial probe.

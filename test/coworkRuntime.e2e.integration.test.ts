@@ -36,6 +36,7 @@ e2eDescribe("signed Cowork runtime document workflow", () => {
     );
     await fs.access(renderer);
     const env = await buildRuntimeEnv(path.resolve(runtimeDir!), process.env, process.platform);
+    if (process.platform === "darwin") env.TMPDIR = "/private/tmp";
     const python = env.COWORK_RUNTIME_PYTHON!;
 
     await execFileAsync(

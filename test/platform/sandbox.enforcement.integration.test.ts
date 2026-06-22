@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
+import { detectCapabilities } from "../../src/platform/sandbox";
 import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
 import { resolveSandboxPolicy, type SandboxPolicy } from "../../src/platform/sandbox/policy";
 import { buildSeatbeltCommand } from "../../src/platform/sandbox/seatbelt";
@@ -46,6 +48,22 @@ function runSeatbelt(ws: string, shellCommand: string, targetPaths?: string[]): 
 }
 
 seatbeltDescribe("seatbelt enforcement (macOS — run before merge)", () => {
+  test("uses the immutable Apple-signed sandbox executable", () => {
+    const stat = fs.statSync("/usr/bin/sandbox-exec");
+    expect(stat.uid).toBe(0);
+    expect(stat.mode & 0o022).toBe(0);
+    expect(fs.realpathSync("/usr/bin/sandbox-exec")).toBe("/usr/bin/sandbox-exec");
+    expect(
+      spawnSync("/usr/bin/codesign", [
+        "--verify",
+        "--strict",
+        "-R=anchor apple",
+        "/usr/bin/sandbox-exec",
+      ]).status,
+    ).toBe(0);
+    expect(detectCapabilities("darwin").seatbelt).toBe(true);
+  });
+
   test("allows writes inside the workspace", () => {
     const ws = tmpDir("sbx-ws-");
     try {
@@ -87,6 +105,41 @@ seatbeltDescribe("seatbelt enforcement (macOS — run before merge)", () => {
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("denies symlink and child-process escapes", () => {
+    const ws = tmpDir("sbx-ws-");
+    const outside = tmpDir("sbx-out-");
+    const link = path.join(ws, "outside-link");
+    fs.symlinkSync(outside, link);
+    try {
+      expect(runSeatbelt(ws, `printf x > '${link}/symlink-escape.txt'`)).not.toBe(0);
+      expect(runSeatbelt(ws, `/bin/sh -c "printf x > '${outside}/child-escape.txt'"`)).not.toBe(0);
+      expect(fs.existsSync(path.join(outside, "symlink-escape.txt"))).toBe(false);
+      expect(fs.existsSync(path.join(outside, "child-escape.txt"))).toBe(false);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("denies outbound network when policy disables it", async () => {
+    const ws = tmpDir("sbx-ws-");
+    const server = net.createServer((socket) => socket.end());
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("TCP probe did not bind a port");
+      const args = ["-z", "-w", "1", "127.0.0.1", String(address.port)];
+      expect(spawnSync("/usr/bin/nc", args).status).toBe(0);
+      expect(runSeatbelt(ws, `/usr/bin/nc ${args.join(" ")}`)).not.toBe(0);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(ws, { recursive: true, force: true });
     }
   });
 

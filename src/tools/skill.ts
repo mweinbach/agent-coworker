@@ -20,7 +20,8 @@ export function createSkillTool(ctx: ToolContext) {
   // Build description dynamically from discovered skills so models see actual skill names.
   let description =
     "Load a skill (a SKILL.md file) to get specialized instructions for producing a specific type of deliverable.\n\n" +
-    "IMPORTANT: Always call this tool BEFORE creating any deliverable. Do NOT skip this step.\n" +
+    "IMPORTANT: When a relevant skill is listed below, call this tool BEFORE creating that deliverable. " +
+    "If no listed skill matches, continue without this tool; never invent a skill name or guess a SKILL.md path.\n" +
     `Skills are searched in ${searchOrder} directories.`;
 
   let paramDesc: string;
@@ -53,7 +54,10 @@ export function createSkillTool(ctx: ToolContext) {
       const loaded = await loadSkillBodyByName(ctx.config, skillName);
       if (!loaded) {
         ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "not_found" })}`);
-        return `Skill "${skillName}" not found.`;
+        const available = skills.map((skill) => `"${skill.name}"`).join(", ");
+        return available
+          ? `Skill "${skillName}" not found. Available skills: ${available}. Use one only when it matches the task; otherwise continue without a skill. Do not guess a SKILL.md path.`
+          : `Skill "${skillName}" not found. No skills are currently available. Continue without a skill and do not guess a SKILL.md path.`;
       }
 
       ctx.log(`tool< skill ${JSON.stringify({ ok: true })}`);

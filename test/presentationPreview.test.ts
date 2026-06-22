@@ -161,6 +161,7 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
         builtInDir: dir,
         config,
         env: {
+          COWORK_DISABLE_RUNTIME: "1",
           COWORK_RUNTIME_DIR: bundledRuntime,
           COWORK_RUNTIME_NODE: fakeNode,
           COWORK_RUNTIME_NODE_MODULES: path.join(bundledRuntime, "node/node_modules"),

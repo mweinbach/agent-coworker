@@ -5,14 +5,13 @@ import { ResearchView } from "../ResearchView";
 import { SkillsView } from "../SkillsView";
 import { TaskView } from "../tasks/TaskView";
 import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
-import { SettingsContent } from "./SettingsContent";
 
 interface PrimaryContentProps {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
   workspaceStartupProgress: CoworkRuntimeBootstrapProgress | null;
-  view: "chat" | "task" | "skills" | "research" | "settings";
+  view: "chat" | "task" | "skills" | "research";
 }
 
 type PrimaryContentVariant =
@@ -22,8 +21,7 @@ type PrimaryContentVariant =
   | "chat"
   | "task"
   | "skills"
-  | "research"
-  | "settings";
+  | "research";
 
 function resolveVariant({
   ready,
@@ -45,9 +43,6 @@ function resolveVariant({
   }
   if (view === "research") {
     return "research";
-  }
-  if (view === "settings") {
-    return "settings";
   }
   if (view === "task") {
     return "task";
@@ -106,12 +101,6 @@ export function PrimaryContent({
       return (
         <div className="h-full min-h-0 bg-panel">
           <ResearchView />
-        </div>
-      );
-    case "settings":
-      return (
-        <div className="h-full min-h-0 bg-panel">
-          <SettingsContent init={init} ready={ready} startupError={startupError} />
         </div>
       );
     case "chat":

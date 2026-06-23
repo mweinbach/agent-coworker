@@ -191,6 +191,48 @@ describe("app window-mode notification routing", () => {
     }
   });
 
+  test("settings replaces the chat shell across the full window", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedReadyState();
+      useAppStore.setState({
+        view: "settings",
+        settingsPage: "models",
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(App));
+      });
+
+      expect(container.querySelector(".app-shell--settings")).not.toBeNull();
+      expect(container.querySelector('nav[aria-label="Settings sections"]')).not.toBeNull();
+      expect(container.querySelector(".app-shell--chat")).toBeNull();
+      expect(container.querySelector(".app-sidebar")).toBeNull();
+      expect(container.querySelector(".app-topbar")).toBeNull();
+
+      await act(async () => {
+        useAppStore.setState({ view: "chat" });
+      });
+
+      expect(container.querySelector(".app-shell--settings")).toBeNull();
+      expect(container.querySelector(".app-shell--chat")).not.toBeNull();
+      expect(container.querySelector(".app-sidebar")).not.toBeNull();
+      expect(container.querySelector(".app-topbar")).not.toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("Escape dismisses pending sandbox approvals for terminal task threads", async () => {
     const harness = setupJsdom();
     const dismissPrompt = mock(() => {});

@@ -265,6 +265,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Desktop UI Patterns
 
+- Treat Settings as a full-window shell: its navigation replaces the chat sidebar and its page chrome replaces the thread top bar. Never mount `SettingsShell` inside `ChatShell`.
 - For long first-run downloads, do not strand a small progress row in a large otherwise-interactive shell. Use an intentional setup state with clear hierarchy, phase context, and unavailable regions visually de-emphasized.
 - Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.
 - For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray asset correctly; dev-only checks are not enough.

@@ -2,9 +2,8 @@ import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { createGoogleInteractionsRuntime } from "../src/runtime/googleInteractionsRuntime";
 import { codexThreadConfig } from "../src/runtime/codexAppServer/config";
+import { createGoogleInteractionsRuntime } from "../src/runtime/googleInteractionsRuntime";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import { createWebFetchTool, __internal as webFetchInternal } from "../src/tools/webFetch";
 import { createWebSearchTool } from "../src/tools/webSearch";
@@ -41,21 +40,23 @@ describe("network policy web-tool contract", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-network-contract-fetch-"));
     const originalFetch = globalThis.fetch;
     webFetchInternal.setHtmlToMarkdownForTests(async (html) =>
-      html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+      html
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
     );
     webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
 
     try {
-      globalThis.fetch = mock(async () =>
-        new Response("<main><h1>Network policy contract</h1></main>", {
-          status: 200,
-          headers: { "Content-Type": "text/html" },
-        }),
+      globalThis.fetch = mock(
+        async () =>
+          new Response("<main><h1>Network policy contract</h1></main>", {
+            status: 200,
+            headers: { "Content-Type": "text/html" },
+          }),
       ) as typeof fetch;
 
-      const tool = createWebFetchTool(
-        makeCtx(dir, { sandboxPolicy: disabledNetworkSandbox(dir) }),
-      );
+      const tool = createWebFetchTool(makeCtx(dir, { sandboxPolicy: disabledNetworkSandbox(dir) }));
       const output = await tool.execute({
         url: "https://example.com/policy",
         maxLength: 10_000,

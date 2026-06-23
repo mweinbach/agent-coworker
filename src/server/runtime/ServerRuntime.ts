@@ -4,6 +4,7 @@ import { loadConfig } from "../../config";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
+import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
 import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
 import type {
@@ -102,6 +103,7 @@ export interface StartAgentServerOptions {
   loadAgentPromptImpl?: typeof loadAgentPromptFn;
   preloadSystemPrompt?: boolean;
   taskTerminalQuiesceTimeoutMs?: number;
+  onCoworkRuntimeBootstrapProgress?: (progress: CoworkRuntimeBootstrapProgress) => void;
 }
 
 type JsonRpcRequest = { id: string | number; method: string; params?: unknown };
@@ -154,6 +156,7 @@ export async function createAgentServerRuntime(
   const coworkRuntimeSetup = await ensureCoworkRuntimeReady({
     homedir: opts.homedir,
     env,
+    onProgress: opts.onCoworkRuntimeBootstrapProgress,
     log: (line) => {
       console.warn(`[cowork-runtime] ${line}`);
     },

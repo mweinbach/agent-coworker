@@ -1,3 +1,4 @@
+import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
 import type { ResearchRecord, ResearchSettings } from "../../../../src/server/research/types";
 import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
@@ -529,6 +530,7 @@ export type ImportRuntimeState = {
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
+  startupProgress: CoworkRuntimeBootstrapProgress | null;
   error: string | null;
   controlSessionId: string | null;
   controlConfig: ConfigSubset | null;

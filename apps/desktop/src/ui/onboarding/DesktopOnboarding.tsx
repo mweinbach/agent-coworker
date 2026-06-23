@@ -39,6 +39,7 @@ import {
 import { cn } from "../../lib/utils";
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../lib/wsProtocol";
+import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
 const WORKSPACE_SERVER_TIMEOUT_MS = 30_000;
@@ -169,6 +170,7 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const serverReady = Boolean(runtime?.serverUrl && !runtime?.error);
   const starting = runtime?.starting === true;
+  const startupProgress = starting && !serverReady ? (runtime?.startupProgress ?? null) : null;
   const serverError = runtime?.error ?? null;
   const hasWorkspace = workspace !== null;
   const hasMultipleWorkspaces = workspaceTargets.length > 1;
@@ -257,6 +259,11 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
                 )}
               </div>
             </div>
+            {startupProgress ? (
+              <div className="mt-3">
+                <WorkspaceRuntimeProgress progress={startupProgress} compact />
+              </div>
+            ) : null}
             {serverError ? (
               <div className="mt-2 text-xs text-destructive">{serverError}</div>
             ) : null}

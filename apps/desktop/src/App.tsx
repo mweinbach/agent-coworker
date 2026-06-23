@@ -15,6 +15,7 @@ import {
   onMenuCommand,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
+  onWorkspaceServerStartupProgress,
   setWindowAppearance,
   showCanvasWindow,
   showNotification,
@@ -204,6 +205,20 @@ const ChatShell = memo(function ChatShell({
   const pluginViewMode = catalogWorkspaceId
     ? (workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins")
     : "plugins";
+  const activeWorkspaceId = activeWorkspace?.id ?? null;
+  const workspaceStartupProgress = useMemo(() => {
+    const activeRuntime = activeWorkspaceId ? workspaceRuntimeById[activeWorkspaceId] : null;
+    if (activeRuntime?.starting && !activeRuntime.serverUrl && activeRuntime.startupProgress) {
+      return activeRuntime.startupProgress;
+    }
+    if (activeWorkspaceId) return null;
+    for (const runtime of Object.values(workspaceRuntimeById)) {
+      if (runtime.starting && !runtime.serverUrl && runtime.startupProgress) {
+        return runtime.startupProgress;
+      }
+    }
+    return null;
+  }, [activeWorkspaceId, workspaceRuntimeById]);
   const topBarTitle =
     effectiveView === "skills"
       ? pluginViewMode === "skills"
@@ -312,7 +327,9 @@ const ChatShell = memo(function ChatShell({
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
         }
-        showContextToggle={showContextSidebar && !showCanvasInTopBar}
+        showContextToggle={
+          showContextSidebar && !showCanvasInTopBar && workspaceStartupProgress === null
+        }
         canvasMode={showCanvasInTopBar}
         canvasIsMarkdown={canvasIsMarkdown}
         canvasActiveTab={canvasActiveTab}
@@ -356,6 +373,7 @@ const ChatShell = memo(function ChatShell({
                 init={init}
                 ready={ready}
                 startupError={startupError}
+                workspaceStartupProgress={workspaceStartupProgress}
                 view={
                   effectiveView === "skills"
                     ? "skills"
@@ -369,7 +387,9 @@ const ChatShell = memo(function ChatShell({
                 }
               />
             </div>
-            {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
+            {showContextSidebar && workspaceStartupProgress === null ? (
+              <RightSidebarPane collapsed={contextSidebarCollapsed} />
+            ) : null}
           </div>
         </main>
       </div>
@@ -385,8 +405,14 @@ export default function App() {
   const init = useAppStore((s) => s.init);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
+  const setWorkspaceServerStartupProgress = useAppStore((s) => s.setWorkspaceServerStartupProgress);
   const seenNotificationIds = useRef(new Set<string>());
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  useEffect(
+    () => onWorkspaceServerStartupProgress(setWorkspaceServerStartupProgress),
+    [setWorkspaceServerStartupProgress],
+  );
 
   useEffect(() => {
     document.documentElement.dataset.windowMode = windowMode;

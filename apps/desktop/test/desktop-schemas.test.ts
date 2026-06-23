@@ -16,6 +16,7 @@ import {
   startWorkspaceServerInputSchema,
   telemetryStatusInputSchema,
   updaterStateSchema,
+  workspaceServerStartupProgressSchema,
 } from "../src/lib/desktopSchemas";
 
 const TS = "2024-01-01T00:00:00.000Z";
@@ -299,6 +300,36 @@ describe("desktop persisted-state schema defaults", () => {
     expect(() => pickDirectoryInputSchema.parse({ title: 42 })).toThrow();
     expect(() => copyTextInputSchema.parse({ text: "not a string" })).toThrow();
     expect(() => telemetryStatusInputSchema.parse({ extra: true })).toThrow();
+  });
+
+  test("validates workspace runtime startup progress events", () => {
+    expect(
+      workspaceServerStartupProgressSchema.parse({
+        workspaceId: "ws_1",
+        progress: {
+          phase: "downloading",
+          version: "2026-06-22",
+          transferredBytes: 50,
+          totalBytes: 100,
+          percent: 50,
+        },
+      }),
+    ).toMatchObject({
+      workspaceId: "ws_1",
+      progress: { phase: "downloading", percent: 50 },
+    });
+    expect(() =>
+      workspaceServerStartupProgressSchema.parse({
+        workspaceId: "ws_1",
+        progress: {
+          phase: "downloading",
+          version: "2026-06-22",
+          transferredBytes: -1,
+          totalBytes: 100,
+          percent: 101,
+        },
+      }),
+    ).toThrow();
   });
 
   test("accepts product analytics IPC event payloads", () => {

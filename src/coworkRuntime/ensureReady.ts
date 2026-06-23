@@ -18,7 +18,11 @@ import { readRuntimeManifest } from "./manifest";
 import { assertRuntimeVersion, resolveRuntimeAssetForHost } from "./platform";
 import { buildRuntimeEnv, verifyRuntime } from "./runtime";
 import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
-import type { CoworkRuntimeSetupResult, RuntimeHost } from "./types";
+import type {
+  CoworkRuntimeBootstrapProgress,
+  CoworkRuntimeSetupResult,
+  RuntimeHost,
+} from "./types";
 
 export const DEFAULT_COWORK_RUNTIME_REPOSITORY = "mweinbach/cowork-runtime";
 export const DEFAULT_COWORK_RUNTIME_VERSION = "2026-06-22";
@@ -200,6 +204,7 @@ export async function ensureCoworkRuntimeReady(
     host?: RuntimeHost;
     fetchImpl?: typeof fetch;
     log?: (line: string) => void;
+    onProgress?: (progress: CoworkRuntimeBootstrapProgress) => void;
     trustedKeys?: TrustedRuntimeKeys;
   } = {},
 ): Promise<CoworkRuntimeSetupResult | null> {
@@ -226,6 +231,20 @@ export async function ensureCoworkRuntimeReady(
     DEFAULT_COWORK_RUNTIME_VERSION
   ).trim();
   assertRuntimeVersion(version);
+  let latestProgress: CoworkRuntimeBootstrapProgress | null = null;
+  const reportProgress = (progress: CoworkRuntimeBootstrapProgress): void => {
+    latestProgress = progress;
+    opts.onProgress?.(progress);
+  };
+  const reportReady = (): void => {
+    reportProgress({
+      phase: "ready",
+      version,
+      transferredBytes: latestProgress?.transferredBytes ?? null,
+      totalBytes: latestProgress?.totalBytes ?? null,
+      percent: latestProgress?.totalBytes ? 100 : (latestProgress?.percent ?? null),
+    });
+  };
   const desiredDir = installedRuntimeDir(version, home);
   const forceRequested = opts.force === true || isTruthy(env[FORCE_ENV]);
   const existing = await resolveDesiredRuntime({
@@ -249,14 +268,22 @@ export async function ensureCoworkRuntimeReady(
   ).trim();
   const releaseTag = (opts.releaseTag ?? env[RELEASE_TAG_ENV])?.trim() || undefined;
   try {
-    return await withCoworkRuntimeBootstrapLock(
+    const result = await withCoworkRuntimeBootstrapLock(
       {
         home,
         version,
-        onWait: (owner) =>
+        onWait: (owner) => {
           opts.log?.(
             `Waiting for Cowork runtime ${version} bootstrap${owner ? ` owned by process ${owner.pid}` : ""}.`,
-          ),
+          );
+          reportProgress({
+            phase: "waiting",
+            version,
+            transferredBytes: null,
+            totalBytes: null,
+            percent: null,
+          });
+        },
       },
       async () => {
         const installedByPeer = await resolveDesiredRuntime({
@@ -276,10 +303,18 @@ export async function ensureCoworkRuntimeReady(
         let installed: Awaited<ReturnType<typeof installRuntimeArchive>>;
         if (archivePath) {
           const resolvedArchive = path.resolve(archivePath);
+          const archiveBytes = (await fs.stat(resolvedArchive)).size;
           const expectedSha256 = await expectedChecksumForArchive(
             resolvedArchive,
             opts.expectedSha256 ?? env[ARCHIVE_SHA256_ENV],
           );
+          reportProgress({
+            phase: "installing",
+            version,
+            transferredBytes: archiveBytes,
+            totalBytes: archiveBytes,
+            percent: 100,
+          });
           installed = await installRuntimeArchive({
             archivePath: resolvedArchive,
             expectedSha256,
@@ -326,8 +361,16 @@ export async function ensureCoworkRuntimeReady(
             host,
             fetchImpl: opts.fetchImpl,
             log: opts.log,
+            onProgress: reportProgress,
           });
           try {
+            reportProgress({
+              phase: "installing",
+              version,
+              transferredBytes: downloaded.downloadedBytes,
+              totalBytes: downloaded.totalBytes,
+              percent: downloaded.totalBytes ? 100 : null,
+            });
             installed = await installRuntimeArchive({
               archivePath: downloaded.archivePath,
               expectedSha256: downloaded.expectedSha256,
@@ -355,6 +398,8 @@ export async function ensureCoworkRuntimeReady(
         });
       },
     );
+    if (result) reportReady();
+    return result;
   } catch (error) {
     opts.log?.(
       `Cowork runtime ${version} could not be installed: ${error instanceof Error ? error.message : String(error)}`,
@@ -369,12 +414,14 @@ export async function ensureCoworkRuntimeReady(
     });
     if (!fallback) return null;
     await cleanupLegacyCoworkRuntimes({ home, log: opts.log });
-    return await setupResult({
+    const result = await setupResult({
       runtimeDir: fallback,
       baseEnv: env,
       source: "fallback",
       trustedKeys,
     });
+    reportReady();
+    return result;
   }
 }
 

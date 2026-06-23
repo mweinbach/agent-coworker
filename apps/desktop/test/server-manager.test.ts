@@ -125,6 +125,83 @@ describe("desktop server manager startup parsing", () => {
     expect(payload.port).toBe(1234);
   });
 
+  test("waitForServerListening forwards validated runtime progress without treating it as log noise", async () => {
+    const child = createFakeChild();
+    const progress: Array<Record<string, unknown>> = [];
+    const stdoutLines: string[] = [];
+    const waitPromise = __internal.waitForServerListening(child as any, {
+      onCoworkRuntimeBootstrapProgress: (next: Record<string, unknown>) => progress.push(next),
+      onStdoutLine: (line: string) => stdoutLines.push(line),
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_startup_progress",
+        component: "cowork-runtime",
+        progress: {
+          phase: "downloading",
+          version: "2026-06-22",
+          transferredBytes: 25,
+          totalBytes: 100,
+          percent: 25,
+        },
+      })}\n`,
+    );
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "/tmp/workspace",
+      })}\n`,
+    );
+
+    await expect(waitPromise).resolves.toMatchObject({ port: 1234 });
+    expect(progress).toEqual([
+      {
+        phase: "downloading",
+        version: "2026-06-22",
+        transferredBytes: 25,
+        totalBytes: 100,
+        percent: 25,
+      },
+    ]);
+    expect(stdoutLines).toEqual([]);
+  });
+
+  test("runtime download progress refreshes the startup inactivity timeout", async () => {
+    const child = createFakeChild();
+    const waitPromise = __internal.waitForServerListening(child as any, { timeoutMs: 50 });
+
+    setTimeout(() => {
+      child.stdout.write(
+        `${JSON.stringify({
+          type: "server_startup_progress",
+          component: "cowork-runtime",
+          progress: {
+            phase: "downloading",
+            version: "2026-06-22",
+            transferredBytes: 1,
+            totalBytes: 2,
+            percent: 50,
+          },
+        })}\n`,
+      );
+    }, 30);
+    setTimeout(() => {
+      child.stdout.write(
+        `${JSON.stringify({
+          type: "server_listening",
+          url: "ws://127.0.0.1:1234/ws",
+          port: 1234,
+          cwd: "/tmp/workspace",
+        })}\n`,
+      );
+    }, 65);
+
+    await expect(waitPromise).resolves.toMatchObject({ port: 1234 });
+  });
+
   test("waitForServerListening preserves browser access tokens from startup JSON", async () => {
     const child = createFakeChild();
     const waitPromise = __internal.waitForServerListening(child as any);
@@ -325,6 +402,7 @@ describe("desktop server manager startup mode", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
     expect(env.COWORK_WEB_DESKTOP_SERVICE).toBe("1");
+    expect(env.COWORK_DESKTOP_STARTUP_EVENTS).toBe("1");
     expect(env.COWORK_DESKTOP_USER_DATA_DIR).toBe(userDataDir);
     expect(env.COWORK_BROWSER_ACCESS_TOKEN).toEqual(expect.any(String));
     expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);

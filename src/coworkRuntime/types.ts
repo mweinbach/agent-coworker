@@ -13,6 +13,21 @@ export type RuntimeHost = {
   arch: string;
 };
 
+export const COWORK_RUNTIME_BOOTSTRAP_PHASES = [
+  "waiting",
+  "downloading",
+  "installing",
+  "ready",
+] as const;
+
+export type CoworkRuntimeBootstrapProgress = {
+  phase: (typeof COWORK_RUNTIME_BOOTSTRAP_PHASES)[number];
+  version: string;
+  transferredBytes: number | null;
+  totalBytes: number | null;
+  percent: number | null;
+};
+
 export type CoworkRuntimeManifest = {
   schemaVersion: 1 | 2;
   version: string;

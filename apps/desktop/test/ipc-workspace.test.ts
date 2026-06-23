@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+import { DESKTOP_EVENT_CHANNELS, DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 const electronMockOverrides = {
@@ -36,6 +36,7 @@ describe("workspace IPC", () => {
       (event: unknown, args?: unknown) => Promise<unknown> | unknown
     >();
     let managerStartOptions: unknown;
+    const sentEvents: Array<{ channel: string; payload: unknown }> = [];
 
     registerWorkspaceIpc({
       deps: {
@@ -44,6 +45,17 @@ describe("workspace IPC", () => {
         serverManager: {
           async startWorkspaceServer(opts: unknown) {
             managerStartOptions = opts;
+            (
+              opts as {
+                onCoworkRuntimeBootstrapProgress?: (progress: Record<string, unknown>) => void;
+              }
+            ).onCoworkRuntimeBootstrapProgress?.({
+              phase: "downloading",
+              version: "2026-06-22",
+              transferredBytes: 25,
+              totalBytes: 100,
+              percent: 25,
+            });
             return {
               url: "ws://127.0.0.1:7337/ws",
               mobileH3: {
@@ -85,7 +97,12 @@ describe("workspace IPC", () => {
     expect(startServerHandler).toBeDefined();
 
     const result = await startServerHandler?.(
-      {},
+      {
+        sender: {
+          isDestroyed: () => false,
+          send: (channel: string, payload: unknown) => sentEvents.push({ channel, payload }),
+        },
+      },
       {
         workspaceId: "ws-1",
         workspacePath: "/tmp/ws-1",
@@ -107,6 +124,21 @@ describe("workspace IPC", () => {
         aiTracePayloadsEnabled: false,
       },
     });
+    expect(sentEvents).toEqual([
+      {
+        channel: DESKTOP_EVENT_CHANNELS.workspaceServerStartupProgress,
+        payload: {
+          workspaceId: "ws-1",
+          progress: {
+            phase: "downloading",
+            version: "2026-06-22",
+            transferredBytes: 25,
+            totalBytes: 100,
+            percent: 25,
+          },
+        },
+      },
+    ]);
   });
 
   test("updates approved roots after saving workspace state", async () => {

@@ -29,6 +29,7 @@ import type {
   TelemetryStatusSnapshot,
   UpdaterState,
   UploadDiagnosticsBundleOutput,
+  WorkspaceServerStartupProgress,
 } from "./desktopApi";
 import { DESKTOP_API_OVERRIDE_KEY } from "./desktopApiOverride";
 
@@ -359,6 +360,12 @@ export function onSystemAppearanceChanged(
 
 export function onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void {
   return getDesktopApi()?.onUpdateStateChanged(listener) ?? noopUnsubscribe;
+}
+
+export function onWorkspaceServerStartupProgress(
+  listener: (event: WorkspaceServerStartupProgress) => void,
+): () => void {
+  return getDesktopApi()?.onWorkspaceServerStartupProgress(listener) ?? noopUnsubscribe;
 }
 
 export function onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void {

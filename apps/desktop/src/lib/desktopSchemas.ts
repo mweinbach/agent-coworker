@@ -68,6 +68,7 @@ import type {
   UpdaterState,
   UploadDiagnosticsBundleInput,
   WindowDragPointInput,
+  WorkspaceServerStartupProgress,
   WriteFileInput,
 } from "./desktopApi";
 import { normalizeQuickChatShortcutAccelerator } from "./quickChatShortcut";
@@ -338,6 +339,24 @@ export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInpu
   featureFlags: desktopFeatureFlagOverridesSchema.optional(),
   privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
 });
+
+export const workspaceServerStartupProgressSchema: z.ZodType<WorkspaceServerStartupProgress> = z
+  .object({
+    workspaceId: safeIdSchema,
+    progress: z
+      .object({
+        phase: z.enum(["waiting", "downloading", "installing", "ready"]),
+        version: z
+          .string()
+          .trim()
+          .regex(/^\d{4}-\d{2}-\d{2}$/),
+        transferredBytes: z.number().finite().nonnegative().nullable(),
+        totalBytes: z.number().finite().nonnegative().nullable(),
+        percent: z.number().finite().min(0).max(100).nullable(),
+      })
+      .strict(),
+  })
+  .strict();
 
 export const createOneOffChatWorkspaceInputSchema: z.ZodType<CreateOneOffChatWorkspaceInput> =
   z.object({

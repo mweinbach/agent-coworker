@@ -208,6 +208,7 @@ export function createDesktopCommandsMock(
     updateMobileRelayTrustedPhonePermissions: async () => DEFAULT_MOBILE_RELAY_STATE,
     onSystemAppearanceChanged: () => () => {},
     onUpdateStateChanged: () => () => {},
+    onWorkspaceServerStartupProgress: () => () => {},
     onMenuCommand: () => () => {},
     onMobileRelayStateChanged: () => () => {},
     ...overrides,

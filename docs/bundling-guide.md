@@ -78,6 +78,8 @@ When launched with `--json`, the server prints a single JSON line to stdout once
 
 Parse this to discover the WebSocket URL. When binding to a non-loopback host such as `0.0.0.0`, `browserAccessToken` is non-null and must be sent to `/ws` as the `coworkBrowserToken` query parameter and to `/cowork/*` HTTP routes as the `X-Cowork-Browser-Token` header. See `apps/desktop/electron/services/serverManager.ts` for a production-grade implementation including startup timeout, stderr capture, graceful shutdown, and retry logic for Bun crashes.
 
+Desktop launchers can also set `COWORK_DESKTOP_STARTUP_EVENTS=1` to receive validated `server_startup_progress` JSON lines while the Cowork runtime is downloading or installing. In that mode, treat stdout as newline-delimited JSON and keep reading until the `server_listening` event arrives.
+
 **Server CLI flags:**
 
 | Flag | Description |

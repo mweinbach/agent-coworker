@@ -6,6 +6,10 @@ import readline from "node:readline";
 import type { Readable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
+import {
+  COWORK_RUNTIME_BOOTSTRAP_PHASES,
+  type CoworkRuntimeBootstrapProgress,
+} from "../../../../src/coworkRuntime/types";
 import { findWindowsHelper } from "../../../../src/platform/sandbox/detect";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
@@ -13,6 +17,10 @@ import {
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
 } from "../../../../src/platform/sandbox/windows";
+import {
+  COWORK_RUNTIME_STARTUP_COMPONENT,
+  SERVER_STARTUP_PROGRESS_TYPE,
+} from "../../../../src/server/startupProgress";
 import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   captureError,
@@ -92,7 +100,9 @@ type ServerOutputMirror = {
 
 type WaitForServerListeningOptions = {
   timeoutMs?: number;
+  bootstrapTimeoutMs?: number;
   onStdoutLine?: (line: string) => void;
+  onCoworkRuntimeBootstrapProgress?: (progress: CoworkRuntimeBootstrapProgress) => void;
 };
 
 type ServerListening = {
@@ -133,6 +143,7 @@ type StartWorkspaceServerOptions = {
   productAnalyticsState?: PersistedProductAnalyticsState | null;
   mobileH3?: boolean;
   rotateMobileH3Tls?: boolean;
+  onCoworkRuntimeBootstrapProgress?: (progress: CoworkRuntimeBootstrapProgress) => void;
 };
 
 type ServerManagerOptions = {
@@ -217,6 +228,27 @@ const serverListeningSchema = z
       .optional(),
   })
   .passthrough();
+
+const coworkRuntimeBootstrapProgressSchema: z.ZodType<CoworkRuntimeBootstrapProgress> = z
+  .object({
+    phase: z.enum(COWORK_RUNTIME_BOOTSTRAP_PHASES),
+    version: z
+      .string()
+      .trim()
+      .regex(/^\d{4}-\d{2}-\d{2}$/),
+    transferredBytes: z.number().finite().nonnegative().nullable(),
+    totalBytes: z.number().finite().nonnegative().nullable(),
+    percent: z.number().finite().min(0).max(100).nullable(),
+  })
+  .strict();
+
+const coworkRuntimeStartupProgressEventSchema = z
+  .object({
+    type: z.literal(SERVER_STARTUP_PROGRESS_TYPE),
+    component: z.literal(COWORK_RUNTIME_STARTUP_COMPONENT),
+    progress: coworkRuntimeBootstrapProgressSchema,
+  })
+  .strict();
 
 function resolveRepoRoot(): string {
   const fromEnv = process.env.COWORK_REPO_ROOT;
@@ -620,12 +652,15 @@ function waitForServerListening(
   opts: WaitForServerListeningOptions = {},
 ): Promise<ServerListening> {
   const timeoutMs = opts.timeoutMs ?? getServerStartupTimeoutMs();
+  const bootstrapTimeoutMs = opts.bootstrapTimeoutMs ?? PACKAGED_SERVER_STARTUP_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({ input: child.stdout });
     const recentLines: string[] = [];
     let readySeen = false;
     let finished = false;
     let readySettled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    let activeTimeoutMs = timeoutMs;
 
     const settleReadyResolve = (value: ServerListening) => {
       if (readySettled) {
@@ -661,6 +696,24 @@ function waitForServerListening(
       return `${message}; output=${recentLines.join(" | ")}`;
     };
 
+    const onTimeout = () => {
+      cleanup();
+      settleReadyReject(
+        new Error(
+          withRecentOutput(`Server startup timed out after ${activeTimeoutMs / 1000} seconds`),
+        ),
+      );
+    };
+
+    const resetTimeout = (delayMs: number) => {
+      if (readySeen || finished) {
+        return;
+      }
+      clearTimeout(timeout);
+      activeTimeoutMs = delayMs;
+      timeout = setTimeout(onTimeout, delayMs);
+    };
+
     const onError = (error: Error) => {
       cleanup();
       if (!readySeen) {
@@ -681,13 +734,6 @@ function waitForServerListening(
       }
     };
 
-    const timeout = setTimeout(() => {
-      cleanup();
-      settleReadyReject(
-        new Error(withRecentOutput(`Server startup timed out after ${timeoutMs / 1000} seconds`)),
-      );
-    }, timeoutMs);
-
     const cleanup = () => {
       if (finished) {
         return;
@@ -701,25 +747,38 @@ function waitForServerListening(
     };
 
     const onLine = (line: string) => {
-      recordLine(line);
       const trimmed = line.trim();
       if (!trimmed) {
         return;
       }
       try {
-        const parsed = serverListeningSchema.safeParse(JSON.parse(trimmed));
-        if (parsed.success && !readySeen) {
+        const payload = JSON.parse(trimmed);
+        const progress = coworkRuntimeStartupProgressEventSchema.safeParse(payload);
+        if (progress.success && !readySeen) {
+          const startupProgress = progress.data.progress;
+          opts.onCoworkRuntimeBootstrapProgress?.(startupProgress);
+          resetTimeout(
+            startupProgress.phase === "waiting" || startupProgress.phase === "installing"
+              ? Math.max(timeoutMs, bootstrapTimeoutMs)
+              : timeoutMs,
+          );
+          return;
+        }
+        const listening = serverListeningSchema.safeParse(payload);
+        if (listening.success && !readySeen) {
           readySeen = true;
           clearTimeout(timeout);
-          settleReadyResolve(parsed.data);
+          settleReadyResolve(listening.data);
           return;
         }
       } catch {
         // Non-JSON lines are human-readable server logs. Keep them visible.
       }
+      recordLine(trimmed);
       opts.onStdoutLine?.(trimmed);
     };
 
+    timeout = setTimeout(onTimeout, timeoutMs);
     rl.on("line", onLine);
     child.once("error", onError);
     child.once("exit", onExit);
@@ -790,6 +849,7 @@ function buildServerEnv(
   return {
     ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",
+    COWORK_DESKTOP_STARTUP_EVENTS: "1",
     COWORK_DESKTOP_USER_DATA_DIR: app.getPath("userData"),
     COWORK_BROWSER_ACCESS_TOKEN:
       process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
@@ -1162,6 +1222,7 @@ export class ServerManager {
 
       try {
         const listening = await waitForServerListening(child, {
+          onCoworkRuntimeBootstrapProgress: opts.onCoworkRuntimeBootstrapProgress,
           onStdoutLine: outputMirror
             ? (line) => {
                 outputMirror.writeLine("stdout", line);

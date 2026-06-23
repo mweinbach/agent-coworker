@@ -43,6 +43,7 @@ export function createWorkspaceActions(
   | "reorderWorkspaces"
   | "setWorkspacesOrder"
   | "restartWorkspaceServer"
+  | "setWorkspaceServerStartupProgress"
 > {
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
@@ -373,6 +374,19 @@ export function createWorkspaceActions(
       await persistNow(get);
     },
 
+    setWorkspaceServerStartupProgress: ({ workspaceId, progress }) => {
+      set((state) => {
+        const runtime = state.workspaceRuntimeById[workspaceId];
+        if (!runtime?.starting || runtime.serverUrl) return {};
+        return {
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            [workspaceId]: { ...runtime, startupProgress: progress },
+          },
+        };
+      });
+    },
+
     restartWorkspaceServer: async (workspaceId) => {
       if (!isWorkspaceLifecycleEnabled()) return;
       bumpWorkspaceStartGeneration(workspaceId);
@@ -405,6 +419,7 @@ export function createWorkspaceActions(
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             serverUrl: null,
+            startupProgress: null,
             controlSessionId: null,
             controlConfig: null,
             controlSessionConfig: null,

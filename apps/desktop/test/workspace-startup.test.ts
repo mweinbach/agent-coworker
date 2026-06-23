@@ -462,6 +462,60 @@ describe("workspace startup flow", () => {
     await selectPromise;
   });
 
+  test("tracks runtime download progress only while the matching workspace is starting", async () => {
+    const workspaceId = "ws-runtime-progress";
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: null,
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace(workspaceId);
+    await waitForCondition(() => startCalls.length === 1);
+
+    useAppStore.getState().setWorkspaceServerStartupProgress({
+      workspaceId,
+      progress: {
+        phase: "downloading",
+        version: "2026-06-22",
+        transferredBytes: 25,
+        totalBytes: 100,
+        percent: 25,
+      },
+    });
+    useAppStore.getState().setWorkspaceServerStartupProgress({
+      workspaceId: "unrelated-workspace",
+      progress: {
+        phase: "downloading",
+        version: "2026-06-22",
+        transferredBytes: 50,
+        totalBytes: 100,
+        percent: 50,
+      },
+    });
+
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.startupProgress).toMatchObject(
+      {
+        phase: "downloading",
+        percent: 25,
+      },
+    );
+
+    startDeferreds[0]?.resolve({ url: "ws://runtime-ready" });
+    await selectPromise;
+
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.startupProgress).toBeNull();
+  });
+
   test("restartWorkspaceServer supersedes an in-flight startup and ignores stale completion", async () => {
     const workspaceId = "ws-restart";
     useAppStore.setState({

@@ -18,7 +18,11 @@ import type {
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";
 import type { TaskCreationInput } from "../../../../src/shared/tasks";
-import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
+import {
+  createDefaultUpdaterState,
+  type UpdaterState,
+  type WorkspaceServerStartupProgress,
+} from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
@@ -490,6 +494,7 @@ export type AppStoreState = {
     opts?: { scope?: "settings" | "target" },
   ) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
+  setWorkspaceServerStartupProgress: (event: WorkspaceServerStartupProgress) => void;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
   upsertWorkspaceMcpServer: (
     workspaceId: string,
@@ -804,7 +809,12 @@ async function ensureServerRunning(
   set((s) => ({
     workspaceRuntimeById: {
       ...s.workspaceRuntimeById,
-      [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], starting: true, error: null },
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        starting: true,
+        startupProgress: null,
+        error: null,
+      },
     },
   }));
 
@@ -827,6 +837,7 @@ async function ensureServerRunning(
             ...s.workspaceRuntimeById[workspaceId],
             serverUrl: res.url,
             starting: false,
+            startupProgress: null,
             error: null,
           },
         },
@@ -849,6 +860,7 @@ async function ensureServerRunning(
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             starting: false,
+            startupProgress: null,
             error: message,
           },
         },

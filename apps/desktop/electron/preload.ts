@@ -58,6 +58,7 @@ import {
   type UpdaterState,
   type UploadDiagnosticsBundleInput,
   type WindowDragPointInput,
+  type WorkspaceServerStartupProgress,
   type WriteFileInput,
 } from "../src/lib/desktopApi";
 import {
@@ -104,6 +105,7 @@ import {
   updaterStateSchema,
   uploadDiagnosticsBundleInputSchema,
   windowDragPointInputSchema,
+  workspaceServerStartupProgressSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
 import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
@@ -265,6 +267,12 @@ function assertSetWindowAppearanceInput(opts: SetWindowAppearanceInput): void {
 
 function assertUpdaterState(value: unknown): asserts value is UpdaterState {
   parseWithSchema(updaterStateSchema, value, "update state");
+}
+
+function assertWorkspaceServerStartupProgress(
+  value: unknown,
+): asserts value is WorkspaceServerStartupProgress {
+  parseWithSchema(workspaceServerStartupProgressSchema, value, "workspace server startup progress");
 }
 
 function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuCommand {
@@ -742,6 +750,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.updateStateChanged, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.updateStateChanged, wrapped);
+    };
+  },
+
+  onWorkspaceServerStartupProgress: (listener: (event: WorkspaceServerStartupProgress) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onWorkspaceServerStartupProgress listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertWorkspaceServerStartupProgress(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.workspaceServerStartupProgress, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.workspaceServerStartupProgress, wrapped);
     };
   },
 

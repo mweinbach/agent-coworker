@@ -89,7 +89,8 @@ describe("tool output overflow", () => {
     expect(String(result?.output.value)).toContain("Use the read tool to inspect the saved file");
     expect(result?.file.path).toContain(MODEL_SCRATCHPAD_DIRNAME);
     expect(path.basename(result?.file.path ?? "")).toContain("bash__call-with-unsafe-chars");
-    await expect(fs.readFile(result?.file.path ?? "", "utf-8")).resolves.toBe(output.value);
+    const spilledOutput = await fs.readFile(result?.file.path ?? "", "utf-8");
+    expect(JSON.parse(spilledOutput)).toEqual(output);
   });
 
   test("refuses to spill into a symlinked scratchpad directory", async () => {

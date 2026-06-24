@@ -1,105 +1,129 @@
 import { describe, expect, test } from "bun:test";
 
-// We test the backpressure queue logic by extracting it into a pure helper
-// rather than mocking Bun.ServerWebSocket internals.
+import { SocketSendQueue } from "../src/server/runtime/SocketSendQueue";
+import { startAgentServer } from "../src/server/startServer";
+import type { StartServerSocket } from "../src/server/startServer/types";
+import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
-interface FakeQueue {
-  queue: string[];
-  max: number;
-  send: (serialized: string) => number;
-  flush: () => void;
-}
+function createSocketSendHarness(statuses: number[], connectionId = "conn-1") {
+  const sent: string[] = [];
+  const socket = {
+    data: { connectionId },
+    send(serialized: string) {
+      sent.push(serialized);
+      return statuses.shift() ?? 1;
+    },
+  } as unknown as StartServerSocket;
 
-function createFakeBackpressureQueue(max: number): FakeQueue {
-  const queue: string[] = [];
-
-  const evictLeastCritical = () => {
-    for (let i = 0; i < queue.length; i++) {
-      try {
-        const parsed = JSON.parse(queue[i]) as {
-          method?: string;
-          params?: { type?: string };
-        };
-        if (
-          parsed.method === "model_stream_chunk" ||
-          parsed.params?.type === "agentMessage/delta"
-        ) {
-          queue.splice(i, 1);
-          return;
-        }
-      } catch {
-        // ignore malformed JSON
-      }
-    }
-    queue.shift();
-  };
-
-  const send = (serialized: string) => {
-    const status = 0; // simulate backpressure
-    if (status === 0 || status === -1) {
-      if (queue.length >= max) {
-        evictLeastCritical();
-      }
-      queue.push(serialized);
-    }
-    return status;
-  };
-
-  const flush = () => {
-    while (queue.length > 0) {
-      const status = 1; // simulate send success on drain
-      if (status === -1) {
-        break;
-      }
-      queue.shift();
-    }
-  };
-
-  return { queue, max, send, flush };
+  return { sent, socket };
 }
 
 describe("WebSocket backpressure queue", () => {
   test("queues messages when send returns backpressure", () => {
-    const q = createFakeBackpressureQueue(500);
-    q.send('{"jsonrpc":"2.0","method":"model_stream_chunk","params":{}}');
-    expect(q.queue.length).toBe(1);
+    const queue = new SocketSendQueue();
+    const payload = { jsonrpc: "2.0", method: "model_stream_chunk", params: {} };
+    const { sent, socket } = createSocketSendHarness([0, 1]);
+
+    queue.send(socket, payload);
+    queue.flush(socket);
+
+    expect(sent).toEqual([JSON.stringify(payload), JSON.stringify(payload)]);
   });
 
   test("evicts stream deltas first when queue is full", () => {
-    const q = createFakeBackpressureQueue(3);
-    q.send('{"jsonrpc":"2.0","method":"ask","params":{}}');
-    q.send('{"jsonrpc":"2.0","method":"model_stream_chunk","params":{}}');
-    q.send('{"jsonrpc":"2.0","method":"approval","params":{}}');
-    expect(q.queue.length).toBe(3);
-    q.send('{"jsonrpc":"2.0","method":"other","params":{}}');
-    expect(q.queue.length).toBe(3);
-    expect(q.queue[0]).toBe('{"jsonrpc":"2.0","method":"ask","params":{}}');
-    expect(q.queue[1]).toBe('{"jsonrpc":"2.0","method":"approval","params":{}}');
-    expect(q.queue[2]).toBe('{"jsonrpc":"2.0","method":"other","params":{}}');
+    const queue = new SocketSendQueue(3);
+    const ask = { jsonrpc: "2.0", method: "ask", params: {} };
+    const streamDelta = { jsonrpc: "2.0", method: "model_stream_chunk", params: {} };
+    const approval = { jsonrpc: "2.0", method: "approval", params: {} };
+    const other = { jsonrpc: "2.0", method: "other", params: {} };
+    const { sent, socket } = createSocketSendHarness([0, 0, 0, 0, 1, 1, 1]);
+
+    queue.send(socket, ask);
+    queue.send(socket, streamDelta);
+    queue.send(socket, approval);
+    queue.send(socket, other);
+    queue.flush(socket);
+
+    expect(sent.slice(4)).toEqual([
+      JSON.stringify(ask),
+      JSON.stringify(approval),
+      JSON.stringify(other),
+    ]);
   });
 
   test("evicts agentMessage/delta params first when queue is full", () => {
-    const q = createFakeBackpressureQueue(3);
-    q.send('{"jsonrpc":"2.0","method":"ask","params":{}}');
-    q.send(
-      '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"type":"agentMessage/delta"}}',
-    );
-    q.send('{"jsonrpc":"2.0","method":"approval","params":{}}');
-    expect(q.queue.length).toBe(3);
-    q.send('{"jsonrpc":"2.0","method":"other","params":{}}');
-    expect(q.queue.length).toBe(3);
-    expect(q.queue[0]).toBe('{"jsonrpc":"2.0","method":"ask","params":{}}');
-    expect(q.queue[1]).toBe('{"jsonrpc":"2.0","method":"approval","params":{}}');
-    expect(q.queue[2]).toBe('{"jsonrpc":"2.0","method":"other","params":{}}');
+    const queue = new SocketSendQueue(3);
+    const ask = { jsonrpc: "2.0", method: "ask", params: {} };
+    const agentDelta = {
+      jsonrpc: "2.0",
+      method: "item/agentMessage/delta",
+      params: { type: "agentMessage/delta" },
+    };
+    const approval = { jsonrpc: "2.0", method: "approval", params: {} };
+    const other = { jsonrpc: "2.0", method: "other", params: {} };
+    const { sent, socket } = createSocketSendHarness([0, 0, 0, 0, 1, 1, 1]);
+
+    queue.send(socket, ask);
+    queue.send(socket, agentDelta);
+    queue.send(socket, approval);
+    queue.send(socket, other);
+    queue.flush(socket);
+
+    expect(sent.slice(4)).toEqual([
+      JSON.stringify(ask),
+      JSON.stringify(approval),
+      JSON.stringify(other),
+    ]);
   });
 
   test("flush clears the queue", () => {
-    const q = createFakeBackpressureQueue(500);
-    q.send('{"jsonrpc":"2.0","method":"ask","params":{}}');
-    q.send('{"jsonrpc":"2.0","method":"approval","params":{}}');
-    expect(q.queue.length).toBe(2);
-    q.flush();
-    expect(q.queue.length).toBe(0);
+    const queue = new SocketSendQueue();
+    const ask = { jsonrpc: "2.0", method: "ask", params: {} };
+    const approval = { jsonrpc: "2.0", method: "approval", params: {} };
+    const { sent, socket } = createSocketSendHarness([0, 0, 1, 1]);
+
+    queue.send(socket, ask);
+    queue.send(socket, approval);
+    queue.flush(socket);
+    queue.flush(socket);
+
+    expect(sent).toEqual([
+      JSON.stringify(ask),
+      JSON.stringify(approval),
+      JSON.stringify(ask),
+      JSON.stringify(approval),
+    ]);
+  });
+
+  test("deleteConnection clears pending sends for the connection", () => {
+    const queue = new SocketSendQueue();
+    const payload = { jsonrpc: "2.0", method: "ask", params: {} };
+    const { sent, socket } = createSocketSendHarness([0, 1]);
+
+    queue.send(socket, payload);
+    queue.deleteConnection(socket.data.connectionId);
+    queue.flush(socket);
+
+    expect(sent).toEqual([JSON.stringify(payload)]);
+  });
+
+  test("shouldSendNotification respects client opt-outs", () => {
+    const queue = new SocketSendQueue();
+    const { socket } = createSocketSendHarness([]);
+    socket.data.rpc = {
+      initializeRequestReceived: true,
+      initializedNotificationReceived: true,
+      pendingRequestCount: 0,
+      maxPendingRequests: 100,
+      capabilities: {
+        experimentalApi: false,
+        optOutNotificationMethods: ["item/agentMessage/delta"],
+      },
+      pendingServerRequests: new Map(),
+    };
+
+    expect(queue.shouldSendNotification(socket, "item/agentMessage/delta")).toBe(false);
+    expect(queue.shouldSendNotification(socket, "approval")).toBe(true);
   });
 });
 
@@ -107,9 +131,6 @@ describe("startServer backpressure integration", () => {
   test("sendJsonRpc queues on backpressure and flushes on drain", async () => {
     // This is a smoke test that the server starts and handles connections.
     // Full backpressure simulation requires Bun.ServerWebSocket mocking.
-    const { startAgentServer } = await import("../src/server/startServer");
-    const { makeTmpProject, serverOpts, stopTestServer } = await import("./helpers/wsHarness");
-
     const tmpDir = await makeTmpProject();
     const { server } = await startAgentServer(serverOpts(tmpDir));
 

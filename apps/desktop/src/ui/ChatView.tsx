@@ -43,6 +43,7 @@ import {
   parseA2uiActionMessage,
   resolveComposerBusyPolicy,
 } from "./chat/chatLogic";
+import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
@@ -358,7 +359,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     rt?.sessionConfig?.featureFlags?.workspace?.a2ui,
   ]);
   const visibleFeed = useMemo(() => {
-    const baseVisibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
+    const baseVisibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode).filter(
+      (item) => !isHiddenRetryTurnMessage(item),
+    );
     if (a2uiEnabled) {
       return baseVisibleFeed;
     }
@@ -676,6 +679,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [rt?.busy, submitComposer, setComposerText],
   );
 
+  const retryFailedTurn = useCallback(async (): Promise<boolean> => {
+    if (!thread || useAppStore.getState().selectedThreadId !== thread.id) return false;
+    const draftBeforeRetry = useAppStore.getState().composerText;
+    const accepted = await sendMessage(HIDDEN_RETRY_TURN_PROMPT, "reject");
+    if (accepted && draftBeforeRetry && useAppStore.getState().composerText === "") {
+      setComposerText(draftBeforeRetry);
+    }
+    return accepted;
+  }, [sendMessage, setComposerText, thread]);
+
   if (!selectedThreadId || !thread) {
     return <NewChatLanding />;
   }
@@ -738,6 +751,10 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           selectedThreadId={selectedThreadId}
           threadTitleById={threadTitleById}
           onSelectThread={selectApprovalThread}
+          onRetryFailedTurn={retryFailedTurn}
+          retryFailedTurnDisabled={
+            busy || inputDisabled || hydrating || transcriptOnly || pendingTurnStart !== null
+          }
         />
 
         {selectedThreadId && a2uiEnabled ? (

@@ -9,10 +9,7 @@ import {
 } from "../models/registry";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
-import {
-  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
-  isAntigravitySupportedPlatform,
-} from "./antigravitySupport";
+import { isAntigravitySupportedPlatform } from "./antigravitySupport";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import {
@@ -90,20 +87,6 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
       supportsImageInput: model.supportsImageInput,
     })),
     defaultModel: defaultSupportedModel(provider).id,
-  };
-}
-
-function antigravityCatalogEntry(
-  platform: NodeJS.Platform = process.platform,
-): ProviderCatalogEntry {
-  if (isAntigravitySupportedPlatform(platform)) return staticCatalogEntry("antigravity");
-  return {
-    id: "antigravity",
-    name: PROVIDER_LABELS.antigravity,
-    models: [],
-    defaultModel: "",
-    state: "unreachable",
-    message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
   };
 }
 
@@ -286,11 +269,12 @@ export async function listProviderCatalogEntries(
   const codex = opts.listCodexAppServerModelsImpl
     ? await codexCatalogEntry({ listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl })
     : staticCatalogEntry("codex-cli");
-  return PROVIDER_NAMES.map((provider) => {
+  return PROVIDER_NAMES.filter(
+    (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
+  ).map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
-    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
 }
@@ -337,11 +321,12 @@ export async function getProviderCatalog(
         codexHome,
       })
     : staticCatalogEntry("codex-cli");
-  const all = PROVIDER_NAMES.map((provider) => {
+  const all = PROVIDER_NAMES.filter(
+    (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
+  ).map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
-    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
   const defaults: Record<string, string> = {};

@@ -2,12 +2,27 @@ import {
   isUserFacingProviderEnabled,
   userFacingAvailableModelsForProvider,
 } from "@cowork/providers/catalog";
+import { type DesktopPlatform, getDesktopPlatformInfo } from "./desktopPlatform";
 import type { ProviderName, SessionEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
 
 export const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
   PROVIDER_NAMES.filter((provider) => !isUserFacingProviderEnabled(provider)),
 );
+
+export function isProviderUnsupportedOnDesktop(
+  provider: ProviderName,
+  platform: DesktopPlatform = getDesktopPlatformInfo().platform,
+): boolean {
+  return platform === "windows" && provider === "antigravity";
+}
+
+export function isUiDisabledProvider(
+  provider: ProviderName,
+  platform: DesktopPlatform = getDesktopPlatformInfo().platform,
+): boolean {
+  return UI_DISABLED_PROVIDERS.has(provider) || isProviderUnsupportedOnDesktop(provider, platform);
+}
 
 export const MODEL_CHOICES: Record<ProviderName, readonly string[]> = Object.fromEntries(
   PROVIDER_NAMES.map((provider) => [provider, userFacingAvailableModelsForProvider(provider)]),
@@ -103,7 +118,7 @@ export function modelChoicesFromCatalog(
   if (catalog.length === 0) {
     return Object.fromEntries(
       PROVIDER_NAMES.filter(
-        (provider) => !UI_DISABLED_PROVIDERS.has(provider) && providerIncluded(provider, options),
+        (provider) => !isUiDisabledProvider(provider) && providerIncluded(provider, options),
       ).map((provider) => [
         provider,
         filterModelsForProvider(provider, MODEL_CHOICES[provider] ?? [], options),
@@ -112,7 +127,7 @@ export function modelChoicesFromCatalog(
   }
   const result = {} as Record<ProviderName, readonly string[]>;
   for (const entry of catalog) {
-    if (UI_DISABLED_PROVIDERS.has(entry.id)) continue;
+    if (isUiDisabledProvider(entry.id)) continue;
     if (!providerIncluded(entry.id, options)) continue;
     const models = Array.isArray(entry.models)
       ? entry.models.map((m) => m.id)
@@ -139,14 +154,10 @@ export function configuredProvidersForModelChoices({
   providerStatusByName?: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
   visibility?: CatalogVisibilityOptions;
 }): ProviderName[] {
-  const connectedSet = new Set(
-    connected.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider)),
-  );
+  const connectedSet = new Set(connected.filter((provider) => !isUiDisabledProvider(provider)));
   const catalogProviders = (
     catalog.length === 0 ? PROVIDER_NAMES : catalog.map((entry) => entry.id)
-  ).filter(
-    (provider) => !UI_DISABLED_PROVIDERS.has(provider) && providerIncluded(provider, visibility),
-  );
+  ).filter((provider) => !isUiDisabledProvider(provider) && providerIncluded(provider, visibility));
 
   return [...new Set(catalogProviders)].filter((provider) => {
     if (connectedSet.has(provider)) return true;
@@ -162,13 +173,11 @@ export function availableProvidersFromCatalog(
     visibleModelsByProvider?: Partial<Record<ProviderName, readonly string[]>>;
   },
 ): ProviderName[] {
-  const connectedSet = new Set(
-    connected.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider)),
-  );
+  const connectedSet = new Set(connected.filter((provider) => !isUiDisabledProvider(provider)));
   const hiddenProviders = new Set(options?.hiddenProviders ?? []);
   const catalogProviders = (
     catalog.length === 0 ? PROVIDER_NAMES : catalog.map((entry) => entry.id)
-  ).filter((provider) => !UI_DISABLED_PROVIDERS.has(provider) && !hiddenProviders.has(provider));
+  ).filter((provider) => !isUiDisabledProvider(provider) && !hiddenProviders.has(provider));
   const providers =
     connectedSet.size === 0
       ? [...catalogProviders]
@@ -179,6 +188,7 @@ export function availableProvidersFromCatalog(
   if (
     preserveProvider &&
     PROVIDER_NAMES.includes(preserveProvider) &&
+    !isProviderUnsupportedOnDesktop(preserveProvider) &&
     !filteredProviders.includes(preserveProvider)
   ) {
     filteredProviders.push(preserveProvider);

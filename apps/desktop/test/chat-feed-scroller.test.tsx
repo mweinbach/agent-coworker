@@ -83,13 +83,10 @@ function installScrollerGeometry(
     if (this.getAttribute("data-slot") === "message-scroller-item") {
       const viewport = this.closest('[data-slot="message-scroller-viewport"]') as HTMLElement;
       const content = this.parentElement;
-      const transcriptItems = Array.from(
-        content?.querySelectorAll(':scope > [data-slot="message-scroller-item"].order-1') ?? [],
+      const items = Array.from(
+        content?.querySelectorAll(':scope > [data-slot="message-scroller-item"]') ?? [],
       );
-      const isClearance = this.classList.contains("order-3");
-      const visualItems = isClearance
-        ? transcriptItems
-        : transcriptItems.slice(0, transcriptItems.indexOf(this));
+      const visualItems = items.slice(0, items.indexOf(this));
       const top =
         visualItems.reduce((sum, item) => sum + itemHeight(item, heights), 0) -
         (viewport?.scrollTop ?? 0);
@@ -273,6 +270,44 @@ describe("desktop chat message scroller", () => {
     }
   });
 
+  test("moves a visible user turn from the middle of the viewport to the top anchor", async () => {
+    const heights = new Map([
+      ["assistant-intro", 200],
+      ["user-1", 60],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("assistant-intro", "assistant", "Intro"),
+              message("user-1", "user", "First question"),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(viewport?.scrollTop).toBe(136);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("anchors a newly appended user turn even with approvals and clearance rendered below it", async () => {
     const heights = new Map([
       ["user-1", 100],
@@ -298,6 +333,8 @@ describe("desktop chat message scroller", () => {
         root.render(
           renderFeed([...initialItems, message("user-2", "user", "Follow-up")], "thread-a"),
         );
+      });
+      await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
       });
 
@@ -308,8 +345,14 @@ describe("desktop chat message scroller", () => {
       const children = Array.from(
         container.querySelector('[data-slot="message-scroller-content"]')?.children ?? [],
       ).filter((element) => element.getAttribute("data-slot") === "message-scroller-item");
-      expect(children.at(-1)?.getAttribute("data-message-id")).toBe("user-2");
-      expect(children.at(-1)?.getAttribute("data-scroll-anchor")).toBe("true");
+      expect(
+        children
+          .map((element) => element.getAttribute("data-message-id"))
+          .filter((messageId): messageId is string => Boolean(messageId)),
+      ).toEqual(["user-1", "assistant-1", "user-2"]);
+      expect(children.at(-1)?.querySelector('[data-slot="message-bar-reserved-space"]')).not.toBe(
+        null,
+      );
 
       await act(async () => root.unmount());
     } finally {

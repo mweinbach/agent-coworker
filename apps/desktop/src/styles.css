@@ -595,6 +595,53 @@ samp {
   }
 }
 
+@keyframes activityTraceExpand {
+  from {
+    height: 0;
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes activityTraceCollapse {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    height: 0;
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+}
+
+.activity-trace-content {
+  overflow: hidden;
+  transform-origin: top;
+}
+
+.activity-trace-content[data-state="open"] {
+  animation: activityTraceExpand 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.activity-trace-content[data-state="closed"] {
+  animation: activityTraceCollapse 160ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-trace-content[data-state] {
+    animation: none;
+  }
+}
+
 .sidebar-rail-enter {
   animation: sidebarRailIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }

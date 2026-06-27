@@ -78,9 +78,9 @@ import {
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
   type CatalogVisibilityOptions,
+  isUiDisabledProvider,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
-  UI_DISABLED_PROVIDERS,
 } from "../../../lib/modelChoices";
 import { displayProviderName } from "../../../lib/providerDisplayNames";
 import {
@@ -186,14 +186,14 @@ function childTargetGroupsFromCatalog(
     if (colonIndex <= 0) continue;
     const provider = ref.slice(0, colonIndex) as ProviderName;
     const model = ref.slice(colonIndex + 1).trim();
-    if (!model || UI_DISABLED_PROVIDERS.has(provider)) continue;
+    if (!model || isUiDisabledProvider(provider)) continue;
     const set = preserveByProvider.get(provider) ?? new Set<string>();
     set.add(model);
     preserveByProvider.set(provider, set);
   }
 
   return sortProviderEntriesForSettings(
-    PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+    PROVIDER_NAMES.filter((provider) => !isUiDisabledProvider(provider))
       .map((provider) => {
         const models = new Set(choices[provider] ?? []);
         for (const model of preserveByProvider.get(provider) ?? []) {
@@ -1065,14 +1065,14 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     const hiddenProviders = new Set(modelSelectorVisibility.hiddenProviders ?? []);
     const catalogProviders = (
       providerCatalog.length === 0 ? PROVIDER_NAMES : providerCatalog.map((entry) => entry.id)
-    ).filter((entry) => !UI_DISABLED_PROVIDERS.has(entry) && !hiddenProviders.has(entry));
+    ).filter((entry) => !isUiDisabledProvider(entry) && !hiddenProviders.has(entry));
     const visibleProviders = sortProviderNamesForSettings(
       [...new Set(catalogProviders)].filter((entry) => {
         const status = providerStatusByName[entry];
         return status ? hasConfiguredProviderStatus(status) : providerConnected.includes(entry);
       }),
     );
-    if (!UI_DISABLED_PROVIDERS.has(provider) && !visibleProviders.includes(provider)) {
+    if (!isUiDisabledProvider(provider) && !visibleProviders.includes(provider)) {
       visibleProviders.push(provider);
     }
     return visibleProviders;
@@ -1500,7 +1500,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                           onValueChange={(value) => {
                             if (!ws) return;
                             const nextProvider = value as ProviderName;
-                            if (UI_DISABLED_PROVIDERS.has(nextProvider)) return;
+                            if (isUiDisabledProvider(nextProvider)) return;
                             const nextDefault =
                               providerDefaultModelByProvider[nextProvider]?.trim() ||
                               modelChoices[nextProvider]?.[0] ||

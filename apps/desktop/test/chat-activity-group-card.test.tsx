@@ -1,10 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -74,15 +76,16 @@ describe("desktop activity group card", () => {
   test("renders mixed reasoning and tool entries in chronological order", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {
+        live: true,
         items: [
           {
             id: "t1",
             kind: "tool",
             ts: "2024-01-01T00:00:01.000Z",
             name: "read",
-            state: "output-error",
+            state: "output-available",
             args: { path: "a.ts" },
-            result: { error: "missing file" },
+            result: { chars: 20 },
           },
           {
             id: "r1",
@@ -134,13 +137,14 @@ describe("desktop activity group card", () => {
   test("renders reasoning summaries once without a nested disclosure", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {
+        live: true,
         items: [
           {
             id: "t1",
             kind: "tool",
             ts: "2024-01-01T00:00:01.000Z",
             name: "read",
-            state: "output-error",
+            state: "output-available",
           },
           {
             id: "r1",
@@ -209,6 +213,8 @@ describe("desktop activity group card", () => {
 
     expect(html).toContain("Worked for 2m 49s");
     expect(html).toContain('data-slot="marker"');
+    expect(html).toContain("before:hidden");
+    expect(html).toContain("group-data-[variant=separator]/marker:text-left");
     expect(html).toContain('data-variant="separator"');
     expect(html).not.toContain("rounded-xl border border-border/32");
     expect(html).not.toContain("Checking the current leadership context.");
@@ -263,6 +269,7 @@ describe("desktop activity group card", () => {
     expect(html).toContain("Working for 56s");
     expect(html).toContain('data-slot="marker"');
     expect(html).toContain('data-variant="border"');
+    expect(html).toContain("activity-trace-content");
     expect(html).not.toContain("Worked for");
     expect(html).not.toContain("rounded-xl border border-border/32");
   });
@@ -290,6 +297,7 @@ describe("desktop activity group card", () => {
   test("skips blank reasoning placeholders and keeps Codex native web search visible", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {
+        live: true,
         items: [
           {
             id: "r-empty",
@@ -337,12 +345,79 @@ describe("desktop activity group card", () => {
     const toolRows = doc.querySelectorAll('[data-activity-entry-kind="tool"]');
 
     expect(reasoningRows).toHaveLength(1);
-    expect(toolRows).toHaveLength(2);
-    expect(html).toContain("Memory");
+    expect(toolRows).toHaveLength(1);
+    expect(html).not.toContain("Memory");
     expect(html).toContain("Web Search");
     expect(html).toContain("Search: LGA crash 2026");
     expect(reasoningRows[0]?.textContent).not.toContain("Summary");
     expect(reasoningRows[0]?.textContent).toContain("Searching for crash details");
+  });
+
+  test("renders only an unrecovered failure as a collapsed compact trace", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        onRetry: async () => true,
+        items: [
+          {
+            id: "t-failed",
+            kind: "tool",
+            ts: "2024-01-01T00:00:00.000Z",
+            completedAt: "2024-01-01T00:00:12.000Z",
+            name: "read",
+            state: "output-error",
+            result: { error: "missing file" },
+          },
+        ],
+      }),
+    );
+
+    const doc = new JSDOM(html).window.document;
+
+    expect(doc.body.textContent).toContain("Couldn't finish after 12s");
+    expect(html).toContain('data-variant="separator"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(doc.body.textContent).toContain("Retry");
+    expect(html).not.toContain("rounded-xl border border-border/32");
+    expect(html).not.toContain("missing file");
+  });
+
+  test("retry action invokes the continuation callback", async () => {
+    const harness = setupJsdom();
+    const onRetry = mock(async () => true);
+    const root = createRoot(harness.dom.window.document.getElementById("root")!);
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            onRetry,
+            items: [
+              {
+                id: "t-failed",
+                kind: "tool",
+                ts: "2024-01-01T00:00:00.000Z",
+                name: "read",
+                state: "output-error",
+                result: { error: "missing file" },
+              },
+            ],
+          }),
+        );
+      });
+
+      const retryButton = harness.dom.window.document.querySelector<HTMLButtonElement>(
+        'button[data-slot="button"]',
+      );
+      expect(retryButton?.textContent).toContain("Retry");
+      await act(async () => {
+        retryButton?.click();
+      });
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
   });
 
   test("renders a pending reasoning placeholder before summary text arrives", () => {

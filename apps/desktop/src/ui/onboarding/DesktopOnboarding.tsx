@@ -26,9 +26,9 @@ import { Switch } from "../../components/ui/switch";
 import {
   availableProvidersFromCatalog,
   type CatalogVisibilityOptions,
+  isUiDisabledProvider,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
-  UI_DISABLED_PROVIDERS,
 } from "../../lib/modelChoices";
 import {
   displayProviderName,
@@ -337,7 +337,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
       .filter((p): p is ProviderName => isProviderNameString(p));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
     const filtered = source.filter(
-      (p) => !UI_DISABLED_PROVIDERS.has(p) && !ONBOARDING_HIDDEN_PROVIDERS.includes(p),
+      (p) => !isUiDisabledProvider(p) && !ONBOARDING_HIDDEN_PROVIDERS.includes(p),
     );
     return filtered
       .filter((p) => {

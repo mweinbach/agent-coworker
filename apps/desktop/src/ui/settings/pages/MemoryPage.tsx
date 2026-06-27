@@ -44,10 +44,11 @@ import {
   configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
+  isProviderUnsupportedOnDesktop,
+  isUiDisabledProvider,
   modelChoicesFromCatalog,
   modelDisplayNamesFromCatalog,
   resolveModelDisplayLabel,
-  UI_DISABLED_PROVIDERS,
 } from "../../../lib/modelChoices";
 import { displayProviderName } from "../../../lib/providerDisplayNames";
 import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
@@ -122,7 +123,7 @@ export function buildMemoryGenerationModelGroups(
   const groups = sortProviderEntriesForSettings(
     PROVIDER_NAMES.filter(
       (provider) =>
-        !UI_DISABLED_PROVIDERS.has(provider) &&
+        !isUiDisabledProvider(provider) &&
         (visibility?.includedProviders ? visibility.includedProviders.includes(provider) : true) &&
         !visibility?.hiddenProviders?.includes(provider),
     )
@@ -146,6 +147,7 @@ export function buildMemoryGenerationModelGroups(
   if (hasCurrent) return groups;
 
   const parsed = decodeProviderModelSelection(current);
+  if (parsed && isProviderUnsupportedOnDesktop(parsed.provider)) return groups;
   const customOption = parsed
     ? {
         value: current,

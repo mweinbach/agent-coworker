@@ -5,6 +5,8 @@ import {
   ClockIcon,
   GlobeIcon,
   ListTodoIcon,
+  LoaderCircleIcon,
+  RotateCcwIcon,
   SearchIcon,
   ShieldAlertIcon,
   TerminalIcon,
@@ -15,6 +17,7 @@ import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ToolFeedState } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader } from "../../components/ui/card";
 import {
   Collapsible,
@@ -326,6 +329,8 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   live?: boolean;
   liveNowMs?: number;
   liveStartedAt?: string | null;
+  onRetry?: () => Promise<boolean>;
+  retryDisabled?: boolean;
 }) {
   const liveNowMsProp = props.liveNowMs;
   const [nowMs, setNowMs] = useState(() => liveNowMsProp ?? Date.now());
@@ -342,6 +347,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   const summary = useMemo(() => summarizeActivityGroup(props.items), [props.items]);
   const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
   const isComplete = displayStatus === "done";
+  const hasUnrecoveredIssue = displayStatus === "issue";
   const liveStartedAtMs =
     props.liveStartedAt !== null && props.liveStartedAt !== undefined
       ? activityTimestampMs(props.liveStartedAt)
@@ -353,15 +359,24 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
         )
       : null;
   const displayElapsedLabel = liveElapsedLabel ?? summary.elapsedLabel;
-  const shouldAutoExpand =
-    displayStatus === "approval" || displayStatus === "issue" || displayStatus === "running";
+  const shouldAutoExpand = displayStatus === "approval" || displayStatus === "running";
   const [expanded, setExpanded] = useState(shouldAutoExpand);
+  const [retrying, setRetrying] = useState(false);
   // Remember whether the user has manually expanded/collapsed this group, so a
   // turn completing doesn't slam the card shut while they're still reading it.
   const userToggledRef = useRef(false);
   const handleOpenChange = (open: boolean) => {
     userToggledRef.current = true;
     setExpanded(open);
+  };
+  const handleRetry = async () => {
+    if (!props.onRetry || props.retryDisabled || retrying) return;
+    setRetrying(true);
+    try {
+      await props.onRetry();
+    } finally {
+      setRetrying(false);
+    }
   };
 
   useEffect(() => {
@@ -377,29 +392,63 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   const useThinkingTreatment =
     isPendingReasoning ||
     (summary.reasoningCount > 0 && summary.toolCount === 0 && !showStateBadge);
-  const useCompactElapsedHeader = isComplete || (props.live === true && !showStateBadge);
+  const useCompactElapsedHeader =
+    isComplete || hasUnrecoveredIssue || (props.live === true && !showStateBadge);
 
   if (useCompactElapsedHeader) {
     return (
       <Collapsible open={expanded} onOpenChange={handleOpenChange}>
-        <Marker asChild variant={props.live ? "border" : "separator"}>
-          <CollapsibleTrigger className="group w-full max-w-3xl pb-2.5 pt-1.5 outline-none">
-            <MarkerContent className="font-mono tracking-tight transition-colors group-hover:text-foreground">
-              <span role={props.live ? "status" : undefined}>
-                {props.live
-                  ? displayElapsedLabel
-                    ? `Working for ${displayElapsedLabel}`
-                    : "Working"
-                  : displayElapsedLabel
-                    ? `Worked for ${displayElapsedLabel}`
-                    : "Worked"}
-              </span>
-            </MarkerContent>
-            <ChevronRightIcon className="size-3.5 shrink-0 opacity-0 transition-all duration-200 group-hover:opacity-100 group-data-[state=open]:rotate-90" />
-          </CollapsibleTrigger>
-        </Marker>
+        <div className="flex w-full max-w-3xl items-center gap-1.5">
+          <Marker asChild variant={props.live ? "border" : "separator"}>
+            <CollapsibleTrigger className="group min-w-0 flex-1 pb-2.5 pt-1.5 outline-none before:hidden">
+              {hasUnrecoveredIssue ? (
+                <AlertTriangleIcon className="size-3.5 shrink-0 text-destructive/75" />
+              ) : null}
+              <MarkerContent
+                className={cn(
+                  "font-mono tracking-tight transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
+                  hasUnrecoveredIssue && "text-destructive/85 group-hover:text-destructive",
+                )}
+              >
+                <span role={props.live ? "status" : undefined}>
+                  {hasUnrecoveredIssue
+                    ? displayElapsedLabel
+                      ? `Couldn't finish after ${displayElapsedLabel}`
+                      : "Couldn't finish"
+                    : props.live
+                      ? displayElapsedLabel
+                        ? `Working for ${displayElapsedLabel}`
+                        : "Working"
+                      : displayElapsedLabel
+                        ? `Worked for ${displayElapsedLabel}`
+                        : "Worked"}
+                </span>
+              </MarkerContent>
+              <ChevronRightIcon
+                className={cn(
+                  "size-3.5 shrink-0 transition-all duration-200 group-hover:opacity-100 group-data-[state=open]:rotate-90",
+                  hasUnrecoveredIssue ? "text-destructive/60 opacity-60" : "opacity-0",
+                )}
+              />
+            </CollapsibleTrigger>
+          </Marker>
+          {hasUnrecoveredIssue && props.onRetry ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              disabled={props.retryDisabled || retrying}
+              aria-busy={retrying || undefined}
+              onClick={() => void handleRetry()}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
+              {retrying ? "Retrying" : "Retry"}
+            </Button>
+          ) : null}
+        </div>
 
-        <CollapsibleContent className="max-w-3xl overflow-hidden">
+        <CollapsibleContent className="activity-trace-content max-w-3xl">
           <div className="border-b border-border/25 px-1 pb-2.5 pt-3">
             <ActivityTimeline summary={summary} live={props.live} />
           </div>
@@ -455,7 +504,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
         </CollapsibleTrigger>
 
         {/* ── Expanded timeline ─────────────────────────────────────────────── */}
-        <CollapsibleContent className="overflow-hidden">
+        <CollapsibleContent className="activity-trace-content">
           <CardContent className="border-t border-border/35 px-3 pb-2.5 pt-2">
             <ActivityTimeline summary={summary} live={props.live} />
           </CardContent>

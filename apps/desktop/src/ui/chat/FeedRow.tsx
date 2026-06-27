@@ -261,8 +261,12 @@ export const FeedRow = memo(function FeedRow(props: {
               </BubbleContent>
             </Bubble>
           ) : userMessage?.cleanText ? (
-            <Bubble variant="tinted" align="end">
-              <BubbleContent className="whitespace-pre-wrap">
+            <Bubble
+              variant="tinted"
+              align="end"
+              className="*:data-[slot=bubble-content]:border-primary/20 *:data-[slot=bubble-content]:bg-primary/[0.08] dark:*:data-[slot=bubble-content]:border-primary/25 dark:*:data-[slot=bubble-content]:bg-primary/[0.12]"
+            >
+              <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 shadow-[var(--shadow-surface-base)] whitespace-pre-wrap selection:bg-primary/20">
                 {canvasRequest ? (
                   <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />
                 ) : (

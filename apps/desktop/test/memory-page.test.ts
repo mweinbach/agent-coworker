@@ -294,6 +294,29 @@ describe("desktop memory page", () => {
     expect(JSON.stringify(groups)).not.toContain("Amazon Nova Micro");
   });
 
+  test("memory model choices do not preserve Antigravity on Windows", () => {
+    const harness = setupJsdom();
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "win32";
+      const groups = buildMemoryGenerationModelGroups(
+        [
+          {
+            id: "google",
+            name: "Google",
+            defaultModel: "gemini-3.5-flash",
+            models: [{ id: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash" }],
+          },
+        ] as any,
+        "antigravity:gemini-3.1-pro-preview",
+      );
+
+      expect(JSON.stringify(groups)).not.toContain("antigravity");
+      expect(JSON.stringify(groups)).not.toContain("Antigravity");
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("memory targets collapse non-project chats while keeping projects individual", () => {
     const chatsRoot = "/tmp/cowork-home/.cowork/chats";
     const workspaces = [

@@ -28,7 +28,7 @@ import {
 } from "../../components/ui/message-scroller";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { ActivityGroupCard } from "./ActivityGroupCard";
-import type { ChatRenderItem } from "./activityGroups";
+import { type ChatRenderItem, summarizeActivityGroup } from "./activityGroups";
 import { parseA2uiActionMessage } from "./chatLogic";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
@@ -53,6 +53,18 @@ function lastVisibleUserTurnId(renderItems: ChatRenderItem[], a2uiEnabled: boole
     if (item && isVisibleUserTurn(item, a2uiEnabled)) {
       return item.kind === "feed-item" ? item.item.id : null;
     }
+  }
+  return null;
+}
+
+function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string | null {
+  for (let index = renderItems.length - 1; index >= 0; index -= 1) {
+    const item = renderItems[index];
+    if (!item) continue;
+    if (item.kind === "activity-group") {
+      return summarizeActivityGroup(item.items).status === "issue" ? item.id : null;
+    }
+    if (item.item.kind === "message") return null;
   }
   return null;
 }
@@ -83,10 +95,7 @@ function InitialTurnRestore({ messageId }: { messageId: string | null }) {
       if (cancelled) return;
 
       const currentVisibility = visibilityRef.current;
-      if (
-        currentVisibility.currentAnchorId === messageId ||
-        currentVisibility.visibleMessageIds.includes(messageId)
-      ) {
+      if (currentVisibility.currentAnchorId === messageId) {
         return;
       }
       scrollToMessage(messageId, {
@@ -125,6 +134,8 @@ export function ChatFeed(props: {
   selectedThreadId?: string | null;
   threadTitleById?: ReadonlyMap<string, string>;
   onSelectThread?: (threadId: string) => void;
+  onRetryFailedTurn?: () => Promise<boolean>;
+  retryFailedTurnDisabled?: boolean;
 }) {
   const {
     transcriptOnly,
@@ -146,8 +157,11 @@ export function ChatFeed(props: {
     selectedThreadId,
     threadTitleById,
     onSelectThread,
+    onRetryFailedTurn,
+    retryFailedTurnDisabled,
   } = props;
   const lastUserTurnId = lastVisibleUserTurnId(renderItems, a2uiEnabled);
+  const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
 
   return (
     <MessageScrollerProvider
@@ -195,37 +209,8 @@ export function ChatFeed(props: {
               </MessageScrollerItem>
             ) : null}
 
-            {sandboxApprovals.map(({ threadId, prompt }) => (
-              <MessageScrollerItem
-                key={`${threadId}:${prompt.requestId}`}
-                messageId={`sandbox-approval:${threadId}:${prompt.requestId}`}
-                className="order-2"
-              >
-                <SandboxApprovalCard
-                  threadId={threadId}
-                  prompt={prompt}
-                  onAnswer={onAnswerApproval}
-                  selectedThreadId={selectedThreadId}
-                  threadTitle={threadTitleById?.get(threadId)}
-                  onSelectThread={onSelectThread}
-                />
-              </MessageScrollerItem>
-            ))}
-
-            <MessageScrollerItem className="order-3">
-              <div
-                aria-hidden="true"
-                className="shrink-0"
-                data-slot="message-bar-reserved-space"
-                style={{ height: composerOverlayHeight }}
-              />
-            </MessageScrollerItem>
-
             {visibleFeedLength === 0 && !disconnected ? (
-              <MessageScrollerItem
-                messageId={hydrating ? "status:hydrating" : "status:empty"}
-                className="order-1"
-              >
+              <MessageScrollerItem messageId={hydrating ? "status:hydrating" : "status:empty"}>
                 <Empty className="min-h-72 border border-border/55 bg-background/24">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -252,13 +237,16 @@ export function ChatFeed(props: {
                     key={messageId}
                     messageId={messageId}
                     scrollAnchor={isVisibleUserTurn(item, a2uiEnabled)}
-                    className="order-1"
                   >
                     {item.kind === "activity-group" ? (
                       <ActivityGroupCard
                         items={item.items}
                         live={item.id === liveActivityGroupId}
                         liveStartedAt={liveStartedAt}
+                        onRetry={
+                          item.id === retryableActivityGroupId ? onRetryFailedTurn : undefined
+                        }
+                        retryDisabled={retryFailedTurnDisabled}
                       />
                     ) : (
                       <InlineErrorBoundary
@@ -278,6 +266,31 @@ export function ChatFeed(props: {
                 );
               })
             )}
+
+            {sandboxApprovals.map(({ threadId, prompt }) => (
+              <MessageScrollerItem
+                key={`${threadId}:${prompt.requestId}`}
+                messageId={`sandbox-approval:${threadId}:${prompt.requestId}`}
+              >
+                <SandboxApprovalCard
+                  threadId={threadId}
+                  prompt={prompt}
+                  onAnswer={onAnswerApproval}
+                  selectedThreadId={selectedThreadId}
+                  threadTitle={threadTitleById?.get(threadId)}
+                  onSelectThread={onSelectThread}
+                />
+              </MessageScrollerItem>
+            ))}
+
+            <MessageScrollerItem>
+              <div
+                aria-hidden="true"
+                className="shrink-0"
+                data-slot="message-bar-reserved-space"
+                style={{ height: composerOverlayHeight }}
+              />
+            </MessageScrollerItem>
           </MessageScrollerContent>
         </MessageScrollerViewport>
         <MessageScrollerButton

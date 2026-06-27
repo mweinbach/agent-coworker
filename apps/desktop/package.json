@@ -63,7 +63,7 @@
     "clsx": "^2.1.1",
     "electron": "^42.5.0",
     "electron-builder": "26.15.3",
-    "electron-vite": "5.0.0",
+    "electron-vite": "6.0.0-beta.1",
     "framer-motion": "^12.42.0",
     "lucide-react": "^1.21.0",
     "react-grab": "^0.1.47",

@@ -124,6 +124,7 @@ import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import type { SkillManager } from "./SkillManager";
 import type { TurnExecutionManager } from "./TurnExecutionManager";
+import type { TaskLockError } from "./taskLocks";
 
 const MEMORY_GENERATIONS_PER_CONSOLIDATION = 5;
 
@@ -1519,6 +1520,7 @@ export class AgentSession {
   async cancelAndWaitForSettlement(opts?: {
     includeSubagents?: boolean;
     timeoutMs?: number;
+    taskLock?: TaskLockError;
   }): Promise<void> {
     await this.getTurnExecutionManager().cancelAndWaitForSettlement(opts);
   }

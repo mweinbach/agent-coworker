@@ -8,6 +8,7 @@ import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import type { StartServerSocket } from "../src/server/startServer/types";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { WebDesktopService, type WebDesktopServiceLike } from "../src/server/webDesktopService";
+import { canonicalWorkspacePath, sameWorkspacePath } from "../src/utils/workspacePath";
 
 type JsonRpcMessage = {
   id?: string | number;
@@ -228,7 +229,11 @@ function taskNotificationPredicate(
   return (message) => {
     if (message.method !== method) return false;
     const params = message.params as { task?: { id?: unknown; workspacePath?: unknown } };
-    return params.task?.id === taskId && params.task.workspacePath === workspacePath;
+    return (
+      params.task?.id === taskId &&
+      typeof params.task.workspacePath === "string" &&
+      sameWorkspacePath(params.task.workspacePath, workspacePath)
+    );
   };
 }
 
@@ -266,6 +271,7 @@ describe("task workspace subscription routing", () => {
       await fs.symlink(catalogWorkspace, catalogAlias, "dir");
       const activePath = await fs.realpath(activeWorkspace);
       const catalogPath = await fs.realpath(catalogWorkspace);
+      const canonicalCatalogPath = canonicalWorkspacePath(catalogPath);
       const oneOffPath = await fs.realpath(oneOffWorkspace);
       const outsidePath = await fs.realpath(outsideWorkspace);
       const desktopService = {
@@ -379,10 +385,10 @@ describe("task workspace subscription routing", () => {
         "task/created notification for catalog workspace",
       );
       expect(createdNotification.params).toMatchObject({
-        cwd: catalogPath,
+        cwd: canonicalCatalogPath,
         task: {
           title: "Catalog workspace task",
-          workspacePath: catalogPath,
+          workspacePath: canonicalCatalogPath,
         },
       });
       const normalizedCreatedNotification = await waitForMessage(
@@ -391,10 +397,10 @@ describe("task workspace subscription routing", () => {
         "task/created notification for normalized catalog workspace",
       );
       expect(normalizedCreatedNotification.params).toMatchObject({
-        cwd: catalogPath,
+        cwd: canonicalCatalogPath,
         task: {
           title: "Catalog workspace task",
-          workspacePath: catalogPath,
+          workspacePath: canonicalCatalogPath,
         },
       });
       const updateResponse = await sendRequest(runtime, mutator, "task/updateBrief", {
@@ -411,16 +417,17 @@ describe("task workspace subscription routing", () => {
           const params = message.params as { task?: { title?: unknown; workspacePath?: unknown } };
           return (
             params.task?.title === "Catalog workspace task updated" &&
-            params.task.workspacePath === catalogPath
+            typeof params.task.workspacePath === "string" &&
+            sameWorkspacePath(params.task.workspacePath, catalogPath)
           );
         },
         "task/updated notification for catalog workspace",
       );
       expect(updatedNotification.params).toMatchObject({
-        cwd: catalogPath,
+        cwd: canonicalCatalogPath,
         task: {
           title: "Catalog workspace task updated",
-          workspacePath: catalogPath,
+          workspacePath: canonicalCatalogPath,
         },
       });
 
@@ -1668,6 +1675,7 @@ describe("task workspace subscription routing", () => {
     try {
       await fs.mkdir(projectWorkspace, { recursive: true });
       const projectPath = await fs.realpath(projectWorkspace);
+      const canonicalProjectPath = canonicalWorkspacePath(projectPath);
       runtime = await createAgentServerRuntime({
         cwd: projectPath,
         homedir: home,
@@ -1736,12 +1744,12 @@ describe("task workspace subscription routing", () => {
         };
       };
       expect(createdParams).toMatchObject({
-        cwd: projectPath,
+        cwd: canonicalProjectPath,
         takeover: true,
         sourceSessionId: originThread.thread.id,
         workspaceDisposition: "existing_project",
         task: {
-          workspacePath: projectPath,
+          workspacePath: canonicalProjectPath,
           sourceSessionId: originThread.thread.id,
           creationOrigin: "chat_tool",
         },

@@ -134,6 +134,19 @@ jobs:
           apps/desktop/test/sidecar.test.ts
           apps/desktop/test/server-manager.test.ts
 
+      - name: Cross-platform task and preview regressions
+        run: >
+          bun test
+          test/task-artifact-versions.test.ts
+          test/task-mode.persistence.test.ts
+          test/jsonrpc.task-workspace-subscription.test.ts
+          test/jsonrpc/flow.task-terminal-locks.test.ts
+          test/presentationPreview.test.ts
+          apps/desktop/test/bootstrap-cache.test.ts
+          apps/desktop/test/jsonrpc-single-connection.test.ts
+          apps/desktop/test/task-actions.test.ts
+          --max-concurrency 1
+
   macos-smoke:
     name: macOS ARM64 smoke
     runs-on: macos-15
@@ -155,6 +168,20 @@ jobs:
           test/build-desktop-resources.test.ts
           apps/desktop/test/sidecar.test.ts
           apps/desktop/test/server-manager.test.ts
+
+      - name: Cross-platform task and preview regressions
+        run: >
+          bun test
+          test/workspace-path.test.ts
+          test/task-artifact-versions.test.ts
+          test/task-mode.persistence.test.ts
+          test/jsonrpc.task-workspace-subscription.test.ts
+          test/jsonrpc/flow.task-terminal-locks.test.ts
+          test/presentationPreview.test.ts
+          apps/desktop/test/bootstrap-cache.test.ts
+          apps/desktop/test/jsonrpc-single-connection.test.ts
+          apps/desktop/test/task-actions.test.ts
+          --max-concurrency 1
 
   remote-mcp-smoke:
     name: Remote MCP smoke

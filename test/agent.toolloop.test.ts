@@ -39,6 +39,8 @@ function makeParams(overrides: Partial<RunTurnParams> = {}): RunTurnParams {
     log: mock(() => {}),
     askUser: mock(async () => "yes"),
     approveCommand: mock(async () => true),
+    // The model/tool boundary is mocked; do not inspect a developer machine's runtime.
+    toolEnv: { COWORK_DISABLE_RUNTIME: "1" },
     ...overrides,
   };
 }

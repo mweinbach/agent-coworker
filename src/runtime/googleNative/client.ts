@@ -1,4 +1,4 @@
-import { GoogleGenAI, type Interactions } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
 export function resolveGoogleApiKey(explicitKey?: string): string {
   const direct = explicitKey?.trim();
@@ -15,9 +15,9 @@ export function resolveGoogleApiKey(explicitKey?: string): string {
   );
 }
 
-export const googleInteractionsClientCache = new Map<string, Interactions>();
+export const googleInteractionsClientCache = new Map<string, GoogleGenAI["interactions"]>();
 
-export function getGoogleInteractionsClient(apiKey: string): Interactions {
+export function getGoogleInteractionsClient(apiKey: string): GoogleGenAI["interactions"] {
   const cached = googleInteractionsClientCache.get(apiKey);
   if (cached) return cached;
 

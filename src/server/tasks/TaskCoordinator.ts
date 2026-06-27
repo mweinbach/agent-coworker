@@ -42,7 +42,7 @@ import {
   makeTaskLockedError,
   registerPendingTerminalTaskLocks,
 } from "../session/taskLocks";
-import type { SessionDb } from "../sessionDb";
+import type { SessionDb, TaskDirectiveCommitHooks } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
 import {
   buildTaskReviewMaterialSnapshot,
@@ -209,6 +209,7 @@ type ReplacementWorkItemInput = {
 
 type DeferredTerminalCommitHook = {
   markDeferred: () => void;
+  directiveCommit: TaskDirectiveCommitHooks;
   onCommitted: (task: TaskRecord) => Promise<void> | void;
 };
 
@@ -2205,6 +2206,7 @@ export class TaskCoordinator {
     taskId: string;
     workspacePath: string;
     expectedRevision: number;
+    deferredTerminalCommitHook?: DeferredTerminalCommitHook;
   }): Promise<TaskRecord> {
     return await this.runTaskMutation(input.taskId, async () => await this.acceptTaskLocked(input));
   }
@@ -2250,6 +2252,7 @@ export class TaskCoordinator {
               taskId: latest.id,
               workspacePath: latest.workspacePath,
               expectedRevision: latest.revision,
+              deferredTerminalCommitHook: input.deferredTerminalCommitHook,
             });
           },
         });
@@ -2263,6 +2266,7 @@ export class TaskCoordinator {
           taskId: current.id,
           expectedRevision: input.expectedRevision,
           updatedAt: nowIso(),
+          directiveCommit: input.deferredTerminalCommitHook?.directiveCommit,
           validateAcceptedTask: async (acceptedTask) => {
             await this.assertLiveArtifactEvidenceUnchanged(acceptedTask, reviewedMaterial);
           },
@@ -2293,6 +2297,7 @@ export class TaskCoordinator {
             taskId: latest.id,
             workspacePath: latest.workspacePath,
             expectedRevision: latest.revision,
+            deferredTerminalCommitHook: input.deferredTerminalCommitHook,
           });
         },
       });
@@ -2306,6 +2311,7 @@ export class TaskCoordinator {
         taskId: current.id,
         expectedRevision: input.expectedRevision,
         updatedAt: nowIso(),
+        directiveCommit: input.deferredTerminalCommitHook?.directiveCommit,
       });
     } finally {
       terminalRelease();
@@ -3971,6 +3977,7 @@ export class TaskCoordinator {
             threadId: thread?.id ?? null,
             settlementRevisionIds,
             reviewRequired: task.reviewRequired,
+            directiveCommit: input.deferredTerminalCommitHook?.directiveCommit,
             validateReadyTask: currentMaterial
               ? async (readyTask) => {
                   await this.assertLiveArtifactEvidenceUnchanged(readyTask, currentMaterial);
@@ -4145,6 +4152,7 @@ export class TaskCoordinator {
     let updated: TaskRecord;
     let continuation: TaskDirectiveResult["continuation"] = "continue";
     let directiveCommitDeferred = false;
+    let directiveCommitPersisted = false;
     const recordDirectiveReceipt = async (task: TaskRecord) => {
       await this.options.sessionDb.recordTaskDirectiveReceipt(
         current.id,
@@ -4153,15 +4161,18 @@ export class TaskCoordinator {
         nowIso(),
       );
     };
-    const recordDeferredDirectiveCommit = async (task: TaskRecord) => {
+    const buildDeferredDirectiveCheckpoint = (task: TaskRecord) => {
       const committedThread =
         task.threads.find((candidate) => candidate.sessionId === sessionId) ?? null;
-      const checkpoint = this.buildTaskCheckpoint(
+      return this.buildTaskCheckpoint(
         task,
         committedThread?.id ?? null,
         `directive ${directive.type}`,
         "",
       );
+    };
+    const recordDeferredDirectiveCommit = async (task: TaskRecord) => {
+      const checkpoint = buildDeferredDirectiveCheckpoint(task);
       const createdCheckpoint =
         await this.options.sessionDb.recordTaskDirectiveReceiptWithCheckpoint({
           taskId: current.id,
@@ -4177,7 +4188,21 @@ export class TaskCoordinator {
       markDeferred: () => {
         directiveCommitDeferred = true;
       },
-      onCommitted: recordDeferredDirectiveCommit,
+      directiveCommit: {
+        create: (task) => ({
+          idempotencyKey: directive.idempotencyKey,
+          receiptCreatedAt: nowIso(),
+          checkpoint: buildDeferredDirectiveCheckpoint(task),
+        }),
+        onCommitted: (task, checkpoint) => {
+          directiveCommitPersisted = true;
+          if (checkpoint) this.notifyTaskCheckpoint(task, checkpoint);
+        },
+      },
+      onCommitted: async (task) => {
+        if (directiveCommitPersisted) return;
+        await recordDeferredDirectiveCommit(task);
+      },
     };
     switch (directive.type) {
       case "update_plan": {

@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import type { TaskRecord, TaskSummary } from "../../../src/shared/tasks";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -437,6 +437,15 @@ const { defaultThreadRuntime } = await import("../src/app/store.helpers/runtimeS
 const { createDefaultUpdaterState } = await import("../src/lib/desktopApi");
 
 type AppStoreState = ReturnType<typeof useAppStore.getState>;
+const defaultRefreshTasks = useAppStore.getState().refreshTasks;
+const defaultSelectTask = useAppStore.getState().selectTask;
+
+function restoreTaskHydrationActions() {
+  useAppStore.setState({
+    refreshTasks: defaultRefreshTasks,
+    selectTask: defaultSelectTask,
+  });
+}
 
 function resetStoreToCachedSeed(value: unknown = cachedState) {
   const cachedSeed = buildCachedDesktopStateSeed(value);
@@ -564,6 +573,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Pr
 
 describe("desktop bootstrap cache", () => {
   beforeEach(() => {
+    restoreTaskHydrationActions();
     installWindowMock();
     loadStateError = null;
     taskListResponse = [];
@@ -605,6 +615,10 @@ describe("desktop bootstrap cache", () => {
     localStorageMock.clear();
     localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(cachedState));
     resetStoreToCachedSeed();
+  });
+
+  afterEach(() => {
+    restoreTaskHydrationActions();
   });
 
   afterAll(() => {

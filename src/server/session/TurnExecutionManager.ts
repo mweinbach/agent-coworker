@@ -5,7 +5,11 @@ import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
 import type { SessionContext } from "./SessionContext";
 import type { SessionMetadataManager } from "./SessionMetadataManager";
-import { getSessionTaskLock } from "./taskLocks";
+import {
+  getSessionTaskLock,
+  registerSettlingTerminalSessionLock,
+  type TaskLockError,
+} from "./taskLocks";
 import {
   createUserMessageTurnRunner,
   type UserMessageTurnRunner,
@@ -91,6 +95,31 @@ export class TurnExecutionManager {
       this.context.id,
       this.context.deps.getLiveSessionParentIdImpl,
     );
+  }
+
+  private retainTaskLockUntilTurnSettlement(lock: TaskLockError | undefined): void {
+    if (!lock) return;
+    const settlements = [
+      ...(this.activeTurnSettlement ? [this.activeTurnSettlement] : []),
+      ...this.activeSteerSettlements,
+    ];
+    if (settlements.length === 0 && !this.context.state.running) return;
+
+    const release = registerSettlingTerminalSessionLock(this.context.id, lock);
+    const settlement =
+      settlements.length > 0
+        ? Promise.allSettled(settlements).then(() => undefined)
+        : new Promise<void>((resolve) => {
+            const interval = setInterval(() => {
+              if (this.context.state.running) return;
+              clearInterval(interval);
+              resolve();
+            }, 25);
+            interval.unref?.();
+          });
+    void settlement.finally(() => {
+      release();
+    });
   }
 
   async sendSteerMessage(
@@ -308,10 +337,12 @@ export class TurnExecutionManager {
   async cancelAndWaitForSettlement(opts?: {
     includeSubagents?: boolean;
     timeoutMs?: number;
+    taskLock?: TaskLockError;
   }): Promise<void> {
     const timeoutMs = opts?.timeoutMs ?? 30_000;
     const childSettlement =
       opts?.includeSubagents === true ? this.cancelChildAgentSessions({ timeoutMs }) : null;
+    this.retainTaskLockUntilTurnSettlement(opts?.taskLock);
     this.cancelOwnTurn();
     const waits = [
       this.waitForOwnTurnSettlement(timeoutMs),

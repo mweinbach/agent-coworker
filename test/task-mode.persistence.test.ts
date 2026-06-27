@@ -72,6 +72,15 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
 }
 
+async function removeTempDir(tempDir: string): Promise<void> {
+  await fs.rm(tempDir, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === "win32" ? 10 : 0,
+    retryDelay: 50,
+  });
+}
+
 async function expectSettlesWithin<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -88,6 +97,22 @@ async function expectSettlesWithin<T>(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
+  await expectSettlesWithin(
+    (async () => {
+      while (!predicate()) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    })(),
+    timeoutMs,
+    label,
+  );
 }
 
 function pauseNextTaskStatusWrite(harness: Awaited<ReturnType<typeof createHarness>>) {
@@ -269,7 +294,8 @@ test("task coordinator rejects task IDs outside the requested workspace context"
       }),
     ).rejects.toThrow("Task is outside the active workspace");
   } finally {
-    await fs.rm(harness.home, { recursive: true, force: true });
+    harness.sessionDb.close();
+    await removeTempDir(harness.home);
   }
 });
 
@@ -1122,6 +1148,16 @@ describe("task mode persistence", () => {
         "deferred completion",
       );
       expect(completed.status).toBe("completed");
+      await waitUntil(
+        () =>
+          harness.notifications.some(
+            (notification) =>
+              notification.method === "task/updated" &&
+              (notification.params.task as TaskRecord | undefined)?.status === "completed",
+          ),
+        1_000,
+        "deferred completion notification",
+      );
       expect(
         harness.notifications.filter(
           (notification) =>
@@ -4794,7 +4830,7 @@ describe("task mode persistence", () => {
     } finally {
       harness.sessionDb.close();
     }
-  });
+  }, 15_000);
 
   test("review enforcement survives session database reload", async () => {
     const harness = await createHarness();
@@ -4851,7 +4887,7 @@ describe("task mode persistence", () => {
         reloadedDb.close();
       }
     } finally {
-      await fs.rm(harness.home, { recursive: true, force: true });
+      await removeTempDir(harness.home);
     }
   });
 
@@ -5015,6 +5051,16 @@ describe("task mode persistence", () => {
 
       expect(completed.status).toBe("completed");
       expect(harness.sessionDb.listPendingTaskArtifactRevisionSettlementIds(task.id)).toEqual([]);
+      await waitUntil(
+        () =>
+          harness.notifications.some(
+            (notification) =>
+              notification.method === "task/updated" &&
+              (notification.params.task as TaskRecord | undefined)?.status === "completed",
+          ),
+        1_000,
+        "deferred artifact-settlement notification",
+      );
       expect(
         harness.notifications.filter(
           (notification) =>
@@ -5109,6 +5155,16 @@ describe("task mode persistence", () => {
       );
 
       expect(completed.status).toBe("completed");
+      await waitUntil(
+        () =>
+          harness.notifications.some(
+            (notification) =>
+              notification.method === "task/updated" &&
+              (notification.params.task as TaskRecord | undefined)?.status === "completed",
+          ),
+        1_000,
+        "deferred active-revision notification",
+      );
       expect(
         harness.notifications.filter(
           (notification) =>
@@ -5223,6 +5279,16 @@ describe("task mode persistence", () => {
       const receipt = harness.sessionDb.getTaskDirectiveReceipt(created.task.id, proposalKey);
       expect(receipt).toBe(completed.revision);
       expect(quiesceCalls).toBe(3);
+      await waitUntil(
+        () =>
+          harness.notifications.some(
+            (notification) =>
+              notification.method === "task/updated" &&
+              (notification.params.task as TaskRecord | undefined)?.status === "completed",
+          ),
+        1_000,
+        "deferred terminal directive notification",
+      );
       expect(
         harness.notifications.filter(
           (notification) =>

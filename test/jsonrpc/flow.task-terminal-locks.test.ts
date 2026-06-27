@@ -1139,6 +1139,19 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const afterTimeout = await readTask(rpc, tmpDir, created.id);
       expect(afterTimeout.status).toBe("working");
       expect(afterTimeout.revision).toBe(latest.revision);
+      await expectTaskLocked(
+        await rpc.sendRequest("turn/steer", {
+          threadId,
+          turnId,
+          input: [{ type: "text", text: "blocked while timed-out cancellation settles" }],
+        }),
+        "finalizing cancelled",
+        {
+          lockKind: "terminal_task_thread",
+          taskId: created.id,
+          taskStatus: "cancelled",
+        },
+      );
       await expect(
         rpc.waitFor(
           (message) =>
@@ -1177,6 +1190,14 @@ describe("server JSON-RPC task terminal turn locks", () => {
           120,
         ),
       ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      holdNextTurn = false;
+      const recoveredTurn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "allowed after timed-out cancellation settles" }],
+      });
+      expect(recoveredTurn.error).toBeUndefined();
+      await waitForTurnCompleted(rpc, threadId, recoveredTurn.result.turn.id);
 
       rpc.close();
       await stopTestServer(running.server);

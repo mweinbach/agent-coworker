@@ -26,6 +26,10 @@ export type TaskLockedError = Error & {
 
 const pendingTerminalSessionLocks = new Map<string, TaskLockError>();
 const pendingTerminalTaskLocks = new Map<string, TaskLockError>();
+const settlingTerminalSessionLocks = new Map<
+  string,
+  Array<{ token: object; lock: TaskLockError }>
+>();
 
 export function isTerminalTaskStatus(status: TaskStatus): status is TerminalTaskStatus {
   return TERMINAL_TASK_STATUSES.has(status);
@@ -152,14 +156,33 @@ export function getPendingTerminalTaskLock(taskId: string): TaskLockError | null
   return pendingTerminalTaskLocks.get(taskId) ?? null;
 }
 
+export function registerSettlingTerminalSessionLock(
+  sessionId: string,
+  lock: TaskLockError,
+): () => void {
+  const registration = { token: {}, lock };
+  const registrations = settlingTerminalSessionLocks.get(sessionId) ?? [];
+  registrations.push(registration);
+  settlingTerminalSessionLocks.set(sessionId, registrations);
+  return () => {
+    const current = settlingTerminalSessionLocks.get(sessionId);
+    if (!current) return;
+    const remaining = current.filter((candidate) => candidate.token !== registration.token);
+    if (remaining.length > 0) settlingTerminalSessionLocks.set(sessionId, remaining);
+    else settlingTerminalSessionLocks.delete(sessionId);
+  };
+}
+
 export function getTaskThreadLock(
   sessionDb: TaskSessionDb | null | undefined,
   sessionId: string,
 ): TaskLockError | null {
+  const task = sessionDb?.getTaskForThread?.(sessionId);
+  const durableLock = task ? terminalTaskLock(task) : null;
+  if (durableLock) return durableLock;
   const pendingLock = pendingTerminalSessionLocks.get(sessionId);
   if (pendingLock) return pendingLock;
-  const task = sessionDb?.getTaskForThread?.(sessionId);
-  return task ? terminalTaskLock(task) : null;
+  return settlingTerminalSessionLocks.get(sessionId)?.at(-1)?.lock ?? null;
 }
 
 export function getActiveSourceChatLock(

@@ -1,4 +1,3 @@
-import { getModel as getPiModel, getModels as getPiModels } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { isFireworksInferenceProvider } from "../providers/fireworksShared";
 import type { ProviderName } from "../types";
@@ -33,15 +32,36 @@ export {
   asString,
 } from "../shared/recordParsing";
 
-export function pickKnownPiModel(provider: string, modelId: string): PiModel | null {
-  const direct = getPiModel(provider as any, modelId as any) as unknown;
+async function getPiModels(provider: string): Promise<readonly unknown[]> {
+  switch (provider) {
+    case "amazon-bedrock": {
+      const { amazonBedrockProvider } = await import(
+        "@earendil-works/pi-ai/providers/amazon-bedrock"
+      );
+      return amazonBedrockProvider().getModels();
+    }
+    case "anthropic": {
+      const { anthropicProvider } = await import("@earendil-works/pi-ai/providers/anthropic");
+      return anthropicProvider().getModels();
+    }
+    case "openai": {
+      const { openaiProvider } = await import("@earendil-works/pi-ai/providers/openai");
+      return openaiProvider().getModels();
+    }
+    default:
+      return [];
+  }
+}
+
+export async function pickKnownPiModel(provider: string, modelId: string): Promise<PiModel | null> {
+  const models = await getPiModels(provider);
+  const direct = models.find((model) => asRecord(model)?.id === modelId);
   const directRecord = asRecord(direct);
   if (directRecord) {
     return directRecord as unknown as PiModel;
   }
-  const fallbackModels = getPiModels(provider as any) as unknown;
-  if (!Array.isArray(fallbackModels) || fallbackModels.length === 0) return null;
-  const fallbackRecord = asRecord(fallbackModels[0]);
+  if (models.length === 0) return null;
+  const fallbackRecord = asRecord(models[0]);
   if (!fallbackRecord) return null;
 
   return {

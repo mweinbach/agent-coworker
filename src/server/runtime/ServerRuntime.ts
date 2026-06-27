@@ -35,6 +35,7 @@ import { jsonRpcTaskRequestSchemas } from "../jsonrpc/schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../jsonrpc/taskPermissions";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
 import { ResearchService } from "../research/ResearchService";
+import { getSessionTaskLock } from "../session/taskLocks";
 import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
 import { readSkillCatalogMtimeSnapshot } from "../skillCatalogMtime";
 import { refreshSessionsForSkillMutation } from "../skillMutationRefresh";
@@ -311,11 +312,13 @@ export async function createAgentServerRuntime(
           }
         };
         try {
+          const taskLock = getSessionTaskLock(sessionDb, sessionId);
           waits.push(
             runtime.turns
               .cancelAndWaitForSettlement({
                 includeSubagents: true,
                 timeoutMs: taskTerminalQuiesceTimeoutMs,
+                ...(taskLock ? { taskLock } : {}),
               })
               .catch((error) => {
                 disposeRuntime();

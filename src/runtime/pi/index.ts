@@ -1,19 +1,18 @@
-import { setBedrockProviderModule } from "@earendil-works/pi-ai";
+import { setBedrockProviderModule } from "@earendil-works/pi-ai/api/bedrock-converse-stream.lazy";
+import { lazyApi } from "@earendil-works/pi-ai/api/lazy";
 import {
   markModelCallSpanError,
   markModelCallSpanSuccessFromAssistantRecord as markModelCallSpanSuccess,
   parseTelemetrySettings,
   startPiModelCallSpan as startModelCallSpan,
 } from "../../observability/modelCallSpan";
-import {
-  streamBedrock as coworkStreamBedrock,
-  streamSimpleBedrock as coworkStreamSimpleBedrock,
-} from "../bedrockProviderModule";
 
-setBedrockProviderModule({
-  streamBedrock: coworkStreamBedrock,
-  streamSimpleBedrock: coworkStreamSimpleBedrock,
-});
+setBedrockProviderModule(
+  lazyApi(async () => {
+    const { streamBedrock, streamSimpleBedrock } = await import("../bedrockProviderModule");
+    return { stream: streamBedrock, streamSimple: streamSimpleBedrock };
+  }),
+);
 
 export { __internal } from "./internal";
 export { createPiRuntime } from "./runTurn";

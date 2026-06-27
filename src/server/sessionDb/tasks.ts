@@ -22,6 +22,7 @@ import type {
   WorkItem,
   WorkItemStatus,
 } from "../../shared/tasks";
+import { canonicalWorkspacePath } from "../../utils/workspacePath";
 
 const TERMINAL_TASK_STATUSES = new Set<TaskStatus>(["completed", "cancelled", "failed"]);
 const PENDING_ARTIFACT_REVISION_SETTLEMENT = "pending";
@@ -632,7 +633,7 @@ export class SessionTaskRepository {
       workspacePath
         ? this.db
             .query("SELECT task_id FROM tasks WHERE workspace_path = ? ORDER BY updated_at DESC")
-            .all(workspacePath)
+            .all(canonicalWorkspacePath(workspacePath))
         : this.db.query("SELECT task_id FROM tasks ORDER BY updated_at DESC").all()
     ) as Array<{
       task_id: string;

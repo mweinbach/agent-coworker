@@ -21,6 +21,7 @@ import type { SessionConfigPatch } from "../protocol";
 import type { AgentSession } from "./AgentSession";
 import type { PendingPromptReplayEvent } from "./InteractionManager";
 import type { ExperimentalA2uiManager, SeededSessionContext } from "./SessionContext";
+import type { TaskLockError } from "./taskLocks";
 
 export class SessionSnapshotService {
   constructor(private readonly session: AgentSession) {}
@@ -178,6 +179,7 @@ export class SessionTurnService {
   async cancelAndWaitForSettlement(opts?: {
     includeSubagents?: boolean;
     timeoutMs?: number;
+    taskLock?: TaskLockError;
   }): Promise<void> {
     await this.session.cancelAndWaitForSettlement(opts);
   }

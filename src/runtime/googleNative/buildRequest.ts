@@ -4,9 +4,15 @@ import { normalizeGoogleToolChoice } from "./nativeTools";
 import { buildGoogleBuiltInTools, convertToolsToInteractionsTools } from "./toolsAndBuiltIns";
 import type { GoogleNativeStepRequest } from "./types";
 
+// The SDK's public namespace type leaves `stream` optional, so preserve the
+// literal here to select the streaming `interactions.create` overload.
+type GoogleStreamingModelInteractionRequest = Interactions.CreateModelInteractionParamsStreaming & {
+  stream: true;
+};
+
 export function buildGoogleNativeRequest(
   opts: GoogleNativeStepRequest,
-): Interactions.CreateModelInteractionParamsStreaming {
+): GoogleStreamingModelInteractionRequest {
   const input = convertMessagesToInteractionsInput(opts.messages);
   const tools = [...convertToolsToInteractionsTools(opts.tools), ...buildGoogleBuiltInTools(opts)];
 
@@ -33,7 +39,7 @@ export function buildGoogleNativeRequest(
     generationConfig.tool_choice = toolChoice;
   }
 
-  const request: Interactions.CreateModelInteractionParamsStreaming = {
+  const request: GoogleStreamingModelInteractionRequest = {
     model: opts.model.id,
     input,
     stream: true,

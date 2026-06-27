@@ -14,6 +14,15 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
+function localRuntimeEnv(home: string): Record<string, string> {
+  return {
+    COWORK_DISABLE_RUNTIME: "1",
+    COWORK_RUNTIME_NODE: process.execPath,
+    HOME: home,
+    USERPROFILE: home,
+  };
+}
+
 describe("presentation preview renderer", () => {
   test("returns error for unsupported format", async () => {
     await withTempDir(async (dir) => {
@@ -34,7 +43,7 @@ describe("presentation preview renderer", () => {
     });
   });
 
-  test("returns error when rendering script is missing", async () => {
+  test("returns a missing-script error without starting the runtime", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "slide-1.mjs");
       await fs.writeFile(filePath, "export default {}", "utf8");
@@ -79,6 +88,7 @@ describe("presentation preview renderer", () => {
         cwd: dir,
         filePath: "slide-1.mjs",
         builtInDir: dir,
+        env: localRuntimeEnv(dir),
       });
 
       expect(result.ok).toBe(true);
@@ -212,6 +222,7 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
         cwd: dir,
         filePath: "deck.pptx",
         builtInDir: dir,
+        env: localRuntimeEnv(dir),
       });
 
       expect(result.ok).toBe(true);
@@ -225,7 +236,7 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
     });
   });
 
-  test("loads cached PNG slides directly when available in preview/ folder", async () => {
+  test("loads cached PNG slides without a rendering script or runtime", async () => {
     await withTempDir(async (dir) => {
       // 1. Set up pre-rendered preview files and dummy pptx file
       const previewDir = path.join(dir, "preview");
@@ -234,15 +245,6 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
 
       const pngPath = path.join(previewDir, "slide-1.png");
       await fs.writeFile(pngPath, "cached-slide-data", "utf8");
-
-      // Mock script (not used in this test because it loads directly from cache)
-      const scriptDir = path.join(dir, "skills/presentations/scripts");
-      await fs.mkdir(scriptDir, { recursive: true });
-      await fs.writeFile(
-        path.join(scriptDir, "render_artifact_slide.mjs"),
-        "process.exit(1);",
-        "utf8",
-      );
 
       const result = await previewPresentationFile({
         cwd: dir,

@@ -74,6 +74,101 @@ async function resolveMarketplacePresentationScript(
   return null;
 }
 
+async function resolvePresentationScript(
+  builtInDir: string,
+  config: AgentConfig | undefined,
+): Promise<{ scriptPath: string | null; expectedPath: string }> {
+  const builtInScript = path.join(
+    builtInDir,
+    "skills",
+    "presentations",
+    "scripts",
+    "render_artifact_slide.mjs",
+  );
+  const marketplaceScript = await resolveMarketplacePresentationScript(config);
+  const scriptCandidates = [...(marketplaceScript ? [marketplaceScript] : []), builtInScript];
+
+  for (const candidate of scriptCandidates) {
+    if (await fs.stat(candidate).catch(() => null)) {
+      return { scriptPath: candidate, expectedPath: candidate };
+    }
+  }
+
+  return {
+    scriptPath: null,
+    expectedPath: marketplaceScript ?? builtInScript,
+  };
+}
+
+async function loadCachedPresentationSlides(
+  resolvedPath: string,
+  cwd: string,
+): Promise<PresentationSlide[] | null> {
+  const pptxDir = path.dirname(resolvedPath);
+  const searchDirs = [
+    path.join(pptxDir, "preview"),
+    path.join(pptxDir, "../preview"),
+    path.join(cwd, "preview"),
+  ];
+
+  for (const previewDir of searchDirs) {
+    try {
+      const files = await fs.readdir(previewDir);
+      const pngFiles = files
+        .filter((filename) => /^slide[-_]?\d+\.png$/i.test(filename))
+        .sort((a, b) => {
+          const numA = Number.parseInt(a.match(/\d+/)?.[0] || "0", 10);
+          const numB = Number.parseInt(b.match(/\d+/)?.[0] || "0", 10);
+          return numA - numB;
+        });
+
+      if (pngFiles.length === 0) continue;
+
+      const slides: PresentationSlide[] = [];
+      for (let i = 0; i < pngFiles.length; i++) {
+        const filename = pngFiles[i];
+        if (!filename) continue;
+        const pngBuffer = await fs.readFile(path.join(previewDir, filename));
+        const slideName = path.basename(filename, ".png");
+        slides.push({
+          slideIndex: i,
+          slideId: slideName,
+          title: slideName,
+          pngBase64: `data:image/png;base64,${pngBuffer.toString("base64")}`,
+        });
+      }
+      return slides;
+    } catch {}
+  }
+
+  return null;
+}
+
+async function findPresentationSlideModules(cwd: string): Promise<string[]> {
+  const slidesDir = path.join(cwd, "slides");
+  let slideModules: string[] = [];
+  try {
+    const files = await fs.readdir(slidesDir);
+    slideModules = files
+      .filter((filename) => /^slide[-_]?\d+\.mjs$/i.test(filename))
+      .map((filename) => path.join(slidesDir, filename));
+  } catch {
+    try {
+      const files = await fs.readdir(cwd);
+      slideModules = files
+        .filter((filename) => /^slide[-_]?\d+\.mjs$/i.test(filename))
+        .map((filename) => path.join(cwd, filename));
+    } catch {}
+  }
+
+  slideModules.sort((a, b) => {
+    const numA = Number.parseInt(path.basename(a).match(/\d+/)?.[0] || "0", 10);
+    const numB = Number.parseInt(path.basename(b).match(/\d+/)?.[0] || "0", 10);
+    return numA - numB;
+  });
+  return slideModules;
+}
+
 export async function previewPresentationFile(
   request: PresentationPreviewRequest,
 ): Promise<PresentationPreviewResult> {
@@ -104,38 +199,37 @@ export async function previewPresentationFile(
     };
   }
 
-  const { nodeBin, env } = await resolvePresentationRuntimeEnv(request.env);
-  const marketplaceScript = await resolveMarketplacePresentationScript(request.config);
-  const scriptCandidates = [
-    ...(marketplaceScript ? [marketplaceScript] : []),
-    path.join(
-      request.builtInDir,
-      "skills",
-      "presentations",
-      "scripts",
-      "render_artifact_slide.mjs",
-    ),
-  ];
-  const scriptPath =
-    (
-      await Promise.all(
-        scriptCandidates.map(async (candidate) => ({
-          candidate,
-          exists: Boolean(await fs.stat(candidate).catch(() => null)),
-        })),
-      )
-    ).find((entry) => entry.exists)?.candidate ?? scriptCandidates[0];
+  if (isPptx) {
+    const cachedSlides = await loadCachedPresentationSlides(resolvedPath, request.cwd);
+    if (cachedSlides) return { ok: true, slides: cachedSlides };
+  }
 
-  // Check if render script exists
-  if (!scriptPath || !(await fs.stat(scriptPath).catch(() => null))) {
+  const { scriptPath, expectedPath } = await resolvePresentationScript(
+    request.builtInDir,
+    request.config,
+  );
+  if (!scriptPath) {
     return {
       ok: false,
       error: {
         kind: "compile_error",
-        message: `Slide rendering script not found at expected path: ${scriptPath}`,
+        message: `Slide rendering script not found at expected path: ${expectedPath}`,
       },
     };
   }
+
+  const slideModules = isPptx ? await findPresentationSlideModules(request.cwd) : [];
+  if (isPptx && slideModules.length === 0) {
+    return {
+      ok: false,
+      error: {
+        kind: "no_slides",
+        message: "No slide source modules or pre-rendered previews found for this deck.",
+      },
+    };
+  }
+
+  const { nodeBin, env } = await resolvePresentationRuntimeEnv(request.env);
 
   if (isSlide) {
     // Single slide preview
@@ -195,83 +289,8 @@ export async function previewPresentationFile(
     }
   }
 
-  // PPTX Preview: Load multiple slides
+  // PPTX Preview: render the slide source modules discovered before runtime startup.
   try {
-    // 1. Try to find preview PNGs first (fast cache)
-    const pptxDir = path.dirname(resolvedPath);
-    const searchDirs = [
-      path.join(pptxDir, "preview"),
-      path.join(pptxDir, "../preview"),
-      path.join(request.cwd, "preview"),
-    ];
-
-    for (const previewDir of searchDirs) {
-      try {
-        const files = await fs.readdir(previewDir);
-        const pngFiles = files
-          .filter((f) => /^slide[-_]?\d+\.png$/i.test(f))
-          .sort((a, b) => {
-            const numA = parseInt(a.match(/\d+/)?.[0] || "0", 10);
-            const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
-            return numA - numB;
-          });
-
-        if (pngFiles.length > 0) {
-          const slides: PresentationSlide[] = [];
-          for (let i = 0; i < pngFiles.length; i++) {
-            const filename = pngFiles[i];
-            if (!filename) continue;
-            const pngPath = path.join(previewDir, filename);
-            const pngBuffer = await fs.readFile(pngPath);
-            const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-            const slideName = path.basename(filename, ".png");
-            slides.push({
-              slideIndex: i,
-              slideId: slideName,
-              title: slideName,
-              pngBase64,
-            });
-          }
-          return { ok: true, slides };
-        }
-      } catch {}
-    }
-
-    // 2. Dynamic compilation fallback: find all slide mjs modules in the workspace
-    const slidesDir = path.join(request.cwd, "slides");
-    let slideModules: string[] = [];
-    try {
-      const files = await fs.readdir(slidesDir);
-      slideModules = files
-        .filter((f) => /^slide[-_]?\d+\.mjs$/i.test(f))
-        .map((f) => path.join(slidesDir, f));
-    } catch {
-      // Sibling or recursive check
-      try {
-        const files = await fs.readdir(request.cwd);
-        slideModules = files
-          .filter((f) => /^slide[-_]?\d+\.mjs$/i.test(f))
-          .map((f) => path.join(request.cwd, f));
-      } catch {}
-    }
-
-    if (slideModules.length === 0) {
-      return {
-        ok: false,
-        error: {
-          kind: "no_slides",
-          message: "No slide source modules or pre-rendered previews found for this deck.",
-        },
-      };
-    }
-
-    // Sort slide modules numerically
-    slideModules.sort((a, b) => {
-      const numA = parseInt(path.basename(a).match(/\d+/)?.[0] || "0", 10);
-      const numB = parseInt(path.basename(b).match(/\d+/)?.[0] || "0", 10);
-      return numA - numB;
-    });
-
     const slides: PresentationSlide[] = [];
     for (let i = 0; i < slideModules.length; i++) {
       const modulePath = slideModules[i];

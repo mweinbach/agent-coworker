@@ -196,6 +196,15 @@ type SessionDbOptions = {
   ) => void;
 };
 
+export type TaskDirectiveCommitHooks = {
+  create: (task: TaskRecord) => {
+    idempotencyKey: string;
+    receiptCreatedAt: string;
+    checkpoint: TaskCheckpoint;
+  };
+  onCommitted?: (task: TaskRecord, checkpoint: TaskCheckpoint | null) => void;
+};
+
 export class SessionDb {
   readonly dbPath: string;
 
@@ -289,8 +298,46 @@ export class SessionDb {
   }
 
   close(): void {
-    this.committedReadDb.close();
-    this.db.close();
+    let needsStatementFinalization = false;
+    const closeDatabase = (database: Database) => {
+      try {
+        database.close(true);
+      } catch (error) {
+        if (!String(error).toLowerCase().includes("database is locked")) throw error;
+        // Bun's cached SQLite statements can keep a WAL handle alive after
+        // sqlite3_close_v2 on Windows. Closing in deferred mode and forcing
+        // finalization releases those native handles before close() returns.
+        database.close();
+        needsStatementFinalization = true;
+      }
+    };
+    closeDatabase(this.committedReadDb);
+    closeDatabase(this.db);
+    if (needsStatementFinalization) Bun.gc(true);
+  }
+
+  private recordTaskDirectiveCommitInOpenTransaction(
+    task: TaskRecord,
+    hooks?: TaskDirectiveCommitHooks,
+  ): TaskCheckpoint | null {
+    if (!hooks) return null;
+    const commit = hooks.create(task);
+    return this.taskRepository.recordDirectiveReceiptWithCheckpoint({
+      taskId: task.id,
+      idempotencyKey: commit.idempotencyKey,
+      resultRevision: task.revision,
+      receiptCreatedAt: commit.receiptCreatedAt,
+      checkpoint: commit.checkpoint,
+      checkpointOptions: { rejectTerminal: false },
+    });
+  }
+
+  private notifyTaskDirectiveCommitted(
+    task: TaskRecord,
+    checkpoint: TaskCheckpoint | null,
+    hooks?: TaskDirectiveCommitHooks,
+  ): void {
+    hooks?.onCommitted?.(task, checkpoint);
   }
 
   private get readRepository(): SessionDbRepository {
@@ -750,11 +797,14 @@ export class SessionDb {
     reviewRequired: boolean;
     validateReadyTask?: (task: TaskRecord) => Promise<void>;
     validateAcceptedTask?: (task: TaskRecord) => Promise<void>;
+    directiveCommit?: TaskDirectiveCommitHooks;
   }): Promise<TaskRecord> {
     return await this.writeCoordinator.runExclusive(
       "propose_task_completion_with_pending_artifact_revision_settlements",
       async () => {
         this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        let committedCheckpoint: TaskCheckpoint | null = null;
+        let committedTask: TaskRecord | null = null;
         try {
           this.taskRepository.setStatusInOpenTransaction({
             taskId: input.taskId,
@@ -785,8 +835,12 @@ export class SessionDb {
           });
           task = this.getTask(input.taskId);
           if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          committedCheckpoint = this.recordTaskDirectiveCommitInOpenTransaction(
+            task,
+            input.directiveCommit,
+          );
+          committedTask = task;
           this.db.exec("COMMIT");
-          return task;
         } catch (error) {
           try {
             this.db.exec("ROLLBACK");
@@ -798,6 +852,13 @@ export class SessionDb {
           }
           throw error;
         }
+        if (!committedTask) throw new Error(`Unknown task: ${input.taskId}`);
+        this.notifyTaskDirectiveCommitted(
+          committedTask,
+          committedCheckpoint,
+          input.directiveCommit,
+        );
+        return committedTask;
       },
       { taskId: input.taskId },
     );
@@ -1030,31 +1091,25 @@ export class SessionDb {
     taskId: string;
     expectedRevision: number;
     updatedAt: string;
+    directiveCommit?: TaskDirectiveCommitHooks;
   }): Promise<TaskRecord> {
     return await this.writeCoordinator.runExclusive(
       "accept_all_task_artifact_versions",
-      async () => this.taskRepository.acceptAllArtifactVersions(input),
-      { taskId: input.taskId },
-    );
-  }
-
-  async acceptAllTaskArtifactVersionsValidated(input: {
-    taskId: string;
-    expectedRevision: number;
-    updatedAt: string;
-    validateAcceptedTask: (task: TaskRecord) => Promise<void>;
-  }): Promise<TaskRecord> {
-    return await this.writeCoordinator.runExclusive(
-      "accept_all_task_artifact_versions_validated",
       async () => {
+        if (!input.directiveCommit) return this.taskRepository.acceptAllArtifactVersions(input);
         this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        let committedTask: TaskRecord | null = null;
+        let committedCheckpoint: TaskCheckpoint | null = null;
         try {
           this.taskRepository.acceptAllArtifactVersionsInOpenTransaction(input);
           const task = this.getTask(input.taskId);
           if (!task) throw new Error(`Unknown task: ${input.taskId}`);
-          await input.validateAcceptedTask(task);
+          committedCheckpoint = this.recordTaskDirectiveCommitInOpenTransaction(
+            task,
+            input.directiveCommit,
+          );
+          committedTask = task;
           this.db.exec("COMMIT");
-          return task;
         } catch (error) {
           try {
             this.db.exec("ROLLBACK");
@@ -1066,6 +1121,60 @@ export class SessionDb {
           }
           throw error;
         }
+        if (!committedTask) throw new Error(`Unknown task: ${input.taskId}`);
+        this.notifyTaskDirectiveCommitted(
+          committedTask,
+          committedCheckpoint,
+          input.directiveCommit,
+        );
+        return committedTask;
+      },
+      { taskId: input.taskId },
+    );
+  }
+
+  async acceptAllTaskArtifactVersionsValidated(input: {
+    taskId: string;
+    expectedRevision: number;
+    updatedAt: string;
+    validateAcceptedTask: (task: TaskRecord) => Promise<void>;
+    directiveCommit?: TaskDirectiveCommitHooks;
+  }): Promise<TaskRecord> {
+    return await this.writeCoordinator.runExclusive(
+      "accept_all_task_artifact_versions_validated",
+      async () => {
+        this.db.exec("BEGIN IMMEDIATE TRANSACTION");
+        let committedTask: TaskRecord | null = null;
+        let committedCheckpoint: TaskCheckpoint | null = null;
+        try {
+          this.taskRepository.acceptAllArtifactVersionsInOpenTransaction(input);
+          const task = this.getTask(input.taskId);
+          if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+          await input.validateAcceptedTask(task);
+          committedCheckpoint = this.recordTaskDirectiveCommitInOpenTransaction(
+            task,
+            input.directiveCommit,
+          );
+          committedTask = task;
+          this.db.exec("COMMIT");
+        } catch (error) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch (rollbackError) {
+            throw new Error(
+              `Failed to roll back task artifact acceptance: ${String(rollbackError)}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        if (!committedTask) throw new Error(`Unknown task: ${input.taskId}`);
+        this.notifyTaskDirectiveCommitted(
+          committedTask,
+          committedCheckpoint,
+          input.directiveCommit,
+        );
+        return committedTask;
       },
       { taskId: input.taskId },
     );

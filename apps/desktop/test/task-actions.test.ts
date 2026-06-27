@@ -154,6 +154,22 @@ function setRendererPlatform(platform: NodeJS.Platform | null) {
   });
 }
 
+async function withWindowsCwd<T>(cwd: string, run: () => T | Promise<T>): Promise<T> {
+  const originalCwd = process.cwd;
+  Object.defineProperty(process, "cwd", {
+    configurable: true,
+    value: () => cwd,
+  });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(process, "cwd", {
+      configurable: true,
+      value: originalCwd,
+    });
+  }
+}
+
 function createHarness(options: { workspacePath?: string } = {}) {
   const reconnectThread = mock(async () => {});
   const workspacePath = options.workspacePath ?? "C:\\Users\\Max\\Projects\\Demo\\";
@@ -360,29 +376,57 @@ describe("desktop task actions", () => {
   });
 
   test("accepts drive-relative task notifications for the same Windows workspace", async () => {
-    setRendererPlatform("win32");
-    const harness = createHarness({ workspacePath: "C:\\repo" });
-    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
-    Object.assign(harness.state, actions);
-    await actions.refreshTasks("ws-1");
+    await withWindowsCwd("C:\\Users\\Max", async () => {
+      setRendererPlatform("win32");
+      const harness = createHarness({ workspacePath: "C:\\Users\\Max\\repo" });
+      const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+      Object.assign(harness.state, actions);
+      await actions.refreshTasks("ws-1");
 
-    notificationRouter?.({
-      kind: "notification",
-      method: "task/updated",
-      params: {
-        cwd: "C:repo",
-        task: taskRecord({
-          workspacePath: "C:repo",
-          title: "Drive-relative task",
-          revision: 3,
-        }),
-      },
+      notificationRouter?.({
+        kind: "notification",
+        method: "task/updated",
+        params: {
+          cwd: "C:repo",
+          task: taskRecord({
+            workspacePath: "C:repo",
+            title: "Drive-relative task",
+            revision: 3,
+          }),
+        },
+      });
+
+      expect(harness.state.tasksById["task-1"]?.title).toBe("Drive-relative task");
+      expect(harness.state.taskSummariesByWorkspaceId["ws-1"]?.[0]?.title).toBe(
+        "Drive-relative task",
+      );
     });
+  });
 
-    expect(harness.state.tasksById["task-1"]?.title).toBe("Drive-relative task");
-    expect(harness.state.taskSummariesByWorkspaceId["ws-1"]?.[0]?.title).toBe(
-      "Drive-relative task",
-    );
+  test("does not treat a Windows drive-relative notification as drive-rooted", async () => {
+    await withWindowsCwd("C:\\Users\\Max", async () => {
+      setRendererPlatform("win32");
+      const harness = createHarness({ workspacePath: "C:\\repo" });
+      const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+      Object.assign(harness.state, actions);
+      await actions.refreshTasks("ws-1");
+
+      notificationRouter?.({
+        kind: "notification",
+        method: "task/updated",
+        params: {
+          cwd: "C:repo",
+          task: taskRecord({
+            workspacePath: "C:repo",
+            title: "Wrong drive-relative task",
+            revision: 3,
+          }),
+        },
+      });
+
+      expect(harness.state.tasksById["task-1"]).toBeUndefined();
+      expect(harness.state.taskSummariesByWorkspaceId["ws-1"]).toEqual([]);
+    });
   });
 
   test("filters drive-relative task notifications for a different Windows drive", async () => {

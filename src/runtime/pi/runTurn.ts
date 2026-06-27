@@ -1,10 +1,9 @@
-import {
-  type Api as PiApi,
-  type Context as PiContext,
-  type Message as PiMessage,
-  type ProviderStreamOptions as PiProviderStreamOptions,
-  type Model as PiSdkModel,
-  stream as piStream,
+import type {
+  Api as PiApi,
+  Context as PiContext,
+  Message as PiMessage,
+  ProviderStreamOptions as PiProviderStreamOptions,
+  Model as PiSdkModel,
 } from "@earendil-works/pi-ai";
 import {
   markModelCallSpanError,
@@ -36,6 +35,7 @@ import {
   isAbortLikeError,
   splitStepOverrides,
 } from "./stepState";
+import { streamPiModel } from "./stream";
 import {
   buildInvalidToolCallFormatReminderMessage,
   executeToolCall,
@@ -49,7 +49,7 @@ function asPiMessage(message: Record<string, unknown>): PiMessage {
 }
 
 export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime {
-  const piStreamImpl = overrides.piStreamImpl ?? piStream;
+  const piStreamImpl = overrides.piStreamImpl ?? streamPiModel;
   return {
     name: "pi",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {

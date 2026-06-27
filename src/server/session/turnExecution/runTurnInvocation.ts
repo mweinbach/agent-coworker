@@ -3,6 +3,7 @@ import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
 import type { SessionContext } from "../SessionContext";
+import { getSessionTaskLock } from "../taskLocks";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
 
@@ -56,7 +57,32 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
   } = deps;
 
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
+    const abortSignal = context.state.abortController?.signal;
+    const isTurnAborted = () => abortSignal?.aborted === true;
+    const assertCanMutate = (toolName: string) => {
+      if (isTurnAborted()) {
+        throw new Error(`Tool ${toolName} blocked because the turn was cancelled.`);
+      }
+      const taskLock = getSessionTaskLock(
+        context.deps.sessionDb,
+        context.id,
+        context.deps.getLiveSessionParentIdImpl,
+      );
+      if (taskLock?.data.lockKind === "terminal_task_thread") {
+        throw new Error(
+          `Tool ${toolName} blocked because task ${taskLock.data.taskId} is ${taskLock.data.taskStatus}. Reopen or retry the task before mutating files or tools.`,
+        );
+      }
+      if (taskLock?.data.lockKind === "active_source_chat") {
+        throw new Error(
+          `Tool ${toolName} blocked because source chat is locked by active task ${taskLock.data.taskId}: ${taskLock.data.taskTitle}. Continue in the task thread or wait until the task reaches a terminal state.`,
+        );
+      }
+    };
     const harnessContext = context.deps.harnessContextStore.get(context.id);
+    const taskContext = context.deps.getTaskContextImpl?.(context.id) ?? null;
+    const applyTaskDirective = context.deps.applyTaskDirectiveImpl;
+    const createTask = context.deps.createTaskImpl;
     return await context.deps.runTurnImpl({
       config: context.state.config,
       system: context.state.system,
@@ -64,6 +90,22 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       allMessages: context.state.allMessages,
       providerState: providerStateOverride,
       harnessContext,
+      taskContext,
+      getTaskContext: taskContext
+        ? () => context.deps.getTaskContextImpl?.(context.id) ?? null
+        : undefined,
+      getTaskReviewMaterial:
+        taskContext && context.deps.getTaskReviewMaterialImpl
+          ? async () => (await context.deps.getTaskReviewMaterialImpl?.(context.id)) ?? null
+          : undefined,
+      applyTaskDirective:
+        taskContext && applyTaskDirective
+          ? async (directive) => await applyTaskDirective(context.id, directive)
+          : undefined,
+      createTask:
+        !taskContext && createTask
+          ? async (input) => await createTask(context.id, input)
+          : undefined,
       referencedPlugins: context.state.turnReferencedPlugins,
       prepareStep: async ({ messages }) => steerCoordinator.drainPendingSteers(messages),
       registerSteerHandler: (handler) => {
@@ -93,6 +135,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
                 includeHarnessContext,
                 forkContext,
               }) => {
+                assertCanMutate("spawnAgent");
                 const createAgentSession = context.deps.createAgentSessionImpl;
                 if (!createAgentSession) {
                   throw new Error("Child-agent spawning is unavailable.");
@@ -122,6 +165,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
               list: async () =>
                 await (context.deps.listAgentSessionsImpl?.(context.id) ?? Promise.resolve([])),
               sendInput: async ({ agentId, message, interrupt }) => {
+                assertCanMutate("sendAgentInput");
                 if (!context.deps.sendAgentInputImpl) {
                   throw new Error("Child-agent input is unavailable.");
                 }
@@ -155,6 +199,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
                 });
               },
               resume: async ({ agentId }) => {
+                assertCanMutate("resumeAgent");
                 if (!context.deps.resumeAgentImpl) {
                   throw new Error("Child-agent resume is unavailable.");
                 }
@@ -183,6 +228,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       enableMcp: context.state.config.enableMcp,
       sessionId: context.id,
       onAdvancedMemoryChanged,
+      assertCanMutate,
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,
       agentRole: context.state.sessionInfo.role,
@@ -199,7 +245,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           turnId,
         },
       },
-      abortSignal: context.state.abortController?.signal,
+      abortSignal,
       includeRawChunks,
       costTracker: context.state.costTracker ?? undefined,
       toolEnv: context.deps.toolEnv,
@@ -256,6 +302,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         });
       },
       onModelRawEvent: async (rawEvent) => {
+        if (isTurnAborted()) return;
         const index = tracker.rawStreamEventIndex++;
         const eventPayload = {
           type: "model_stream_raw" as const,
@@ -282,6 +329,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         });
       },
       onModelStreamPart: async (rawPart) => {
+        if (isTurnAborted()) return;
         if (isStartStepPart(rawPart)) {
           tracker.startedStepCount += 1;
           setAcceptingSteers(tracker.startedStepCount < context.state.maxSteps);

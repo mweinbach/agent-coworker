@@ -1,5 +1,6 @@
 import { Text, View } from "react-native";
 
+import { radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type TodoItem = {
@@ -28,7 +29,7 @@ function statusColor(status: TodoItem["status"], theme: ReturnType<typeof useApp
     case "completed":
       return theme.success;
     case "in_progress":
-      return theme.warning;
+      return theme.primary;
     case "pending":
       return theme.textTertiary;
   }
@@ -41,7 +42,7 @@ export function TodoCard({ todos }: TodoCardProps) {
     <View
       style={{
         gap: 8,
-        borderRadius: 22,
+        borderRadius: radius.xl,
         borderCurve: "continuous",
         borderWidth: 1,
         borderColor: theme.border,
@@ -52,10 +53,10 @@ export function TodoCard({ todos }: TodoCardProps) {
     >
       <Text
         style={{
-          color: theme.success,
+          color: theme.textTertiary,
           fontSize: 11,
-          fontWeight: "700",
-          letterSpacing: 0.6,
+          fontWeight: "600",
+          letterSpacing: 0.4,
           textTransform: "uppercase",
         }}
       >

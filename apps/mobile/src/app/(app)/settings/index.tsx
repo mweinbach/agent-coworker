@@ -184,7 +184,8 @@ export default function SettingsHubScreen() {
             <Switch
               value={showDebugMessages}
               onValueChange={setShowDebugMessages}
-              trackColor={{ true: theme.primary }}
+              trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+              ios_backgroundColor={theme.surfaceMuted}
             />
           </View>
         </SectionCard>

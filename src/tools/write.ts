@@ -6,6 +6,7 @@ import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
+import { cleanupCreatedDirectories, prepareMutationDirectory } from "./mutationGuard";
 
 export function createWriteTool(ctx: ToolContext) {
   return defineTool({
@@ -46,11 +47,17 @@ export function createWriteTool(ctx: ToolContext) {
         "write",
         ctx.agentTargetPaths,
       );
-      await fs.mkdir(path.dirname(abs), { recursive: true });
-      if (resolvedMode === "append") {
-        await fs.appendFile(abs, content, "utf-8");
-      } else {
-        await fs.writeFile(abs, content, "utf-8");
+      const createdDirs = await prepareMutationDirectory(ctx, "write", path.dirname(abs));
+      try {
+        await ctx.assertCanMutate?.("write");
+        if (resolvedMode === "append") {
+          await fs.appendFile(abs, content, "utf-8");
+        } else {
+          await fs.writeFile(abs, content, "utf-8");
+        }
+      } catch (error) {
+        await cleanupCreatedDirectories(createdDirs);
+        throw error;
       }
 
       const verb = resolvedMode === "append" ? "Appended" : "Wrote";

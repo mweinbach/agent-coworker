@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "../../../src/platform/sandbox/windows";
 
 import {
   resolvePackagedSidecarFilename,
@@ -115,6 +123,83 @@ describe("desktop server manager startup parsing", () => {
     const payload = await waitPromise;
     expect(payload.url).toBe("ws://127.0.0.1:1234/ws");
     expect(payload.port).toBe(1234);
+  });
+
+  test("waitForServerListening forwards validated runtime progress without treating it as log noise", async () => {
+    const child = createFakeChild();
+    const progress: Array<Record<string, unknown>> = [];
+    const stdoutLines: string[] = [];
+    const waitPromise = __internal.waitForServerListening(child as any, {
+      onCoworkRuntimeBootstrapProgress: (next: Record<string, unknown>) => progress.push(next),
+      onStdoutLine: (line: string) => stdoutLines.push(line),
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_startup_progress",
+        component: "cowork-runtime",
+        progress: {
+          phase: "downloading",
+          version: "2026-06-22",
+          transferredBytes: 25,
+          totalBytes: 100,
+          percent: 25,
+        },
+      })}\n`,
+    );
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "server_listening",
+        url: "ws://127.0.0.1:1234/ws",
+        port: 1234,
+        cwd: "/tmp/workspace",
+      })}\n`,
+    );
+
+    await expect(waitPromise).resolves.toMatchObject({ port: 1234 });
+    expect(progress).toEqual([
+      {
+        phase: "downloading",
+        version: "2026-06-22",
+        transferredBytes: 25,
+        totalBytes: 100,
+        percent: 25,
+      },
+    ]);
+    expect(stdoutLines).toEqual([]);
+  });
+
+  test("runtime download progress refreshes the startup inactivity timeout", async () => {
+    const child = createFakeChild();
+    const waitPromise = __internal.waitForServerListening(child as any, { timeoutMs: 50 });
+
+    setTimeout(() => {
+      child.stdout.write(
+        `${JSON.stringify({
+          type: "server_startup_progress",
+          component: "cowork-runtime",
+          progress: {
+            phase: "downloading",
+            version: "2026-06-22",
+            transferredBytes: 1,
+            totalBytes: 2,
+            percent: 50,
+          },
+        })}\n`,
+      );
+    }, 30);
+    setTimeout(() => {
+      child.stdout.write(
+        `${JSON.stringify({
+          type: "server_listening",
+          url: "ws://127.0.0.1:1234/ws",
+          port: 1234,
+          cwd: "/tmp/workspace",
+        })}\n`,
+      );
+    }, 65);
+
+    await expect(waitPromise).resolves.toMatchObject({ port: 1234 });
   });
 
   test("waitForServerListening preserves browser access tokens from startup JSON", async () => {
@@ -313,21 +398,29 @@ describe("desktop server manager startup mode", () => {
     }
   });
 
-  test("buildServerEnv mirrors process env without desktop-only skill bootstrap flags", () => {
+  test("buildServerEnv enables independent marketplace and runtime downloads by default", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
     expect(env.COWORK_WEB_DESKTOP_SERVICE).toBe("1");
+    expect(env.COWORK_DESKTOP_STARTUP_EVENTS).toBe("1");
     expect(env.COWORK_DESKTOP_USER_DATA_DIR).toBe(userDataDir);
     expect(env.COWORK_BROWSER_ACCESS_TOKEN).toEqual(expect.any(String));
     expect(env.COWORK_BROWSER_ACCESS_TOKEN?.length).toBeGreaterThan(20);
-    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(
-      process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+    expect(env.COWORK_BOOTSTRAP_DEFAULT_SKILLS).toBe(
+      process.env.COWORK_BOOTSTRAP_DEFAULT_SKILLS ?? "1",
     );
+    expect(env.COWORK_RUNTIME_ALLOW_NETWORK).toBe(process.env.COWORK_RUNTIME_ALLOW_NETWORK ?? "1");
     expect(env.COWORK_HARNESS_TERMINAL_LOGS).toBe(
       process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
     );
     expect(env.AGENT_OBSERVABILITY_ENABLED).toBe("false");
     expect(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS).toBe("false");
+  });
+
+  test("buildServerEnv does not inherit the child-server default-skills skip flag", async () => {
+    await withProcessEnv({ COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1" }, () => {
+      expect(__internal.buildServerEnv().COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBeUndefined();
+    });
   });
 
   test("buildServerEnv preserves explicit browser access tokens", () => {
@@ -656,6 +749,158 @@ describe("desktop server manager startup mode", () => {
     }
   });
 
+  test("buildServerEnv points Windows source servers at the bundled sandbox helper", async () => {
+    const previousHelper = process.env.COWORK_WIN_SANDBOX_HELPER;
+    const previousSidecarPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-windows-sandbox-helper-"));
+    const sidecar = path.join(dir, resolvePackagedSidecarFilename(process.platform, process.arch));
+    const helper = path.join(dir, WINDOWS_SANDBOX_HELPER_NAME);
+    const setup = path.join(dir, WINDOWS_SANDBOX_SETUP_NAME);
+    const commandRunner = path.join(dir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME);
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+
+    try {
+      delete process.env.COWORK_WIN_SANDBOX_HELPER;
+      process.env.COWORK_DESKTOP_SIDECAR_PATH = sidecar;
+      await fs.writeFile(sidecar, "");
+      await fs.writeFile(helper, "helper");
+      await fs.writeFile(setup, "setup");
+      await fs.writeFile(commandRunner, "runner");
+      await fs.writeFile(
+        path.join(dir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME),
+        JSON.stringify({
+          schemaVersion: 1,
+          files: {
+            [WINDOWS_SANDBOX_HELPER_NAME]: digest("helper"),
+            [WINDOWS_SANDBOX_SETUP_NAME]: digest("setup"),
+            [WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]: digest("runner"),
+          },
+        }),
+      );
+
+      expect(__internal.findBundledWindowsSandboxHelper()).toBe(helper);
+      if (process.platform === "win32") {
+        const env = __internal.buildServerEnv();
+        expect(env.COWORK_WIN_SANDBOX_HELPER).toBe(helper);
+        expect(env.COWORK_WIN_SANDBOX_HELPER_SHA256).toBe(digest("helper"));
+        expect(env.COWORK_WIN_SANDBOX_SETUP).toBe(setup);
+        expect(env.COWORK_WIN_SANDBOX_COMMAND_RUNNER).toBe(commandRunner);
+      }
+    } finally {
+      if (previousHelper === undefined) delete process.env.COWORK_WIN_SANDBOX_HELPER;
+      else process.env.COWORK_WIN_SANDBOX_HELPER = previousHelper;
+      if (previousSidecarPath === undefined) {
+        delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
+      } else {
+        process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarPath;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("records UAC cancellation and does not repeat setup prompts in one desktop session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-sandbox-readiness-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    const actions: string[] = [];
+    __internal.resetWindowsSandboxSetupAttemptForTests();
+    const bundle = {
+      helperPath: "C:\\trusted\\cowork-win-sandbox.exe",
+      helperSha256: "a".repeat(64),
+      setupPath: "C:\\trusted\\codex-windows-sandbox-setup.exe",
+      setupSha256: "b".repeat(64),
+      commandRunnerPath: "C:\\trusted\\codex-command-runner.exe",
+      commandRunnerSha256: "c".repeat(64),
+    };
+    const runHelper = async (_helperPath: string, args: string[]) => {
+      actions.push(args[0]!);
+      return args[0] === "probe"
+        ? {
+            code: 3,
+            stdout:
+              '{"ready":false,"filesystem":false,"network":false,"process":false,"integrity":true,"setup_required":true}',
+            stderr: "",
+          }
+        : { code: 2, stdout: "", stderr: "orchestrator_helper_launch_canceled" };
+    };
+
+    try {
+      await __internal.ensureWindowsSandboxReady(workspace, {
+        platform: "win32",
+        userDataDir: root,
+        resolveBundle: () => bundle,
+        runHelper,
+      });
+      const readiness = JSON.parse(
+        await fs.readFile(path.join(root, "windows-sandbox", "readiness.json"), "utf8"),
+      );
+      expect(actions).toEqual(["probe", "setup"]);
+      expect(readiness).toMatchObject({
+        state: "setup-failed",
+        bundleTrusted: true,
+        setupRequired: true,
+      });
+
+      actions.splice(0);
+      await __internal.ensureWindowsSandboxReady(workspace, {
+        platform: "win32",
+        userDataDir: root,
+        resolveBundle: () => bundle,
+        runHelper,
+      });
+      expect(actions).toEqual(["probe"]);
+    } finally {
+      __internal.resetWindowsSandboxSetupAttemptForTests();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("records a stale sandbox setup upgrade only after every native probe passes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-sandbox-readiness-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    __internal.resetWindowsSandboxSetupAttemptForTests();
+    try {
+      await __internal.ensureWindowsSandboxReady(workspace, {
+        platform: "win32",
+        userDataDir: root,
+        resolveBundle: () => ({
+          helperPath: "C:\\trusted\\cowork-win-sandbox.exe",
+          helperSha256: "a".repeat(64),
+          setupPath: "C:\\trusted\\codex-windows-sandbox-setup.exe",
+          setupSha256: "b".repeat(64),
+          commandRunnerPath: "C:\\trusted\\codex-command-runner.exe",
+          commandRunnerSha256: "c".repeat(64),
+        }),
+        runHelper: async (_helperPath: string, args: string[]) =>
+          args[0] === "probe"
+            ? {
+                code: 3,
+                stdout:
+                  '{"ready":false,"filesystem":false,"network":false,"process":false,"integrity":true,"setup_required":true}',
+                stderr: "",
+              }
+            : {
+                code: 0,
+                stdout:
+                  '{"ready":true,"filesystem":true,"network":true,"process":true,"integrity":true,"setup_required":false}',
+                stderr: "",
+              },
+      });
+      const readiness = JSON.parse(
+        await fs.readFile(path.join(root, "windows-sandbox", "readiness.json"), "utf8"),
+      );
+      expect(readiness).toMatchObject({
+        state: "ready",
+        setupRequired: false,
+        enforcement: { filesystem: true, network: true, process: true, integrity: true },
+      });
+    } finally {
+      __internal.resetWindowsSandboxSetupAttemptForTests();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("buildServerEnv enables OpenAI native connectors only from the desktop feature flag", () => {
     const previous = process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
     delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
@@ -690,8 +935,9 @@ describe("desktop server manager startup mode", () => {
     expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
   });
 
-  test("server startup timeout leaves room for first-run runtime bootstrap", () => {
-    expect(__internal.getServerStartupTimeoutMs({})).toBe(45_000);
+  test("packaged server startup leaves room for first-run runtime bootstrap", () => {
+    expect(__internal.getServerStartupTimeoutMs({}, false)).toBe(45_000);
+    expect(__internal.getServerStartupTimeoutMs({}, true)).toBe(300_000);
     expect(
       __internal.getServerStartupTimeoutMs({
         COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "1",

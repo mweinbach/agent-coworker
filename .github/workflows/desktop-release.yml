@@ -55,9 +55,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-15
             label: macOS
             artifact_name: desktop-release-macos
+            build_arch: arm64
           - os: windows-latest
             label: Windows x64
             artifact_name: desktop-release-windows-x64
@@ -166,6 +167,17 @@ jobs:
             exit 1
           fi
 
+      - name: Validate Windows signing inputs
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $missing = @()
+          if (-not $env:WIN_CSC_LINK) { $missing += "WIN_CSC_LINK" }
+          if (-not $env:WIN_CSC_KEY_PASSWORD) { $missing += "WIN_CSC_KEY_PASSWORD" }
+          if ($missing.Count -gt 0) {
+            throw "Unsigned Windows production releases are forbidden. Missing required secrets: $($missing -join ', ')"
+          }
+
       - name: Prepare Apple API key
         if: ${{ runner.os == 'macOS' }}
         shell: bash
@@ -183,6 +195,14 @@ jobs:
           chmod 600 "$key_path"
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
+      - name: Verify native macOS sandbox and runtime
+        if: ${{ runner.os == 'macOS' }}
+        run: >
+          bun test
+          test/platform/sandbox.enforcement.integration.test.ts
+          test/platform/sandbox.test.ts
+          test/coworkRuntime.test.ts
+
       - name: Build macOS desktop artifacts
         if: ${{ runner.os == 'macOS' }}
         env:
@@ -193,7 +213,9 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: bun run desktop:build -- --publish never
+          COWORK_BUILD_PLATFORM: darwin
+          COWORK_BUILD_ARCH: arm64
+        run: bun run desktop:build -- --publish never --arm64
 
       - name: Build Windows desktop artifacts
         if: ${{ runner.os == 'Windows' }}
@@ -202,16 +224,8 @@ jobs:
           COWORK_BUILD_PLATFORM: win32
           COWORK_BUILD_ARCH: ${{ matrix.build_arch }}
         run: |
-          if ($env:WIN_CSC_LINK -and $env:WIN_CSC_KEY_PASSWORD) {
-            $env:CSC_LINK = $env:WIN_CSC_LINK
-            $env:CSC_KEY_PASSWORD = $env:WIN_CSC_KEY_PASSWORD
-          } else {
-            Remove-Item Env:WIN_CSC_LINK -ErrorAction SilentlyContinue
-            Remove-Item Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
-            Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
-            Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
-          }
-
+          $env:CSC_LINK = $env:WIN_CSC_LINK
+          $env:CSC_KEY_PASSWORD = $env:WIN_CSC_KEY_PASSWORD
           bun run desktop:build -- --publish never --${{ matrix.build_arch }}
 
       - name: Build Windows ARM64 unpacked desktop directory
@@ -221,6 +235,8 @@ jobs:
           COWORK_BUILD_PLATFORM: win32
           COWORK_BUILD_ARCH: arm64
         run: |
+          $env:CSC_LINK = $env:WIN_CSC_LINK
+          $env:CSC_KEY_PASSWORD = $env:WIN_CSC_KEY_PASSWORD
           bun run --cwd apps/desktop build:dir -- --arm64
 
       - name: Verify Windows ARM64 unpacked sidecar payload
@@ -243,8 +259,7 @@ jobs:
 
           $requiredPaths = @(
             (Join-Path $sidecarRoot "bun.exe"),
-            (Join-Path $sidecarRoot "server\\index.js"),
-            (Join-Path $sidecarRoot "server\\assets\\managed-soffice-helper.mjs")
+            (Join-Path $sidecarRoot "server\\index.js")
           )
 
           foreach ($requiredPath in $requiredPaths) {
@@ -280,11 +295,12 @@ jobs:
             exit 1
           fi
 
+          codesign --verify --deep --strict --verbose=4 "$app_path"
           xcrun stapler validate "$app_path"
           spctl -a -vv --type exec "$app_path"
 
       - name: Verify Windows signing
-        if: ${{ runner.os == 'Windows' && env.WIN_CSC_LINK != '' && env.WIN_CSC_KEY_PASSWORD != '' }}
+        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
           $installer = Get-ChildItem "apps/desktop/release/*-win-${{ matrix.build_arch }}.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -293,11 +309,41 @@ jobs:
             throw "No packaged .exe installer found for arch ${{ matrix.build_arch }} under apps/desktop/release"
           }
 
-          $signature = Get-AuthenticodeSignature $installer.FullName
-          $signature | Format-List Status, StatusMessage, Path, SignerCertificate
+          $unpackedName = if ("${{ matrix.build_arch }}" -eq "arm64") { "win-arm64-unpacked" } else { "win-unpacked" }
+          $binariesRoot = Join-Path "apps/desktop/release" "$unpackedName/resources/binaries"
+          $trustedHelpers = @(
+            "cowork-win-sandbox.exe",
+            "codex-windows-sandbox-setup.exe",
+            "codex-command-runner.exe"
+          )
+          $signedFiles = @($installer.FullName)
+          foreach ($name in $trustedHelpers) {
+            $helperPath = Join-Path $binariesRoot $name
+            if (-not (Test-Path -LiteralPath $helperPath)) {
+              throw "Packaged Windows release is missing trusted helper: $helperPath"
+            }
+            $signedFiles += $helperPath
+          }
 
-          if ($signature.Status -ne "Valid") {
-            throw "Expected a valid Authenticode signature on $($installer.FullName)"
+          foreach ($filePath in $signedFiles) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $filePath
+            $signature | Format-List Status, StatusMessage, Path, SignerCertificate
+            if ($signature.Status -ne "Valid") {
+              throw "Expected a valid Authenticode signature on $filePath"
+            }
+          }
+
+          $manifestPath = Join-Path $binariesRoot "cowork-win-sandbox.sha256.json"
+          if (-not (Test-Path -LiteralPath $manifestPath)) {
+            throw "Packaged Windows release is missing the sandbox hash manifest: $manifestPath"
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          foreach ($name in $trustedHelpers) {
+            $expected = $manifest.files.PSObject.Properties[$name].Value
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $binariesRoot $name)).Hash.ToLowerInvariant()
+            if (-not $expected -or $actual -ne $expected) {
+              throw "Post-signing sandbox hash mismatch for $name"
+            }
           }
 
       - name: Stage Windows desktop release assets
@@ -329,11 +375,7 @@ jobs:
 
           Copy-Item "apps/desktop/release/latest.yml" -Destination (Join-Path $stagingDir "${{ matrix.updater_metadata_name }}")
 
-          if ($env:WIN_CSC_LINK -and $env:WIN_CSC_KEY_PASSWORD) {
-            Write-Host "Windows signing secrets configured; publishing signed installer plus updater metadata."
-          } else {
-            Write-Host "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata."
-          }
+          Write-Host "Publishing Authenticode-signed installer, trusted helpers, and updater metadata."
 
       - name: Upload macOS desktop artifacts
         if: ${{ runner.os == 'macOS' }}

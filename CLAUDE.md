@@ -185,7 +185,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **OAuth**: never share one constant between listener bind host and advertised redirect host. Bind both `::1` and `127.0.0.1` when using `localhost`. Pin the production redirect URI to the provider-accepted host and cover the advertised URL in tests.
 - **Bun-compiled sidecars**: never read `package.json` via runtime `__dirname` paths — compiled binaries run from `/$bunfs`. Use bundled imports or build-time injection.
 - **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
-- **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
+- **Tool output overflow**: spill-to-workspace truncation is the default; the `skill` tool and every `read` result are exempt so complete `SKILL.md` instructions, references, and script source stay inline.
 
 ### Desktop UI Patterns
 - Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.

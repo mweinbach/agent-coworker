@@ -7,12 +7,13 @@ import {
   listSupportedModels,
   type SupportedModel,
 } from "../models/registry";
+import {
+  isOpenAiReasoningEffort,
+  type OpenAiReasoningEffort,
+} from "../shared/openaiCompatibleOptions";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
-import {
-  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
-  isAntigravitySupportedPlatform,
-} from "./antigravitySupport";
+import { isAntigravitySupportedPlatform } from "./antigravitySupport";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import {
@@ -40,7 +41,11 @@ function storedProviderApiKey(
 export type ProviderCatalogModelEntry = Pick<
   SupportedModel,
   "id" | "displayName" | "knowledgeCutoff" | "supportsImageInput"
->;
+> & {
+  reasoning?: {
+    defaultEffort: OpenAiReasoningEffort;
+  };
+};
 
 export type ProviderCatalogEntry = {
   id: ProviderName;
@@ -79,31 +84,30 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   antigravity: "Antigravity",
 };
 
+function reasoningConfigForModel(
+  model: Pick<SupportedModel, "providerOptionsDefaults">,
+): ProviderCatalogModelEntry["reasoning"] {
+  const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
+  return isOpenAiReasoningEffort(defaultEffort) ? { defaultEffort } : undefined;
+}
+
+function staticCatalogModelEntry(model: SupportedModel): ProviderCatalogModelEntry {
+  const reasoning = reasoningConfigForModel(model);
+  return {
+    id: model.id,
+    displayName: model.displayName,
+    knowledgeCutoff: model.knowledgeCutoff,
+    supportsImageInput: model.supportsImageInput,
+    ...(reasoning ? { reasoning } : {}),
+  };
+}
+
 function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): ProviderCatalogEntry {
   return {
     id: provider,
     name: PROVIDER_LABELS[provider],
-    models: listSupportedModels(provider).map((model) => ({
-      id: model.id,
-      displayName: model.displayName,
-      knowledgeCutoff: model.knowledgeCutoff,
-      supportsImageInput: model.supportsImageInput,
-    })),
+    models: listSupportedModels(provider).map(staticCatalogModelEntry),
     defaultModel: defaultSupportedModel(provider).id,
-  };
-}
-
-function antigravityCatalogEntry(
-  platform: NodeJS.Platform = process.platform,
-): ProviderCatalogEntry {
-  if (isAntigravitySupportedPlatform(platform)) return staticCatalogEntry("antigravity");
-  return {
-    id: "antigravity",
-    name: PROVIDER_LABELS.antigravity,
-    models: [],
-    defaultModel: "",
-    state: "unreachable",
-    message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
   };
 }
 
@@ -136,11 +140,13 @@ async function codexCatalogEntry(opts: {
   for (const model of appServerModels) {
     const live = resolveLiveModel(model);
     if (modelsById.has(live.id)) continue;
+    const reasoning = live.supported ? reasoningConfigForModel(live.supported) : undefined;
     modelsById.set(live.id, {
       id: live.id,
       displayName: model.displayName || live.supported?.displayName || live.id,
       knowledgeCutoff: live.supported?.knowledgeCutoff ?? "Unknown",
       supportsImageInput: live.supported?.supportsImageInput ?? model.supportsImageInput ?? false,
+      ...(reasoning ? { reasoning } : {}),
     });
   }
   const models = [...modelsById.values()];
@@ -286,11 +292,12 @@ export async function listProviderCatalogEntries(
   const codex = opts.listCodexAppServerModelsImpl
     ? await codexCatalogEntry({ listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl })
     : staticCatalogEntry("codex-cli");
-  return PROVIDER_NAMES.map((provider) => {
+  return PROVIDER_NAMES.filter(
+    (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
+  ).map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
-    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
 }
@@ -337,11 +344,12 @@ export async function getProviderCatalog(
         codexHome,
       })
     : staticCatalogEntry("codex-cli");
-  const all = PROVIDER_NAMES.map((provider) => {
+  const all = PROVIDER_NAMES.filter(
+    (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
+  ).map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
-    if (provider === "antigravity") return antigravityCatalogEntry(opts.platform);
     return staticCatalogEntry(provider);
   });
   const defaults: Record<string, string> = {};

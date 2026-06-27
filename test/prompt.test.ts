@@ -1024,6 +1024,9 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("## Skill Loading Policy (Strict)");
     expect(prompt).toContain("call the `skill` tool first");
+    expect(prompt).toContain("do not invent a skill name or guess a `SKILL.md` path");
+    expect(prompt).toContain("Canonical skill names available in this run: none");
+    expect(prompt).not.toContain('load the "pdf" skill before starting');
     expect(prompt).toContain("Do not count search result pages");
     expect(prompt).toContain("`python-pptx`");
     expect(prompt).toContain("Placeholder, stock stand-ins, or unrelated fallback images");

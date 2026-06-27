@@ -157,6 +157,29 @@ describe("desktop providers page", () => {
     expect(html).toContain("Parallel Search");
   });
 
+  test("does not render Antigravity anywhere on Windows", () => {
+    const harness = setupJsdom();
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "win32";
+      useAppStore.setState({
+        providerCatalog: [
+          { id: "google", name: "Google", models: [] },
+          {
+            id: "antigravity",
+            name: "Antigravity",
+            models: [{ id: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro" }],
+          },
+        ] as any,
+      });
+
+      const html = renderToStaticMarkup(createElement(ProvidersPage));
+      expect(html).not.toContain("Antigravity");
+      expect(html).not.toContain("gemini-3.1-pro-preview");
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("renders a dedicated Exa Search settings card", () => {
     const html = renderToStaticMarkup(
       createElement(ProvidersPage, {

@@ -62,6 +62,11 @@ rl.on("line", (line) => {
   if (msg.method === "turn/steer") {
     send({ id: msg.id, result: { turnId: msg.params.expectedTurnId } });
     completeTurn([{ type: "userMessage", id: "steer_user_1", content: msg.params.input }]);
+    return;
+  }
+  if (msg.method === "turn/interrupt") {
+    send({ id: msg.id, result: {} });
+    send({ method: "turn/completed", params: { threadId: msg.params.threadId, turn: { id: msg.params.turnId || "turn_1", threadId: msg.params.threadId, status: "cancelled", items: [], error: null } } });
   }
 });
 `,
@@ -299,7 +304,7 @@ export function createMockClient(): CodexAppServerClient {
         reasoningEffort: "high",
       };
     } else if (method === "turn/start") {
-      const record = params as { threadId?: string };
+      const record = params as { threadId?: string; approvalPolicy?: string };
       const threadId = record.threadId ?? "thread_1";
       const turnId = `turn_${nextTurnId++}`;
       if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("early-token-usage-wrong")) {
@@ -405,7 +410,7 @@ export function createMockClient(): CodexAppServerClient {
       }
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
       if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("disconnect-mid-turn")) {
-        queueMicrotask(() => {
+        setTimeout(() => {
           sendNotification({
             method: "item/started",
             params: {
@@ -451,6 +456,30 @@ export function createMockClient(): CodexAppServerClient {
         });
       } else if (process.env.CODEX_APP_SERVER_DELAY_COMPLETION !== "1") {
         queueMicrotask(async () => {
+          if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("dynamic-lock-then-native")) {
+            await sendServerRequest("item/tool/call", {
+              threadId: "thread_1",
+              turnId,
+              callId: "call_create_task",
+              tool: "createTask",
+              arguments: {},
+            });
+            const nativeWritePath = process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH;
+            if (record.approvalPolicy === "never") {
+              if (nativeWritePath) {
+                await fs.writeFile(nativeWritePath, "native write after dynamic lock", "utf8");
+              }
+            } else {
+              const approval = (await sendServerRequest("item/commandExecution/requestApproval", {
+                threadId: "thread_1",
+                turnId,
+                command: "write native-output.txt",
+              })) as { decision?: string };
+              if (approval.decision === "accept" && nativeWritePath) {
+                await fs.writeFile(nativeWritePath, "native write after approval", "utf8");
+              }
+            }
+          }
           if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("dynamic-tool-call")) {
             await sendServerRequest("item/tool/call", {
               threadId: "thread_1",
@@ -624,6 +653,32 @@ export function createMockClient(): CodexAppServerClient {
     },
     interruptTurn: async (params) => {
       mockInterrupts.push(params);
+      const turnId = params.turnId ?? "turn_1";
+      queueMicrotask(() => {
+        if (process.env.COWORK_CODEX_APP_SERVER_ARGS?.includes("late-todo-after-abort")) {
+          sendNotification({
+            method: "todoList/updated",
+            params: {
+              threadId: params.threadId,
+              turnId,
+              todos: [{ content: "late todo after abort", status: "in_progress" }],
+            },
+          });
+        }
+        sendNotification({
+          method: "turn/completed",
+          params: {
+            threadId: params.threadId,
+            turn: {
+              id: turnId,
+              threadId: params.threadId,
+              status: "cancelled",
+              items: [],
+              error: null,
+            },
+          },
+        });
+      });
     },
     onNotification: (listener) => {
       notificationListeners.add(listener);

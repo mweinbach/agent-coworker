@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import {
+  type CodexAppServerClient,
+  type CodexAppServerJsonRpcNotification,
+  type CodexAppServerJsonRpcRawMessage,
+  __internal as codexAppServerClientInternal,
+} from "../../../src/providers/codexAppServerClient";
 import { createRuntime } from "../../../src/runtime";
 import { buildCodexTurnInput } from "../../../src/runtime/codexAppServer/turnInput";
 import type { ModelMessage } from "../../../src/types";
@@ -22,6 +28,122 @@ type TestSteerHandler = (input: {
   expectedTurnId: string;
   content?: ModelMessage["content"];
 }) => Promise<void>;
+
+function createControlledCodexTurnClient(): {
+  client: CodexAppServerClient;
+  turnStartEntered: Promise<{ threadId: string; params: Record<string, unknown> }>;
+  resolveTurnStart: (value?: unknown) => void;
+  rejectTurnStart: (error: Error) => void;
+  emitNotification: (notification: CodexAppServerJsonRpcNotification) => void;
+  interruptCalls: Array<{ threadId: string; turnId?: string }>;
+} {
+  const notificationListeners = new Set<
+    (notification: CodexAppServerJsonRpcNotification) => void
+  >();
+  const rawListeners = new Set<(message: CodexAppServerJsonRpcRawMessage) => void>();
+  const closeListeners = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>();
+  const turnStartEntered = Promise.withResolvers<{
+    threadId: string;
+    params: Record<string, unknown>;
+  }>();
+  const turnStartResponse = Promise.withResolvers<unknown>();
+  const interruptCalls: Array<{ threadId: string; turnId?: string }> = [];
+  let nextRequestId = 1;
+
+  const emitRaw = (message: CodexAppServerJsonRpcRawMessage) => {
+    for (const listener of rawListeners) listener(message);
+  };
+  const emitNotification = (notification: CodexAppServerJsonRpcNotification) => {
+    emitRaw({
+      direction: "server_notification",
+      message: notification as Record<string, unknown>,
+    });
+    for (const listener of notificationListeners) listener(notification);
+  };
+  const emitResponse = (id: number, result: unknown) => {
+    emitRaw({ direction: "server_response", message: { id, result } });
+  };
+
+  const client: CodexAppServerClient = {
+    command: { command: "mock-codex-app-server", args: [], source: "override" },
+    isClosed: () => false,
+    getLastCloseInfo: () => null,
+    request: async (method: string, params?: unknown) => {
+      const id = nextRequestId++;
+      emitRaw({
+        direction: "client_request",
+        message: { id, method, ...(params !== undefined ? { params } : {}) },
+      });
+      let result: unknown;
+      if (method === "initialize") {
+        result = { userAgent: "mock" };
+      } else if (method === "model/list") {
+        result = {
+          data: [{ id: "gpt-5.4", model: "gpt-5.4", displayName: "GPT-5.4", isDefault: true }],
+          nextCursor: null,
+        };
+      } else if (method === "thread/start") {
+        const record = params as { model?: string; approvalPolicy?: string; sandbox?: string };
+        result = {
+          thread: { id: "thread_1", modelProvider: "openai", turns: [] },
+          model: record.model ?? "gpt-5.4",
+          modelProvider: "openai",
+          cwd: process.cwd(),
+          approvalPolicy: record.approvalPolicy,
+          sandbox: record.sandbox,
+          reasoningEffort: "high",
+        };
+      } else if (method === "turn/start") {
+        const record = (params as Record<string, unknown> | undefined) ?? {};
+        const threadId = typeof record.threadId === "string" ? record.threadId : "thread_1";
+        turnStartEntered.resolve({ threadId, params: record });
+        return await turnStartResponse.promise;
+      } else if (method === "turn/steer") {
+        const record = (params as Record<string, unknown> | undefined) ?? {};
+        result = { turnId: record.expectedTurnId };
+      } else {
+        result = {};
+      }
+      emitResponse(id, result);
+      return result;
+    },
+    notify: (method, params) => {
+      emitRaw({
+        direction: "client_notification",
+        message: { method, ...(params !== undefined ? { params } : {}) },
+      });
+    },
+    interruptTurn: async (params) => {
+      interruptCalls.push(params);
+    },
+    onNotification: (listener) => {
+      notificationListeners.add(listener);
+      return () => notificationListeners.delete(listener);
+    },
+    onServerRequest: () => () => {},
+    onJsonRpcMessage: (listener) => {
+      rawListeners.add(listener);
+      return () => rawListeners.delete(listener);
+    },
+    onClose: (listener) => {
+      closeListeners.add(listener);
+      return () => closeListeners.delete(listener);
+    },
+    close: async () => {
+      for (const listener of closeListeners) listener(null, "SIGTERM");
+    },
+  };
+
+  return {
+    client,
+    turnStartEntered: turnStartEntered.promise,
+    resolveTurnStart: (value = { turn: { id: "turn_ack", status: "inProgress", items: [] } }) =>
+      turnStartResponse.resolve(value),
+    rejectTurnStart: (error: Error) => turnStartResponse.reject(error),
+    emitNotification,
+    interruptCalls,
+  };
+}
 
 describe("codex app-server turn lifecycle", () => {
   test.serial(
@@ -71,6 +193,124 @@ describe("codex app-server turn lifecycle", () => {
           threadId: "thread_1",
         }),
       );
+    },
+  );
+
+  test.serial(
+    "drops unknown-turn token usage when app-server disconnects before start ack",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-unknown-usage-close-"));
+      const controlled = createControlledCodexTurnClient();
+      let turnPromise: Promise<unknown> | undefined;
+
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        turnPromise = runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+        });
+
+        await controlled.turnStartEntered;
+        controlled.emitNotification({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread_1",
+            turnId: "old_turn",
+            tokenUsage: {
+              total: {
+                inputTokens: 7,
+                outputTokens: 11,
+                totalTokens: 18,
+              },
+            },
+          },
+        });
+        await controlled.client.close();
+
+        let capturedError: unknown;
+        try {
+          await turnPromise;
+        } catch (error) {
+          capturedError = error;
+        }
+        expect(capturedError).toBeInstanceOf(Error);
+        expect((capturedError as Error & { usage?: unknown }).message).toContain(
+          "Codex client disconnected during execution",
+        );
+        expect((capturedError as Error & { usage?: unknown }).usage).toBeUndefined();
+      } finally {
+        controlled.rejectTurnStart(new Error("late start rejection after disconnect"));
+        await turnPromise?.catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.serial(
+    "drops same-thread stale token usage after a stale item before start ack",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-stale-item-usage-"));
+      const controlled = createControlledCodexTurnClient();
+      let turnPromise: Promise<unknown> | undefined;
+
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        turnPromise = runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+        });
+
+        await controlled.turnStartEntered;
+        controlled.emitNotification({
+          method: "item/started",
+          params: {
+            threadId: "thread_1",
+            turnId: "old_turn",
+            item: { type: "agentMessage", id: "old_item", text: "stale" },
+          },
+        });
+        controlled.emitNotification({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread_1",
+            turnId: "old_turn",
+            tokenUsage: {
+              total: {
+                inputTokens: 7,
+                outputTokens: 11,
+                totalTokens: 18,
+              },
+            },
+          },
+        });
+        await controlled.client.close();
+
+        let capturedError: unknown;
+        try {
+          await turnPromise;
+        } catch (error) {
+          capturedError = error;
+        }
+        expect(capturedError).toBeInstanceOf(Error);
+        expect((capturedError as Error & { usage?: unknown }).message).toContain(
+          "Codex client disconnected during execution",
+        );
+        expect((capturedError as Error & { usage?: unknown }).usage).toBeUndefined();
+      } finally {
+        controlled.rejectTurnStart(new Error("late start rejection after disconnect"));
+        await turnPromise?.catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     },
   );
 
@@ -222,6 +462,9 @@ describe("codex app-server turn lifecycle", () => {
     const requests = await readCapturedRequests(capturePath);
     const resumeParams = requests.find((entry) => entry.method === "thread/resume")?.params;
     expect(resumeParams).not.toHaveProperty("baseInstructions");
+    expect(resumeParams?.developerInstructions).toContain(
+      "Never call the native `request_user_input` tool",
+    );
     expect(resumeParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -275,8 +518,10 @@ describe("codex app-server turn lifecycle", () => {
     expect(requests.map((entry) => entry.method)).toEqual(
       expect.arrayContaining(["thread/resume", "thread/start", "turn/start"]),
     );
-    expect(requests.find((entry) => entry.method === "thread/start")?.params).toHaveProperty(
-      "baseInstructions",
+    const freshThreadParams = requests.find((entry) => entry.method === "thread/start")?.params;
+    expect(freshThreadParams).not.toHaveProperty("baseInstructions");
+    expect(freshThreadParams?.developerInstructions).toContain(
+      "Never call the native `request_user_input` tool",
     );
     expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
       { type: "text", text: "User: Earlier question", text_elements: [] },
@@ -467,6 +712,286 @@ describe("codex app-server turn lifecycle", () => {
     ).rejects.toThrow("Cancelled by user");
     expect(mockInterrupts).toEqual([{ threadId: "thread_1", turnId: "turn_1" }]);
   });
+
+  test.serial("does not settle a pending turn/start from abort alone", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-abort-alone-"));
+    const controller = new AbortController();
+    const controlled = createControlledCodexTurnClient();
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Wait" }],
+        tools: {},
+        maxSteps: 1,
+        abortSignal: controller.signal,
+      });
+
+      await controlled.turnStartEntered;
+      controller.abort();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(controlled.interruptCalls).toEqual([{ threadId: "thread_1" }]);
+
+      const abortOnlyOutcome = await Promise.race([
+        turnPromise.then(
+          () => "resolved",
+          (error) => (error instanceof Error ? error.message : String(error)),
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 50)),
+      ]);
+      expect(abortOnlyOutcome).toBe("pending");
+
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_cancelled",
+            threadId: "thread_1",
+            status: "cancelled",
+            items: [],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).rejects.toThrow("Cancelled by user");
+    } finally {
+      controlled.rejectTurnStart(new Error("late start rejection after abort"));
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  for (const mode of [
+    { label: "ordinary", params: {} },
+    { label: "yolo danger-full-access", params: { yolo: true, shellPolicy: "full" as const } },
+  ]) {
+    test.serial(
+      `settles ${mode.label} cancellation from a matching provider terminal while turn/start is pending`,
+      async () => {
+        const dir = await fs.mkdtemp(
+          path.join(os.tmpdir(), `cowork-codex-start-pending-${mode.label.replaceAll(" ", "-")}-`),
+        );
+        const controller = new AbortController();
+        const controlled = createControlledCodexTurnClient();
+        let turnPromise: Promise<unknown> | undefined;
+
+        codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+        try {
+          const runtime = createRuntime(makeConfig(dir));
+          turnPromise = runtime.runTurn({
+            config: makeConfig(dir),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Wait" }],
+            tools: {},
+            maxSteps: 1,
+            abortSignal: controller.signal,
+            ...mode.params,
+          });
+
+          await controlled.turnStartEntered;
+          controller.abort();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          expect(controlled.interruptCalls).toEqual([{ threadId: "thread_1" }]);
+
+          controlled.emitNotification({
+            method: "turn/completed",
+            params: {
+              threadId: "thread_1",
+              turn: {
+                id: "turn_cancelled",
+                threadId: "thread_1",
+                status: "cancelled",
+                items: [],
+                error: null,
+              },
+            },
+          });
+
+          const outcome = await Promise.race([
+            turnPromise.then(
+              () => "resolved",
+              (error) => (error instanceof Error ? error.message : String(error)),
+            ),
+            new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 50)),
+          ]);
+
+          expect(outcome).toContain("Cancelled by user");
+        } finally {
+          controlled.rejectTurnStart(new Error("late start rejection after terminal settlement"));
+          await turnPromise?.catch(() => {});
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
+
+  test.serial(
+    "ignores wrong-thread and threadless terminal notifications before turn/start ack",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-preack-thread-match-"));
+      const controlled = createControlledCodexTurnClient();
+      let turnPromise: Promise<unknown> | undefined;
+
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        turnPromise = runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+        });
+
+        await controlled.turnStartEntered;
+        controlled.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId: "thread_other",
+            turn: {
+              id: "turn_wrong",
+              threadId: "thread_other",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "wrong", text: "wrong thread" }],
+              error: null,
+            },
+          },
+        });
+        controlled.emitNotification({
+          method: "turn/completed",
+          params: {
+            turn: {
+              id: "turn_threadless",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "threadless", text: "threadless" }],
+              error: null,
+            },
+          },
+        });
+
+        const ignoredOutcome = await Promise.race([
+          turnPromise.then(
+            () => "resolved",
+            (error) => (error instanceof Error ? error.message : String(error)),
+          ),
+          new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 50)),
+        ]);
+        expect(ignoredOutcome).toBe("pending");
+
+        controlled.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId: "thread_1",
+            turn: {
+              id: "turn_matched",
+              threadId: "thread_1",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "matched", text: "matched before ack" }],
+              error: null,
+            },
+          },
+        });
+
+        await expect(turnPromise).resolves.toMatchObject({ text: "matched before ack" });
+      } finally {
+        controlled.rejectTurnStart(new Error("late ignored start rejection"));
+        await turnPromise?.catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.serial(
+    "accepts a matching provider completion before start ack and observes a late start rejection",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-preack-complete-"));
+      const controlled = createControlledCodexTurnClient();
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (error: unknown) => {
+        unhandledRejections.push(error);
+      };
+      let turnPromise: Promise<unknown> | undefined;
+
+      process.on("unhandledRejection", onUnhandledRejection);
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        turnPromise = runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+        });
+
+        await controlled.turnStartEntered;
+        controlled.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId: "thread_1",
+            turn: {
+              id: "turn_pre_ack",
+              threadId: "thread_1",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "pre_ack", text: "pre ack complete" }],
+              error: null,
+            },
+          },
+        });
+
+        await expect(turnPromise).resolves.toMatchObject({ text: "pre ack complete" });
+        controlled.rejectTurnStart(new Error("late turn/start failure"));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandledRejection);
+        controlled.resolveTurnStart();
+        await turnPromise?.catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.serial(
+    "drops stateful todo notifications after abort while waiting for completion",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-late-todo-"));
+      process.env.CODEX_APP_SERVER_DELAY_COMPLETION = "1";
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = "late-todo-after-abort";
+      const controller = new AbortController();
+      const todos: unknown[] = [];
+      const runtime = createRuntime(makeConfig(dir));
+
+      await expect(
+        runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Wait" }],
+          tools: {},
+          maxSteps: 1,
+          abortSignal: controller.signal,
+          updateTodos: (nextTodos) => todos.push(nextTodos),
+          onModelRawEvent: (event) => {
+            const message = event.event.message as { method?: string } | undefined;
+            if (message?.method === "turn/start") setTimeout(() => controller.abort(), 0);
+          },
+        }),
+      ).rejects.toThrow("Cancelled by user");
+
+      expect(mockInterrupts).toEqual([{ threadId: "thread_1", turnId: "turn_1" }]);
+      expect(todos).toEqual([]);
+    },
+  );
 
   test.serial("projects requestUserInput, todoList, and fileChange events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-events-"));

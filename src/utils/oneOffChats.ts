@@ -3,12 +3,37 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { canonicalizePathForBoundaryCheckSync, isPathInside } from "./paths";
+
 const PRIVATE_DIR_MODE = 0o700;
 
 const ONE_OFF_CHAT_WORKSPACE_KIND = "oneOffChat";
 const PROJECT_WORKSPACE_KIND = "project";
 
 export type WorkspaceKind = typeof PROJECT_WORKSPACE_KIND | typeof ONE_OFF_CHAT_WORKSPACE_KIND;
+export type WorkspaceKindSource = "explicit" | "path" | "default";
+
+const WORKSPACE_KIND_SOURCE: unique symbol = Symbol("workspaceKindSource");
+
+type WorkspaceKindSourceCarrier = {
+  [WORKSPACE_KIND_SOURCE]?: WorkspaceKindSource;
+};
+
+export function getWorkspaceKindSource(record: unknown): WorkspaceKindSource | null {
+  const source = (record as WorkspaceKindSourceCarrier | null)?.[WORKSPACE_KIND_SOURCE];
+  return source === "explicit" || source === "path" || source === "default" ? source : null;
+}
+
+export function withWorkspaceKindSource<T extends object>(
+  record: T,
+  source: WorkspaceKindSource,
+): T {
+  Object.defineProperty(record, WORKSPACE_KIND_SOURCE, {
+    value: source,
+    enumerable: false,
+  });
+  return record;
+}
 
 export type OneOffChatWorkspace = {
   name: string;
@@ -25,15 +50,16 @@ export function getOneOffChatsRoot(homedir = os.homedir()): string {
   return path.join(homedir, ".cowork", "chats");
 }
 
-function pathContains(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 export function isPathInsideOneOffChatsRoot(targetPath: string, homedir = os.homedir()): boolean {
-  const root = path.resolve(getOneOffChatsRoot(homedir));
-  const target = path.resolve(targetPath);
-  return pathContains(root, target);
+  const root = getOneOffChatsRoot(homedir);
+  try {
+    return isPathInside(
+      canonicalizePathForBoundaryCheckSync(root),
+      canonicalizePathForBoundaryCheckSync(targetPath),
+    );
+  } catch {
+    return isPathInside(root, targetPath);
+  }
 }
 
 function slugifyTitle(value: string | undefined): string {

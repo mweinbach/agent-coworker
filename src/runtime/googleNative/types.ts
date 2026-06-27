@@ -15,7 +15,7 @@ type GoogleInteractionsStreamOptions = {
   maxOutputTokens?: number;
   toolChoice?: GoogleInteractionsToolChoice;
   nativeWebSearch?: boolean;
-  responseFormat?: unknown;
+  responseFormat?: Interactions.CreateModelInteractionParamsStreaming["response_format"];
   responseMimeType?: string;
 };
 

@@ -29,6 +29,7 @@ async function resolveThreadListWorkspacePath(
     const { workspaces } = await listWorkspaceSummaries({
       workingDirectory: context.getConfig().workingDirectory,
       desktopService: context.desktopService,
+      homedir: context.homedir,
     });
     const workspace = workspaces.find((entry) => entry.path === requestedCwd);
     if (!workspace) {

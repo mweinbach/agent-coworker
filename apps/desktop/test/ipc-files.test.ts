@@ -551,6 +551,74 @@ describe("files IPC", () => {
     await fs.rm(sourceDir, { recursive: true, force: true });
   });
 
+  test("copyFileToWorkspaceUploads rejects source files changed after authorization", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-upload-mutate-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-upload-mutate-source-"));
+    const sourcePath = path.join(sourceDir, "notes.txt");
+    await fs.writeFile(sourcePath, "selected payload", "utf-8");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const authorizeHandler = handlers.get(DESKTOP_IPC_CHANNELS.authorizeUploadSource);
+    const copyHandler = handlers.get(DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads);
+    expect(authorizeHandler).toBeDefined();
+    expect(copyHandler).toBeDefined();
+
+    const sender = { sender: { id: 1 }, processId: 10, frameId: 20 };
+    const copyInput = {
+      workspacePath: tempWorkspace,
+      sourcePath,
+      filename: "notes.txt",
+    };
+
+    await authorizeHandler?.(sender, { sourcePath });
+    await fs.appendFile(sourcePath, " tampered", "utf-8");
+
+    await expect(copyHandler?.(sender, copyInput)).rejects.toThrow(/changed after authorization/i);
+    await expect(fs.stat(path.join(tempWorkspace, "User Uploads", "notes.txt"))).rejects.toThrow();
+
+    await authorizeHandler?.(sender, { sourcePath });
+    const result = await copyHandler?.(sender, copyInput);
+    const copiedPath = path.join(tempWorkspace, "User Uploads", "notes.txt");
+    expect(result).toEqual({ filename: "notes.txt", path: copiedPath });
+    expect(await fs.readFile(copiedPath, "utf-8")).toBe("selected payload tampered");
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(sourceDir, { recursive: true, force: true });
+  });
+
   test("copyFileToWorkspaceUploads keeps authorization after destination validation fails", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
     const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-upload-retry-ws-"));

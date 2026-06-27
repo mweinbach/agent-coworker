@@ -78,9 +78,9 @@ import {
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
   type CatalogVisibilityOptions,
+  isUiDisabledProvider,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
-  UI_DISABLED_PROVIDERS,
 } from "../../../lib/modelChoices";
 import { displayProviderName } from "../../../lib/providerDisplayNames";
 import {
@@ -186,14 +186,14 @@ function childTargetGroupsFromCatalog(
     if (colonIndex <= 0) continue;
     const provider = ref.slice(0, colonIndex) as ProviderName;
     const model = ref.slice(colonIndex + 1).trim();
-    if (!model || UI_DISABLED_PROVIDERS.has(provider)) continue;
+    if (!model || isUiDisabledProvider(provider)) continue;
     const set = preserveByProvider.get(provider) ?? new Set<string>();
     set.add(model);
     preserveByProvider.set(provider, set);
   }
 
   return sortProviderEntriesForSettings(
-    PROVIDER_NAMES.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+    PROVIDER_NAMES.filter((provider) => !isUiDisabledProvider(provider))
       .map((provider) => {
         const models = new Set(choices[provider] ?? []);
         for (const model of preserveByProvider.get(provider) ?? []) {
@@ -755,10 +755,42 @@ export function WorkspaceUserProfileCard({
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const savedProfileKey = useMemo(
+    () =>
+      `${workspace.id}\u0000${workspace.userName ?? ""}\u0000${
+        normalizeWorkspaceUserProfile(workspace.userProfile).instructions
+      }\u0000${normalizeWorkspaceUserProfile(workspace.userProfile).work}\u0000${
+        normalizeWorkspaceUserProfile(workspace.userProfile).details
+      }`,
+    [workspace],
+  );
+  const savedProfileDraftRef = useRef(buildUserProfileDraft(workspace));
+  const savedProfileKeyRef = useRef(savedProfileKey);
+  if (savedProfileKeyRef.current !== savedProfileKey) {
+    savedProfileKeyRef.current = savedProfileKey;
+    savedProfileDraftRef.current = buildUserProfileDraft(workspace);
+  }
+
   useEffect(() => {
-    setDraft(buildUserProfileDraft(workspace));
+    // Only re-seed the draft when the saved profile content (or workspace id)
+    // actually changes. Unrelated workspace object-identity churn (provider
+    // status refreshes, remote defaults updates) must not wipe in-progress
+    // typing. If the user has unsaved edits, those always win.
+    const profileKey = savedProfileKey;
+    const next = savedProfileDraftRef.current;
+    const current = draftRef.current;
+    const isDirty =
+      current.userName !== next.userName ||
+      current.instructions !== next.instructions ||
+      current.work !== next.work ||
+      current.details !== next.details;
+    if (isDirty) return;
+    savedProfileKeyRef.current = profileKey;
+    setDraft(next);
     setSaveSuccess(false);
-  }, [workspace]);
+  }, [savedProfileKey]);
 
   const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
   const isDirty =
@@ -871,7 +903,11 @@ export function WorkspaceUserProfileCard({
           <Button onClick={handleSave} disabled={!isDirty || saving}>
             {saving ? "Saving..." : "Save changes"}
           </Button>
-          {saveSuccess && <span className="text-sm text-success">Saved successfully</span>}
+          {saveSuccess && (
+            <span className="text-sm text-success" role="status" aria-live="polite">
+              Saved successfully
+            </span>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -1029,14 +1065,14 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     const hiddenProviders = new Set(modelSelectorVisibility.hiddenProviders ?? []);
     const catalogProviders = (
       providerCatalog.length === 0 ? PROVIDER_NAMES : providerCatalog.map((entry) => entry.id)
-    ).filter((entry) => !UI_DISABLED_PROVIDERS.has(entry) && !hiddenProviders.has(entry));
+    ).filter((entry) => !isUiDisabledProvider(entry) && !hiddenProviders.has(entry));
     const visibleProviders = sortProviderNamesForSettings(
       [...new Set(catalogProviders)].filter((entry) => {
         const status = providerStatusByName[entry];
         return status ? hasConfiguredProviderStatus(status) : providerConnected.includes(entry);
       }),
     );
-    if (!UI_DISABLED_PROVIDERS.has(provider) && !visibleProviders.includes(provider)) {
+    if (!isUiDisabledProvider(provider) && !visibleProviders.includes(provider)) {
       visibleProviders.push(provider);
     }
     return visibleProviders;
@@ -1358,39 +1394,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <CardContent className="space-y-4 border-t border-border/70 pt-4">
-                      <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                        <div>
-                          <div className="text-sm font-medium">
-                            Configure settings per folder or chat
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            When enabled, each folder or one-off chat can keep different provider,
-                            model, and behavior settings.
-                          </div>
-                        </div>
-                        <Switch
-                          checked={perWorkspaceSettings}
-                          aria-label="Configure settings per folder or chat"
-                          onCheckedChange={async (checked) => {
-                            if (!checked && workspaces.length > 1) {
-                              const confirmed = await confirmAction({
-                                title: "Share settings everywhere",
-                                message:
-                                  "All folders and chats will be synced to the current settings.",
-                                detail:
-                                  "This will overwrite provider, model, and behavior settings on other folders and chats.",
-                                confirmLabel: "Share settings",
-                                cancelLabel: "Cancel",
-                                kind: "warning",
-                                defaultAction: "cancel",
-                              });
-                              if (!confirmed) return;
-                            }
-                            setPerWorkspaceSettings(checked);
-                          }}
-                        />
-                      </div>
-
                       {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                         <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>
@@ -1497,7 +1500,7 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                           onValueChange={(value) => {
                             if (!ws) return;
                             const nextProvider = value as ProviderName;
-                            if (UI_DISABLED_PROVIDERS.has(nextProvider)) return;
+                            if (isUiDisabledProvider(nextProvider)) return;
                             const nextDefault =
                               providerDefaultModelByProvider[nextProvider]?.trim() ||
                               modelChoices[nextProvider]?.[0] ||

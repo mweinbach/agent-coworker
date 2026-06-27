@@ -30,6 +30,7 @@ import { Textarea } from "../components/ui/textarea";
 import { cleanMarkdown, markdownToHtml, nodeToMarkdown } from "../lib/canvasMarkdown";
 import { buildCanvasDocumentPrompt } from "../lib/canvasRequest";
 import { openPath, readFileForPreview, revealPath, writeFile } from "../lib/desktopCommands";
+import { getDesktopPlatformInfo } from "../lib/desktopPlatform";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
@@ -51,6 +52,9 @@ function basenamePath(p: string): string {
 const CANVAS_PREVIEW_MAX_BYTES = 256 * 1024;
 
 function CanvasTruncationBanner({ path }: { path: string }) {
+  const revealLabel =
+    getDesktopPlatformInfo().platform === "macos" ? "Reveal in Finder" : "Reveal in Explorer";
+
   const openFullFile = useCallback(() => {
     void openPath({ path }).catch((error) => {
       console.error("Failed to open truncated preview externally:", error);
@@ -84,7 +88,7 @@ function CanvasTruncationBanner({ path }: { path: string }) {
         </Button>
         <Button type="button" variant="ghost" size="sm" onClick={revealFile}>
           <FolderOpenIcon data-icon="inline-start" />
-          Reveal in Finder
+          {revealLabel}
         </Button>
       </div>
     </div>
@@ -121,6 +125,7 @@ export function Canvas({ path }: { path: string }) {
   const [selectedText, setSelectedText] = useState<string>("");
   const [floatingCoords, setFloatingCoords] = useState<{ x: number; y: number } | null>(null);
   const [floatingPromptText, setFloatingPromptText] = useState<string>("");
+  const [promptError, setPromptError] = useState<string | null>(null);
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
@@ -469,9 +474,10 @@ export function Canvas({ path }: { path: string }) {
     const textToSend = (explicitPrompt !== undefined ? explicitPrompt : promptText).trim();
     if (!textToSend) return;
     if (!selectedThreadId) {
-      alert("Please select or start a chat thread to collaborate with the agent.");
+      setPromptError("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
+    setPromptError(null);
 
     const filename = basenamePath(path);
     const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
@@ -833,6 +839,15 @@ export function Canvas({ path }: { path: string }) {
         )}
       >
         <div className="relative flex items-center bg-background border border-border/65 rounded-xl shadow-sm hover:border-border/80 transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/30">
+          {promptError ? (
+            <div
+              role="alert"
+              data-testid="canvas-prompt-error"
+              className="absolute -top-2 left-0 right-0 -translate-y-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+            >
+              {promptError}
+            </div>
+          ) : null}
           <Input
             value={promptText}
             onChange={(e) => setPromptText(e.target.value)}

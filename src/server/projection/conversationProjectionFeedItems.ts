@@ -64,6 +64,7 @@ export function createFeedItemProjection(state: ConversationProjectionState) {
       message: evt.message,
       code: evt.code,
       source: evt.source,
+      ...(evt.data !== undefined ? { data: evt.data } : {}),
     };
     state.opts.sink.emitItemStarted(null, item);
     state.opts.sink.emitItemCompleted(null, item);

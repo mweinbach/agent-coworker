@@ -1,6 +1,6 @@
 appId: com.cowork.desktop
 productName: Cowork
-electronVersion: 42.2.0
+electronVersion: 42.5.0
 asar: true
 compression: maximum
 directories:
@@ -19,8 +19,6 @@ extraResources:
     to: dist/config
   - from: ../../dist/skills
     to: dist/skills
-  - from: ../../dist/codex-primary-runtime
-    to: dist/codex-primary-runtime
   - from: build/icon.png
     to: tray/icon.png
   - from: build/icon.ico
@@ -33,6 +31,7 @@ extraResources:
       - "!**/*.map.json"
       - "!**/*.tsbuildinfo"
       - "!**/.DS_Store"
+afterPack: scripts/afterPack.cjs
 afterSign: scripts/notarize.cjs
 publish:
   provider: github
@@ -53,7 +52,8 @@ mac:
 win:
   icon: build/icon.ico
   artifactName: ${productName}-${version}-${os}-${arch}.${ext}
-  verifyUpdateCodeSignature: false
+  forceCodeSigning: true
+  verifyUpdateCodeSignature: true
   target:
     - nsis
 linux:

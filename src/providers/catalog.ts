@@ -1,4 +1,12 @@
-import { defaultModelIdForProvider, listSupportedModelIds } from "../models/registry";
+import {
+  defaultModelIdForProvider,
+  getSupportedModel,
+  listSupportedModelIds,
+} from "../models/registry";
+import {
+  isOpenAiReasoningEffort,
+  type OpenAiReasoningEffort,
+} from "../shared/openaiCompatibleOptions";
 import type { ProviderName } from "../types";
 
 type ProviderModelDefinition = {
@@ -92,6 +100,15 @@ export function availableModelsForProvider(provider: ProviderName): readonly str
 
 export function userFacingAvailableModelsForProvider(provider: ProviderName): readonly string[] {
   return isUserFacingProviderEnabled(provider) ? availableModelsForProvider(provider) : [];
+}
+
+export function reasoningConfigForProviderModel(
+  provider: ProviderName,
+  modelId: string,
+): { defaultEffort: OpenAiReasoningEffort } | null {
+  const supportedModel = getSupportedModel(provider, modelId.trim());
+  const defaultEffort = supportedModel?.providerOptionsDefaults.reasoningEffort;
+  return isOpenAiReasoningEffort(defaultEffort) ? { defaultEffort } : null;
 }
 
 export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {

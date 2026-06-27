@@ -146,4 +146,43 @@ describe("upsertFeedItem / applyProjectedItemStarted", () => {
 
     expect(nextFeed[0]).toEqual(feed[0]);
   });
+
+  test("preserves structured error data when projecting errors into the feed", () => {
+    const projected: ProjectedItem = {
+      id: "error:task-locked",
+      type: "error",
+      message: "Task is locked",
+      code: "task_locked",
+      source: "session",
+      data: {
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: "task-1",
+        taskStatus: "cancelled",
+      },
+    };
+
+    const feed = applyProjectedItemCompleted(
+      applyProjectedItemStarted([], projected, "2026-01-01T00:00:00.000Z"),
+      projected,
+      "2026-01-01T00:00:01.000Z",
+    );
+
+    expect(feed[0]).toEqual({
+      id: "error:task-locked",
+      kind: "error",
+      ts: "2026-01-01T00:00:00.000Z",
+      message: "Task is locked",
+      code: "task_locked",
+      source: "session",
+      data: {
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: "task-1",
+        taskStatus: "cancelled",
+      },
+    });
+  });
 });

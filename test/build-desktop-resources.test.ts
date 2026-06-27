@@ -5,7 +5,12 @@ import path from "node:path";
 
 import { FOUNDATION_MODELS_KOFFI_TRIPLET } from "../apps/desktop/electron/services/sidecar";
 import { __internal } from "../scripts/build_desktop_resources";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "../src/platform/sandbox/windows";
 
 describe("desktop resource build helpers", () => {
   test("refreshes cached Foundation Models SDK bundles missing Koffi runtime files", async () => {
@@ -112,13 +117,7 @@ describe("desktop resource build helpers", () => {
       WINDOWS_SANDBOX_HELPER_NAME,
     );
     const crateDir = path.join(root, "crates", "cowork-win-sandbox");
-    const builtHelper = path.join(
-      crateDir,
-      "target",
-      "aarch64-pc-windows-msvc",
-      "release",
-      WINDOWS_SANDBOX_HELPER_NAME,
-    );
+    const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
     const commands: string[][] = [];
 
     try {
@@ -136,8 +135,15 @@ describe("desktop resource build helpers", () => {
         arch: "arm64",
         commandRunner: async (command) => {
           commands.push(command);
-          await fs.mkdir(path.dirname(builtHelper), { recursive: true });
-          await fs.writeFile(builtHelper, "helper-binary");
+          await fs.mkdir(builtDir, { recursive: true });
+          await Promise.all([
+            fs.writeFile(path.join(builtDir, WINDOWS_SANDBOX_HELPER_NAME), "helper-binary"),
+            fs.writeFile(path.join(builtDir, WINDOWS_SANDBOX_SETUP_NAME), "setup-binary"),
+            fs.writeFile(
+              path.join(builtDir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME),
+              "command-runner-binary",
+            ),
+          ]);
         },
       });
 
@@ -147,12 +153,55 @@ describe("desktop resource build helpers", () => {
           "cargo",
           "build",
           "--release",
+          "--bins",
           "--manifest-path",
           path.join(crateDir, "Cargo.toml"),
           "--target",
           "aarch64-pc-windows-msvc",
         ],
       ]);
+      await expect(fs.readFile(dest, "utf8")).resolves.toBe("helper-binary");
+      await expect(
+        fs.readFile(path.join(path.dirname(dest), WINDOWS_SANDBOX_SETUP_NAME), "utf8"),
+      ).resolves.toBe("setup-binary");
+      await expect(
+        fs.readFile(path.join(path.dirname(dest), WINDOWS_SANDBOX_COMMAND_RUNNER_NAME), "utf8"),
+      ).resolves.toBe("command-runner-binary");
+      const manifest = JSON.parse(
+        await fs.readFile(
+          path.join(path.dirname(dest), WINDOWS_SANDBOX_HASH_MANIFEST_NAME),
+          "utf8",
+        ),
+      );
+      expect(manifest.files).toEqual({
+        [WINDOWS_SANDBOX_HELPER_NAME]: expect.stringMatching(/^[a-f0-9]{64}$/),
+        [WINDOWS_SANDBOX_SETUP_NAME]: expect.stringMatching(/^[a-f0-9]{64}$/),
+        [WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+
+      commands.splice(0);
+      await fs.writeFile(dest, "replaced-helper");
+      await __internal.syncWindowsSandboxHelper({
+        root,
+        dest,
+        previousFingerprint: "new",
+        nextFingerprint: "new",
+        platform: "win32",
+        arch: "arm64",
+        commandRunner: async (command) => {
+          commands.push(command);
+          await fs.mkdir(builtDir, { recursive: true });
+          await Promise.all([
+            fs.writeFile(path.join(builtDir, WINDOWS_SANDBOX_HELPER_NAME), "helper-binary"),
+            fs.writeFile(path.join(builtDir, WINDOWS_SANDBOX_SETUP_NAME), "setup-binary"),
+            fs.writeFile(
+              path.join(builtDir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME),
+              "command-runner-binary",
+            ),
+          ]);
+        },
+      });
+      expect(commands).toHaveLength(2);
       await expect(fs.readFile(dest, "utf8")).resolves.toBe("helper-binary");
     } finally {
       await fs.rm(root, { recursive: true, force: true });

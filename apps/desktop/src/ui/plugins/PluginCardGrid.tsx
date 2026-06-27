@@ -37,7 +37,7 @@ export function PluginCardGrid({
                     </div>
                     <div className="truncate text-xs text-muted-foreground flex items-center gap-1.5">
                       <span>
-                        {plugin.scope === "workspace" ? "Workspace plugin" : "User plugin"}
+                        {plugin.scope === "workspace" ? "Workspace plugin" : "Library plugin"}
                       </span>
                       <span>/</span>
                       <span>

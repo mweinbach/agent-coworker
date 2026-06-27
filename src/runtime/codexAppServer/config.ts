@@ -1,10 +1,9 @@
 import path from "node:path";
 import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import {
-  ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
-  renderArtifactRuntimeInstructions,
-} from "../../artifactRuntime";
-import { renderManagedSofficeRuntimeInstructions } from "../../managedSofficeRuntime";
+  COWORK_RUNTIME_INSTRUCTIONS_HEADING,
+  renderCoworkRuntimeInstructions,
+} from "../../coworkRuntime";
 import { getSupportedModel } from "../../models/registry";
 import {
   type SandboxPolicy as CoworkSandboxPolicy,
@@ -130,16 +129,13 @@ export function codexThreadConfig(
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-export function codexBaseInstructions(
+export function codexDeveloperInstructions(
   system: string,
   env?: Record<string, string | undefined>,
 ): string {
-  const managedSofficeInstructions = system.includes("## Managed LibreOffice Runtime")
+  const coworkRuntimeInstructions = system.includes(COWORK_RUNTIME_INSTRUCTIONS_HEADING)
     ? null
-    : renderManagedSofficeRuntimeInstructions(env);
-  const artifactRuntimeInstructions = system.includes(ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING)
-    ? null
-    : renderArtifactRuntimeInstructions(env);
+    : renderCoworkRuntimeInstructions(env);
   return [
     [
       "## Codex App-Server Tool Boundary",
@@ -147,11 +143,11 @@ export function codexBaseInstructions(
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
       "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
       "Use Codex-native tools for local files, commands, and web access.",
-      "Use Cowork dynamic tools for subagents, memory, skills, todos, and A2UI.",
+      "Use Cowork dynamic tools for tasks, subagents, memory, skills, todos, and A2UI.",
+      "For user clarification, call Cowork's dynamic `AskUserQuestion` tool directly. Never call the native `request_user_input` tool, which is unavailable on Cowork's Default-mode turns.",
       "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
     ].join("\n"),
-    ...(artifactRuntimeInstructions ? [artifactRuntimeInstructions] : []),
-    ...(managedSofficeInstructions ? [managedSofficeInstructions] : []),
+    ...(coworkRuntimeInstructions ? [coworkRuntimeInstructions] : []),
     system,
   ].join("\n\n");
 }
@@ -164,9 +160,13 @@ export function codexDynamicToolSpecs(
     .map(([name, tool]): CodexDynamicToolSpec | null => {
       const record = asRecord(tool);
       if (!record) return null;
+      const description = asString(record.description) ?? name;
       return {
         name: codexDynamicToolName(name),
-        description: asString(record.description) ?? name,
+        description:
+          name === "AskUserQuestion"
+            ? `${description} Use this Cowork tool instead of the native request_user_input tool.`
+            : description,
         inputSchema: toPiJsonSchema(record.inputSchema, CODEX_APP_SERVER_PROVIDER),
       };
     })
@@ -261,6 +261,13 @@ export function codexSandboxMode(params: RuntimeRunTurnParams): CodexSandboxMode
 }
 
 export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApprovalPolicy {
+  if (
+    params.yolo === true &&
+    typeof params.assertCanMutate === "function" &&
+    Object.keys(params.tools).some((name) => isCodexDynamicCoworkToolName(name))
+  ) {
+    return "on-request";
+  }
   return params.yolo === true ? "never" : "on-request";
 }
 
@@ -301,19 +308,9 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     projectRoot: path.dirname(params.config.projectCoworkDir),
     outputDirectory: params.config.outputDirectory,
     uploadsDirectory: params.config.uploadsDirectory,
-    toolRuntimeWritableRoots: [
-      ...resolveAdvancedMemoryWriteRoots(params.config),
-      ...resolveCodexToolRuntimeWriteRoots(params.toolEnv),
-    ],
+    toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(params.config)],
     targetPaths: params.agentTargetPaths,
   });
-}
-
-function resolveCodexToolRuntimeWriteRoots(
-  env: Record<string, string | undefined> | undefined,
-): string[] {
-  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
-  return managedSofficeRoot ? [managedSofficeRoot] : [];
 }
 
 function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undefined {
@@ -321,7 +318,9 @@ function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undef
   // under YOLO. An explicitly restrictive `read-only` sandbox is a hard floor and
   // must not be widened either — YOLO only relaxes the APPROVAL policy, not the
   // sandbox mode the user explicitly selected. Only an unscoped, non-read-only
-  // session is lifted to full access. YOLO still maps to approvalPolicy "never".
+  // session is lifted to full access. YOLO usually maps to approvalPolicy
+  // "never", except turns with Cowork dynamic tools keep approval requests so
+  // native app-server effects still cross the mutation gate.
   const scoped = (params.agentTargetPaths?.length ?? 0) > 0;
   const explicitlyReadOnly = params.config.sandbox?.mode === "read-only";
   if (params.yolo !== true || scoped || explicitlyReadOnly) {

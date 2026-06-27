@@ -381,7 +381,7 @@ describe("skills catalog page", () => {
       });
 
       expect(container.textContent).toContain("No skills found");
-      expect(container.textContent).toContain("Install a skill to give Codex superpowers.");
+      expect(container.textContent).toContain("Install a skill to give Cowork superpowers.");
       expect(container.textContent).not.toContain("Loading...");
 
       await act(async () => {

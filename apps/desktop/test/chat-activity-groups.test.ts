@@ -263,7 +263,7 @@ describe("desktop chat activity groups", () => {
     expect(summary.statusLabel).toBe("Needs review");
   });
 
-  test("summary hides recovered internal command failures from the user-facing trace", () => {
+  test("summary hides recovered tool failures from the user-facing trace", () => {
     const summary = summarizeActivityGroup([
       {
         id: "r1",
@@ -308,6 +308,38 @@ describe("desktop chat activity groups", () => {
       summary.entries.some((entry) => entry.kind === "tool" && entry.item.state === "output-error"),
     ).toBe(false);
     expect(summary.toolCount).toBe(2);
+  });
+
+  test("summary hides a failed skill lookup once reasoning continues", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t-skill",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "skill",
+        state: "output-available",
+        result: 'Skill "pdf" not found.',
+      },
+      {
+        id: "r-recovery",
+        kind: "reasoning",
+        mode: "reasoning",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "Trying the supported document workflow instead.",
+      },
+      {
+        id: "t-recovery",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "todoWrite",
+        state: "output-available",
+        result: { count: 3 },
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual(["r-recovery", "t-recovery"]);
+    expect(summary.toolCount).toBe(1);
   });
 
   test("summary keeps unrecovered internal command failures visible", () => {

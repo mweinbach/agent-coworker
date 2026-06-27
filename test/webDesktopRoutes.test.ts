@@ -50,6 +50,21 @@ afterEach(async () => {
 });
 
 describe("web desktop routes", () => {
+  async function makeAliasedHome(prefix: string): Promise<{
+    cleanupRoot: string;
+    aliasHome: string;
+    processHome: string;
+  }> {
+    const cleanupRoot = await makeTempDir(prefix);
+    const realHome = path.join(cleanupRoot, "real-home");
+    const aliasHome = path.join(cleanupRoot, "home-alias");
+    const processHome = path.join(cleanupRoot, "process-home");
+    await fs.mkdir(realHome, { recursive: true });
+    await fs.mkdir(processHome, { recursive: true });
+    await fs.symlink(realHome, aliasHome, process.platform === "win32" ? "junction" : "dir");
+    return { cleanupRoot, aliasHome, processHome };
+  }
+
   test("desktop service route creates one-off chat workspaces", async () => {
     const workspace = await makeTempDir("cowork-web-desktop-one-off-route-");
     const service = {
@@ -73,6 +88,139 @@ describe("web desktop routes", () => {
       name: "Scratch pad",
       path: path.join(workspace, "created-chat"),
     });
+  });
+
+  test("desktop state roundtrip keeps fallback one-off workspaces classified as chats", async () => {
+    const { cleanupRoot, aliasHome } = await makeAliasedHome("cowork-web-desktop-fallback-oneoff-");
+    const userDataDir = path.join(cleanupRoot, "user-data");
+    const oneOffWorkspace = path.join(aliasHome, ".cowork", "chats", "fallback-chat");
+    const promotedProject = path.join(aliasHome, ".cowork", "chats", "promoted-project");
+    const projectWorkspace = path.join(cleanupRoot, "project");
+    await fs.mkdir(oneOffWorkspace, { recursive: true });
+    await fs.mkdir(promotedProject, { recursive: true });
+    await fs.mkdir(projectWorkspace, { recursive: true });
+    const oneOffPath = await fs.realpath(oneOffWorkspace);
+    const promotedProjectPath = await fs.realpath(promotedProject);
+    const projectPath = await fs.realpath(projectWorkspace);
+    const service = new WebDesktopService({ userDataDir, homedir: aliasHome });
+
+    const stateResponse = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/state"),
+      { cwd: oneOffPath, desktopService: service },
+    );
+    expect(stateResponse).not.toBeNull();
+    const roundtripState = (await readJson(stateResponse!)) as {
+      workspaces: Array<{ id: string; path: string; workspaceKind?: string }>;
+    };
+    expect(roundtripState.workspaces).toHaveLength(1);
+    expect(roundtripState.workspaces[0]).toEqual(
+      expect.objectContaining({
+        path: oneOffPath,
+        workspaceKind: "oneOffChat",
+      }),
+    );
+
+    const saveResponse = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/state", {
+        method: "POST",
+        body: JSON.stringify(roundtripState),
+      }),
+      { cwd: oneOffPath, desktopService: service },
+    );
+    expect(saveResponse).not.toBeNull();
+    const savedState = (await readJson(saveResponse!)) as {
+      workspaces: Array<{ path: string; workspaceKind?: string }>;
+    };
+    expect(savedState.workspaces[0]).toEqual(
+      expect.objectContaining({
+        path: oneOffPath,
+        workspaceKind: "oneOffChat",
+      }),
+    );
+    await expect(service.loadState({ fallbackCwd: oneOffPath })).resolves.toMatchObject({
+      workspaces: [expect.objectContaining({ path: oneOffPath, workspaceKind: "oneOffChat" })],
+    });
+
+    await expect(service.loadState({ fallbackCwd: projectPath })).resolves.toMatchObject({
+      workspaces: [expect.objectContaining({ path: oneOffPath, workspaceKind: "oneOffChat" })],
+    });
+    const projectService = new WebDesktopService({
+      userDataDir: path.join(cleanupRoot, "project-user-data"),
+      homedir: aliasHome,
+    });
+    await expect(projectService.loadState({ fallbackCwd: projectPath })).resolves.toMatchObject({
+      workspaces: [expect.objectContaining({ path: projectPath, workspaceKind: "project" })],
+    });
+
+    await service.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "promoted-project",
+          name: "Promoted project",
+          path: promotedProjectPath,
+          workspaceKind: "project",
+          createdAt: "2026-06-20T00:00:00.000Z",
+          lastOpenedAt: "2026-06-20T00:00:00.000Z",
+        },
+      ],
+      threads: [],
+    });
+    await expect(service.loadState({ fallbackCwd: oneOffPath })).resolves.toMatchObject({
+      workspaces: [
+        expect.objectContaining({ path: promotedProjectPath, workspaceKind: "project" }),
+      ],
+    });
+  });
+
+  test("desktop service creates one-off chats under the configured home", async () => {
+    const { cleanupRoot, aliasHome, processHome } = await makeAliasedHome(
+      "cowork-web-desktop-oneoff-home-",
+    );
+    const userDataDir = path.join(cleanupRoot, "user-data");
+    const service = new WebDesktopService({ userDataDir, homedir: aliasHome });
+    const previousHome = process.env.HOME;
+    process.env.HOME = processHome;
+    try {
+      const response = await handleWebDesktopRoute(
+        new Request("http://localhost/cowork/desktop/one-off-chat/workspace", {
+          method: "POST",
+          body: JSON.stringify({ titleHint: "Configured home chat" }),
+        }),
+        { cwd: cleanupRoot, desktopService: service },
+      );
+      expect(response).not.toBeNull();
+      const created = (await readJson(response!)) as { name: string; path: string };
+      const configuredChatsRoot = await fs.realpath(getOneOffChatsRoot(aliasHome));
+      const processChatsRoot = path.join(processHome, ".cowork", "chats");
+      expect(created.name).toBe("New chat");
+      expect(created.path.startsWith(`${configuredChatsRoot}${path.sep}`)).toBe(true);
+      expect(created.path.startsWith(processChatsRoot)).toBe(false);
+
+      await service.saveState({
+        version: 2,
+        workspaces: [
+          {
+            id: "created-one-off",
+            name: "Created one-off",
+            path: created.path,
+            workspaceKind: "oneOffChat",
+            createdAt: "2026-06-20T00:00:00.000Z",
+            lastOpenedAt: "2026-06-20T00:00:00.000Z",
+          },
+        ],
+        threads: [],
+      });
+      await expect(service.loadState()).resolves.toMatchObject({
+        workspaces: [expect.objectContaining({ path: created.path, workspaceKind: "oneOffChat" })],
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
   });
 
   test("desktop service exposes persisted workspaces and allows fs access across them", async () => {

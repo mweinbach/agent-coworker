@@ -27,6 +27,13 @@ function dedupePathDirs(pathDirs: string[], platform: NodeJS.Platform): string[]
   return out;
 }
 
+function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
+  const exact = env[name];
+  if (exact !== undefined) return exact;
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key ? env[key] : undefined;
+}
+
 export function buildPlatformShellExecutionPlan(
   platform: NodeJS.Platform,
   command: string,
@@ -72,16 +79,15 @@ export function buildPlatformShellCommandWithRuntimePrelude(opts: {
   let command = opts.command;
   const env = opts.env || process.env;
   const pathImpl = pathImplForPlatform(opts.platform);
-  const runtimePython = env.COWORK_ARTIFACT_RUNTIME_PYTHON;
-  const runtimeNode = env.COWORK_ARTIFACT_RUNTIME_NODE;
-  const managedSofficeShim = env.COWORK_SOFFICE || env.COWORK_MANAGED_SOFFICE_SHIM;
-  const managedSofficeShimDir =
-    env.COWORK_MANAGED_SOFFICE_SHIM_DIR ||
-    (managedSofficeShim ? pathImpl.dirname(managedSofficeShim) : undefined);
+  const runtimeBin = envValue(env, "COWORK_RUNTIME_BIN");
+  const runtimePython = envValue(env, "COWORK_RUNTIME_PYTHON");
+  const runtimeNode = envValue(env, "COWORK_RUNTIME_NODE");
+  const runtimeGit = envValue(env, "COWORK_RUNTIME_GIT");
+  const runtimePopplerBin = envValue(env, "COWORK_RUNTIME_POPPLER_BIN");
 
   const pathDirs: string[] = [];
-  if (managedSofficeShimDir) {
-    pathDirs.push(managedSofficeShimDir);
+  if (runtimeBin) {
+    pathDirs.push(runtimeBin);
   }
   if (runtimeNode) {
     pathDirs.push(pathImpl.dirname(runtimeNode));
@@ -93,17 +99,15 @@ export function buildPlatformShellCommandWithRuntimePrelude(opts: {
       pathDirs.push(pathImpl.join(pythonDir, "Scripts"));
     }
   }
+  if (runtimeGit) {
+    pathDirs.push(pathImpl.dirname(runtimeGit));
+  }
+  if (runtimePopplerBin) {
+    pathDirs.push(runtimePopplerBin);
+  }
 
   const uniquePathDirs = dedupePathDirs(pathDirs, opts.platform);
-  const envExports: Record<string, string> = {};
-  if (managedSofficeShim) {
-    envExports.COWORK_SOFFICE = managedSofficeShim;
-  }
-  if (managedSofficeShimDir) {
-    envExports.COWORK_MANAGED_SOFFICE_SHIM_DIR = managedSofficeShimDir;
-  }
-
-  if (uniquePathDirs.length === 0 && Object.keys(envExports).length === 0) {
+  if (uniquePathDirs.length === 0) {
     return command;
   }
 
@@ -114,17 +118,11 @@ export function buildPlatformShellCommandWithRuntimePrelude(opts: {
         `$env:PATH = ${quotePowerShellSingleQuotedValue(uniquePathDirs.join(";"))} + ';' + $env:PATH`,
       );
     }
-    for (const [key, value] of Object.entries(envExports)) {
-      statements.push(`$env:${key} = ${quotePowerShellSingleQuotedValue(value)}`);
-    }
     command = `${statements.join("; ")}; ${command}`;
   } else {
     const statements: string[] = [];
     if (uniquePathDirs.length > 0) {
       statements.push(`export PATH=${quotePosixShellValue(uniquePathDirs.join(":"))}:$PATH`);
-    }
-    for (const [key, value] of Object.entries(envExports)) {
-      statements.push(`export ${key}=${quotePosixShellValue(value)}`);
     }
     command = `${statements.join(" && ")} && ${command}`;
   }

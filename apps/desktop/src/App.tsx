@@ -1,8 +1,9 @@
 import type { CSSProperties } from "react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
+import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility";
 import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
@@ -14,6 +15,7 @@ import {
   onMenuCommand,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
+  onWorkspaceServerStartupProgress,
   setWindowAppearance,
   showCanvasWindow,
   showNotification,
@@ -26,7 +28,9 @@ import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { Canvas } from "./ui/Canvas";
+import { CommandPalette } from "./ui/CommandPalette";
 import { ContextSidebar } from "./ui/ContextSidebar";
+import { InlineErrorBoundary } from "./ui/CrashReportingErrorBoundary";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
@@ -38,6 +42,7 @@ import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
+import { TaskConversationSidebar } from "./ui/tasks/TaskConversationSidebar";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -61,11 +66,17 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
   const filePreview = useAppStore((s) => s.filePreview);
   const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
   const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
+  const view = useAppStore((s) => s.view);
 
   const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
   const showCanvas = canvasEnabled && isCanvasSupported;
   const canvasMaximized = showCanvas && isCanvasMaximized;
-  const activeWidth = showCanvas && !canvasMaximized ? canvasSidebarWidth : contextSidebarWidth;
+  const activeWidth =
+    showCanvas && !canvasMaximized
+      ? canvasSidebarWidth
+      : view === "task"
+        ? Math.max(contextSidebarWidth, 420)
+        : contextSidebarWidth;
   const canvasContainerStyle: CSSProperties = canvasMaximized
     ? {
         top: "calc(var(--platform-drag-strip-height) + var(--platform-titlebar-height))",
@@ -91,7 +102,15 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
         )}
         style={canvasContainerStyle}
       >
-        {showCanvas && filePreview?.path ? <Canvas path={filePreview.path} /> : <ContextSidebar />}
+        {showCanvas && filePreview?.path ? (
+          <InlineErrorBoundary label="This canvas couldn't be rendered.">
+            <Canvas path={filePreview.path} />
+          </InlineErrorBoundary>
+        ) : view === "task" ? (
+          <TaskConversationSidebar />
+        ) : (
+          <ContextSidebar />
+        )}
       </div>
     </div>
   );
@@ -118,6 +137,9 @@ const ChatShell = memo(function ChatShell({
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const selectedTask = useAppStore((s) =>
+    s.selectedTaskId ? s.tasksById[s.selectedTaskId] : null,
+  );
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
   const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
@@ -150,11 +172,9 @@ const ChatShell = memo(function ChatShell({
     [selectedThreadId, threads],
   );
   const activeWorkspace = useMemo(() => {
-    if (!activeThread) {
-      return null;
-    }
-    return workspaces.find((workspace) => workspace.id === activeThread.workspaceId) ?? null;
-  }, [activeThread, workspaces]);
+    const workspaceId = activeThread?.workspaceId ?? selectedWorkspaceId;
+    return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
+  }, [activeThread, selectedWorkspaceId, workspaces]);
   const projectWorkspaces = useMemo(
     () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
     [workspaces],
@@ -178,11 +198,28 @@ const ChatShell = memo(function ChatShell({
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
   const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
-  const showContextSidebar = effectiveView === "chat" && activeThread !== null;
+  const isConversationView = effectiveView === "chat" || effectiveView === "task";
+  const showContextSidebar =
+    (effectiveView === "chat" && activeThread !== null) ||
+    (effectiveView === "task" && selectedTask !== null);
   const catalogWorkspaceId = pluginSelection.catalogWorkspaceId;
   const pluginViewMode = catalogWorkspaceId
     ? (workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins")
     : "plugins";
+  const activeWorkspaceId = activeWorkspace?.id ?? null;
+  const workspaceStartupProgress = useMemo(() => {
+    const activeRuntime = activeWorkspaceId ? workspaceRuntimeById[activeWorkspaceId] : null;
+    if (activeRuntime?.starting && !activeRuntime.serverUrl && activeRuntime.startupProgress) {
+      return activeRuntime.startupProgress;
+    }
+    if (activeWorkspaceId) return null;
+    for (const runtime of Object.values(workspaceRuntimeById)) {
+      if (runtime.starting && !runtime.serverUrl && runtime.startupProgress) {
+        return runtime.startupProgress;
+      }
+    }
+    return null;
+  }, [activeWorkspaceId, workspaceRuntimeById]);
   const topBarTitle =
     effectiveView === "skills"
       ? pluginViewMode === "skills"
@@ -190,7 +227,9 @@ const ChatShell = memo(function ChatShell({
         : "Plugins"
       : effectiveView === "research"
         ? "Research"
-        : activeThread?.title?.trim() || "New thread";
+        : effectiveView === "task"
+          ? (selectedTask?.title ?? "New task")
+          : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle: string | null =
     effectiveView === "skills"
       ? (pluginManagementWorkspace?.name ?? "Global")
@@ -206,10 +245,12 @@ const ChatShell = memo(function ChatShell({
     Boolean(runtime?.sessionId) &&
     activeThread?.status === "active";
   const quickChatPopOutThreadId =
-    activeThread && canPopOutQuickChatThread(activeThread) ? activeThread.id : null;
+    effectiveView === "chat" && activeThread && canPopOutQuickChatThread(activeThread)
+      ? activeThread.id
+      : null;
   const canvasPath = filePreview?.path ?? null;
   const showCanvasInTopBar =
-    effectiveView === "chat" &&
+    isConversationView &&
     canvasEnabled &&
     canvasPath !== null &&
     isCanvasSupportedFile(canvasPath) &&
@@ -245,9 +286,15 @@ const ChatShell = memo(function ChatShell({
 
   return (
     <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
+      <a
+        href="#main-content"
+        className="sr-only z-50 rounded-md bg-background px-3 py-2 text-sm font-medium text-foreground shadow-md focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:outline-none focus:ring-2 focus:ring-ring/50"
+      >
+        Skip to content
+      </a>
       <div className="app-window-drag-strip" aria-hidden="true" />
       <AppTopBar
-        busy={effectiveView === "chat" ? busy : false}
+        busy={isConversationView ? busy : false}
         onToggleSidebar={toggleSidebar}
         onNewChat={() => void openNewChatLanding()}
         sidebarCollapsed={sidebarCollapsed}
@@ -263,7 +310,7 @@ const ChatShell = memo(function ChatShell({
         subtitle={topBarSubtitle}
         managementMode={effectiveView === "skills" ? "plugins" : "thread"}
         suppressThreadDetails={effectiveView === "research"}
-        hideThreadShell={effectiveView === "chat" && activeThread === null}
+        hideThreadShell={isConversationView && activeThread === null}
         managementWorkspaceId={pluginSelection.displayWorkspaceId}
         managementWorkspaces={projectWorkspaces.map((workspace) => ({
           id: workspace.id,
@@ -274,14 +321,16 @@ const ChatShell = memo(function ChatShell({
             ? (workspaceId: string | null) => void setPluginManagementWorkspace(workspaceId)
             : undefined
         }
-        sessionUsage={effectiveView === "chat" ? (runtime?.sessionUsage ?? null) : null}
-        lastTurnUsage={effectiveView === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
-        agents={effectiveView === "chat" ? (runtime?.agents ?? []) : []}
+        sessionUsage={isConversationView ? (runtime?.sessionUsage ?? null) : null}
+        lastTurnUsage={isConversationView ? (runtime?.lastTurnUsage ?? null) : null}
+        agents={isConversationView ? (runtime?.agents ?? []) : []}
         canClearHardCap={canClearHardCap}
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
         }
-        showContextToggle={showContextSidebar && !showCanvasInTopBar}
+        showContextToggle={
+          showContextSidebar && !showCanvasInTopBar && workspaceStartupProgress === null
+        }
         canvasMode={showCanvasInTopBar}
         canvasIsMarkdown={canvasIsMarkdown}
         canvasActiveTab={canvasActiveTab}
@@ -303,23 +352,43 @@ const ChatShell = memo(function ChatShell({
       />
       <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
-        <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          aria-label={
+            effectiveView === "settings"
+              ? "Settings"
+              : effectiveView === "skills"
+                ? "Skills and plugins"
+                : effectiveView === "research"
+                  ? "Research"
+                  : effectiveView === "task"
+                    ? "Task"
+                    : "Chat"
+          }
+          className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
+        >
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
               <PrimaryContent
                 init={init}
                 ready={ready}
                 startupError={startupError}
+                workspaceStartupProgress={workspaceStartupProgress}
                 view={
                   effectiveView === "skills"
                     ? "skills"
                     : effectiveView === "research"
                       ? "research"
-                      : "chat"
+                      : effectiveView === "task"
+                        ? "task"
+                        : "chat"
                 }
               />
             </div>
-            {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
+            {showContextSidebar && workspaceStartupProgress === null ? (
+              <RightSidebarPane collapsed={contextSidebarCollapsed} />
+            ) : null}
           </div>
         </main>
       </div>
@@ -336,7 +405,14 @@ export default function App() {
   const view = useAppStore((s) => s.view);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
+  const setWorkspaceServerStartupProgress = useAppStore((s) => s.setWorkspaceServerStartupProgress);
   const seenNotificationIds = useRef(new Set<string>());
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  useEffect(
+    () => onWorkspaceServerStartupProgress(setWorkspaceServerStartupProgress),
+    [setWorkspaceServerStartupProgress],
+  );
 
   useEffect(() => {
     document.documentElement.dataset.windowMode = windowMode;
@@ -388,10 +464,13 @@ export default function App() {
           }
           return;
         }
-        const hasPendingSandboxApproval = Object.values(state.sandboxApprovalsByThread).some(
-          (pending) => pending.length > 0,
+        const hasPendingSandboxApproval = Object.entries(state.sandboxApprovalsByThread).some(
+          ([threadId, pending]) =>
+            pending.length > 0 && isSandboxApprovalThreadVisible(state, threadId),
         );
         if (hasPendingSandboxApproval) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
           state.dismissPrompt();
           return;
         }
@@ -411,6 +490,25 @@ export default function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  // Cmd/Ctrl+K opens the command palette. Scoped to the main window so the
+  // popout quick-chat / menu-bar / canvas windows keep their minimal shells.
+  useEffect(() => {
+    if (windowMode !== "main") return;
+    function handlePaletteShortcut(event: KeyboardEvent) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key === "k"
+      ) {
+        event.preventDefault();
+        setCommandPaletteOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", handlePaletteShortcut);
+    return () => window.removeEventListener("keydown", handlePaletteShortcut);
+  }, [windowMode]);
 
   useEffect(() => {
     function handleMenuCommand(command: DesktopMenuCommand): void {
@@ -534,7 +632,9 @@ export default function App() {
           }
         >
           <div className="flex-1 min-h-0 min-w-0">
-            <Canvas path={new URLSearchParams(window.location.search).get("path") || ""} />
+            <InlineErrorBoundary label="This canvas couldn't be rendered.">
+              <Canvas path={new URLSearchParams(window.location.search).get("path") || ""} />
+            </InlineErrorBoundary>
           </div>
         </div>
       ) : view === "settings" ? (
@@ -548,7 +648,10 @@ export default function App() {
         <ChatShell init={init} ready={ready} startupError={startupError} />
       )}
       <PromptModal />
-      <FilePreviewModal />
+      {windowMode === "main" ? <FilePreviewModal /> : null}
+      {windowMode === "main" ? (
+        <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      ) : null}
       {windowMode === "main" ? <DesktopOnboarding /> : null}
     </>
   );

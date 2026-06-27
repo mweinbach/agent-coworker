@@ -15,6 +15,7 @@ import { createProviderActions } from "./store.actions/provider";
 import { createResearchActions } from "./store.actions/research";
 import { createRuntimeDiagnosticsActions } from "./store.actions/runtimeDiagnostics";
 import { createSkillActions } from "./store.actions/skills";
+import { createTaskActions } from "./store.actions/tasks";
 import { createThreadActions } from "./store.actions/thread";
 import { createWorkspaceActions } from "./store.actions/workspace";
 import { createWorkspaceDefaultsActions } from "./store.actions/workspaceDefaults";
@@ -26,6 +27,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createWorkspaceActions(set, get),
     ...createWorkspaceBackupActions(set, get),
     ...createThreadActions(set, get),
+    ...createTaskActions(set, get),
     ...createAgentProfileActions(set, get),
     ...createSkillActions(set, get),
     ...createPluginActions(set, get),

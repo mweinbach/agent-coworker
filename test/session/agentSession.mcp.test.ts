@@ -97,6 +97,94 @@ describe("AgentSession", () => {
       }
     });
 
+    test("upsertMcpServer and deleteMcpServer target user MCP config when source is user", async () => {
+      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-user-source-"));
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-user-source-home-"));
+      try {
+        const config = {
+          ...makeConfig(workspace),
+          userCoworkDir: path.join(home, ".cowork"),
+          skillsDirs: [path.join(home, ".cowork", "skills")],
+        };
+        const workspaceMcpFile = path.join(workspace, ".cowork", "mcp-servers.json");
+        const userMcpFile = path.join(home, ".cowork", "config", "mcp-servers.json");
+        await fs.mkdir(path.dirname(workspaceMcpFile), { recursive: true });
+        await fs.writeFile(
+          workspaceMcpFile,
+          JSON.stringify(
+            {
+              servers: [
+                {
+                  name: "shared",
+                  transport: { type: "stdio", command: "workspace" },
+                  auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+                },
+              ],
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const { session, events } = makeSession({ config });
+        await session.upsertMcpServer(
+          {
+            name: "shared",
+            transport: { type: "stdio", command: "user" },
+            auth: { type: "none" },
+          },
+          undefined,
+          "user",
+        );
+
+        let workspaceDoc = JSON.parse(await fs.readFile(workspaceMcpFile, "utf-8")) as {
+          servers: Array<{ name: string; transport: { command: string }; auth?: unknown }>;
+        };
+        let userDoc = JSON.parse(await fs.readFile(userMcpFile, "utf-8")) as {
+          servers: Array<{ name: string; transport: { command: string }; auth?: unknown }>;
+        };
+        expect(workspaceDoc.servers).toEqual([
+          {
+            name: "shared",
+            transport: { type: "stdio", command: "workspace" },
+            auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+          },
+        ]);
+        expect(userDoc.servers).toEqual([
+          {
+            name: "shared",
+            transport: { type: "stdio", command: "user" },
+            auth: { type: "none" },
+          },
+        ]);
+
+        await waitForCondition(() =>
+          events.some((entry) => entry.type === "mcp_server_validation"),
+        );
+        await flushAsyncWork();
+        await session.deleteMcpServer("shared", "user");
+
+        workspaceDoc = JSON.parse(await fs.readFile(workspaceMcpFile, "utf-8")) as {
+          servers: Array<{ name: string; transport: { command: string }; auth?: unknown }>;
+        };
+        userDoc = JSON.parse(await fs.readFile(userMcpFile, "utf-8")) as {
+          servers: Array<{ name: string; transport: { command: string }; auth?: unknown }>;
+        };
+        expect(workspaceDoc.servers).toEqual([
+          {
+            name: "shared",
+            transport: { type: "stdio", command: "workspace" },
+            auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+          },
+        ]);
+        expect(userDoc.servers).toEqual([]);
+      } finally {
+        await fs.rm(workspace, { recursive: true, force: true });
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    });
+
     test("validateMcpServer blocks concurrent validation while connection flow is active", async () => {
       const { session, events } = makeSession();
       let releaseLookup: (() => void) | null = null;

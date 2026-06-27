@@ -208,19 +208,17 @@ describe("desktop developer page", () => {
     }
   });
 
-  test("checks the managed LibreOffice runtime from developer settings", async () => {
+  test("checks the managed headless LibreOffice runtime from developer settings", async () => {
     const checkLibreOfficeRuntime = mock(async () => ({
       status: "available" as const,
       checkedAt: "2026-05-21T00:00:00.000Z",
-      message: "LibreOffice is available through the Cowork-managed soffice shim.",
+      message:
+        "Cowork's managed headless LibreOffice launcher is available; UI and printing modes are blocked.",
       version: "26.2.3.2",
-      shimPath: "/Users/test/.cache/cowork/libreoffice/bin/soffice",
-      resolvedPath:
-        "/Users/test/.cache/cowork/libreoffice/runtime/LibreOffice.app/Contents/MacOS/soffice",
+      resolvedPath: "/runtime/dependencies/bin/soffice",
       smoke: {
         ok: true,
         durationMs: 120,
-        outputPath: "/tmp/check.pdf",
         sizeBytes: 2048,
       },
     }));
@@ -256,10 +254,10 @@ describe("desktop developer page", () => {
         root.render(createElement(DeveloperPage));
       });
 
-      expect(container.textContent).toContain("LibreOffice Runtime");
+      expect(container.textContent).toContain("LibreOffice");
       expect(container.textContent).toContain("Not checked");
       const button = [...container.querySelectorAll("button")].find((entry) =>
-        entry.textContent?.includes("Check runtime"),
+        entry.textContent?.includes("Check managed runtime"),
       );
       if (!button) throw new Error("missing check runtime button");
 
@@ -270,7 +268,7 @@ describe("desktop developer page", () => {
       expect(checkLibreOfficeRuntime).toHaveBeenCalledWith({ smoke: true });
       expect(container.textContent).toContain("Available");
       expect(container.textContent).toContain("26.2.3.2");
-      expect(container.textContent).toContain(".cache/cowork/libreoffice/bin/soffice");
+      expect(container.textContent).toContain("/runtime/dependencies/bin/soffice");
       expect(container.textContent).toContain("2,048 bytes in 120ms");
 
       await act(async () => {

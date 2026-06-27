@@ -1,3 +1,4 @@
+import type { ArtifactDiff, ArtifactPreview } from "../../../../src/server/artifacts/types";
 import type { PresentationPreviewResult } from "../../../../src/server/presentationPreview";
 import type {
   AgentProfileCopyInput,
@@ -16,7 +17,12 @@ import type {
   SpreadsheetFileVersionResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../src/shared/spreadsheetPreview";
-import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
+import type { TaskCreationInput } from "../../../../src/shared/tasks";
+import {
+  createDefaultUpdaterState,
+  type UpdaterState,
+  type WorkspaceServerStartupProgress,
+} from "../lib/desktopApi";
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
@@ -31,6 +37,7 @@ import type {
   TodoItem,
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
+import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
 import {
@@ -52,6 +59,7 @@ import {
   clearThreadSelectionRequest,
   clearWorkspaceJsonRpcSocketGeneration,
   clearWorkspaceStartState,
+  type DraftModelSelection,
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
   ensureThreadRuntime,
@@ -84,6 +92,11 @@ import type {
   SandboxApprovalPrompt,
   SettingsPageId,
   SidebarSectionKey,
+  TaskArtifactDetail,
+  TaskQuestionAnswerInput,
+  TaskQuestionResumeStatus,
+  TaskRecord,
+  TaskSummary,
   ThreadBusyPolicy,
   ThreadRecord,
   ThreadRuntime,
@@ -166,6 +179,12 @@ function providerAuthMethodsFor(
   return fallbackAuthMethods(provider);
 }
 
+export type TaskLifecycleRequest = {
+  action: "reopen" | "retry";
+  expectedRevision: number;
+  requestId: string;
+};
+
 export type AppStoreState = {
   ready: boolean;
   bootstrapPending: boolean;
@@ -182,6 +201,14 @@ export type AppStoreState = {
   pluginManagementWorkspaceId: string | null;
   pluginManagementMode: PluginManagementMode;
   selectedThreadId: string | null;
+  selectedTaskId: string | null;
+  newTaskWorkspaceId: string | null;
+  newTaskWorkspaceRequestId: number;
+  taskSummariesByWorkspaceId: Record<string, TaskSummary[]>;
+  tasksById: Record<string, TaskRecord>;
+  taskListLoadingByWorkspaceId: Record<string, boolean>;
+  taskLifecycleRequestByTaskId: Record<string, TaskLifecycleRequest>;
+  taskError: string | null;
 
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;
   threadRuntimeById: Record<string, ThreadRuntime>;
@@ -250,7 +277,6 @@ export type AppStoreState = {
   contextSidebarWidth: number;
   canvasSidebarWidth: number;
   messageBarHeight: number;
-
   init: () => Promise<void>;
 
   openSettings: (page?: SettingsPageId) => void;
@@ -274,6 +300,7 @@ export type AppStoreState = {
     attachmentFiles?: File[];
     provider?: ProviderName;
     model?: string;
+    reasoningEffort?: ReasoningEffortValue;
   }) => Promise<boolean>;
   openNewChatLanding: (opts?: {
     defaultTargetKind?: "project" | "oneOff";
@@ -314,6 +341,11 @@ export type AppStoreState = {
     payload?: Record<string, unknown>;
   }) => Promise<boolean>;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
+  setThreadReasoningEffort: (
+    threadId: string,
+    provider: ProviderName,
+    effort: ReasoningEffortValue,
+  ) => void;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;
@@ -338,6 +370,58 @@ export type AppStoreState = {
 
   openSkills: () => Promise<void>;
   openResearch: () => Promise<void>;
+  openNewTask: (workspaceId?: string) => Promise<void>;
+  refreshTasks: (workspaceId?: string) => Promise<void>;
+  startTask: (opts: { workspaceId: string; task: TaskCreationInput }) => Promise<TaskRecord | null>;
+  selectTask: (taskId: string, options?: { preserveView?: boolean }) => Promise<void>;
+  selectTaskThread: (taskId: string, taskThreadId: string) => Promise<void>;
+  createTaskThread: (taskId: string, title: string, workItemId?: string) => Promise<void>;
+  updateTaskBrief: (
+    taskId: string,
+    patch: { title?: string; objective?: string },
+  ) => Promise<boolean>;
+  acceptTask: (taskId: string) => Promise<void>;
+  requestTaskChanges: (taskId: string, feedback: string) => Promise<void>;
+  cancelTask: (taskId: string, reason?: string) => Promise<void>;
+  reopenTask: (taskId: string, reason?: string) => Promise<void>;
+  retryTask: (taskId: string) => Promise<boolean>;
+  resolveTaskQuestions: (
+    taskId: string,
+    answers: TaskQuestionAnswerInput[],
+  ) => Promise<TaskQuestionResumeStatus | null>;
+  readTaskArtifact: (taskId: string, artifactId: string) => Promise<TaskArtifactDetail | null>;
+  captureTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    changeSummary?: string,
+  ) => Promise<TaskArtifactDetail | null>;
+  compareTaskArtifactVersions: (
+    taskId: string,
+    artifactId: string,
+    baseVersionId: string,
+    targetVersionId: string,
+  ) => Promise<ArtifactDiff | null>;
+  previewTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    versionId: string,
+  ) => Promise<{ versionId: string; preview: ArtifactPreview } | null>;
+  restoreTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    versionId: string,
+  ) => Promise<TaskArtifactDetail | null>;
+  acceptTaskArtifactVersion: (
+    taskId: string,
+    artifactId: string,
+    versionId?: string,
+  ) => Promise<TaskArtifactDetail | null>;
+  startTaskArtifactRevision: (
+    taskId: string,
+    artifactId: string,
+    baseVersionId: string,
+    instruction: string,
+  ) => Promise<TaskArtifactDetail | null>;
   refreshSkillsCatalog: (workspaceId?: string) => Promise<void>;
   refreshAgentProfilesCatalog: (workspaceId?: string) => Promise<void>;
   upsertAgentProfile: (profile: AgentProfileUpsertInput, workspaceId?: string) => Promise<boolean>;
@@ -402,7 +486,7 @@ export type AppStoreState = {
   applyWorkspaceDefaultsToThread: (
     threadId: string,
     mode?: "auto" | "auto-resume" | "explicit",
-    draftModelSelection?: { provider: ProviderName; model: string } | null,
+    draftModelSelection?: DraftModelSelection | null,
     opts?: { allowBeforeHydration?: boolean },
   ) => Promise<void>;
   updateWorkspaceDefaults: (
@@ -411,6 +495,7 @@ export type AppStoreState = {
     opts?: { scope?: "settings" | "target" },
   ) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
+  setWorkspaceServerStartupProgress: (event: WorkspaceServerStartupProgress) => void;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
   upsertWorkspaceMcpServer: (
     workspaceId: string,
@@ -725,7 +810,12 @@ async function ensureServerRunning(
   set((s) => ({
     workspaceRuntimeById: {
       ...s.workspaceRuntimeById,
-      [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], starting: true, error: null },
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        starting: true,
+        startupProgress: null,
+        error: null,
+      },
     },
   }));
 
@@ -748,6 +838,7 @@ async function ensureServerRunning(
             ...s.workspaceRuntimeById[workspaceId],
             serverUrl: res.url,
             starting: false,
+            startupProgress: null,
             error: null,
           },
         },
@@ -770,6 +861,7 @@ async function ensureServerRunning(
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             starting: false,
+            startupProgress: null,
             error: message,
           },
         },

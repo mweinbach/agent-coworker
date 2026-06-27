@@ -26,7 +26,11 @@ export type PartialTurnError = Error & {
 export type RuntimeToolDefinition = {
   description?: string;
   inputSchema?: unknown;
-  execute: (input: unknown) => Promise<unknown> | unknown;
+  execute: (input: unknown, options?: RuntimeToolExecutionOptions) => Promise<unknown> | unknown;
+};
+
+export type RuntimeToolExecutionOptions = {
+  abortSignal?: AbortSignal;
 };
 
 export type RuntimeToolMap = Record<string, RuntimeToolDefinition>;
@@ -74,10 +78,12 @@ export interface RuntimeRunTurnParams {
   clientMessageId?: string;
   telemetry?: unknown;
   prepareStep?: RuntimePrepareStep;
+  shouldStopAfterToolStep?: () => boolean;
   registerSteerHandler?: RuntimeRegisterSteerHandler;
   askUser?: (question: string, options?: string[]) => Promise<string>;
   approveCommand?: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
+  assertCanMutate?: (toolName: string) => void | Promise<void>;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;

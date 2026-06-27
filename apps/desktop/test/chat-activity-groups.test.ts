@@ -364,6 +364,36 @@ describe("desktop chat activity groups", () => {
     );
   });
 
+  test("summary keeps tool failures visible while a retry is still pending", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t-failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "commandExecution",
+        state: "output-error",
+        args: { command: "python3 build_report.py" },
+        result: { error: "TypeError: bad argument" },
+      },
+      {
+        id: "t-recovery-pending",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "fileChange",
+        state: "input-available",
+        args: { path: "build_report.py" },
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.statusLabel).toBe("Issue");
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual([
+      "t-failed",
+      "t-recovery-pending",
+    ]);
+    expect(summary.toolCount).toBe(2);
+  });
+
   test("summary collapses adjacent tool lifecycle updates into one trace row", () => {
     const summary = summarizeActivityGroup([
       {

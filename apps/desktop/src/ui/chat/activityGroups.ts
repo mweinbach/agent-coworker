@@ -1,3 +1,4 @@
+import { isTerminalToolState } from "../../app/toolFeedState";
 import type { FeedItem, ToolFeedState } from "../../app/types";
 
 import { buildMarkdownPreviewText } from "./markdownPreview";
@@ -45,19 +46,6 @@ const genericToolSubtitles = new Set([
   "Finished with an issue",
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function getRecordValue(record: Record<string, unknown>, keys: string[]): unknown {
-  for (const key of keys) {
-    if (key in record) return record[key];
-  }
-  return undefined;
-}
-
-import { isTerminalToolState } from "../../app/toolFeedState";
-
 function effectiveToolState(item: Extract<FeedItem, { kind: "tool" }>): ToolFeedState {
   if (item.result !== undefined && isRecord(item.result)) {
     if (item.result.denied === true) return "output-denied";
@@ -72,6 +60,17 @@ function effectiveToolState(item: Extract<FeedItem, { kind: "tool" }>): ToolFeed
   }
   if (isTerminalToolState(item.state) || item.result === undefined) return item.state;
   return "output-available";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getRecordValue(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in record) return record[key];
+  }
+  return undefined;
 }
 
 function normalizeToolActivityItem(
@@ -289,7 +288,7 @@ function filterRecoveredToolErrors(entries: ActivityTraceEntry[]): ActivityTrace
 
     return !entries.slice(index + 1).some((next) => {
       if (next.kind !== "tool") return false;
-      return effectiveToolState(next.item) !== "output-error";
+      return effectiveToolState(next.item) === "output-available";
     });
   });
 }

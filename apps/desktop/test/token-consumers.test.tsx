@@ -5,7 +5,6 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Tool, ToolContent, ToolHeader } from "../src/components/ai-elements/tool";
 import { Card, CardDescription } from "../src/components/ui/card";
 import { Input } from "../src/components/ui/input";
 import {
@@ -16,6 +15,7 @@ import {
   SelectValue,
 } from "../src/components/ui/select";
 import { Textarea } from "../src/components/ui/textarea";
+import { ToolCard } from "../src/ui/chat/toolCards/ToolCard";
 import { setupJsdom } from "./jsdomHarness";
 
 describe("desktop token consumers", () => {
@@ -117,17 +117,13 @@ describe("desktop token consumers", () => {
     }
   });
 
-  test("ai-elements tool surfaces use token-backed shadows and status colors", () => {
+  test("app-owned tool cards use token-backed shadows and status colors", () => {
     const html = renderToStaticMarkup(
-      createElement(
-        Tool,
-        { defaultOpen: true },
-        createElement(ToolHeader, {
-          title: "read",
-          state: "output-available",
-        }),
-        createElement(ToolContent, null, "done"),
-      ),
+      createElement(ToolCard, {
+        name: "read",
+        state: "output-available",
+        result: "done",
+      }),
     );
 
     expect(html).toContain("app-shadow-surface");

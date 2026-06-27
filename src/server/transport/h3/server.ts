@@ -9,6 +9,7 @@ import type {
   JsonRpcLiteNotification,
   JsonRpcLiteRequest,
 } from "../../jsonrpc/protocol";
+import { getTaskRpcRequiredPermissions } from "../../jsonrpc/taskPermissions";
 import type { AgentServerRuntime } from "../../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../../startServer/types";
 import {
@@ -138,6 +139,9 @@ function applyTrustedDevicePermissionsToConnection(
 ): void {
   connection.data.workspaceControlEventsAllowed =
     trustedDevice.permissions.workspaceSettings === true;
+  connection.data.taskReadAllowed = trustedDevice.permissions.conversations === true;
+  connection.data.taskMutationAllowed =
+    trustedDevice.permissions.conversations === true && trustedDevice.permissions.turns === true;
 }
 
 function requireAdminToken(req: Request, adminToken: string): Response | null {
@@ -296,6 +300,10 @@ function getRequiredH3Permission(
     method === "thread/resume"
   ) {
     return "conversations";
+  }
+  if (method.startsWith("task/")) {
+    const permissions = getTaskRpcRequiredPermissions(method);
+    return permissions.length === 1 ? (permissions[0] ?? null) : permissions;
   }
   if (method.startsWith("cowork/provider/auth/")) {
     return "providerAuth";

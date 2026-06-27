@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { TaskStatus } from "../../src/shared/tasks";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -33,6 +34,25 @@ import {
   withEnv,
 } from "./agentSession.harness";
 
+const TERMINAL_TASK_STATUSES = [
+  "completed",
+  "cancelled",
+  "failed",
+] as const satisfies readonly TaskStatus[];
+
+function terminalTaskSessionDb(status: (typeof TERMINAL_TASK_STATUSES)[number]) {
+  return {
+    getActiveTaskForSourceSession: () => null,
+    getTaskForThread: () => ({
+      id: `task-${status}`,
+      title: `${status} delivery`,
+      status,
+    }),
+    persistSessionMutation: async () => 0,
+    persistSessionSnapshot: async () => {},
+  };
+}
+
 describe("AgentSession", () => {
   beforeEach(async () => {
     await resetAgentSessionMocks();
@@ -44,6 +64,452 @@ describe("AgentSession", () => {
   });
 
   describe("sendUserMessage", () => {
+    test("locks a source chat while its promoted task is active", async () => {
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => ({
+          id: "task-1",
+          title: "Managed delivery",
+          status: "working" as const,
+        }),
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+
+      await session.sendUserMessage("Continue in the source chat");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          message: "Chat is locked by active task task-1: Managed delivery",
+        }),
+      );
+    });
+
+    test("rechecks task locks after async preflight before starting the turn", async () => {
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount === 1
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+
+      await session.sendUserMessage("turn accepted just before task cancellation");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          message:
+            "Task task-cancelled is cancelled and cannot accept new turns until it is reopened or retried.",
+        }),
+      );
+      expect(events.some((event) => event.type === "user_message")).toBe(false);
+      expect(events.some((event) => event.type === "session_busy" && event.busy === true)).toBe(
+        false,
+      );
+    });
+
+    test("rolls back inline turn attachments when the task lock closes after write", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-"));
+      const uploadsDir = path.join(dir, "deep", "nested", "uploads");
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount < 7
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+        sessionDb: sessionDb as never,
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-cancelled-content", undefined, [
+          {
+            filename: "late.txt",
+            contentBase64: Buffer.from("late input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ]);
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+            message:
+              "Task task-cancelled is cancelled and cannot accept new turns until it is reopened or retried.",
+          }),
+        );
+        expect(events.some((event) => event.type === "user_message")).toBe(false);
+        expect(events.some((event) => event.type === "session_busy")).toBe(false);
+        expect(JSON.stringify((session as any).state.allMessages)).not.toContain("late input");
+        await expect(fs.readdir(uploadsDir)).rejects.toThrow();
+        await expect(fs.stat(path.join(dir, "deep"))).rejects.toThrow();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("rolls back only newly-created nested upload directories", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-partial-"));
+      const preexistingDir = path.join(dir, "deep");
+      const uploadsDir = path.join(preexistingDir, "nested", "uploads");
+      await fs.mkdir(preexistingDir);
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount < 7
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+        sessionDb: sessionDb as never,
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-cancelled-content", undefined, [
+          {
+            filename: "late.txt",
+            contentBase64: Buffer.from("late input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ]);
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
+        const preexistingStat = await fs.stat(preexistingDir);
+        expect(preexistingStat.isDirectory()).toBe(true);
+        await expect(fs.stat(path.join(preexistingDir, "nested"))).rejects.toThrow();
+        await expect(fs.stat(uploadsDir)).rejects.toThrow();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("rolls back all newly-created inline turn attachments without deleting collisions", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-content-lock-multi-"));
+      const uploadsDir = path.join(dir, "uploads");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(path.join(uploadsDir, "late.txt"), "pre-existing", "utf8");
+      const persistedReasons: string[] = [];
+      let taskLookupCount = 0;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => {
+          taskLookupCount += 1;
+          return taskLookupCount < 10
+            ? null
+            : {
+                id: "task-cancelled",
+                title: "Cancelled delivery",
+                status: "cancelled" as const,
+              };
+        },
+        persistSessionMutation: async ({ reason }: { reason: string }) => {
+          persistedReasons.push(reason);
+          return persistedReasons.length;
+        },
+        persistSessionSnapshot: async (_id: string, _snapshot: unknown, reason: string) => {
+          persistedReasons.push(reason);
+        },
+      };
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+        sessionDb: sessionDb as never,
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-cancelled-content", undefined, [
+          {
+            filename: "late.txt",
+            contentBase64: Buffer.from("late input").toString("base64"),
+            mimeType: "text/plain",
+          },
+          {
+            filename: "second.txt",
+            contentBase64: Buffer.from("second input").toString("base64"),
+            mimeType: "text/plain",
+          },
+        ]);
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
+        expect(events.filter((event) => event.type === "session_busy")).toHaveLength(0);
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+          }),
+        );
+        await expect(fs.readFile(path.join(uploadsDir, "late.txt"), "utf8")).resolves.toBe(
+          "pre-existing",
+        );
+        await expect(fs.stat(path.join(uploadsDir, "late_1.txt"))).rejects.toThrow();
+        await expect(fs.stat(path.join(uploadsDir, "second.txt"))).rejects.toThrow();
+        await expect(fs.readdir(uploadsDir)).resolves.toEqual(["late.txt"]);
+        expect(JSON.stringify((session as any).state.allMessages)).not.toContain("late input");
+        expect(JSON.stringify((session as any).state.allMessages)).not.toContain("second input");
+        expect(persistedReasons).toEqual([]);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    for (const status of TERMINAL_TASK_STATUSES) {
+      test(`locks ${status} task threads against new user turns`, async () => {
+        const { session, events } = makeSession({
+          sessionDb: terminalTaskSessionDb(status) as never,
+        });
+
+        await session.sendUserMessage("Keep working after terminal state");
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+            message: `Task task-${status} is ${status} and cannot accept new turns until it is reopened or retried.`,
+          }),
+        );
+      });
+    }
+
+    test("locks restarted child-agent sessions through their task-thread parent", async () => {
+      let childSessionId = "";
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: (sessionId: string) =>
+          sessionId === childSessionId
+            ? {
+                sessionId,
+                parentSessionId: "task-thread-parent",
+              }
+            : null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+      childSessionId = session.id;
+
+      await session.sendUserMessage("child should not restart after terminal parent task");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          data: expect.objectContaining({
+            lockKind: "terminal_task_thread",
+            taskId: "task-completed",
+            taskStatus: "completed",
+          }),
+        }),
+      );
+    });
+
+    test("locks live child-agent user turns through their parent before the parent link is persisted", async () => {
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: () => null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+
+      await session.sendUserMessage("live child should inherit the terminal parent task lock");
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          data: expect.objectContaining({
+            lockKind: "terminal_task_thread",
+            taskId: "task-completed",
+            taskStatus: "completed",
+          }),
+        }),
+      );
+    });
+
+    test("locks live child-agent steers through their parent before the parent link is persisted", async () => {
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: () => null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+      (session as any).state.running = true;
+      (session as any).state.currentTurnId = "turn-live";
+      (session as any).state.acceptingSteers = true;
+
+      await session.sendSteerMessage("live child steer", "turn-live", "steer-live-child");
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "task_locked",
+          data: expect.objectContaining({
+            lockKind: "terminal_task_thread",
+            taskId: "task-completed",
+            taskStatus: "completed",
+          }),
+        }),
+      );
+      expect(events.some((event) => event.type === "steer_accepted")).toBe(false);
+    });
+
+    test("blocks live child-agent tool mutation gates through their parent before persistence", async () => {
+      let locked = false;
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: (sessionId: string) =>
+          locked && sessionId === "task-thread-parent"
+            ? {
+                id: "task-completed",
+                title: "Completed delivery",
+                status: "completed" as const,
+              }
+            : null,
+        getSessionRecord: () => null,
+        persistSessionMutation: async () => 0,
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({
+        sessionDb: sessionDb as never,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "task-thread-parent",
+          role: "worker",
+        } as never,
+      });
+      let sideEffectCount = 0;
+      mockRunTurn.mockImplementation(async (params: any) => {
+        locked = true;
+        params.assertCanMutate("write");
+        sideEffectCount += 1;
+        return { text: "", reasoningText: undefined, responseMessages: [] };
+      });
+
+      await session.sendUserMessage("attempt child tool mutation");
+
+      expect(mockRunTurn).toHaveBeenCalledTimes(1);
+      expect(sideEffectCount).toBe(0);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          message: expect.stringContaining("task task-completed is completed"),
+        }),
+      );
+    });
+
+    for (const status of TERMINAL_TASK_STATUSES) {
+      test(`locks ${status} task threads against new steers`, async () => {
+        const { session, events } = makeSession({
+          sessionDb: terminalTaskSessionDb(status) as never,
+        });
+
+        await session.sendSteerMessage("Keep steering after terminal state", "turn-1", "steer-1");
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "task_locked",
+            message: `Task task-${status} is ${status} and cannot accept new turns until it is reopened or retried.`,
+          }),
+        );
+        expect(events.some((event) => event.type === "steer_accepted")).toBe(false);
+      });
+    }
+
     test("rejects if already running (emits error)", async () => {
       const { session, events } = makeSession();
 
@@ -155,6 +621,70 @@ describe("AgentSession", () => {
         history.some(
           (m: any) => m.role === "assistant" && m.content[0]?.text === "Working on it...",
         ),
+      ).toBe(true);
+    });
+
+    test("suppresses abort partial messages and provider state before persistence", async () => {
+      const { session } = makeSession();
+
+      mockRunTurn.mockImplementation(async () => {
+        (session as any).state.abortController?.abort();
+        const error = Object.assign(new Error("Provider aborted after partial output"), {
+          code: "ABORT_ERR" as const,
+          responseMessages: [
+            { role: "assistant", content: [{ type: "text", text: "should not persist" }] },
+          ],
+          providerState: {
+            provider: "google" as const,
+            model: "gemini-3-flash-preview",
+            interactionId: "partial-interaction",
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        throw error;
+      });
+
+      await session.sendUserMessage("trigger abort partial");
+
+      const history = (session as any).state.allMessages;
+      expect(JSON.stringify(history)).not.toContain("should not persist");
+      expect((session as any).state.providerState).toBeNull();
+    });
+
+    test("treats foreign ABORT_ERR as provider failure when the session is not aborted", async () => {
+      const providerState = {
+        provider: "google" as const,
+        model: "gemini-3-flash-preview",
+        interactionId: "foreign-abort-partial",
+        updatedAt: "2026-06-21T09:30:00.000Z",
+      };
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async () => {
+        const error = Object.assign(new Error("Foreign provider ABORT_ERR"), {
+          code: "ABORT_ERR" as const,
+          responseMessages: [
+            { role: "assistant", content: [{ type: "text", text: "partial survives" }] },
+          ],
+          providerState,
+        });
+        throw error;
+      });
+
+      await session.sendUserMessage("trigger foreign abort code");
+
+      const history = (session as any).state.allMessages;
+      expect(JSON.stringify(history)).toContain("partial survives");
+      expect((session as any).state.providerState).toEqual(providerState);
+      expect((session as any).state.currentTurnOutcome).toBe("error");
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          message: "Foreign provider ABORT_ERR",
+        }),
+      );
+      expect(
+        events.some((event) => event.type === "session_busy" && (event as any).outcome === "error"),
       ).toBe(true);
     });
 
@@ -1212,6 +1742,49 @@ describe("AgentSession", () => {
       expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id);
     });
 
+    test("waits for child agent settlement during terminal cancellation", async () => {
+      const childSettled = Promise.withResolvers<void>();
+      const cancelAgentSessionsImpl = mock(
+        async (_parentSessionId: string, opts?: { timeoutMs?: number }) => {
+          expect(opts?.timeoutMs).toBe(500);
+          await childSettled.promise;
+        },
+      );
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      mockRunTurn.mockImplementationOnce(async (params: any) => {
+        await new Promise((_, reject) => {
+          params.abortSignal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+
+        throw new Error("unreachable");
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await waitForCondition(() => session.isBusy);
+
+      const settled = session.cancelAndWaitForSettlement({
+        includeSubagents: true,
+        timeoutMs: 500,
+      });
+      await sendPromise;
+
+      await expect(
+        Promise.race([
+          settled.then(() => "settled"),
+          new Promise((resolve) => setTimeout(() => resolve("pending"), 25)),
+        ]),
+      ).resolves.toBe("pending");
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id, { timeoutMs: 500 });
+
+      childSettled.resolve();
+      await expect(settled).resolves.toBeUndefined();
+    });
+
     test("can cancel child agents explicitly even when the root session is idle", () => {
       const cancelAgentSessionsImpl = mock(() => {});
       const { session } = makeSession({ cancelAgentSessionsImpl });
@@ -1646,6 +2219,42 @@ describe("AgentSession", () => {
         clientMessageId: "msg-attachment",
       });
       await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("hello");
+    });
+
+    test("preserves newly-created nested upload directories after successful inline turn commit", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-nested-"));
+      const uploadsDir = path.join(dir, "deep", "nested", "uploads");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      try {
+        await session.sendUserMessage("", "msg-attachment", undefined, [
+          {
+            filename: "photo.png",
+            contentBase64: "aGVsbG8=",
+            mimeType: "image/png",
+          },
+        ]);
+
+        const userEvt = events.find((e) => e.type === "user_message") as any;
+        expect(userEvt).toMatchObject({
+          text: "[photo.png]",
+          clientMessageId: "msg-attachment",
+        });
+        await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe(
+          "hello",
+        );
+        const uploadsStat = await fs.stat(uploadsDir);
+        expect(uploadsStat.isDirectory()).toBe(true);
+        const deepStat = await fs.stat(path.join(dir, "deep"));
+        expect(deepStat.isDirectory()).toBe(true);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     });
 
     test("keeps referenced skill context in ordered file turns", async () => {

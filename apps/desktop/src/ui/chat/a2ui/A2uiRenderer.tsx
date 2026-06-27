@@ -10,6 +10,7 @@ import { resolveDynamicWithFunctions } from "../../../../../../src/experimental/
 import { Input } from "../../../components/ui/input";
 import { Textarea } from "../../../components/ui/textarea";
 import { cn } from "../../../lib/utils";
+import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
 
 /**
  * Permissive shape of an A2UI v0.9 component. We defensively introspect
@@ -258,12 +259,16 @@ function RenderNode({
       );
 
     case "Stack":
+      // The a2ui protocol models Stack as overlapping layers, but this renderer
+      // has no active-index switching, so absolute-overlapping children always
+      // paint on top of each other. Lay them out as a vertical stack instead —
+      // safe and non-colliding — until a real active-child policy exists.
       return (
-        <div className="relative">
+        <div className="flex flex-col gap-2">
           {children.map((child, index) => (
-            <div key={childKey(child, index)} className="absolute inset-0">
+            <Fragment key={childKey(child, index)}>
               <RenderNode component={child} context={childContext} />
-            </div>
+            </Fragment>
           ))}
         </div>
       );
@@ -919,5 +924,12 @@ export function A2uiRenderer({ root, dataModel, interactive, onAction }: A2uiRen
     depth: 0,
     path: typeof root.id === "string" ? root.id : "root",
   };
-  return <RenderNode component={root} context={context} />;
+  // The model drives the entire rendered subtree, so a bad component deep in
+  // the tree can throw. Contain it to this surface so a malformed a2ui payload
+  // degrades to one inline tile instead of taking the window down.
+  return (
+    <InlineErrorBoundary label="This surface couldn't be rendered.">
+      <RenderNode component={root} context={context} />
+    </InlineErrorBoundary>
+  );
 }

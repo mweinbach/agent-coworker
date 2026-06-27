@@ -11,6 +11,7 @@ bun run dev
 
 Dev mode enables Electron remote debugging on loopback automatically so local CDP tooling like the Chrome DevTools MCP can attach to `http://127.0.0.1:9222`.
 Set `COWORK_ELECTRON_REMOTE_DEBUG=0` to opt out, and use `COWORK_ELECTRON_REMOTE_DEBUG_PORT` to override the default port.
+Set `COWORK_ELECTRON_USER_DATA_DIR=/path/to/isolated-profile` in dev/test mode to override Electron `userData` before desktop services initialize. Packaged builds reject this override.
 
 Desktop renderer dev URL is restricted to loopback on `COWORK_DESKTOP_RENDERER_PORT` (default `1420`).
 If `ELECTRON_RENDERER_URL` points to another app on the wrong host or port, desktop falls back to its own renderer URL.
@@ -40,7 +41,7 @@ COWORK_ELECTRON_REMOTE_DEBUG=0 bun run dev # opt out
 bun run build
 ```
 
-The build pipeline rebuilds bundled desktop resources (`cowork-server` sidecar + prompts/config by default, with docs opt-in via `COWORK_BUNDLE_DESKTOP_DOCS=1`) via the root `build:desktop-resources` script. Windows targets also build and bundle `cowork-win-sandbox.exe` into `resources/binaries` for shell process containment. Codex app-server is resolved at runtime from the app-pinned Cowork-managed release under `~/.cowork/codex-app-server`; when the app bumps that code pin, the next runtime use downloads and promotes the replacement payload. Curated default skills are bootstrapped by the shared agent runtime into `~/.cowork/skills` from GitHub instead of being bundled into the app.
+The build pipeline rebuilds bundled desktop resources (`cowork-server` sidecar + prompts/config by default, with docs opt-in via `COWORK_BUNDLE_DESKTOP_DOCS=1`) via the root `build:desktop-resources` script. Windows targets also build and bundle the sandbox runner, elevated setup helper, command runner, and their SHA-256 manifest into `resources/binaries`. The app verifies their hashes on every use, requires Authenticode signatures in packaged builds, and accepts the sandbox only after its native filesystem/network/process/integrity probe succeeds. Codex app-server is resolved at runtime from the app-pinned Cowork-managed release under `~/.cowork/codex-app-server`; when the app bumps that code pin, the next runtime use downloads and promotes the replacement payload. Curated default skills are bootstrapped by the shared agent runtime into `~/.cowork/skills` from GitHub instead of being bundled into the app.
 `build:desktop-resources` is target-aware. It defaults to the host platform and arch locally, and CI can override that with `COWORK_BUILD_PLATFORM` / `COWORK_BUILD_ARCH` (or explicit `--platform` / `--arch` flags when invoking the script directly).
 Desktop packaging clears `apps/desktop/resources/binaries/`, emits exactly one target-specific sidecar payload, and writes `cowork-server-manifest.json` beside it so the packaged app launches that pinned payload instead of scanning for an arbitrary match.
 Most targets still bundle a compiled `cowork-server-*` executable. Windows ARM64 instead bundles `bun.exe` plus `server/index.js`, and the manifest tells the packaged app to launch that runtime bundle.

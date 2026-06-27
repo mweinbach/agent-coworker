@@ -83,6 +83,9 @@ describe("Agent providerOptions pass-through", () => {
       log: mock(() => {}),
       askUser: mock(async () => "yes"),
       approveCommand: mock(async () => true),
+      // Provider option forwarding is independent of the managed artifact runtime.
+      // Keep this unit test isolated from any runtime installed in the developer's home.
+      toolEnv: { COWORK_DISABLE_RUNTIME: "1" },
       ...overrides,
     };
   }

@@ -103,6 +103,7 @@ export class ProviderAuthManager {
       refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
       getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       runProviderConnect: ConnectProviderHandler;
+      logoutProviderAuth?: typeof logoutProviderAuthMethod;
     },
   ) {}
 
@@ -445,7 +446,7 @@ export class ProviderAuthManager {
     this.opts.setConnecting(true);
     const startedAt = Date.now();
     try {
-      const result = await logoutProviderAuthMethod({
+      const result = await (this.opts.logoutProviderAuth ?? logoutProviderAuthMethod)({
         provider: providerRaw,
         paths: this.opts.getGlobalAuthPaths(),
       });

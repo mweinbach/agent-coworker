@@ -24,6 +24,11 @@ const runCodexLoginMock = mock(async (opts: any) => {
   return buildMockCodexLogin();
 });
 
+const runCodexLogoutMock = mock(async () => ({
+  revoked: true,
+  message: "Codex app-server auth revoked via test.",
+}));
+
 const {
   connectProvider,
   disconnectProvider,
@@ -79,12 +84,18 @@ describe("connectProvider", () => {
     connectInternal.setOauthDepsForTests({
       isOauthCliProvider: (provider: string) => provider === "codex-cli",
       runCodexLogin: runCodexLoginMock,
+      runCodexLogout: runCodexLogoutMock,
     });
     runCodexLoginMock.mockReset();
+    runCodexLogoutMock.mockReset();
     runCodexLoginMock.mockImplementation(async (opts: any) => {
       await opts.openUrl?.(mockedAuthorizeUrl);
       return buildMockCodexLogin();
     });
+    runCodexLogoutMock.mockImplementation(async () => ({
+      revoked: true,
+      message: "Codex app-server auth revoked via test.",
+    }));
   });
 
   afterEach(() => {
@@ -337,6 +348,7 @@ describe("connectProvider", () => {
     expect(result.ok).toBe(true);
     expect(result.message).toContain("Codex connection cleared from Cowork");
     expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
+    expect(runCodexLogoutMock).toHaveBeenCalledTimes(1);
     const store = await readConnectionStore(paths);
     expect(store.services["codex-cli"]).toBeUndefined();
     await expect(

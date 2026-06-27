@@ -60,6 +60,7 @@ export type ReplSessionEventContext = {
   streamState: CliStreamState;
   activateNextPrompt: (rl: readline.Interface) => void;
   resetModelStreamState: () => void;
+  openTaskThread?: (threadId: string) => Promise<void> | void;
 };
 
 function logProviderAuthChallenge(
@@ -219,6 +220,23 @@ export function createNotificationHandler(ctx: ReplSessionEventContext) {
           ctx.state.config = nextConfig;
           ctx.state.selectedProvider = nextConfig.provider;
         }
+        break;
+      }
+
+      case "task/created": {
+        const task = params.task;
+        if (!task || typeof task !== "object") break;
+        const taskRecord = task as Record<string, unknown>;
+        const threads = Array.isArray(taskRecord.threads) ? taskRecord.threads : [];
+        const firstThread = threads[0];
+        if (!firstThread || typeof firstThread !== "object") break;
+        const taskThreadId = asString((firstThread as Record<string, unknown>).sessionId);
+        if (!taskThreadId) break;
+        ctx.state.threadId = taskThreadId;
+        ctx.state.lastKnownThreadId = taskThreadId;
+        const title = asString(taskRecord.title) ?? "Task";
+        console.log(`\nTask mode: ${title}`);
+        void ctx.openTaskThread?.(taskThreadId);
         break;
       }
 

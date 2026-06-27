@@ -11,20 +11,11 @@ import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAttachmentCountValidationMessage } from "../../../../../src/shared/attachments";
 import { buildAttachmentDisplayText } from "../../app/attachmentInputs";
+import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../app/store";
 import { ensureServerRunning } from "../../app/store.helpers";
 import type { FileAttachmentInput } from "../../app/store.helpers/jsonRpcSocket";
 import { isOneOffChatWorkspace } from "../../app/types";
-import {
-  PromptInputAttachmentPreviews,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputForm,
-  PromptInputRoot,
-  PromptInputStatusRow,
-  PromptInputSubmit,
-  PromptInputTools,
-} from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
 import {
   Command,
@@ -43,10 +34,21 @@ import {
   resolveComposerAttachmentsForWorkspace,
   revokeComposerAttachmentPreview,
 } from "../../lib/composerAttachments";
-import { modelDisplayNamesFromCatalog } from "../../lib/modelChoices";
+import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../../lib/modelChoices";
 import { resolveNewChatLandingTarget } from "../../lib/newChatLanding";
+import {
+  MessageComposerAttachments,
+  MessageComposerBody,
+  MessageComposerFooter,
+  MessageComposerForm,
+  MessageComposerRoot,
+  MessageComposerStatus,
+  MessageComposerSubmit,
+  MessageComposerTools,
+} from "../composer/MessageComposer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
 import { type ComposerModelSelection, ComposerModelSelector } from "./ComposerModelSelector";
+import { ComposerReasoningToggle } from "./ComposerReasoningToggle";
 import { buildMentionCatalog, extractReferencesFromText } from "./composerMentions";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
 
@@ -121,7 +123,32 @@ export function NewChatLanding() {
   );
   const [modelSelection, setModelSelection] =
     useState<ComposerModelSelection>(defaultModelSelection);
+  const [reasoningOverride, setReasoningOverride] = useState<{
+    provider: ComposerModelSelection["provider"];
+    model: string;
+    effort: ReasoningEffortValue;
+  } | null>(null);
 
+  const reasoningConfig = useMemo(
+    () =>
+      reasoningConfigFromCatalog(providerCatalog, modelSelection.provider, modelSelection.model),
+    [modelSelection, providerCatalog],
+  );
+  const workspaceReasoningEffort =
+    modelSelection.provider === "openai" || modelSelection.provider === "codex-cli"
+      ? fallbackModelWorkspace?.providerOptions?.[modelSelection.provider]?.reasoningEffort
+      : undefined;
+  const reasoningEffort: ReasoningEffortValue | null = reasoningConfig
+    ? reasoningOverride?.provider === modelSelection.provider &&
+      reasoningOverride.model === modelSelection.model
+      ? reasoningOverride.effort
+      : (workspaceReasoningEffort ?? reasoningConfig.defaultEffort)
+    : null;
+  const enabledReasoningEffort: ReasoningEffortValue | null = reasoningConfig
+    ? reasoningConfig.defaultEffort === "none"
+      ? "high"
+      : reasoningConfig.defaultEffort
+    : null;
   useEffect(() => {
     if (!modelTouched) {
       setModelSelection(defaultModelSelection);
@@ -246,6 +273,7 @@ export function NewChatLanding() {
                 references: referencesArg,
                 provider: modelSelection.provider,
                 model: modelSelection.model,
+                reasoningEffort: reasoningEffort ?? undefined,
               })
             : await newThread({
                 scope: "oneOff",
@@ -256,6 +284,7 @@ export function NewChatLanding() {
                 references: referencesArg,
                 provider: modelSelection.provider,
                 model: modelSelection.model,
+                reasoningEffort: reasoningEffort ?? undefined,
               });
 
         if (ok) {
@@ -279,6 +308,7 @@ export function NewChatLanding() {
       modelSelection,
       newThread,
       pendingAttachments,
+      reasoningEffort,
       setComposerText,
       submitting,
       target,
@@ -314,21 +344,21 @@ export function NewChatLanding() {
             Describe a task, idea, or question — Cowork will take it from here.
           </p>
         </header>
-        <PromptInputRoot
+        <MessageComposerRoot
           className="w-full max-w-[42rem] rounded-[28px] border-border/55 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
           fileDrop={
             submitting ? undefined : { onFiles: (files) => void ingestAttachmentFiles(files) }
           }
         >
-          <PromptInputAttachmentPreviews
+          <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
           />
-          <PromptInputForm onSubmit={submitNewChat}>
-            <PromptInputStatusRow>
+          <MessageComposerForm onSubmit={submitNewChat}>
+            <MessageComposerStatus>
               {submitting ? "Starting a new chat..." : null}
-            </PromptInputStatusRow>
-            <PromptInputBody>
+            </MessageComposerStatus>
+            <MessageComposerBody>
               {attachmentPickerError ? (
                 <div className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive">
                   <AlertTriangleIcon className="size-3.5 shrink-0" />
@@ -370,9 +400,9 @@ export function NewChatLanding() {
                   }
                 }}
               />
-            </PromptInputBody>
-            <PromptInputFooter className="gap-3 pt-1">
-              <PromptInputTools className="gap-2">
+            </MessageComposerBody>
+            <MessageComposerFooter className="gap-3 pt-1">
+              <MessageComposerTools className="gap-2">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -479,25 +509,40 @@ export function NewChatLanding() {
                   </PopoverContent>
                 </Popover>
                 {modelSelection.model ? (
-                  <ComposerModelSelector
-                    provider={modelSelection.provider}
-                    model={modelSelection.model}
-                    modelDisplayNames={modelDisplayNames}
-                    disabled={submitting}
-                    onChange={(selection) => {
-                      setModelTouched(true);
-                      setModelSelection(selection);
-                    }}
-                  />
+                  <>
+                    <ComposerModelSelector
+                      provider={modelSelection.provider}
+                      model={modelSelection.model}
+                      modelDisplayNames={modelDisplayNames}
+                      disabled={submitting}
+                      onChange={(selection) => {
+                        setModelTouched(true);
+                        setModelSelection(selection);
+                      }}
+                    />
+                    {reasoningConfig && reasoningEffort && enabledReasoningEffort ? (
+                      <ComposerReasoningToggle
+                        enabled={reasoningEffort !== "none"}
+                        disabled={submitting}
+                        onChange={(enabled) => {
+                          setReasoningOverride({
+                            provider: modelSelection.provider,
+                            model: modelSelection.model,
+                            effort: enabled ? enabledReasoningEffort : "none",
+                          });
+                        }}
+                      />
+                    ) : null}
+                  </>
                 ) : null}
-              </PromptInputTools>
-              <PromptInputSubmit
+              </MessageComposerTools>
+              <MessageComposerSubmit
                 status={submitting ? "pending" : "ready"}
                 disabled={!canSubmitNewChat || submitting}
               />
-            </PromptInputFooter>
-          </PromptInputForm>
-        </PromptInputRoot>
+            </MessageComposerFooter>
+          </MessageComposerForm>
+        </MessageComposerRoot>
       </div>
     </div>
   );

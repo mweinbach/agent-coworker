@@ -3,6 +3,7 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/o
 import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
+  mergeWorkspaceProviderOptions,
   mergeWorkspaceProviderOptionsPreservingSearchSettings,
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
@@ -633,7 +634,7 @@ export function createWorkspaceDefaultsActions(
     applyWorkspaceDefaultsToThread: async (
       threadId: string,
       mode: "auto" | "auto-resume" | "explicit" = "explicit",
-      draftModelSelection: { provider: ProviderName; model: string } | null = null,
+      draftModelSelection: DraftModelSelection | null = null,
       opts?: { allowBeforeHydration?: boolean },
     ) => {
       const thread = get().threads.find((t) => t.id === threadId);
@@ -732,7 +733,15 @@ export function createWorkspaceDefaultsActions(
       const allowedChildModelRefs = preserveSessionModel
         ? (rt.sessionConfig?.allowedChildModelRefs ?? [])
         : (ws.defaultAllowedChildModelRefs ?? rt.sessionConfig?.allowedChildModelRefs ?? []);
-      const providerOptions = ws.providerOptions;
+      const providerOptions =
+        effectiveDraftModelSelection?.reasoningEffort &&
+        (provider === "openai" || provider === "codex-cli")
+          ? mergeWorkspaceProviderOptions(ws.providerOptions, {
+              [provider]: {
+                reasoningEffort: effectiveDraftModelSelection.reasoningEffort,
+              },
+            })
+          : ws.providerOptions;
       const userName = ws.userName;
       const memoryDefaults = resolveThreadApplyMemoryDefaults(
         ws,

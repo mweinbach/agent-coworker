@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -16,7 +15,12 @@ import {
   shouldUseBundledBunRuntime,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "../src/platform/sandbox/windows";
 import {
   buildBunBundle,
   copyDir,
@@ -28,8 +32,7 @@ import {
   runCommand,
 } from "./releaseBuildUtils";
 
-const CACHE_VERSION = 9;
-const MANAGED_SOFFICE_HELPER_RELATIVE_PATH = path.join("assets", "managed-soffice-helper.mjs");
+const CACHE_VERSION = 11;
 
 type DesktopResourcesCache = {
   version: number;
@@ -40,8 +43,6 @@ type DesktopResourcesCache = {
   promptsFingerprint: string;
   configFingerprint: string;
   skillsFingerprint: string;
-  codexPrimaryRuntimeFingerprint: string | null;
-  artifactRuntimeFingerprint: string | null;
   foundationModelsSdkFingerprint: string | null;
   windowsAiElectronFingerprint: string | null;
   windowsSandboxHelperFingerprint: string | null;
@@ -117,10 +118,6 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
       typeof parsed.skillsFingerprint !== "string" ||
-      (parsed.codexPrimaryRuntimeFingerprint !== null &&
-        typeof parsed.codexPrimaryRuntimeFingerprint !== "string") ||
-      (parsed.artifactRuntimeFingerprint !== null &&
-        typeof parsed.artifactRuntimeFingerprint !== "string") ||
       (parsed.foundationModelsSdkFingerprint !== null &&
         typeof parsed.foundationModelsSdkFingerprint !== "string") ||
       (parsed.windowsAiElectronFingerprint !== null &&
@@ -159,51 +156,6 @@ async function removeLegacyCodexAppServerBinaries(desktopBinariesDir: string): P
   );
 }
 
-async function resolveCodexPrimaryRuntimeSource(): Promise<string | null> {
-  const fromEnv = process.env.COWORK_CODEX_PRIMARY_RUNTIME_DIR?.trim();
-  if (fromEnv) {
-    const resolved = path.resolve(fromEnv);
-    if (!(await pathExists(path.join(resolved, "runtime.json")))) {
-      throw new Error(
-        `COWORK_CODEX_PRIMARY_RUNTIME_DIR does not contain runtime.json: ${resolved}`,
-      );
-    }
-    return resolved;
-  }
-
-  const defaultRuntimeDir = path.join(
-    os.homedir(),
-    ".cache",
-    "codex-runtimes",
-    "codex-primary-runtime",
-  );
-  if (await pathExists(path.join(defaultRuntimeDir, "runtime.json"))) {
-    return defaultRuntimeDir;
-  }
-
-  return null;
-}
-
-async function resolveArtifactRuntimeSource(): Promise<string | null> {
-  const fromEnv = process.env.COWORK_ARTIFACT_RUNTIME_DIR?.trim();
-  const isUsable = async (dir: string): Promise<boolean> =>
-    (await pathExists(path.join(dir, "runtime.json"))) ||
-    (await pathExists(path.join(dir, "node", "node_modules", "@oai", "artifact-tool")));
-
-  if (fromEnv) {
-    const resolved = path.resolve(fromEnv);
-    if (!(await isUsable(resolved))) {
-      throw new Error(
-        `COWORK_ARTIFACT_RUNTIME_DIR does not contain an artifact runtime tree: ${resolved}`,
-      );
-    }
-    return resolved;
-  }
-
-  const defaultRuntimeDir = path.join(os.homedir(), ".cache", "cowork", "artifact-runtime");
-  return (await isUsable(defaultRuntimeDir)) ? defaultRuntimeDir : null;
-}
-
 async function syncCopiedDir(opts: {
   label: string;
   src: string;
@@ -231,17 +183,56 @@ async function syncWindowsSandboxHelper(opts: {
   platform: NodeJS.Platform;
   arch: string;
   commandRunner?: typeof runCommand;
+  forceBuild?: boolean;
 }): Promise<void> {
+  const destinationDir = path.dirname(opts.dest);
+  const binaryNames = [
+    WINDOWS_SANDBOX_HELPER_NAME,
+    WINDOWS_SANDBOX_SETUP_NAME,
+    WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  ];
+  const manifestDest = path.join(destinationDir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
   if (opts.platform !== "win32" || opts.nextFingerprint === null) {
-    await fs.rm(opts.dest, { force: true });
-    console.log("[resources] Windows sandbox helper: disabled");
+    await Promise.all([
+      ...binaryNames.map((name) => fs.rm(path.join(destinationDir, name), { force: true })),
+      fs.rm(manifestDest, { force: true }),
+    ]);
+    console.log("[resources] Windows sandbox helpers: disabled");
     return;
   }
 
+  const cachedBundleIsValid = await (async () => {
+    try {
+      const manifest = JSON.parse(await fs.readFile(manifestDest, "utf8")) as {
+        schemaVersion?: unknown;
+        rustTarget?: unknown;
+        files?: Record<string, unknown>;
+      };
+      if (
+        manifest.schemaVersion !== 1 ||
+        manifest.rustTarget !== resolveWindowsRustTarget(opts.arch)
+      ) {
+        return false;
+      }
+      for (const name of binaryNames) {
+        const expected = manifest.files?.[name];
+        if (typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) return false;
+        const actual = createHash("sha256")
+          .update(await fs.readFile(path.join(destinationDir, name)))
+          .digest("hex");
+        if (actual !== expected) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   const needsBuild =
-    opts.previousFingerprint !== opts.nextFingerprint || !(await pathExists(opts.dest));
+    opts.forceBuild === true ||
+    opts.previousFingerprint !== opts.nextFingerprint ||
+    !cachedBundleIsValid;
   if (!needsBuild) {
-    console.log("[resources] Windows sandbox helper: cached");
+    console.log("[resources] Windows sandbox helpers: cached");
     return;
   }
 
@@ -253,26 +244,54 @@ async function syncWindowsSandboxHelper(opts: {
     cwd: opts.root,
   });
   await runner(
-    ["cargo", "build", "--release", "--manifest-path", manifestPath, "--target", rustTarget],
+    [
+      "cargo",
+      "build",
+      "--release",
+      "--bins",
+      "--manifest-path",
+      manifestPath,
+      "--target",
+      rustTarget,
+    ],
     {
       cwd: opts.root,
+      ...(opts.forceBuild
+        ? {
+            env: {
+              ...process.env,
+              COWORK_SANDBOX_BUILD_NONCE: `${Date.now()}-${process.pid}`,
+            },
+          }
+        : {}),
     },
   );
 
-  const builtHelper = path.join(
-    crateDir,
-    "target",
-    rustTarget,
-    "release",
-    WINDOWS_SANDBOX_HELPER_NAME,
-  );
-  if (!(await pathExists(builtHelper))) {
-    throw new Error(`Windows sandbox helper build did not produce ${builtHelper}`);
+  const releaseDir = path.join(crateDir, "target", rustTarget, "release");
+  const builtBinaries = binaryNames.map((name) => ({ name, path: path.join(releaseDir, name) }));
+  for (const binary of builtBinaries) {
+    if (!(await pathExists(binary.path))) {
+      throw new Error(`Windows sandbox build did not produce ${binary.path}`);
+    }
   }
 
-  await fs.mkdir(path.dirname(opts.dest), { recursive: true });
-  await fs.copyFile(builtHelper, opts.dest);
-  console.log(`[resources] Windows sandbox helper: updated ${path.relative(opts.root, opts.dest)}`);
+  await fs.mkdir(destinationDir, { recursive: true });
+  const files: Record<string, string> = {};
+  for (const binary of builtBinaries) {
+    const destination = path.join(destinationDir, binary.name);
+    await fs.copyFile(binary.path, destination);
+    files[binary.name] = createHash("sha256")
+      .update(await fs.readFile(destination))
+      .digest("hex");
+  }
+  await fs.writeFile(
+    manifestDest,
+    `${JSON.stringify({ schemaVersion: 1, rustTarget, files }, null, 2)}\n`,
+    "utf8",
+  );
+  console.log(
+    `[resources] Windows sandbox helpers: updated ${path.relative(opts.root, destinationDir)}`,
+  );
 }
 
 function resolveWindowsRustTarget(arch: string): string {
@@ -476,16 +495,21 @@ async function syncFoundationModelsSdk(opts: {
 }
 
 async function main() {
-  const target = resolveBuildTarget(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  const forceWindowsSandboxBuild = rawArgs.includes("--force-windows-sandbox-build");
+  const target = resolveBuildTarget(
+    rawArgs.filter((arg) => arg !== "--force-windows-sandbox-build"),
+  );
   const { platform, arch } = target;
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
   const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
-  const shouldBundleCodexPrimaryRuntime = process.env.COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME === "1";
   const cachePath = path.join(distDir, `.desktop-resources-cache-${platform}-${arch}.json`);
 
   await fs.mkdir(distDir, { recursive: true });
   await rmrf(path.join(distDir, "server"));
+  await rmrf(path.join(distDir, "codex-primary-runtime"));
+  await rmrf(path.join(distDir, "artifact-runtime"));
 
   const cache = await loadCache(cachePath);
 
@@ -504,32 +528,9 @@ async function main() {
   const configSrc = path.join(root, "config");
   const skillsSrc = path.join(root, "skills");
   const docsSrc = path.join(root, "docs");
-  const codexPrimaryRuntimeSource = shouldBundleCodexPrimaryRuntime
-    ? await resolveCodexPrimaryRuntimeSource()
-    : null;
-  if (shouldBundleCodexPrimaryRuntime && !codexPrimaryRuntimeSource) {
-    throw new Error(
-      "COWORK_BUNDLE_CODEX_PRIMARY_RUNTIME=1 but no Codex primary runtime cache was found. Set COWORK_CODEX_PRIMARY_RUNTIME_DIR or run the Codex runtime setup first.",
-    );
-  }
-  const shouldBundleArtifactRuntime = process.env.COWORK_BUNDLE_ARTIFACT_RUNTIME === "1";
-  const artifactRuntimeSource = shouldBundleArtifactRuntime
-    ? await resolveArtifactRuntimeSource()
-    : null;
-  if (shouldBundleArtifactRuntime && !artifactRuntimeSource) {
-    throw new Error(
-      "COWORK_BUNDLE_ARTIFACT_RUNTIME=1 but no artifact runtime cache was found. Set COWORK_ARTIFACT_RUNTIME_DIR or run `bun run setup:artifact-runtime` first.",
-    );
-  }
   const promptsFingerprint = await fingerprintInputs([promptsSrc], root);
   const configFingerprint = await fingerprintInputs([configSrc], root);
   const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
-  const codexPrimaryRuntimeFingerprint = codexPrimaryRuntimeSource
-    ? await fingerprintInputs([codexPrimaryRuntimeSource], codexPrimaryRuntimeSource)
-    : null;
-  const artifactRuntimeFingerprint = artifactRuntimeSource
-    ? await fingerprintInputs([artifactRuntimeSource], artifactRuntimeSource)
-    : null;
   const foundationModelsSdkInputs = shouldBundleFoundationModelsSdk(platform, arch)
     ? await ensureFoundationModelsSdkInputs(root)
     : null;
@@ -547,7 +548,10 @@ async function main() {
       ? [
           path.join(root, "crates", "cowork-win-sandbox", "Cargo.toml"),
           path.join(root, "crates", "cowork-win-sandbox", "Cargo.lock"),
+          path.join(root, "crates", "cowork-win-sandbox", "build.rs"),
+          path.join(root, "crates", "cowork-win-sandbox", "codex-windows-sandbox-setup.manifest"),
           path.join(root, "crates", "cowork-win-sandbox", "src"),
+          path.join(root, "crates", "cowork-win-sandbox", "vendor"),
         ]
       : null;
   const windowsSandboxHelperFingerprint = windowsSandboxHelperInputs
@@ -567,14 +571,6 @@ async function main() {
   const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
   const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
   const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
-  const compiledManagedSofficeHelperPath = path.join(
-    desktopBinariesDir,
-    MANAGED_SOFFICE_HELPER_RELATIVE_PATH,
-  );
-  const bundledManagedSofficeHelperPath = path.join(
-    path.dirname(bundledEntrypointPath),
-    MANAGED_SOFFICE_HELPER_RELATIVE_PATH,
-  );
   const useBundledBunRuntime = shouldUseBundledBunRuntime(platform, arch);
   const bundledBunRuntimeVersion = useBundledBunRuntime
     ? resolveBundledBunRuntimeVersion(target)
@@ -587,11 +583,8 @@ async function main() {
     cache?.bundledBunRuntimeVersion !== bundledBunRuntimeVersion ||
     !(await pathExists(sidecarManifestPath)) ||
     (useBundledBunRuntime
-      ? !(await pathExists(bundledBunPath)) ||
-        !(await pathExists(bundledEntrypointPath)) ||
-        !(await pathExists(bundledManagedSofficeHelperPath))
-      : !(await pathExists(sidecarOutfile)) ||
-        !(await pathExists(compiledManagedSofficeHelperPath)));
+      ? !(await pathExists(bundledBunPath)) || !(await pathExists(bundledEntrypointPath))
+      : !(await pathExists(sidecarOutfile)));
 
   if (sidecarNeedsBuild) {
     const entry = path.join(root, "src", "server", "index.ts");
@@ -621,11 +614,6 @@ async function main() {
 
       const { executablePath, version } = await ensureBundledBunRuntime(root, target);
       await fs.copyFile(executablePath, bundledBunPath);
-      await fs.mkdir(path.dirname(bundledManagedSofficeHelperPath), { recursive: true });
-      await fs.copyFile(
-        path.join(root, "src", "managedSofficeRuntime", MANAGED_SOFFICE_HELPER_RELATIVE_PATH),
-        bundledManagedSofficeHelperPath,
-      );
       console.log(
         `[resources] sidecar: rebuilt ${path.relative(root, bundledEntrypointPath)} with Bun runtime v${version}`,
       );
@@ -658,11 +646,6 @@ async function main() {
         cwd: root,
         env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
       });
-      await fs.mkdir(path.dirname(compiledManagedSofficeHelperPath), { recursive: true });
-      await fs.copyFile(
-        path.join(root, "src", "managedSofficeRuntime", MANAGED_SOFFICE_HELPER_RELATIVE_PATH),
-        compiledManagedSofficeHelperPath,
-      );
       console.log(`[resources] sidecar: rebuilt ${path.relative(root, sidecarOutfile)}`);
     }
 
@@ -677,8 +660,6 @@ async function main() {
   const promptsDest = path.join(distDir, "prompts");
   const configDest = path.join(distDir, "config");
   const skillsDest = path.join(distDir, "skills");
-  const codexPrimaryRuntimeDest = path.join(distDir, "codex-primary-runtime");
-  const artifactRuntimeDest = path.join(distDir, "artifact-runtime");
 
   await syncCopiedDir({
     label: "prompts",
@@ -703,34 +684,6 @@ async function main() {
     previousFingerprint: cache?.skillsFingerprint ?? null,
     nextFingerprint: skillsFingerprint,
   });
-
-  if (codexPrimaryRuntimeSource && codexPrimaryRuntimeFingerprint) {
-    await syncCopiedDir({
-      label: "codex primary runtime",
-      src: codexPrimaryRuntimeSource,
-      dest: codexPrimaryRuntimeDest,
-      previousFingerprint: cache?.codexPrimaryRuntimeFingerprint ?? null,
-      nextFingerprint: codexPrimaryRuntimeFingerprint,
-    });
-  } else {
-    await rmrf(codexPrimaryRuntimeDest);
-    await fs.mkdir(codexPrimaryRuntimeDest, { recursive: true });
-    console.log("[resources] codex primary runtime: disabled");
-  }
-
-  if (artifactRuntimeSource && artifactRuntimeFingerprint) {
-    await syncCopiedDir({
-      label: "artifact runtime",
-      src: artifactRuntimeSource,
-      dest: artifactRuntimeDest,
-      previousFingerprint: cache?.artifactRuntimeFingerprint ?? null,
-      nextFingerprint: artifactRuntimeFingerprint,
-    });
-  } else {
-    await rmrf(artifactRuntimeDest);
-    await fs.mkdir(artifactRuntimeDest, { recursive: true });
-    console.log("[resources] artifact runtime: disabled");
-  }
 
   await syncFoundationModelsSdk({
     root,
@@ -757,6 +710,7 @@ async function main() {
     nextFingerprint: windowsSandboxHelperFingerprint,
     platform,
     arch,
+    forceBuild: forceWindowsSandboxBuild,
   });
 
   const docsDest = path.join(distDir, "docs");
@@ -782,8 +736,6 @@ async function main() {
     promptsFingerprint,
     configFingerprint,
     skillsFingerprint,
-    codexPrimaryRuntimeFingerprint,
-    artifactRuntimeFingerprint,
     foundationModelsSdkFingerprint,
     windowsAiElectronFingerprint,
     windowsSandboxHelperFingerprint,

@@ -280,6 +280,7 @@ export function AppTopBar({
 }: AppTopBarProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
+  const [managementSelectorOpen, setManagementSelectorOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
   const detailsId = useId();
   const platformInfo = useDesktopPlatform();
@@ -505,6 +506,8 @@ export function AppTopBar({
             style={collapsedThreadAnchorStyle}
           >
             <Select
+              open={managementSelectorOpen}
+              onOpenChange={setManagementSelectorOpen}
               value={managementWorkspaceId ?? "__global__"}
               onValueChange={(value) => {
                 onSelectManagementWorkspace?.(value === "__global__" ? null : value);
@@ -514,6 +517,7 @@ export function AppTopBar({
                 aria-label="Select plugin management workspace"
                 className="app-topbar__thread-button app-topbar__controls h-8 border-transparent bg-transparent px-0 text-sm font-medium shadow-none hover:bg-transparent"
                 size="sm"
+                onClick={() => setManagementSelectorOpen(true)}
               >
                 <span className="app-topbar__thread-title truncate">{title}</span>
                 <span
@@ -532,14 +536,16 @@ export function AppTopBar({
                   </span>
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__global__">Global</SelectItem>
-                {managementWorkspaces.map((workspace) => (
-                  <SelectItem key={workspace.id} value={workspace.id}>
-                    {workspace.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
+              {managementSelectorOpen ? (
+                <SelectContent forceMount>
+                  <SelectItem value="__global__">Global</SelectItem>
+                  {managementWorkspaces.map((workspace) => (
+                    <SelectItem key={workspace.id} value={workspace.id}>
+                      {workspace.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              ) : null}
             </Select>
           </div>
         ) : (

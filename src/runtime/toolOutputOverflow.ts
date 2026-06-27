@@ -5,6 +5,7 @@ import {
   MODEL_SCRATCHPAD_DIRNAME,
   TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
 } from "../shared/toolOutputOverflow";
+import { cleanupCreatedDirectories } from "../tools/mutationGuard";
 import { type PiToolResultContentPart, toolResultContentFromOutput } from "./piMessageBridge";
 
 type OverflowSummaryField = "exitCode" | "ok" | "count" | "provider";
@@ -12,8 +13,9 @@ type OverflowSummaryField = "exitCode" | "ok" | "count" | "provider";
 const SUMMARY_FIELDS: OverflowSummaryField[] = ["exitCode", "ok", "count", "provider"];
 const PRIVATE_SCRATCHPAD_DIR_MODE = 0o700;
 const PRIVATE_SCRATCHPAD_FILE_MODE = 0o600;
-// `read` is intentionally exempt so the model can inspect large file contents inline.
-const TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS = new Set(["read"]);
+// `read` and `skill` are intentionally exempt so the model receives complete
+// SKILL.md instructions plus any requested reference or script source inline.
+const TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS = new Set(["read", "skill"]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -139,6 +141,7 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
   toolCallId: string;
   workingDirectory: string;
   toolOutputOverflowChars: number | null | undefined;
+  assertCanMutate?: (toolName: string) => void | Promise<void>;
   log?: (line: string) => void;
 }): Promise<ToolOutputOverflowResolution | null> {
   const threshold = effectiveToolOutputOverflowChars(opts.toolOutputOverflowChars);
@@ -165,14 +168,22 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
 
   try {
     await assertScratchpadDirectorySafe(scratchDir);
+    await opts.assertCanMutate?.("toolOutputOverflow");
+    const createdDirs = await collectMissingDirectories(scratchDir);
     await fs.mkdir(scratchDir, { recursive: true, mode: PRIVATE_SCRATCHPAD_DIR_MODE });
-    await assertScratchpadDirectorySafe(scratchDir);
-    await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
-    await fs.writeFile(filePath, spillText, {
-      encoding: "utf-8",
-      mode: PRIVATE_SCRATCHPAD_FILE_MODE,
-    });
-    await fs.chmod(filePath, PRIVATE_SCRATCHPAD_FILE_MODE).catch(() => {});
+    try {
+      await assertScratchpadDirectorySafe(scratchDir);
+      await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
+      await opts.assertCanMutate?.("toolOutputOverflow");
+      await fs.writeFile(filePath, spillText, {
+        encoding: "utf-8",
+        mode: PRIVATE_SCRATCHPAD_FILE_MODE,
+      });
+      await fs.chmod(filePath, PRIVATE_SCRATCHPAD_FILE_MODE).catch(() => {});
+    } catch (error) {
+      await cleanupCreatedDirectories(createdDirs);
+      throw error;
+    }
   } catch (error) {
     opts.log?.(
       `[warn] Failed to write tool overflow spill file for ${opts.toolName}: ${error instanceof Error ? error.message : String(error)}`,
@@ -204,6 +215,28 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
       preview,
     },
   };
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function collectMissingDirectories(dirPath: string): Promise<string[]> {
+  const missing: string[] = [];
+  let current = path.resolve(dirPath);
+  while (!(await pathExists(current))) {
+    missing.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return missing;
 }
 
 async function assertScratchpadDirectorySafe(scratchDir: string): Promise<void> {

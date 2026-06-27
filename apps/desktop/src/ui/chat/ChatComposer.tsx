@@ -4,24 +4,27 @@ import type {
   CSSProperties,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
+  Ref,
   RefObject,
 } from "react";
-import {
-  PromptInputAttachmentPreviews,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputForm,
-  PromptInputRoot,
-  PromptInputStatusRow,
-  PromptInputSubmit,
-  PromptInputTools,
-} from "../../components/ai-elements/prompt-input";
+import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
 import { Button } from "../../components/ui/button";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import type { ProviderName } from "../../lib/wsProtocol";
+import {
+  MessageComposerAttachments,
+  MessageComposerBody,
+  MessageComposerFooter,
+  MessageComposerForm,
+  MessageComposerRoot,
+  MessageComposerStatus,
+  MessageComposerSubmit,
+  MessageComposerTools,
+} from "../composer/MessageComposer";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
+import { ComposerReasoningToggle } from "./ComposerReasoningToggle";
 import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
 
@@ -31,14 +34,13 @@ import { DraftThreadModelSelector } from "./DraftThreadModelSelector";
 import { ThreadModelIndicator } from "./ThreadModelIndicator";
 
 export function ChatComposer(props: {
-  messageBarOverlayRef: RefObject<HTMLDivElement | null>;
+  messageBarOverlayRef: Ref<HTMLDivElement>;
   composerOverlayMinHeight: number;
   messageBarHeight: number;
   inputDisabled: boolean;
   transcriptOnly: boolean;
   ingestAttachmentFiles: (files: File[]) => void;
   isUploading: boolean;
-  uploadProgress: number;
   pendingAttachments: ComposerAttachmentFile[];
   removeAttachment: (index: number) => void;
   submitComposer: (busyPolicy: "reject" | "steer") => void;
@@ -55,6 +57,8 @@ export function ChatComposer(props: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   handleFileSelect: (event: ChangeEvent<HTMLInputElement>) => void;
   threadModelConfig: { provider: ProviderName; model: string } | null;
+  reasoningToggle: { enabled: boolean; enabledEffort: ReasoningEffortValue } | null;
+  onReasoningEnabledChange: (enabled: boolean) => void;
   threadDraft: boolean;
   selectedThreadId: string;
   modelDisplayNames: Record<ProviderName, Record<string, string>>;
@@ -69,7 +73,6 @@ export function ChatComposer(props: {
     transcriptOnly,
     ingestAttachmentFiles,
     isUploading,
-    uploadProgress,
     pendingAttachments,
     removeAttachment,
     submitComposer,
@@ -86,6 +89,8 @@ export function ChatComposer(props: {
     fileInputRef,
     handleFileSelect,
     threadModelConfig,
+    reasoningToggle,
+    onReasoningEnabledChange,
     threadDraft,
     selectedThreadId,
     modelDisplayNames,
@@ -102,7 +107,7 @@ export function ChatComposer(props: {
     >
       <div className="relative mx-auto w-full max-w-[56rem] pointer-events-auto">
         <MessageBarResizer />
-        <PromptInputRoot
+        <MessageComposerRoot
           className="w-full max-w-full rounded-[28px] border border-border/55 bg-background/95 app-shadow-overlay backdrop-blur-md"
           style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
           fileDrop={
@@ -111,31 +116,35 @@ export function ChatComposer(props: {
               : { onFiles: (files) => void ingestAttachmentFiles(files) }
           }
         >
-          {isUploading && (
-            <div className="w-full mb-3 px-3 pt-2.5">
-              <Progress value={uploadProgress} className="h-1 bg-primary/10 rounded-full" />
+          {isUploading && !attachmentPickerError && (
+            <div
+              className="w-full mb-3 px-3 pt-2.5"
+              role="status"
+              aria-busy="true"
+              aria-live="polite"
+            >
+              <Progress indeterminate className="h-1 bg-primary/10 rounded-full" />
               <div className="flex items-center gap-2 mt-1.5 px-0.5 text-xs text-muted-foreground select-none font-medium">
                 <LoaderCircleIcon className="size-3.5 animate-spin text-primary shrink-0" />
                 <span>
-                  Uploading and preparing message...{" "}
-                  {uploadProgress < 100 ? `${uploadProgress}%` : "Done"}
+                  {preparingAttachments ? "Uploading and preparing message…" : "Sending message…"}
                 </span>
               </div>
             </div>
           )}
-          <PromptInputAttachmentPreviews
+          <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
             className="px-0"
           />
-          <PromptInputForm
+          <MessageComposerForm
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
               submitComposer(resolveComposerBusyPolicy(busy));
             }}
           >
-            <PromptInputStatusRow>{composerHint}</PromptInputStatusRow>
-            <PromptInputBody>
+            <MessageComposerStatus>{composerHint}</MessageComposerStatus>
+            <MessageComposerBody>
               {attachmentPickerError ? (
                 <div className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive">
                   <AlertTriangleIcon className="size-3.5 shrink-0" />
@@ -155,9 +164,9 @@ export function ChatComposer(props: {
                 ariaLabel="Message input"
                 textareaScrollClassName="min-h-14 max-h-[var(--composer-cap)] overflow-y-auto"
               />
-            </PromptInputBody>
-            <PromptInputFooter className="gap-3 pt-1">
-              <PromptInputTools className="gap-2">
+            </MessageComposerBody>
+            <MessageComposerFooter className="gap-3 pt-1">
+              <MessageComposerTools className="gap-2">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -194,18 +203,25 @@ export function ChatComposer(props: {
                     />
                   )
                 ) : null}
-              </PromptInputTools>
+                {reasoningToggle ? (
+                  <ComposerReasoningToggle
+                    enabled={reasoningToggle.enabled}
+                    disabled={inputDisabled || busy}
+                    onChange={onReasoningEnabledChange}
+                  />
+                ) : null}
+              </MessageComposerTools>
               <div className="flex shrink-0 items-center gap-2">
-                <PromptInputSubmit
+                <MessageComposerSubmit
                   mode={composerSubmitState.mode}
                   status={composerSubmitState.status}
                   disabled={composerSubmitState.disabled || preparingAttachments}
                   onStop={onStop}
                 />
               </div>
-            </PromptInputFooter>
-          </PromptInputForm>
-        </PromptInputRoot>
+            </MessageComposerFooter>
+          </MessageComposerForm>
+        </MessageComposerRoot>
       </div>
     </div>
   );

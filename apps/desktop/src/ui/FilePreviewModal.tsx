@@ -6,12 +6,6 @@ import { ExternalLinkIcon } from "lucide-react";
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
 import { useAppStore } from "../app/store";
-import {
-  DesktopMessageLink,
-  defaultDesktopRehypePlugins,
-  fileUrlToDesktopPath,
-  remarkRewriteDesktopFileLinks,
-} from "./markdown";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -37,7 +31,14 @@ import {
 } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
+import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
 import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
+import {
+  DesktopMessageLink,
+  defaultDesktopRehypePlugins,
+  fileUrlToDesktopPath,
+  remarkRewriteDesktopFileLinks,
+} from "./markdown";
 import { PptxPreview } from "./PptxPreview";
 
 function decodeUtf8(bytes: Uint8Array): string {
@@ -586,9 +587,13 @@ export function FilePreviewModal() {
               ) : null}
             </div>
           ) : (kind === "csv" || kind === "xlsx") && path ? (
-            <LazyUniverSpreadsheetCanvas key={path} path={path} />
+            <InlineErrorBoundary label="This spreadsheet couldn't be previewed.">
+              <LazyUniverSpreadsheetCanvas key={path} path={path} />
+            </InlineErrorBoundary>
           ) : kind === "pptx" && path ? (
-            <PptxPreview key={path} path={path} />
+            <InlineErrorBoundary label="This presentation couldn't be previewed.">
+              <PptxPreview key={path} path={path} />
+            </InlineErrorBoundary>
           ) : showUnknownAsText ? (
             <CodeFilePreview content={textContent} filePath={path ?? ""} />
           ) : showFallback || showUnknownFallback ? (

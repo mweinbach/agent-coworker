@@ -4,6 +4,7 @@ import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import type { MarketplaceSkillCatalogEntry } from "../../lib/wsProtocol";
+import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { ImportDialog } from "../import/ImportDialog";
 import { AvailableSkillCardGrid } from "./AvailableSkillCardGrid";
 import { InstallationCardGrid } from "./InstallationCardGrid";
@@ -105,75 +106,77 @@ export function SkillsCatalogPage({
           <InstallSkillDialog workspaceId={workspaceId} />
         </div>
 
-        <div className="space-y-6">
-          {effectiveSkills.length > 0 && (
-            <section>
-              <h2 className="text-lg font-semibold mb-4">Installed</h2>
-              <InstallationCardGrid
-                installations={effectiveSkills}
-                onSelect={(id) => void selectSkillInstallation(id)}
-              />
-            </section>
-          )}
+        <InlineErrorBoundary label="The skills catalog couldn't be loaded.">
+          <div className="space-y-6">
+            {effectiveSkills.length > 0 && (
+              <section>
+                <h2 className="text-lg font-semibold mb-4">Installed</h2>
+                <InstallationCardGrid
+                  installations={effectiveSkills}
+                  onSelect={(id) => void selectSkillInstallation(id)}
+                />
+              </section>
+            )}
 
-          {otherSkills.length > 0 && (
-            <section>
-              <h2 className="mb-4 text-lg font-semibold text-muted-foreground">
-                Other Installations
-              </h2>
-              <InstallationCardGrid
-                installations={otherSkills}
-                onSelect={(id) => void selectSkillInstallation(id)}
-              />
-            </section>
-          )}
+            {otherSkills.length > 0 && (
+              <section>
+                <h2 className="mb-4 text-lg font-semibold text-muted-foreground">
+                  Other Installations
+                </h2>
+                <InstallationCardGrid
+                  installations={otherSkills}
+                  onSelect={(id) => void selectSkillInstallation(id)}
+                />
+              </section>
+            )}
 
-          {availableSkills.length > 0 && (
-            <section>
-              <h2 className="mb-4 text-lg font-semibold">Available</h2>
-              <AvailableSkillCardGrid
-                skills={availableSkills}
-                onInstall={handleInstallAvailableSkill}
-                installing={installingSkill}
-              />
-            </section>
-          )}
+            {availableSkills.length > 0 && (
+              <section>
+                <h2 className="mb-4 text-lg font-semibold">Available</h2>
+                <AvailableSkillCardGrid
+                  skills={availableSkills}
+                  onInstall={handleInstallAvailableSkill}
+                  installing={installingSkill}
+                />
+              </section>
+            )}
 
-          {showLoadingState && (
-            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
-              <div className="mb-1 text-base font-medium">Loading...</div>
-              <div className="text-sm text-muted-foreground">Fetching skills catalog.</div>
-            </div>
-          )}
-
-          {!showLoadingState && skillCatalogError ? (
-            <div className="flex flex-col items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-4 text-left">
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className="border-destructive/40 text-destructive">
-                  Connection issue
-                </Badge>
-                <span className="text-sm text-destructive">{skillCatalogError}</span>
-              </div>
-              <Button size="sm" variant="outline" onClick={() => void refreshSkillsCatalog()}>
-                Retry
-              </Button>
-            </div>
-          ) : null}
-
-          {!showLoadingState &&
-            !skillCatalogError &&
-            installations.length === 0 &&
-            availableSkills.length === 0 && (
+            {showLoadingState && (
               <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
-                <div className="mb-1 text-base font-medium">No skills found</div>
-                <div className="text-sm text-muted-foreground">
-                  {searchQuery
-                    ? "Try adjusting your search query."
-                    : "Install a skill to give Codex superpowers."}
-                </div>
+                <div className="mb-1 text-base font-medium">Loading...</div>
+                <div className="text-sm text-muted-foreground">Fetching skills catalog.</div>
               </div>
             )}
-        </div>
+
+            {!showLoadingState && skillCatalogError ? (
+              <div className="flex flex-col items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-4 text-left">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="border-destructive/40 text-destructive">
+                    Connection issue
+                  </Badge>
+                  <span className="text-sm text-destructive">{skillCatalogError}</span>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => void refreshSkillsCatalog()}>
+                  Retry
+                </Button>
+              </div>
+            ) : null}
+
+            {!showLoadingState &&
+              !skillCatalogError &&
+              installations.length === 0 &&
+              availableSkills.length === 0 && (
+                <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
+                  <div className="mb-1 text-base font-medium">No skills found</div>
+                  <div className="text-sm text-muted-foreground">
+                    {searchQuery
+                      ? "Try adjusting your search query."
+                      : "Install a skill to give Cowork superpowers."}
+                  </div>
+                </div>
+              )}
+          </div>
+        </InlineErrorBoundary>
       </div>
 
       <SkillDetailDialog workspaceId={workspaceId} />

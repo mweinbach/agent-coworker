@@ -1,5 +1,6 @@
 import { ArchiveIcon, ClockIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { useAppStore } from "../../../app/store";
+import { isStandardChatThread } from "../../../app/threadFilters";
 import { workspaceLabelForThread } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
@@ -32,7 +33,9 @@ export function ArchivedChatsPage() {
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
   const setArchivedChatsAutoDeleteDays = useAppStore((s) => s.setArchivedChatsAutoDeleteDays);
 
-  const archivedThreads = threads.filter((t) => t.archived);
+  const archivedThreads = threads.filter(
+    (thread) => thread.archived && isStandardChatThread(thread, { includeArchived: true }),
+  );
   const currentAutoDelete = desktopSettings.archivedChatsAutoDeleteDays;
 
   const handleDelete = async (threadId: string, title: string) => {
@@ -66,7 +69,7 @@ export function ArchivedChatsPage() {
               value={String(currentAutoDelete)}
               onValueChange={(val) => setArchivedChatsAutoDeleteDays(Number(val))}
             >
-              <SelectTrigger className="w-48 text-[13px] h-9">
+              <SelectTrigger className="w-48 text-[13px] h-9" aria-label="Auto-delete retention">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

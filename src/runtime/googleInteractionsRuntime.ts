@@ -129,6 +129,17 @@ function isGoogleNotImplementedError(error: unknown): boolean {
   );
 }
 
+function isGoogleReplayCompatibilityError(error: unknown): boolean {
+  if (isGoogleNotImplementedError(error)) return true;
+
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("tool type of tool_call part") &&
+    normalized.includes("does not match with tool call context")
+  );
+}
+
 function sanitizedTextFromContent(content: unknown): string {
   if (typeof content === "string") return content.trim();
   if (!Array.isArray(content)) return "";
@@ -433,7 +444,7 @@ export function createGoogleInteractionsRuntime(
               throw error;
             }
             params.log?.(
-              "google-interactions: request is not implemented for full replay; retrying with text-only replay.",
+              "google-interactions: full replay was rejected; retrying with text-only replay.",
             );
             return await callGoogleStep(sanitizedMessages, undefined);
           };
@@ -473,7 +484,10 @@ export function createGoogleInteractionsRuntime(
             interactionId = result.interactionId;
             markModelCallSpanSuccess(span, telemetry, assistantRecord);
           } catch (error) {
-            if (previousInteractionId && isInvalidGoogleContinuationError(error)) {
+            if (
+              previousInteractionId &&
+              (isInvalidGoogleContinuationError(error) || isGoogleReplayCompatibilityError(error))
+            ) {
               params.log?.(
                 "google-interactions: Stateful request failed. Retrying with clean state.",
               );
@@ -485,7 +499,7 @@ export function createGoogleInteractionsRuntime(
               try {
                 result = await callGoogleStep(cleanStateMessages, undefined);
               } catch (cleanStateError) {
-                if (!isGoogleNotImplementedError(cleanStateError)) {
+                if (!isGoogleReplayCompatibilityError(cleanStateError)) {
                   markModelCallSpanError(span, cleanStateError);
                   throw cleanStateError;
                 }
@@ -494,7 +508,7 @@ export function createGoogleInteractionsRuntime(
               assistantRecord = asRecord(result.assistant) ?? {};
               interactionId = result.interactionId;
               markModelCallSpanSuccess(span, telemetry, assistantRecord);
-            } else if (!previousInteractionId && isGoogleNotImplementedError(error)) {
+            } else if (!previousInteractionId && isGoogleReplayCompatibilityError(error)) {
               const result = await retryWithTextOnlyReplay(requestMessages, error);
               assistantRecord = asRecord(result.assistant) ?? {};
               interactionId = result.interactionId;
@@ -558,6 +572,7 @@ export function createGoogleInteractionsRuntime(
           }
 
           stepMessages = [...stepMessages, ...toolResultMessages];
+          if (params.shouldStopAfterToolStep?.()) break;
         }
 
         await emitPart({

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -39,11 +39,7 @@ describe("google interactions runtime — core", () => {
     });
   });
 
-  test("caches the Google interactions client so the SDK experimental warning is only emitted once per api key", () => {
-    const realWarn = console.warn;
-    const warn = mock(() => {});
-    console.warn = warn as typeof console.warn;
-
+  test("caches the Google interactions client once per api key", () => {
     try {
       googleNativeInternal.__testResetGoogleInteractionsClientCache();
 
@@ -52,13 +48,7 @@ describe("google interactions runtime — core", () => {
 
       expect(first).toBe(second);
       expect(googleNativeInternal.__testGetGoogleInteractionsClientCacheSize()).toBe(1);
-      expect(
-        warn.mock.calls.filter(([message]) =>
-          String(message).includes("GoogleGenAI.interactions: Interactions usage is experimental"),
-        ).length,
-      ).toBe(1);
     } finally {
-      console.warn = realWarn;
       googleNativeInternal.__testResetGoogleInteractionsClientCache();
     }
   });

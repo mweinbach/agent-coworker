@@ -2,7 +2,7 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -11,6 +11,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import {
   defaultRehypePlugins,
   defaultRemarkPlugins,
+  Streamdown,
   type StreamdownProps,
 } from "streamdown";
 import type { PluggableList } from "unified";
@@ -21,11 +22,10 @@ import {
   normalizeDisplayCitationMarkers,
 } from "../../../../../src/shared/displayCitationMarkers";
 import { useAppStore } from "../../app/store";
+import { Button } from "../../components/ui/button";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
 import { cn } from "../../lib/utils";
-import { MessageResponse } from "../../components/ai-elements/message";
-import { Button } from "../../components/ui/button";
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
@@ -1099,7 +1099,60 @@ export type DesktopMarkdownProps = StreamdownProps & {
   desktopBasePath?: string | null;
 };
 
-function normalizeMessageResponseChildren(
+/**
+ * Wraps rendered `<pre>` (code) blocks with a hover-revealed Copy button.
+ * Additive only: the original `<pre>` element and its children render unchanged,
+ * so existing `[&_pre]` styling and Streamdown code-block structure are preserved.
+ */
+function PreWithCopy({
+  children,
+  node: _node,
+  ...props
+}: ComponentProps<"pre"> & { node?: unknown }) {
+  const preRef = useRef<HTMLPreElement | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    const text = preRef.current?.textContent ?? "";
+    if (!text) return;
+    void Promise.resolve(
+      typeof navigator !== "undefined" && navigator.clipboard
+        ? navigator.clipboard.writeText(text)
+        : Promise.reject(new Error("clipboard unavailable")),
+    ).then(
+      () => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      },
+      () => {
+        // Clipboard unavailable (e.g. insecure context) — fail silently.
+      },
+    );
+  };
+
+  return (
+    <div className="group relative">
+      <pre ref={preRef} {...props}>
+        {children}
+      </pre>
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={copied ? "Copied" : "Copy code"}
+        title={copied ? "Copied" : "Copy"}
+        className="absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded-md border border-border/50 bg-background/85 text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+      >
+        {copied ? (
+          <CheckIcon className="size-3.5 text-success" />
+        ) : (
+          <CopyIcon className="size-3.5" />
+        )}
+      </button>
+    </div>
+  );
+}
+
+function normalizeDesktopMarkdownChildren(
   children: StreamdownProps["children"],
   normalizeDisplayCitations: boolean,
   citationUrlsByIndex?: ReadonlyMap<number, string>,
@@ -1154,9 +1207,9 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
 
   return (
-    <MessageResponse
+    <Streamdown
       {...restProps}
-      children={normalizeMessageResponseChildren(
+      children={normalizeDesktopMarkdownChildren(
         children,
         normalizeDisplayCitations,
         citationUrlsByIndex,
@@ -1164,11 +1217,18 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
         citationAnnotations,
         fallbackToSourcesFooter,
       )}
-      className={className}
+      className={cn(
+        "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
+        // Keep wide GFM tables from overflowing the message bubble: render the
+        // table as a block-level horizontal scroll container.
+        "[&_table]:block [&_table]:w-max [&_table]:overflow-x-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1",
+        className,
+      )}
       components={{
         ...components,
         a: DesktopMessageLink,
         cite: DesktopCitationChip,
+        pre: PreWithCopy,
       }}
       plugins={{
         ...streamdownPlugins,

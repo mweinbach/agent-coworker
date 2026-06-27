@@ -166,6 +166,46 @@ describe("memory tool", () => {
     expect(await t.execute({ action: "read", key: "pref" })).toContain("not found");
   });
 
+  test("checks the mutation gate again after memory write approval", async () => {
+    const dir = await tmpDir();
+    let locked = false;
+    const t: any = createMemoryTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, { memoryRequireApproval: true }),
+        askUser: async () => {
+          locked = true;
+          return "approve";
+        },
+        assertCanMutate: () => {
+          if (locked) {
+            throw new Error("task locked before memory write");
+          }
+        },
+      }),
+    );
+
+    await expect(
+      t.execute({ action: "write", key: "pref", content: "Should not persist" }),
+    ).rejects.toThrow("task locked");
+    expect(await t.execute({ action: "read", key: "pref" })).toContain("not found");
+  });
+
+  test("blocks memory deletes through the mutation gate", async () => {
+    const dir = await tmpDir();
+    const writer: any = createMemoryTool(makeCtx(dir));
+    await writer.execute({ action: "write", key: "pref", content: "Keep this" });
+    const t: any = createMemoryTool(
+      makeCtx(dir, {
+        assertCanMutate: () => {
+          throw new Error("task locked before memory delete");
+        },
+      }),
+    );
+
+    await expect(t.execute({ action: "delete", key: "pref" })).rejects.toThrow("task locked");
+    expect(await writer.execute({ action: "read", key: "pref" })).toBe("Keep this");
+  });
+
   test("searches sqlite-backed memory entries", async () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));

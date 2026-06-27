@@ -44,10 +44,11 @@ import {
   configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
+  isProviderUnsupportedOnDesktop,
+  isUiDisabledProvider,
   modelChoicesFromCatalog,
   modelDisplayNamesFromCatalog,
   resolveModelDisplayLabel,
-  UI_DISABLED_PROVIDERS,
 } from "../../../lib/modelChoices";
 import { displayProviderName } from "../../../lib/providerDisplayNames";
 import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
@@ -122,7 +123,7 @@ export function buildMemoryGenerationModelGroups(
   const groups = sortProviderEntriesForSettings(
     PROVIDER_NAMES.filter(
       (provider) =>
-        !UI_DISABLED_PROVIDERS.has(provider) &&
+        !isUiDisabledProvider(provider) &&
         (visibility?.includedProviders ? visibility.includedProviders.includes(provider) : true) &&
         !visibility?.hiddenProviders?.includes(provider),
     )
@@ -146,6 +147,7 @@ export function buildMemoryGenerationModelGroups(
   if (hasCurrent) return groups;
 
   const parsed = decodeProviderModelSelection(current);
+  if (parsed && isProviderUnsupportedOnDesktop(parsed.provider)) return groups;
   const customOption = parsed
     ? {
         value: current,
@@ -367,6 +369,18 @@ export function MemoryPage() {
     setDraft(emptyDraft());
   };
 
+  const isDraftDirty = (): boolean => {
+    if (editingEntry) {
+      return (
+        draft.scope !== editingEntry.scope ||
+        draft.id !== editingEntry.id ||
+        draft.content !== editingEntry.content
+      );
+    }
+    const fresh = emptyDraft();
+    return draft.scope !== fresh.scope || draft.id !== fresh.id || draft.content !== fresh.content;
+  };
+
   const handleSave = () => {
     if (!activeTarget || !draft.content.trim()) return;
     const id = resolveDraftMemoryId(draft.id);
@@ -551,14 +565,31 @@ export function MemoryPage() {
           {filtered.length === 0 ? (
             <div className="rounded-xl border border-border/70 bg-background/50 py-12 flex flex-col items-center justify-center gap-3">
               <BrainIcon className="w-10 h-10 text-muted-foreground/40" />
-              <p className="text-sm text-muted-foreground">
-                {showMemoryLoading ? "Loading..." : "No remembered facts yet"}
-              </p>
-              {!showMemoryLoading && activeTarget ? (
-                <Button variant="outline" size="sm" onClick={openCreateDialog}>
-                  Add your first memory
-                </Button>
-              ) : null}
+              {memoryLoadStalled ? (
+                <>
+                  <p className="text-sm text-muted-foreground">Still loading…</p>
+                  {activeTarget ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => requestMemories(activeTarget)}
+                    >
+                      Retry
+                    </Button>
+                  ) : null}
+                </>
+              ) : showMemoryLoading ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">No remembered facts yet</p>
+                  {activeTarget ? (
+                    <Button variant="outline" size="sm" onClick={openCreateDialog}>
+                      Add your first memory
+                    </Button>
+                  ) : null}
+                </>
+              )}
             </div>
           ) : (
             <div
@@ -644,7 +675,18 @@ export function MemoryPage() {
 
           <Dialog
             open={dialogOpen}
-            onOpenChange={(open) => {
+            onOpenChange={async (open) => {
+              if (!open && isDraftDirty()) {
+                const confirmed = await confirmAction({
+                  title: "Discard changes?",
+                  message: "You have unsaved changes to this remembered fact.",
+                  confirmLabel: "Discard",
+                  cancelLabel: "Keep editing",
+                  kind: "warning",
+                  defaultAction: "cancel",
+                });
+                if (!confirmed) return;
+              }
               if (!open) closeDialog();
             }}
           >

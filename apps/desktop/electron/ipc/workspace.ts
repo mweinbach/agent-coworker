@@ -6,6 +6,7 @@ import { hydrateTranscriptSnapshot } from "../../src/app/transcriptHydration";
 import type { PersistedState } from "../../src/app/types";
 import {
   type CreateOneOffChatWorkspaceInput,
+  DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
   type DeleteTranscriptInput,
   type ReadTranscriptInput,
@@ -192,6 +193,13 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
         ...input,
         workspacePath,
         productAnalyticsState: deps.productAnalytics?.getPersistedState(),
+        onCoworkRuntimeBootstrapProgress: (progress) => {
+          if (_event.sender.isDestroyed()) return;
+          _event.sender.send(DESKTOP_EVENT_CHANNELS.workspaceServerStartupProgress, {
+            workspaceId: input.workspaceId,
+            progress,
+          });
+        },
       });
       return { url: listening.url };
     },

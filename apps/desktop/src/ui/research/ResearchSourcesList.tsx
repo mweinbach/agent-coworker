@@ -8,6 +8,13 @@ import { cn } from "../../lib/utils";
 
 type SourceRow = ResearchDetail["sources"][number];
 
+/**
+ * Third-party favicon fetches leak every source hostname to an external
+ * service (Google). Default to off and render a bundled letter-avatar
+ * fallback instead. Flip to true behind an explicit privacy opt-in.
+ */
+const ENABLE_THIRD_PARTY_FAVICONS = false;
+
 function sourceListKey(source: SourceRow): string {
   return [source.sourceType, source.url, source.title ?? ""].join(":");
 }
@@ -78,9 +85,10 @@ function SourceRow({ source }: { source: SourceRow }) {
       describeCitationSource({ url: source.url, ...(source.title ? { title: source.title } : {}) }),
     [source.title, source.url],
   );
-  const faviconSrc = display.faviconHostname
-    ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(display.faviconHostname)}&sz=32`
-    : null;
+  const faviconSrc =
+    ENABLE_THIRD_PARTY_FAVICONS && display.faviconHostname
+      ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(display.faviconHostname)}&sz=32`
+      : null;
 
   const open = () => void openExternalUrl({ url: source.url });
 

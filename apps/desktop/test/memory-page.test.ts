@@ -155,9 +155,10 @@ describe("desktop memory page", () => {
         await new Promise((resolve) => setTimeout(resolve, MEMORY_LOADING_STALL_MS + 100));
       });
 
-      expect(container.textContent).toContain("No remembered facts yet");
+      expect(container.textContent).toContain("Still loading…");
+      expect(container.textContent).not.toContain("No remembered facts yet");
+      expect(container.textContent).toContain("Retry");
       expect(container.textContent).not.toContain("Loading...");
-      expect(container.textContent).toContain("Refresh");
 
       await act(async () => {
         root.unmount();
@@ -291,6 +292,29 @@ describe("desktop memory page", () => {
       },
     ]);
     expect(JSON.stringify(groups)).not.toContain("Amazon Nova Micro");
+  });
+
+  test("memory model choices do not preserve Antigravity on Windows", () => {
+    const harness = setupJsdom();
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "win32";
+      const groups = buildMemoryGenerationModelGroups(
+        [
+          {
+            id: "google",
+            name: "Google",
+            defaultModel: "gemini-3.5-flash",
+            models: [{ id: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash" }],
+          },
+        ] as any,
+        "antigravity:gemini-3.1-pro-preview",
+      );
+
+      expect(JSON.stringify(groups)).not.toContain("antigravity");
+      expect(JSON.stringify(groups)).not.toContain("Antigravity");
+    } finally {
+      harness.restore();
+    }
   });
 
   test("memory targets collapse non-project chats while keeping projects individual", () => {

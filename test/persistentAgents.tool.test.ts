@@ -171,4 +171,54 @@ describe("persistent agent tools", () => {
       "Child agents are unavailable outside a session-backed turn.",
     );
   });
+
+  test("send and resume check the mutation gate before launching child work", async () => {
+    const sendInput = mock(async () => {});
+    const resume = mock(async () => makeSummary({ executionState: "running", busy: true }));
+    const assertCanMutate = mock(async () => {
+      throw new Error("task locked");
+    });
+    const ctx = makeCtx({
+      assertCanMutate,
+      agentControl: {
+        spawn: async () => makeSummary(),
+        list: async () => [],
+        sendInput,
+        wait: async () => ({
+          timedOut: false,
+          mode: "any" as const,
+          agents: [],
+          readyAgentIds: [],
+        }),
+        inspect: async () => ({
+          agent: makeSummary(),
+          latestAssistantText: null,
+          parsedReport: null,
+          reportRequired: true,
+          reportFound: false,
+          reportValid: false,
+          reportBlockCount: 0,
+          reportDiagnostic:
+            "No assistant message available to inspect for an <agent_report> footer.",
+          sessionUsage: null,
+          lastTurnUsage: null,
+        }),
+        resume,
+        close: async () => makeSummary(),
+      },
+    });
+
+    const sendTool: any = createSendAgentInputTool(ctx);
+    await expect(sendTool.execute({ agentId: "child-1", message: "next" })).rejects.toThrow(
+      "task locked",
+    );
+    expect(assertCanMutate).toHaveBeenCalledWith("sendAgentInput");
+    expect(sendInput).not.toHaveBeenCalled();
+
+    assertCanMutate.mockClear();
+    const resumeTool: any = createResumeAgentTool(ctx);
+    await expect(resumeTool.execute({ agentId: "child-1" })).rejects.toThrow("task locked");
+    expect(assertCanMutate).toHaveBeenCalledWith("resumeAgent");
+    expect(resume).not.toHaveBeenCalled();
+  });
 });

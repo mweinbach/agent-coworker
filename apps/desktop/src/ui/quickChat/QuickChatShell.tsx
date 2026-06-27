@@ -2,10 +2,12 @@ import { ArrowUpRightIcon, SquarePenIcon, XIcon } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useRef } from "react";
 
 import { useAppStore } from "../../app/store";
+import { isStandardChatThread } from "../../app/threadFilters";
 import { Button } from "../../components/ui/button";
 import { showMainWindow, windowClose } from "../../lib/desktopCommands";
 import { getDesktopWindowThreadId, shouldStartNewQuickChatThread } from "../../lib/windowMode";
 import { ChatView } from "../ChatView";
+import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 
 type QuickChatShellProps = {
   init: () => Promise<void>;
@@ -24,7 +26,11 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   const startedRequestedNewThreadRef = useRef(false);
 
   const activeThread = useMemo(
-    () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
+    () =>
+      threads.find(
+        (thread) =>
+          thread.id === selectedThreadId && isStandardChatThread(thread, { includeDrafts: true }),
+      ) ?? null,
     [selectedThreadId, threads],
   );
   const activeWorkspace = useMemo(
@@ -39,7 +45,12 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
     if (!ready || startupError || !requestedThreadId) {
       return;
     }
-    if (!threads.some((thread) => thread.id === requestedThreadId)) {
+    if (
+      !threads.some(
+        (thread) =>
+          thread.id === requestedThreadId && isStandardChatThread(thread, { includeDrafts: true }),
+      )
+    ) {
       return;
     }
     if (selectedThreadId === requestedThreadId) {
@@ -52,7 +63,13 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
     if (!ready || startupError) {
       return;
     }
-    if (requestedThreadId && threads.some((thread) => thread.id === requestedThreadId)) {
+    if (
+      requestedThreadId &&
+      threads.some(
+        (thread) =>
+          thread.id === requestedThreadId && isStandardChatThread(thread, { includeDrafts: true }),
+      )
+    ) {
       return;
     }
     if (requestedNewThread) {
@@ -63,7 +80,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
       void newThread();
       return;
     }
-    if (selectedThreadId) {
+    if (activeThread) {
       return;
     }
     void newThread();
@@ -72,7 +89,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
     ready,
     requestedNewThread,
     requestedThreadId,
-    selectedThreadId,
+    activeThread,
     startupError,
     threads,
   ]);
@@ -159,7 +176,9 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
                 </Button>
               </div>
             ) : (
-              <ChatView />
+              <InlineErrorBoundary label="This chat couldn't be rendered.">
+                <ChatView />
+              </InlineErrorBoundary>
             )}
           </div>
         </div>

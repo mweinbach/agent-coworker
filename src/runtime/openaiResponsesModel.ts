@@ -56,7 +56,7 @@ export async function resolveOpenAiResponsesModel(
   if (provider !== "openai") {
     throw new Error(`Unsupported provider for OpenAI Responses runtime: ${provider}`);
   }
-  const model = pickKnownPiModel("openai", modelId);
+  const model = await pickKnownPiModel("openai", modelId);
   if (!model) {
     throw new Error(
       `No OpenAI Responses model metadata available for provider openai (model: ${modelId}).`,

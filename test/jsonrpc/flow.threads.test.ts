@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { RunTurnParams } from "../../src/agent";
 import { jsonRpcThreadTurnRequestSchemas } from "../../src/server/jsonrpc/schema.threadTurn";
 import { startAgentServer } from "../../src/server/startServer";
 import {
@@ -16,6 +17,65 @@ import {
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
+  test("thread/start applies explicit provider and model to the live session config", async () => {
+    const tmpDir = await makeTmpProject();
+    const capturedConfigs: Array<{
+      provider: RunTurnParams["config"]["provider"];
+      model: string;
+      runtime: RunTurnParams["config"]["runtime"];
+    }> = [];
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_MODEL: "gemini-3-flash-preview",
+        },
+        runTurnImpl: async (params: RunTurnParams) => {
+          capturedConfigs.push({
+            provider: params.config.provider,
+            model: params.config.model,
+            runtime: params.config.runtime,
+          });
+          return {
+            text: "provider-specific reply",
+            responseMessages: [],
+          };
+        },
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", {
+        cwd: tmpDir,
+        provider: "openai",
+        model: "gpt-5.4-mini",
+      });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      expect(started.result.thread.modelProvider).toBe("openai");
+      expect(started.result.thread.model).toBe("gpt-5.4-mini");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-explicit-model",
+        input: [{ type: "text", text: "use the selected model" }],
+      });
+      expect(turnResponse.result.turn.threadId).toBe(started.result.thread.id);
+      await rpc.waitFor((message) => message.method === "turn/completed");
+
+      expect(capturedConfigs).toEqual([
+        {
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          runtime: "openai-responses",
+        },
+      ]);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("one connection can start, list, and read multiple threads", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

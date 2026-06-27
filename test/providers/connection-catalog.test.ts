@@ -15,8 +15,26 @@ const noCodexAccount = async () => ({
 });
 
 describe("providers/connectionCatalog", () => {
+  test("marks only models with toggleable reasoning effort", async () => {
+    const entries = await listProviderCatalogEntries({ platform: "linux" });
+    const openAiModel = entries
+      .find((entry) => entry.id === "openai")
+      ?.models.find((model) => model.id === "gpt-5.4");
+    const googleModel = entries
+      .find((entry) => entry.id === "google")
+      ?.models.find((model) => model.id === "gemini-3.1-pro-preview");
+    const anthropicModel = entries
+      .find((entry) => entry.id === "anthropic")
+      ?.models.find((model) => model.id === "claude-opus-4-8");
+
+    expect(openAiModel?.reasoning).toEqual({ defaultEffort: "high" });
+    expect(googleModel?.reasoning).toBeUndefined();
+    expect(anthropicModel?.reasoning).toBeUndefined();
+  });
+
   test("catalog entries stay aligned with provider names and default-model map", async () => {
     const payload = await getProviderCatalog({
+      platform: "linux",
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
         version: 1,
@@ -27,14 +45,14 @@ describe("providers/connectionCatalog", () => {
 
     const entryIds = payload.all.map((entry) => entry.id);
     expect(entryIds).toEqual(PROVIDER_NAMES);
-    expect(payload.all).toEqual(await listProviderCatalogEntries());
+    expect(payload.all).toEqual(await listProviderCatalogEntries({ platform: "linux" }));
     expect(Object.keys(payload.default)).toEqual(PROVIDER_NAMES);
     for (const entry of payload.all) {
       expect(payload.default[entry.id]).toBe(entry.defaultModel);
     }
   });
 
-  test("marks Antigravity unreachable on Windows", async () => {
+  test("omits Antigravity from the Windows catalog", async () => {
     const payload = await getProviderCatalog({
       platform: "win32",
       readCodexAppServerAccountImpl: noCodexAccount,
@@ -52,15 +70,8 @@ describe("providers/connectionCatalog", () => {
       }),
     });
 
-    const entry = payload.all.find((candidate) => candidate.id === "antigravity");
-    expect(entry).toEqual({
-      id: "antigravity",
-      name: "Antigravity",
-      models: [],
-      defaultModel: "",
-      state: "unreachable",
-      message: "Antigravity runtime is only supported on macOS and Linux for now.",
-    });
+    expect(payload.all.some((candidate) => candidate.id === "antigravity")).toBe(false);
+    expect(payload.default).not.toHaveProperty("antigravity");
     expect(payload.connected).not.toContain("antigravity");
   });
 

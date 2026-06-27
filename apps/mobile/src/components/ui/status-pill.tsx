@@ -49,9 +49,9 @@ export function StatusPill({ label, tone = "neutral" }: StatusPillProps) {
         style={{
           color: palette.color,
           fontSize: 10,
-          fontWeight: "700",
+          fontWeight: "600",
           textTransform: "uppercase",
-          letterSpacing: 0.7,
+          letterSpacing: 0.5,
         }}
       >
         {label}

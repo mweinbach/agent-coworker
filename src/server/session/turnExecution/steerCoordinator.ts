@@ -15,11 +15,21 @@ import type {
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import type { HistoryManager } from "../HistoryManager";
 import type { SessionContext } from "../SessionContext";
+import type { TaskLockError } from "../taskLocks";
 import {
   type ReferencedSkillContext,
   resolveReferencedPlugins,
   resolveReferencedSkills,
 } from "./referenceInjection";
+import {
+  createUserContentMaterializationTransaction,
+  type UserMessageContentBuildOptions,
+} from "./userMessageAttachments";
+import {
+  getTaskLockAbortSessionError,
+  isTaskLockAbortError,
+  makeTaskLockAbortError,
+} from "./userMessageTurnHelpers";
 
 const MAX_PENDING_STEER_COUNT = 32;
 
@@ -60,8 +70,11 @@ export type SteerCoordinatorDeps = {
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    options?: UserMessageContentBuildOptions,
   ) => Promise<string | Array<Record<string, unknown>>>;
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
+  getTaskLock?: () => TaskLockError | null;
+  trackLiveSteerSettlement?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export type SteerCoordinator = {
@@ -72,6 +85,7 @@ export type SteerCoordinator = {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    steerRequestId?: string,
   ) => Promise<void>;
   commitPendingSteers: () => Promise<{ messages: ModelMessage[]; committedCount: number }>;
   drainPendingSteers: (
@@ -130,6 +144,95 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
 
   const log = (line: string) => context.emit({ type: "log", sessionId: context.id, line });
 
+  const emitSessionError = (
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: TaskLockError["data"],
+    steerRequestId?: string,
+  ) => {
+    context.emit({
+      type: "error",
+      sessionId: context.id,
+      code,
+      source,
+      message,
+      ...(data ? { data } : {}),
+      ...(steerRequestId ? { steerRequestId } : {}),
+    });
+  };
+
+  const emitTaskLockIfPresent = (steerRequestId?: string): boolean => {
+    const taskLock = deps.getTaskLock?.() ?? null;
+    if (!taskLock) return false;
+    emitSessionError("task_locked", "session", taskLock.message, taskLock.data, steerRequestId);
+    return true;
+  };
+  const admitSteerForTurn = (turnId: string, steerRequestId?: string): boolean => {
+    if (emitTaskLockIfPresent(steerRequestId)) return false;
+    if (!context.state.running) {
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "No active turn to steer.",
+        undefined,
+        steerRequestId,
+      );
+      return false;
+    }
+    if (context.state.currentTurnId !== turnId) {
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn mismatch.",
+        undefined,
+        steerRequestId,
+      );
+      return false;
+    }
+    if (!context.state.acceptingSteers) {
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn no longer accepts steering.",
+        undefined,
+        steerRequestId,
+      );
+      return false;
+    }
+    return true;
+  };
+  const makeAssertCanMaterializeSteerContent = (opts?: {
+    turnId?: string;
+    abortSignal?: AbortSignal | null;
+  }) => {
+    return () => {
+      const taskLock = deps.getTaskLock?.() ?? null;
+      if (taskLock) {
+        throw makeTaskLockAbortError(taskLock.message, {
+          code: "task_locked",
+          source: "session",
+          message: taskLock.message,
+          data: taskLock.data,
+        });
+      }
+      const turnEnded =
+        opts?.turnId !== undefined &&
+        (!context.state.running || context.state.currentTurnId !== opts.turnId);
+      const interrupted =
+        context.state.abortController?.signal.aborted === true ||
+        opts?.abortSignal?.aborted === true;
+      if (interrupted || turnEnded) {
+        const message = "Turn was interrupted before the steer could be accepted.";
+        throw makeTaskLockAbortError(message, {
+          code: "validation_failed",
+          source: "session",
+          message,
+        });
+      }
+    };
+  };
+
   const mergeReferencedPlugins = (incoming: ReferencedPluginContext[]) => {
     if (incoming.length === 0) return;
     const byName = new Map(
@@ -159,76 +262,163 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    steerRequestId?: string,
   ) => {
+    if (emitTaskLockIfPresent(steerRequestId)) return;
     if (!context.state.running) {
-      context.emitError("validation_failed", "session", "No active turn to steer.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "No active turn to steer.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     const currentTurnId = context.state.currentTurnId;
     if (!currentTurnId) {
-      context.emitError("validation_failed", "session", "Active turn is missing an id.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn is missing an id.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     if (expectedTurnId !== currentTurnId) {
-      context.emitError("validation_failed", "session", "Active turn mismatch.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn mismatch.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     if (!context.state.acceptingSteers) {
-      context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Active turn no longer accepts steering.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
 
     if (text.trim().length === 0 && (!attachments || attachments.length === 0)) {
-      context.emitError("validation_failed", "session", "Steer input must be non-empty.");
+      emitSessionError(
+        "validation_failed",
+        "session",
+        "Steer input must be non-empty.",
+        undefined,
+        steerRequestId,
+      );
       return;
     }
     const displayText = resolveUserInputDisplayText(text, attachments);
     const attachmentValidationMessage = deps.getTurnAttachmentValidationMessage(attachments);
     if (attachmentValidationMessage) {
-      context.emitError("validation_failed", "session", attachmentValidationMessage);
+      emitSessionError(
+        "validation_failed",
+        "session",
+        attachmentValidationMessage,
+        undefined,
+        steerRequestId,
+      );
       return;
     }
     try {
       await deps.validateUploadedFileAttachments(attachments);
     } catch (error) {
       const classified = deps.classifyTurnError(error);
-      context.emitError(classified.code, classified.source, context.formatError(error));
+      emitSessionError(
+        classified.code,
+        classified.source,
+        context.formatError(error),
+        undefined,
+        steerRequestId,
+      );
       return;
     }
+    if (!admitSteerForTurn(currentTurnId, steerRequestId)) return;
     const activeSteerHandler = context.state.activeSteerHandler;
     if (activeSteerHandler) {
-      try {
-        const content = await deps.buildUserMessageContent(text, attachments, inputParts);
-        const resolvedReferences = await resolveSteerReferences(references);
-        const deliveryContent = prependReferenceContextToContent(
-          content,
-          renderSteerReferenceContext(resolvedReferences),
-        );
-        await activeSteerHandler({ text, expectedTurnId: currentTurnId, content: deliveryContent });
-        // Persist the model-facing content (with any forced-skill text folded in)
-        // as plain text — accepted by all providers, unlike synthetic tool calls.
-        historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);
-        context.emit({
-          type: "user_message",
-          sessionId: context.id,
-          text: displayText,
-          ...(clientMessageId ? { clientMessageId } : {}),
-        });
-        mergeReferencedPlugins(resolvedReferences.plugins);
-        context.queuePersistSessionSnapshot("session.steer_committed");
-        context.emit({
-          type: "steer_accepted",
-          sessionId: context.id,
-          turnId: currentTurnId,
-          text,
-          ...(clientMessageId ? { clientMessageId } : {}),
-        });
-      } catch (error) {
-        const classified = deps.classifyTurnError(error);
-        context.emitError(classified.code, classified.source, context.formatError(error));
+      const admittedAbortSignal = context.state.abortController?.signal ?? null;
+      const materialization = createUserContentMaterializationTransaction();
+      const assertCanMaterializeSteerContent = makeAssertCanMaterializeSteerContent({
+        turnId: currentTurnId,
+        abortSignal: admittedAbortSignal,
+      });
+      const liveSteerTransaction = async () => {
+        try {
+          const resolvedReferences = await resolveSteerReferences(references);
+          assertCanMaterializeSteerContent();
+          const content = await deps.buildUserMessageContent(text, attachments, inputParts, {
+            assertCanMaterialize: assertCanMaterializeSteerContent,
+            materialization,
+          });
+          const deliveryContent = prependReferenceContextToContent(
+            content,
+            renderSteerReferenceContext(resolvedReferences),
+          );
+          assertCanMaterializeSteerContent();
+          await activeSteerHandler({
+            text,
+            expectedTurnId: currentTurnId,
+            content: deliveryContent,
+          });
+          // Persist the model-facing content (with any forced-skill text folded in)
+          // as plain text — accepted by all providers, unlike synthetic tool calls.
+          historyManager.appendMessagesToHistory([{ role: "user", content: deliveryContent }]);
+          materialization.commit();
+          context.emit({
+            type: "user_message",
+            sessionId: context.id,
+            text: displayText,
+            ...(clientMessageId ? { clientMessageId } : {}),
+          });
+          mergeReferencedPlugins(resolvedReferences.plugins);
+          context.queuePersistSessionSnapshot("session.steer_committed");
+          context.emit({
+            type: "steer_accepted",
+            sessionId: context.id,
+            turnId: currentTurnId,
+            text,
+            ...(clientMessageId ? { clientMessageId } : {}),
+            ...(steerRequestId ? { steerRequestId } : {}),
+          });
+        } catch (error) {
+          await materialization.rollback();
+          const sessionError = getTaskLockAbortSessionError(error);
+          if (sessionError) {
+            emitSessionError(
+              sessionError.code,
+              sessionError.source,
+              sessionError.message,
+              sessionError.data,
+              steerRequestId,
+            );
+          }
+          if (isTaskLockAbortError(error)) return;
+          const classified = deps.classifyTurnError(error);
+          emitSessionError(
+            classified.code,
+            classified.source,
+            context.formatError(error),
+            undefined,
+            steerRequestId,
+          );
+        }
+      };
+      if (deps.trackLiveSteerSettlement) {
+        await deps.trackLiveSteerSettlement(liveSteerTransaction);
+      } else {
+        await liveSteerTransaction();
       }
       return;
     }
@@ -239,18 +429,22 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
         0,
       ) + getAttachmentTotalBase64Size(getInlineAttachments(attachments));
     if (nextPendingSteerAttachmentBase64Size > MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE) {
-      context.emitError(
+      emitSessionError(
         "validation_failed",
         "session",
         "Pending steer attachments are too large. Wait for the current turn to consume queued steers.",
+        undefined,
+        steerRequestId,
       );
       return;
     }
     if (context.state.pendingSteers.length >= MAX_PENDING_STEER_COUNT) {
-      context.emitError(
+      emitSessionError(
         "validation_failed",
         "session",
         "Too many pending steers. Wait for the current turn to consume queued steers.",
+        undefined,
+        steerRequestId,
       );
       return;
     }
@@ -269,6 +463,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       turnId: currentTurnId,
       text,
       ...(clientMessageId ? { clientMessageId } : {}),
+      ...(steerRequestId ? { steerRequestId } : {}),
     });
   };
 
@@ -276,24 +471,68 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     messages: ModelMessage[];
     committedCount: number;
   }> => {
-    const drained = context.state.pendingSteers.splice(0);
+    const drained = [...context.state.pendingSteers];
     if (drained.length === 0) return { messages: [], committedCount: 0 };
+    if (emitTaskLockIfPresent()) {
+      context.state.pendingSteers.splice(0);
+      return { messages: [], committedCount: 0 };
+    }
 
     const steerMessages: ModelMessage[] = [];
-    for (const steer of drained) {
-      const resolvedReferences = await resolveSteerReferences(steer.references);
-      mergeReferencedPlugins(resolvedReferences.plugins);
-      const referenceContext = renderSteerReferenceContext(resolvedReferences);
-      let content: ModelMessage["content"] = await deps.buildUserMessageContent(
-        steer.text,
-        steer.attachments,
-        steer.inputParts,
-      );
-      if (referenceContext) {
-        content = prependReferenceContextToContent(content, referenceContext);
+    const pluginBatches: ReferencedPluginContext[][] = [];
+    const materialization = createUserContentMaterializationTransaction();
+    const assertCanMaterializeSteerContent = makeAssertCanMaterializeSteerContent();
+    try {
+      for (const steer of drained) {
+        const resolvedReferences = await resolveSteerReferences(steer.references);
+        assertCanMaterializeSteerContent();
+        pluginBatches.push(resolvedReferences.plugins);
+        const referenceContext = renderSteerReferenceContext(resolvedReferences);
+        let content: ModelMessage["content"] = await deps.buildUserMessageContent(
+          steer.text,
+          steer.attachments,
+          steer.inputParts,
+          { assertCanMaterialize: assertCanMaterializeSteerContent, materialization },
+        );
+        if (referenceContext) {
+          content = prependReferenceContextToContent(content, referenceContext);
+        }
+        steerMessages.push({ role: "user", content });
       }
-      steerMessages.push({ role: "user", content });
+    } catch (error) {
+      await materialization.rollback();
+      const sessionError = getTaskLockAbortSessionError(error);
+      if (sessionError) {
+        context.emitError(
+          sessionError.code,
+          sessionError.source,
+          sessionError.message,
+          sessionError.data,
+        );
+      }
+      if (!isTaskLockAbortError(error)) throw error;
+      context.state.pendingSteers.splice(0);
+      return { messages: [], committedCount: 0 };
     }
+    try {
+      assertCanMaterializeSteerContent();
+    } catch (error) {
+      await materialization.rollback();
+      const sessionError = getTaskLockAbortSessionError(error);
+      if (sessionError) {
+        context.emitError(
+          sessionError.code,
+          sessionError.source,
+          sessionError.message,
+          sessionError.data,
+        );
+      }
+      if (!isTaskLockAbortError(error)) throw error;
+      context.state.pendingSteers.splice(0);
+      return { messages: [], committedCount: 0 };
+    }
+    context.state.pendingSteers.splice(0, drained.length);
+    for (const plugins of pluginBatches) mergeReferencedPlugins(plugins);
     historyManager.appendMessagesToHistory(steerMessages);
     for (const steer of drained) {
       context.emit({
@@ -304,6 +543,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       });
     }
     context.queuePersistSessionSnapshot("session.steer_committed");
+    materialization.commit();
     return { messages: steerMessages, committedCount: drained.length };
   };
 

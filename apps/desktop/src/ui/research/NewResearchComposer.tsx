@@ -2,17 +2,17 @@ import { PaperclipIcon, Settings2Icon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
-import {
-  PromptInputAttachmentPreviews,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputForm,
-  PromptInputRoot,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
+import {
+  MessageComposerAttachments,
+  MessageComposerBody,
+  MessageComposerFooter,
+  MessageComposerForm,
+  MessageComposerRoot,
+  MessageComposerSubmit,
+  MessageComposerTextarea,
+  MessageComposerTools,
+} from "../composer/MessageComposer";
 import { ResearchSettingsDialog } from "./ResearchSettingsPopover";
 import { useResearchAttachments } from "./useResearchAttachments";
 
@@ -49,7 +49,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
 
   return (
     <div className="w-full max-w-3xl px-4 py-4">
-      <PromptInputRoot
+      <MessageComposerRoot
         fileDrop={{
           disabled: submitting,
           onFiles: async (files) => {
@@ -57,29 +57,29 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
           },
         }}
       >
-        <PromptInputForm
+        <MessageComposerForm
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
           }}
         >
-          <PromptInputAttachmentPreviews
+          <MessageComposerAttachments
             attachments={attachmentPreviews}
             onRemove={removeAttachment}
           />
 
-          <PromptInputBody>
-            <PromptInputTextarea
+          <MessageComposerBody>
+            <MessageComposerTextarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder="Investigate a market, compare vendors, summarize a benchmark run, or draft a cited brief."
               rows={4}
               disabled={submitting}
             />
-          </PromptInputBody>
+          </MessageComposerBody>
 
-          <PromptInputFooter>
-            <PromptInputTools>
+          <MessageComposerFooter>
+            <MessageComposerTools>
               <Button
                 type="button"
                 size="icon-sm"
@@ -100,11 +100,14 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
               >
                 <PaperclipIcon className="h-4 w-4" />
               </Button>
-            </PromptInputTools>
-            <PromptInputSubmit status={submitting ? "pending" : "ready"} disabled={!input.trim()} />
-          </PromptInputFooter>
-        </PromptInputForm>
-      </PromptInputRoot>
+            </MessageComposerTools>
+            <MessageComposerSubmit
+              status={submitting ? "pending" : "ready"}
+              disabled={!input.trim()}
+            />
+          </MessageComposerFooter>
+        </MessageComposerForm>
+      </MessageComposerRoot>
 
       <ResearchSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 

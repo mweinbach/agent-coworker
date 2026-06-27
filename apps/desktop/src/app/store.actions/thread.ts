@@ -6,6 +6,7 @@ import {
 import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
 import { seedDockFromFeed } from "../a2uiDockReducer";
+import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
   type AppStoreActions,
   type AppStoreState,
@@ -41,8 +42,10 @@ import {
   syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
+import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
   createDefaultA2uiDock,
@@ -68,12 +71,17 @@ function findLatestSandboxApprovalPrompt(
   const selectedPrompt = selectedThreadId
     ? state.sandboxApprovalsByThread[selectedThreadId]?.at(-1)
     : undefined;
-  if (selectedThreadId && selectedPrompt) {
+  if (
+    selectedThreadId &&
+    selectedPrompt &&
+    isSandboxApprovalThreadVisible(state, selectedThreadId)
+  ) {
     return { threadId: selectedThreadId, prompt: selectedPrompt };
   }
 
   let latest: { threadId: string; prompt: SandboxApprovalPrompt } | null = null;
   for (const [threadId, prompts] of Object.entries(state.sandboxApprovalsByThread)) {
+    if (!isSandboxApprovalThreadVisible(state, threadId)) continue;
     for (const prompt of prompts) {
       if (!latest) {
         latest = { threadId, prompt };
@@ -122,6 +130,12 @@ export async function hydrateThreadSelection(
 
   const thread = get().threads.find((candidate) => candidate.id === threadId);
   if (!thread) return;
+  const selectedTaskIdForThread = (candidate: ThreadRecord): string | null => {
+    if (isStandardChatThread(candidate, { includeDrafts: true })) return null;
+    return typeof candidate.taskId === "string" && candidate.taskId.trim().length > 0
+      ? candidate.taskId
+      : null;
+  };
 
   const threadFingerprint = (candidate: ThreadRecord): SessionSnapshotFingerprint => ({
     updatedAt: candidate.lastMessageAt,
@@ -272,9 +286,11 @@ export async function hydrateThreadSelection(
 
   ensureThreadRuntime(get, set, threadId);
   if (thread.draft) {
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedThreadId: threadId,
       selectedWorkspaceId: thread.workspaceId,
+      selectedTaskId,
       view: options.preserveView ? state.view : "chat",
       threadRuntimeById: {
         ...state.threadRuntimeById,
@@ -291,16 +307,20 @@ export async function hydrateThreadSelection(
 
   const rt = get().threadRuntimeById[threadId];
   if (get().selectedThreadId === threadId && RUNTIME.threadSelectionRequests.has(threadId)) {
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
+      selectedTaskId,
       view: options.preserveView ? state.view : "chat",
     }));
     syncDesktopStateCache(get);
     return;
   }
   if (get().selectedThreadId === threadId && rt?.connected) {
+    const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
+      selectedTaskId,
       view: options.preserveView ? state.view : "chat",
     }));
     syncDesktopStateCache(get);
@@ -341,9 +361,11 @@ export async function hydrateThreadSelection(
     (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
 
   const requestId = beginThreadSelectionRequest(threadId);
+  const selectedTaskId = selectedTaskIdForThread(thread);
   set((state) => ({
     selectedThreadId: threadId,
     selectedWorkspaceId: thread.workspaceId,
+    selectedTaskId,
     view: options.preserveView ? state.view : "chat",
     threadRuntimeById: {
       ...state.threadRuntimeById,
@@ -507,6 +529,7 @@ export function createThreadActions(
   | "clearThreadUsageHardCap"
   | "dispatchA2uiAction"
   | "setThreadModel"
+  | "setThreadReasoningEffort"
   | "setComposerText"
   | "setInjectContext"
   | "answerAsk"
@@ -841,6 +864,7 @@ export function createThreadActions(
           if (existingDraft) {
             set({
               selectedThreadId: existingDraft.id,
+              selectedTaskId: null,
               view: "chat",
               newChatLandingTarget: null,
             });
@@ -895,6 +919,7 @@ export function createThreadActions(
       set((s) => ({
         threads: [thread, ...s.threads],
         selectedThreadId: threadId,
+        selectedTaskId: null,
         view: "chat",
         composerText: "",
         newChatLandingTarget: null,
@@ -908,6 +933,7 @@ export function createThreadActions(
             transcriptOnly: false,
             draftComposerProvider: opts?.provider ?? null,
             draftComposerModel: opts?.model?.trim() || null,
+            composerReasoningEffort: opts?.reasoningEffort ?? null,
           },
         },
       }));
@@ -964,6 +990,7 @@ export function createThreadActions(
           : resolveDefaultNewChatTarget(state.workspaces, state.selectedWorkspaceId));
       set({
         selectedThreadId: null,
+        selectedTaskId: null,
         view: "chat",
         composerText: "",
         newChatLandingTarget: landingTarget,
@@ -1068,10 +1095,42 @@ export function createThreadActions(
       const thread = get().threads.find((t) => t.id === activeThreadId);
       if (!thread) return false;
 
+      if (!(thread.workspaceId in get().taskSummariesByWorkspaceId)) {
+        await get().refreshTasks(thread.workspaceId);
+      }
+
       const rt = get().threadRuntimeById[activeThreadId];
       const trimmed = text.trim();
       const hasAttachments = attachments && attachments.length > 0;
       if (!trimmed && !hasAttachments) return false;
+
+      const taskCommand = !hasAttachments ? trimmed.match(/^\/task(?:\s+([\s\S]*))?$/i) : null;
+      if (taskCommand) {
+        try {
+          await ensureServerRunning(get, set, thread.workspaceId);
+          ensureControlSocket(get, set, thread.workspaceId);
+          await requestJsonRpc(get, set, thread.workspaceId, "command/execute", {
+            threadId: activeThreadId,
+            name: "task",
+            arguments: taskCommand[1]?.trim() ?? "",
+            clientMessageId: makeId(),
+          });
+          set({ composerText: "" });
+          return true;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          set((state) => ({
+            notifications: pushNotification(state.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: "Unable to start task mode",
+              detail,
+            }),
+          }));
+          return false;
+        }
+      }
 
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
@@ -1206,6 +1265,7 @@ export function createThreadActions(
               ...s.threadRuntimeById[threadId],
               draftComposerProvider: provider,
               draftComposerModel: model,
+              composerReasoningEffort: null,
             },
           },
         }));
@@ -1214,6 +1274,15 @@ export function createThreadActions(
 
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
+      set((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId],
+            composerReasoningEffort: null,
+          },
+        },
+      }));
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
       if (pendingApply?.draftModelSelection) {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
@@ -1233,6 +1302,46 @@ export function createThreadActions(
           sessionId: rt.sessionId,
           provider,
           model,
+        });
+      }
+    },
+
+    setThreadReasoningEffort: (threadId, provider, effort) => {
+      if (provider !== "openai" && provider !== "codex-cli") return;
+      const thread = get().threads.find((candidate) => candidate.id === threadId);
+      if (!thread) return;
+      ensureThreadRuntime(get, set, threadId);
+      const currentRuntime = get().threadRuntimeById[threadId];
+      if (!thread.draft && currentRuntime?.busy) return;
+
+      set((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId],
+            composerReasoningEffort: effort,
+          },
+        },
+      }));
+
+      if (thread.draft) return;
+      const rt = currentRuntime;
+      if (!rt?.sessionId) return;
+      const config = {
+        providerOptions: {
+          [provider]: { reasoningEffort: effort },
+        },
+      };
+      const ok = sendThread(get, threadId, (sessionId) => ({
+        type: "set_config",
+        sessionId,
+        config,
+      }));
+      if (ok) {
+        appendThreadTranscript(threadId, "client", {
+          type: "set_config",
+          sessionId: rt.sessionId,
+          config,
         });
       }
     },

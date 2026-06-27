@@ -551,7 +551,8 @@ function buildSkillPolicySection(
   return [
     "## Skill Loading Policy (Strict)",
     "",
-    "- Before creating any domain deliverable (spreadsheet, document, presentation, PDF), call the `skill` tool first.",
+    "- Before creating any domain deliverable (spreadsheet, document, presentation, PDF), call the `skill` tool first when a matching skill is listed as available in this run.",
+    "- If no listed skill matches the requested deliverable, continue with the available tools; do not invent a skill name or guess a `SKILL.md` path.",
     "- If the user prompt explicitly says to use the `skill` tool, that call is mandatory and must happen before related artifact creation.",
     "- Do not write build scripts or output artifacts for those domains before loading the corresponding skill.",
     "- If the task spans multiple deliverable domains, load each required skill before creating files.",
@@ -658,15 +659,10 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     defaultImplementationRole: defaultSubagentRoles.implementationRoleId,
     defaultVerificationRole: defaultSubagentRoles.verificationRoleId,
     knowledgeCutoff: supportedModel.knowledgeCutoff,
-    skillNames: skillNames || '"pdf", "documents", "presentations", "spreadsheets"',
+    skillNames: skillNames || "none",
     skillExamples:
       skillExamples ||
-      [
-        '- Creating a presentation → load the "presentations" skill before starting',
-        '- Creating a spreadsheet → load the "spreadsheets" skill before starting',
-        '- Creating a Word document → load the "documents" skill before starting',
-        '- Creating a PDF → load the "pdf" skill before starting',
-      ].join("\n"),
+      "- No skills are available in this run. Continue without the `skill` tool instead of guessing a skill name or path.",
   };
 
   prompt = renderTemplateVariables(prompt, vars);

@@ -209,6 +209,46 @@ describe("openai responses runtime", () => {
     expect(result.providerState?.responseId).toBe("resp_2");
   });
 
+  test("stops after a tool step when a task input directive requests a pause", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-task-pause-"));
+    let modelSteps = 0;
+    let toolCalls = 0;
+    const runtime = createOpenAiResponsesRuntime({
+      runStepImpl: async () => {
+        modelSteps += 1;
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_1", name: "requestInput", arguments: {} }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "toolUse",
+          },
+          responseId: "resp_pause",
+        };
+      },
+    });
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 3,
+        shouldStopAfterToolStep: () => true,
+        tools: {
+          requestInput: {
+            execute: async () => {
+              toolCalls += 1;
+              return "Task paused for input";
+            },
+          },
+        },
+      }),
+    );
+
+    expect(modelSteps).toBe(1);
+    expect(toolCalls).toBe(1);
+    expect(result.providerState?.responseId).toBe("resp_pause");
+    expect(result.responseMessages.some((message) => message.role === "tool")).toBe(true);
+  });
+
   test("provider-managed continuation uses overflow pointer text instead of the full spilled tool payload", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-overflow-"));
     const nativeCalls: Array<Record<string, unknown>> = [];

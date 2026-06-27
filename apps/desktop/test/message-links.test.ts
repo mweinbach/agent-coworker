@@ -4,12 +4,12 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  DesktopMarkdown,
   decodeDesktopExternalHref,
   decodeDesktopLocalFileHref,
   encodeDesktopExternalHref,
   encodeDesktopLocalFileHref,
   fileUrlToDesktopPath,
-  DesktopMarkdown,
   remarkRewriteDesktopFileLinks,
   rewriteBareDesktopFilePathsInTree,
   rewriteDesktopFileLinksInTree,

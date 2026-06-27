@@ -82,6 +82,70 @@ function makeSnapshot(sessionId: string): PersistedSessionSnapshot {
   };
 }
 
+function makeRawSnapshot(version: number): {
+  version: number;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
+  session: Record<string, unknown>;
+  config: Record<string, unknown>;
+  context: Record<string, unknown>;
+} {
+  const snapshot = {
+    version,
+    sessionId: `snapshot-v${version}`,
+    createdAt: "2026-06-13T00:00:00.000Z",
+    updatedAt: "2026-06-13T00:00:01.000Z",
+    session: {
+      title: `Snapshot v${version}`,
+      titleSource: "model",
+      titleModel: "gpt-5-mini",
+      provider: "openai",
+      model: "gpt-5.2",
+    } as Record<string, unknown>,
+    config: {
+      provider: "openai",
+      model: "gpt-5.2",
+      enableMcp: true,
+      workingDirectory: "/tmp/workspace",
+    } as Record<string, unknown>,
+    context: {
+      system: "System prompt",
+      messages: [{ role: "user", content: "hello" }],
+      todos: [],
+      harnessContext: null,
+    } as Record<string, unknown>,
+  };
+
+  if (version >= 2) {
+    snapshot.context.providerState = null;
+  }
+  if (version >= 3) {
+    snapshot.session.sessionKind = "root";
+    snapshot.session.parentSessionId = null;
+    snapshot.session.role = null;
+  }
+  if (version >= 4) {
+    snapshot.context.costTracker = null;
+  }
+  if (version >= 5) {
+    snapshot.config.backupsEnabledOverride = null;
+  }
+  if (version >= 6) {
+    snapshot.session.mode = null;
+    snapshot.session.depth = null;
+    snapshot.session.nickname = null;
+    snapshot.session.requestedModel = null;
+    snapshot.session.effectiveModel = null;
+    snapshot.session.requestedReasoningEffort = null;
+    snapshot.session.effectiveReasoningEffort = null;
+    snapshot.session.executionState = null;
+    snapshot.session.lastMessagePreview = null;
+  }
+
+  return snapshot;
+}
+
 describe("sessionStore", () => {
   test("writes and reads a persisted session snapshot", async () => {
     const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
@@ -207,6 +271,137 @@ describe("sessionStore", () => {
 
     expect(parsed.version).toBe(7);
     expect(parsed.context.lastMemoryGeneratedIndex).toBe(2);
+  });
+
+  test.each([
+    [3, "general", "worker"],
+    [4, "explore", "explorer"],
+    [5, "research", "research"],
+  ] as const)("parsePersistedSessionSnapshot normalizes legacy v%d subagent and agent type values", (version, agentType, expectedRole) => {
+    const raw = makeRawSnapshot(version);
+    raw.session.sessionKind = "subagent";
+    raw.session.agentType = agentType;
+
+    const parsed = parsePersistedSessionSnapshot(raw);
+
+    expect(parsed).toMatchObject({
+      version,
+      session: {
+        sessionKind: "agent",
+        role: expectedRole,
+      },
+    });
+  });
+
+  test("parsePersistedSessionSnapshot keeps canonical legacy roles ahead of agentType", () => {
+    const raw = makeRawSnapshot(5);
+    raw.session.sessionKind = "subagent";
+    raw.session.role = "reviewer";
+    raw.session.agentType = "general";
+
+    const parsed = parsePersistedSessionSnapshot(raw);
+
+    expect(parsed).toMatchObject({
+      version: 5,
+      session: {
+        sessionKind: "agent",
+        role: "reviewer",
+      },
+    });
+  });
+
+  test("parsePersistedSessionSnapshot rejects retired legacy sessionKind values after v5", () => {
+    const raw = makeRawSnapshot(6);
+    raw.session.sessionKind = "subagent";
+
+    expect(() => parsePersistedSessionSnapshot(raw)).toThrow("Invalid persisted session snapshot");
+  });
+
+  test("parsePersistedSessionSnapshot preserves v7 profile, sandbox, and provider options", () => {
+    const raw = makeRawSnapshot(7);
+    raw.session.profile = {
+      id: "reviewer",
+      ref: "workspace:reviewer",
+      scope: "workspace",
+      displayName: "Reviewer",
+      description: "Review focused profile",
+      baseRole: "reviewer",
+      prompt: "Review carefully",
+      allowedBuiltInTools: ["read"],
+      allowedMcpServers: ["github"],
+      skillNames: ["code-review"],
+      model: "gpt-5.2",
+      reasoningEffort: "high",
+      defaultTaskType: "verify",
+      defaultContextMode: "brief",
+      resolvedAt: "2026-06-13T00:00:00.000Z",
+    };
+    raw.config.providerOptions = {
+      reasoning: { effort: "high" },
+      store: false,
+    };
+    raw.config.sandbox = {
+      mode: "workspace-write",
+      network: false,
+      requireBackend: true,
+    };
+    raw.context.lastMemoryGeneratedIndex = 1;
+
+    const parsed = parsePersistedSessionSnapshot(raw);
+
+    expect(parsed).toMatchObject({
+      version: 7,
+      session: {
+        profile: {
+          id: "reviewer",
+          scope: "workspace",
+          baseRole: "reviewer",
+        },
+      },
+      config: {
+        providerOptions: {
+          reasoning: { effort: "high" },
+          store: false,
+        },
+        sandbox: {
+          mode: "workspace-write",
+          network: false,
+          requireBackend: true,
+        },
+      },
+      context: {
+        lastMemoryGeneratedIndex: 1,
+      },
+    });
+  });
+
+  test("parsePersistedSessionSnapshot defaults omitted v7 optional objects without pinning config overrides", () => {
+    const parsed = parsePersistedSessionSnapshot(makeRawSnapshot(7));
+
+    expect(parsed).toMatchObject({
+      version: 7,
+      session: {
+        profile: null,
+      },
+    });
+    expect(parsed.config).not.toHaveProperty("providerOptions");
+    expect(parsed.config).not.toHaveProperty("sandbox");
+  });
+
+  test("parsePersistedSessionSnapshot rejects malformed embedded v4 cost tracker state", () => {
+    const raw = makeRawSnapshot(4);
+    raw.context.costTracker = {};
+
+    expect(() => parsePersistedSessionSnapshot(raw)).toThrow("Invalid persisted session snapshot");
+  });
+
+  test("parsePersistedSessionSnapshot rejects malformed embedded v7 sandbox state", () => {
+    const raw = makeRawSnapshot(7);
+    raw.config.sandbox = {
+      mode: "invalid",
+    };
+
+    expect(() => parsePersistedSessionSnapshot(raw)).toThrow("Invalid persisted session snapshot");
   });
 
   test("listPersistedSessionSnapshots excludes subagent snapshots from top-level lists", async () => {

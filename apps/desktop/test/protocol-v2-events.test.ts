@@ -1500,6 +1500,353 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
   });
 
+  test("dismissPrompt does not act on task-owned approvals from ordinary chat", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-task-approval-stays-scoped";
+    const chatThreadId = `thread-${crypto.randomUUID()}`;
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        view: "chat",
+        selectedTaskId: null,
+        selectedThreadId: chatThreadId,
+        threads: [
+          ...state.threads.map((thread) =>
+            thread.id === threadId
+              ? { ...thread, taskId: "task-1", taskThreadId: "task-thread-1" }
+              : thread,
+          ),
+          {
+            id: chatThreadId,
+            workspaceId,
+            title: "Ordinary chat",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "active",
+            sessionId: `session-${crypto.randomUUID()}`,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+          },
+        ],
+        tasksById: {
+          "task-1": {
+            id: "task-1",
+            threads: [
+              {
+                id: "task-thread-1",
+                taskId: "task-1",
+                sessionId: threadId,
+              },
+            ],
+          },
+        } as never,
+      }));
+    });
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).not.toContainEqual({
+      id: requestId,
+      result: { decision: "decline" },
+    });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+  });
+
+  test("dismissPrompt declines selected task approvals while settings overlays task", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-settings-over-task-denies";
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com/settings-task",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        view: "settings",
+        lastNonSettingsView: "task",
+        selectedTaskId: "task-1",
+        selectedThreadId: threadId,
+        threads: state.threads.map((thread) =>
+          thread.id === threadId
+            ? { ...thread, taskId: "task-1", taskThreadId: "task-thread-1" }
+            : thread,
+        ),
+        tasksById: {
+          "task-1": {
+            id: "task-1",
+            status: "working",
+            threads: [
+              {
+                id: "task-thread-1",
+                taskId: "task-1",
+                sessionId: threadId,
+              },
+            ],
+          },
+        } as never,
+      }));
+    });
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+  });
+
+  test("dismissPrompt keeps task approvals hidden while settings overlays chat", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-settings-over-chat-stays-scoped";
+    const chatThreadId = `thread-${crypto.randomUUID()}`;
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com/settings-chat",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        view: "settings",
+        lastNonSettingsView: "chat",
+        selectedTaskId: null,
+        selectedThreadId: chatThreadId,
+        threads: [
+          ...state.threads.map((thread) =>
+            thread.id === threadId
+              ? { ...thread, taskId: "task-1", taskThreadId: "task-thread-1" }
+              : thread,
+          ),
+          {
+            id: chatThreadId,
+            workspaceId,
+            title: "Ordinary chat",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "active",
+            sessionId: `session-${crypto.randomUUID()}`,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+          },
+        ],
+        tasksById: {
+          "task-1": {
+            id: "task-1",
+            status: "working",
+            threads: [
+              {
+                id: "task-thread-1",
+                taskId: "task-1",
+                sessionId: threadId,
+              },
+            ],
+          },
+        } as never,
+      }));
+    });
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).not.toContainEqual({
+      id: requestId,
+      result: { decision: "decline" },
+    });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+  });
+
+  for (const status of ["completed", "cancelled", "failed"] as const) {
+    test(`dismissPrompt declines pending sandbox approvals on ${status} task threads`, async () => {
+      const socket = await reconnectThreadAndGetSocket();
+      const requestId = `sandbox-terminal-task-${status}`;
+
+      socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+        threadId: sessionId,
+        turnId: "turn-1",
+        itemId: "item-sandbox",
+        command: `curl https://example.com/${status}`,
+        dangerous: true,
+        reason: "sandbox_denied_escalation",
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        useAppStore.setState((state) => ({
+          view: "task",
+          selectedTaskId: "task-1",
+          selectedThreadId: threadId,
+          threads: state.threads.map((thread) =>
+            thread.id === threadId
+              ? { ...thread, taskId: "task-1", taskThreadId: "task-thread-1" }
+              : thread,
+          ),
+          tasksById: {
+            "task-1": {
+              id: "task-1",
+              status,
+              threads: [
+                {
+                  id: "task-thread-1",
+                  taskId: "task-1",
+                  sessionId: threadId,
+                },
+              ],
+            },
+          } as never,
+        }));
+      });
+
+      await act(async () => {
+        useAppStore.getState().dismissPrompt();
+        await Promise.resolve();
+      });
+
+      expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
+      expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    });
+  }
+
+  test("dismissPrompt keeps terminal task approvals scoped out of chat and other tasks", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "sandbox-terminal-task-stays-scoped";
+    const chatThreadId = `thread-${crypto.randomUUID()}`;
+    const otherTaskThreadId = `thread-${crypto.randomUUID()}`;
+
+    socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-sandbox",
+      command: "curl https://example.com/task-only",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        view: "chat",
+        selectedTaskId: null,
+        selectedThreadId: chatThreadId,
+        threads: [
+          ...state.threads.map((thread) =>
+            thread.id === threadId
+              ? { ...thread, taskId: "task-1", taskThreadId: "task-thread-1" }
+              : thread,
+          ),
+          {
+            id: chatThreadId,
+            workspaceId,
+            title: "Ordinary chat",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "active",
+            sessionId: `session-${crypto.randomUUID()}`,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+          },
+          {
+            id: otherTaskThreadId,
+            workspaceId,
+            title: "Other task thread",
+            createdAt: "2024-01-01T00:00:04.000Z",
+            lastMessageAt: "2024-01-01T00:00:04.000Z",
+            status: "active",
+            sessionId: `session-${crypto.randomUUID()}`,
+            messageCount: 0,
+            lastEventSeq: 0,
+            draft: false,
+            taskId: "task-2",
+            taskThreadId: "task-thread-2",
+          },
+        ],
+        tasksById: {
+          "task-1": {
+            id: "task-1",
+            status: "completed",
+            threads: [
+              {
+                id: "task-thread-1",
+                taskId: "task-1",
+                sessionId: threadId,
+              },
+            ],
+          },
+          "task-2": {
+            id: "task-2",
+            status: "working",
+            threads: [
+              {
+                id: "task-thread-2",
+                taskId: "task-2",
+                sessionId: otherTaskThreadId,
+              },
+            ],
+          },
+        } as never,
+      }));
+    });
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).not.toContainEqual({
+      id: requestId,
+      result: { decision: "decline" },
+    });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+
+    act(() => {
+      useAppStore.setState({
+        view: "task",
+        selectedTaskId: "task-2",
+        selectedThreadId: otherTaskThreadId,
+      } as never);
+    });
+
+    await act(async () => {
+      useAppStore.getState().dismissPrompt();
+      await Promise.resolve();
+    });
+
+    expect(socket.responses).not.toContainEqual({
+      id: requestId,
+      result: { decision: "decline" },
+    });
+    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+  });
+
   test("dismissPrompt declines the latest off-thread inline sandbox approval", async () => {
     const socket = await reconnectThreadAndGetSocket();
     const firstRequestId = "sandbox-escape-first-off-thread";

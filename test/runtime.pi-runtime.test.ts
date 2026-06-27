@@ -1284,6 +1284,47 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: "permission denied" }]);
   });
 
+  test("pi runtime stops after a tool step when task input requests a pause", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-task-pause-"));
+    let modelSteps = 0;
+    let toolCalls = 0;
+    const runtime = createPiRuntime({
+      piStreamImpl: (() => ({
+        async *[Symbol.asyncIterator]() {
+          return;
+        },
+        async result() {
+          modelSteps += 1;
+          return {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_pause", name: "requestInput", arguments: {} }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "toolUse",
+          };
+        },
+      })) as never,
+    });
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 3,
+        shouldStopAfterToolStep: () => true,
+        tools: {
+          requestInput: {
+            execute: async () => {
+              toolCalls += 1;
+              return "Task paused for input";
+            },
+          },
+        },
+      }),
+    );
+
+    expect(modelSteps).toBe(1);
+    expect(toolCalls).toBe(1);
+    expect(result.responseMessages.some((message) => message.role === "tool")).toBe(true);
+  });
+
   test("pi runtime injects a reminder message after malformed tool-call format errors", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-format-reminder-"));
     const stepMessages: ModelMessage[][] = [];
@@ -1529,16 +1570,98 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: String(overflowOutput.value) }]);
   });
 
-  test("executeToolCall keeps oversized read output inline even over the overflow threshold", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-read-inline-"));
+  test("executeToolCall skips oversized output spill when the mutation gate closes", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-overflow-gate-"));
     const emitted: Array<Record<string, unknown>> = [];
-    const oversized = "read-output-".repeat(400);
+    let locked = false;
+    const oversized = "overflow-result-".repeat(400);
 
     const result = await piRuntimeInternal.executeToolCall(
-      { id: "call-read-overflow", name: "read", arguments: { filePath: "/tmp/large.txt" } },
+      { id: "call-overflow-gated", name: "lookup", arguments: {} },
       makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
         tools: {
-          read: {
+          lookup: {
+            execute: async () => {
+              locked = true;
+              return oversized;
+            },
+          },
+        },
+        assertCanMutate: async (toolName) => {
+          if (locked) throw new Error(`${toolName} blocked by task lock`);
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      },
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "call-overflow-gated",
+        toolName: "lookup",
+        output: oversized,
+      },
+    ]);
+    expect(result).toMatchObject({
+      isError: false,
+      content: [{ type: "text", text: oversized }],
+    });
+    await expect(fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+  });
+
+  test("executeToolCall keeps requested files inline, including skill references and scripts", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-read-inline-"));
+    const oversized = "read-output-".repeat(400);
+    const requestedFiles = [
+      path.join(homeDir, "large.txt"),
+      path.join(homeDir, ".cowork", "skills", "large-skill", "references", "guide.md"),
+      path.join(homeDir, ".cowork", "skills", "large-skill", "scripts", "run.ts"),
+    ];
+
+    for (const [index, filePath] of requestedFiles.entries()) {
+      const emitted: Array<Record<string, unknown>> = [];
+      const toolCallId = `call-read-overflow-${index}`;
+      const result = await piRuntimeInternal.executeToolCall(
+        { id: toolCallId, name: "read", arguments: { filePath } },
+        makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
+          tools: {
+            read: {
+              execute: async () => oversized,
+            },
+          },
+        }),
+        async (part) => {
+          emitted.push(part as Record<string, unknown>);
+        },
+      );
+
+      expect(emitted).toEqual([
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName: "read",
+          output: oversized,
+        },
+      ]);
+      expect(result.isError).toBe(false);
+      expect(result.details).toBe(oversized);
+      expect(result.content).toEqual([{ type: "text", text: oversized }]);
+    }
+    await expect(fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+  });
+
+  test("executeToolCall keeps complete oversized skill instructions inline", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-skill-inline-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    const oversized = `# Large skill\n\n${"Follow every instruction.\n".repeat(400)}`;
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-skill-overflow", name: "skill", arguments: { skillName: "large-skill" } },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
+        tools: {
+          skill: {
             execute: async () => oversized,
           },
         },
@@ -1551,8 +1674,8 @@ describe("pi runtime regressions", () => {
     expect(emitted).toEqual([
       {
         type: "tool-result",
-        toolCallId: "call-read-overflow",
-        toolName: "read",
+        toolCallId: "call-skill-overflow",
+        toolName: "skill",
         output: oversized,
       },
     ]);

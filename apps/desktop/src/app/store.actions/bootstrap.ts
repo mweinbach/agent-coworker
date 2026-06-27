@@ -55,6 +55,8 @@ import {
   syncDesktopStateCacheNow,
 } from "../store.helpers";
 import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import { isStandardChatThread } from "../threadFilters";
+import { getThreadSelectionContext, getThreadSelectionIntent } from "../threadSelectionContext";
 import {
   type CachedDesktopUiState,
   type CachedSessionSnapshot,
@@ -77,6 +79,12 @@ const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
   z.string().optional(),
 );
+const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
+const optionalSafeIdSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return SAFE_ID.test(trimmed) ? trimmed : undefined;
+}, z.string().optional());
 const optionalStringSchema = z.preprocess(
   (value) => (typeof value === "string" ? value : undefined),
   z.string().optional(),
@@ -108,10 +116,14 @@ const normalizedLastEventSeqSchema = z.preprocess(
 );
 const normalizedViewSchema = z.preprocess(
   (value) =>
-    value === "chat" || value === "skills" || value === "research" || value === "settings"
+    value === "chat" ||
+    value === "task" ||
+    value === "skills" ||
+    value === "research" ||
+    value === "settings"
       ? value
       : "chat",
-  z.enum(["chat", "skills", "research", "settings"]),
+  z.enum(["chat", "task", "skills", "research", "settings"]),
 );
 
 function normalizeSettingsPageId(
@@ -301,6 +313,8 @@ const persistedThreadSchema = z
     messageCount: normalizedLastEventSeqSchema,
     lastEventSeq: normalizedLastEventSeqSchema,
     legacyTranscriptId: normalizedSessionIdSchema.optional(),
+    taskId: optionalSafeIdSchema,
+    taskThreadId: optionalSafeIdSchema,
     draft: z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
@@ -324,6 +338,8 @@ const persistedThreadSchema = z
       messageCount: thread.messageCount,
       lastEventSeq: thread.lastEventSeq,
       legacyTranscriptId: thread.legacyTranscriptId ?? (thread.id !== id ? thread.id : null),
+      ...(thread.taskId ? { taskId: thread.taskId } : {}),
+      ...(thread.taskThreadId ? { taskThreadId: thread.taskThreadId } : {}),
       draft: thread.draft ?? false,
       archived: thread.archived ?? false,
       archivedAt: thread.archivedAt,
@@ -334,6 +350,7 @@ const persistedUiSchema = z
   .object({
     selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
     selectedThreadId: normalizedNullableSelectionSchema.optional(),
+    selectedTaskId: normalizedNullableSelectionSchema.optional(),
     pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
     pluginManagementMode: z.enum(["auto", "global", "workspace"]).optional(),
     view: normalizedViewSchema.optional(),
@@ -355,6 +372,7 @@ const persistedUiSchema = z
     (ui): CachedDesktopUiState => ({
       selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
       selectedThreadId: ui.selectedThreadId ?? null,
+      selectedTaskId: ui.selectedTaskId ?? null,
       pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
       pluginManagementMode: ui.pluginManagementMode ?? "auto",
       view: ui.view ?? "chat",
@@ -571,9 +589,23 @@ function buildResolvedDesktopUiState(
   const selectedWorkspaceId = selection.selectedWorkspaceId;
   const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
   const pluginManagementMode = selection.pluginManagementMode;
+  const threadSelectionIntent = getThreadSelectionIntent(
+    normalizedUi.view,
+    normalizedUi.lastNonSettingsView,
+    normalizedUi.selectedTaskId,
+  );
   const workspaceThreads = selectedWorkspaceId
     ? threads
-        .filter((thread) => thread.workspaceId === selectedWorkspaceId)
+        .filter((thread) => {
+          if (thread.workspaceId !== selectedWorkspaceId) return false;
+          if (threadSelectionIntent.context === "task") {
+            return Boolean(
+              threadSelectionIntent.selectedTaskId &&
+                thread.taskId === threadSelectionIntent.selectedTaskId,
+            );
+          }
+          return isStandardChatThread(thread, { includeDrafts: true });
+        })
         .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
     : [];
   const fallbackSelectedThreadId =
@@ -599,6 +631,7 @@ function buildResolvedDesktopUiState(
   return {
     selectedWorkspaceId,
     selectedThreadId,
+    selectedTaskId: threadSelectionIntent.selectedTaskId,
     pluginManagementWorkspaceId,
     pluginManagementMode,
     view: normalizedUi.view ?? "chat",
@@ -714,6 +747,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       threads: state.threads,
       selectedWorkspaceId: ui.selectedWorkspaceId,
       selectedThreadId: ui.selectedThreadId,
+      selectedTaskId: ui.selectedTaskId,
       pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
       pluginManagementMode: ui.pluginManagementMode,
       providerStatusByName: state.providerState?.statusByName ?? {},
@@ -801,6 +835,7 @@ export function createBootstrapActions(
           {
             selectedWorkspaceId: get().selectedWorkspaceId,
             selectedThreadId: get().selectedThreadId,
+            selectedTaskId: get().selectedTaskId,
             pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
             pluginManagementMode: get().pluginManagementMode,
             view: get().view,
@@ -869,6 +904,7 @@ export function createBootstrapActions(
           threads: finalThreads,
           selectedWorkspaceId: ui.selectedWorkspaceId,
           selectedThreadId: ui.selectedThreadId,
+          selectedTaskId: ui.selectedTaskId,
           pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
           pluginManagementMode: ui.pluginManagementMode,
           providerStatusByName: state.providerState?.statusByName ?? {},
@@ -909,6 +945,8 @@ export function createBootstrapActions(
         } else {
           syncDesktopStateCacheNow(get);
         }
+
+        const startupSelectionContext = getThreadSelectionContext(ui.view, ui.lastNonSettingsView);
 
         if (ui.selectedThreadId && ui.view === "chat") {
           set((s) => ({
@@ -954,6 +992,42 @@ export function createBootstrapActions(
             ensureWorkspaceRuntime(get, set, startupWorkspaceId);
             void ensureServerRunning(get, set, startupWorkspaceId).then(() => {
               ensureControlSocket(get, set, startupWorkspaceId);
+            });
+          });
+        } else if (ui.selectedWorkspaceId && startupSelectionContext === "task") {
+          const startupWorkspaceId = ui.selectedWorkspaceId;
+          const startupTaskId = ui.selectedTaskId;
+          const preserveStartupView = ui.view === "settings";
+          runAfterInitialPaint(() => {
+            const current = get();
+            if (
+              current.selectedWorkspaceId !== startupWorkspaceId ||
+              current.selectedTaskId !== startupTaskId ||
+              getThreadSelectionContext(current.view, current.lastNonSettingsView) !== "task"
+            ) {
+              return;
+            }
+            void current.refreshTasks(startupWorkspaceId).then(() => {
+              const refreshed = get();
+              if (
+                refreshed.selectedWorkspaceId !== startupWorkspaceId ||
+                refreshed.selectedTaskId !== startupTaskId ||
+                getThreadSelectionContext(refreshed.view, refreshed.lastNonSettingsView) !== "task"
+              ) {
+                return;
+              }
+              if (!startupTaskId) {
+                return;
+              }
+              const taskExists = (
+                refreshed.taskSummariesByWorkspaceId[startupWorkspaceId] ?? []
+              ).some((task) => task.id === startupTaskId);
+              if (taskExists) {
+                void refreshed.selectTask(startupTaskId, { preserveView: preserveStartupView });
+                return;
+              }
+              set({ selectedTaskId: null, selectedThreadId: null });
+              syncDesktopStateCacheNow(get);
             });
           });
         }

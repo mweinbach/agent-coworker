@@ -85,10 +85,11 @@ describe("package manifest", () => {
     expect(paths).not.toContain("prompts/system-models/.research/google-guide.md");
     expect(paths).not.toContain("prompts/system-models/.research/openai-guide.md");
     expect(paths).toContain("prompts/system.md");
-    expect(paths).toContain("skills/documents/SKILL.md");
+    expect(paths).not.toContain("skills/documents/SKILL.md");
     expect(paths).toContain("skills/memories/SKILL.md");
-    expect(paths).toContain("skills/presentations/SKILL.md");
-    expect(paths).toContain("skills/spreadsheets/SKILL.md");
+    expect(paths).not.toContain("skills/pdf/SKILL.md");
+    expect(paths).not.toContain("skills/presentations/SKILL.md");
+    expect(paths).not.toContain("skills/spreadsheets/SKILL.md");
     expect(paths).not.toContain("skills/presentations/dev/run_prompt_battle.mjs");
     expect(paths.some((path) => path.includes("/skills/") && path.includes("/dev/"))).toBeFalse();
     expect(paths.some((path) => path.includes("/__pycache__/"))).toBeFalse();
@@ -96,8 +97,9 @@ describe("package manifest", () => {
     expect(paths).toContain("scripts/build_cowork_server_binary.ts");
     expect(paths).toContain("scripts/postinstall.ts");
     expect(paths).toContain("scripts/releaseBuildUtils.ts");
-    expect(paths).toContain("scripts/setup_codex_primary_runtime.ts");
-    expect(paths).toContain("scripts/setup_artifact_runtime.ts");
+    expect(paths).toContain("scripts/setup_cowork_runtime.ts");
+    expect(paths).not.toContain("scripts/setup_codex_primary_runtime.ts");
+    expect(paths).not.toContain("scripts/setup_artifact_runtime.ts");
 
     expect(paths.some((path) => path.startsWith(".agents/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("apps/"))).toBeFalse();

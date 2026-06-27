@@ -1,6 +1,7 @@
 import { Text, View } from "react-native";
 
 import type { SessionFeedItem } from "@/features/cowork/protocolTypes";
+import { alpha, radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 import { A2uiSurfaceCard } from "./a2ui-surface-card";
 import { MarkdownText } from "./markdown-text";
@@ -26,11 +27,14 @@ export function ThreadFeedItem({ item, a2uiEnabled, showDebugMessages }: ThreadF
       >
         <View
           style={{
-            borderRadius: isAssistant ? 0 : 20,
+            borderRadius: isAssistant ? 0 : radius.card,
             borderCurve: "continuous",
-            backgroundColor: isAssistant ? "transparent" : theme.primary,
-            paddingHorizontal: isAssistant ? 0 : 16,
-            paddingVertical: isAssistant ? 0 : 11,
+            borderWidth: isAssistant ? 0 : 1,
+            // Desktop user bubble: bg-primary/12 + border-primary/22 + foreground text.
+            borderColor: isAssistant ? undefined : alpha(theme.primary, 0.22),
+            backgroundColor: isAssistant ? "transparent" : alpha(theme.primary, 0.12),
+            paddingHorizontal: isAssistant ? 0 : 14,
+            paddingVertical: isAssistant ? 0 : 10,
           }}
         >
           {isAssistant ? (
@@ -39,7 +43,7 @@ export function ThreadFeedItem({ item, a2uiEnabled, showDebugMessages }: ThreadF
             <Text
               selectable
               style={{
-                color: theme.primaryText,
+                color: theme.text,
                 fontSize: 16,
                 lineHeight: 24,
               }}

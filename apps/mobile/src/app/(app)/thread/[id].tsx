@@ -146,8 +146,8 @@ export default function ThreadDetailScreen() {
           title: activeThread.title,
         }}
       />
-      <Stack.Toolbar placement="right">
-        {activePendingRequest ? (
+      {activePendingRequest ? (
+        <Stack.Toolbar placement="right">
           <Stack.Toolbar.Button
             icon="xmark.circle.fill"
             accessibilityLabel="Stop turn"
@@ -155,19 +155,17 @@ export default function ThreadDetailScreen() {
               void interruptCurrentThread();
             }}
           />
-        ) : (
-          <Stack.Toolbar.Button
-            icon="ellipsis"
-            accessibilityLabel="Thread options"
-            onPress={() => {
-              /* open overflow */
-            }}
-          />
-        )}
-      </Stack.Toolbar>
+        </Stack.Toolbar>
+      ) : null}
       <KeyboardAvoidingView
         style={{ flex: 1, backgroundColor: theme.background, position: "relative" }}
-        behavior={process.env.EXPO_OS === "ios" ? "padding" : undefined}
+        behavior={
+          process.env.EXPO_OS === "ios"
+            ? "padding"
+            : process.env.EXPO_OS === "android"
+              ? "height"
+              : undefined
+        }
       >
         <FlatList
           style={{ flex: 1, backgroundColor: theme.background }}

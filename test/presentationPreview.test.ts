@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { loadConfig } from "../src/config";
 import { previewPresentationFile } from "../src/server/presentationPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -11,6 +12,15 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+}
+
+function localRuntimeEnv(home: string): Record<string, string> {
+  return {
+    COWORK_DISABLE_RUNTIME: "1",
+    COWORK_RUNTIME_NODE: process.execPath,
+    HOME: home,
+    USERPROFILE: home,
+  };
 }
 
 describe("presentation preview renderer", () => {
@@ -33,7 +43,7 @@ describe("presentation preview renderer", () => {
     });
   });
 
-  test("returns error when rendering script is missing", async () => {
+  test("returns a missing-script error without starting the runtime", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "slide-1.mjs");
       await fs.writeFile(filePath, "export default {}", "utf8");
@@ -78,6 +88,7 @@ describe("presentation preview renderer", () => {
         cwd: dir,
         filePath: "slide-1.mjs",
         builtInDir: dir,
+        env: localRuntimeEnv(dir),
       });
 
       expect(result.ok).toBe(true);
@@ -92,16 +103,49 @@ describe("presentation preview renderer", () => {
     });
   });
 
-  test("uses the bundled artifact runtime environment for slide rendering", async () => {
+  test("runs the marketplace presentation skill with the separate runtime environment", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "slide-1.mjs");
       await fs.writeFile(filePath, "export default {}", "utf8");
 
-      const scriptDir = path.join(dir, "skills/presentations/scripts");
+      const home = path.join(dir, "home");
+      const pluginRoot = path.join(home, ".cowork", "plugins", "workspace-tools");
+      const scriptDir = path.join(pluginRoot, "skills", "presentations", "scripts");
       await fs.mkdir(scriptDir, { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, ".cowork-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".cowork-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "workspace-tools",
+          version: "1.0.0",
+          description: "Marketplace workspace tools",
+          skills: "./skills",
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".cowork-plugin", "install.json"),
+        `${JSON.stringify({
+          marketplace: {
+            name: "cowork-personal",
+            sourceInput:
+              "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/workspace-tools",
+          },
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, "skills", "presentations", "SKILL.md"),
+        "---\nname: presentations\ndescription: Marketplace presentations fixture\n---\n",
+        "utf8",
+      );
       await fs.writeFile(
         path.join(scriptDir, "render_artifact_slide.mjs"),
-        "throw new Error('the fake bundled node handles this script');",
+        `import fs from "node:fs";
+fs.writeFileSync(process.env.COWORK_TEST_ENV_CAPTURE, Object.entries(process.env).map(([key, value]) => key + "=" + value).join("\\n"));
+const outputIndex = process.argv.indexOf("--output");
+fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
+`,
         "utf8",
       );
 
@@ -112,34 +156,27 @@ describe("presentation preview renderer", () => {
       await fs.mkdir(bundledModulesDir, { recursive: true });
       await fs.writeFile(path.join(bundledRuntime, "runtime.json"), "{}\n", "utf8");
       await fs.writeFile(path.join(bundledModulesDir, "package.json"), "{}\n", "utf8");
-      const fakeNode = path.join(bundledNodeDir, "node");
-      await fs.writeFile(
-        fakeNode,
-        `#!/usr/bin/env bash
-env > "$COWORK_TEST_ENV_CAPTURE"
-output=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output" ]; then
-    shift
-    output="$1"
-  fi
-  shift || true
-done
-printf 'bundled-runtime-png' > "$output"
-`,
-        "utf8",
+      const fakeNode = path.join(
+        bundledNodeDir,
+        process.platform === "win32" ? "node.exe" : "node",
       );
+      await fs.copyFile(process.execPath, fakeNode);
       await fs.chmod(fakeNode, 0o755);
 
       const envCapture = path.join(dir, "render-env.txt");
+      const config = await loadConfig({ cwd: dir, homedir: home, builtInDir: dir });
       const result = await previewPresentationFile({
         cwd: dir,
         filePath: "slide-1.mjs",
         builtInDir: dir,
+        config,
         env: {
-          COWORK_BUNDLED_ARTIFACT_RUNTIME_DIR: bundledRuntime,
+          COWORK_DISABLE_RUNTIME: "1",
+          COWORK_RUNTIME_DIR: bundledRuntime,
+          COWORK_RUNTIME_NODE: fakeNode,
+          COWORK_RUNTIME_NODE_MODULES: path.join(bundledRuntime, "node/node_modules"),
           COWORK_TEST_ENV_CAPTURE: envCapture,
-          HOME: path.join(dir, "home"),
+          HOME: home,
         },
       });
 
@@ -149,9 +186,9 @@ printf 'bundled-runtime-png' > "$output"
         "data:image/png;base64,YnVuZGxlZC1ydW50aW1lLXBuZw==",
       );
       const capturedEnv = await fs.readFile(envCapture, "utf8");
-      expect(capturedEnv).toContain(`COWORK_ARTIFACT_RUNTIME_NODE=${fakeNode}`);
+      expect(capturedEnv).toContain(`COWORK_RUNTIME_NODE=${fakeNode}`);
       expect(capturedEnv).toContain(
-        `COWORK_ARTIFACT_RUNTIME_NODE_MODULES=${path.join(bundledRuntime, "node/node_modules")}`,
+        `COWORK_RUNTIME_NODE_MODULES=${path.join(bundledRuntime, "node/node_modules")}`,
       );
     });
   });
@@ -185,6 +222,7 @@ printf 'bundled-runtime-png' > "$output"
         cwd: dir,
         filePath: "deck.pptx",
         builtInDir: dir,
+        env: localRuntimeEnv(dir),
       });
 
       expect(result.ok).toBe(true);
@@ -198,7 +236,7 @@ printf 'bundled-runtime-png' > "$output"
     });
   });
 
-  test("loads cached PNG slides directly when available in preview/ folder", async () => {
+  test("loads cached PNG slides without a rendering script or runtime", async () => {
     await withTempDir(async (dir) => {
       // 1. Set up pre-rendered preview files and dummy pptx file
       const previewDir = path.join(dir, "preview");
@@ -207,15 +245,6 @@ printf 'bundled-runtime-png' > "$output"
 
       const pngPath = path.join(previewDir, "slide-1.png");
       await fs.writeFile(pngPath, "cached-slide-data", "utf8");
-
-      // Mock script (not used in this test because it loads directly from cache)
-      const scriptDir = path.join(dir, "skills/presentations/scripts");
-      await fs.mkdir(scriptDir, { recursive: true });
-      await fs.writeFile(
-        path.join(scriptDir, "render_artifact_slide.mjs"),
-        "process.exit(1);",
-        "utf8",
-      );
 
       const result = await previewPresentationFile({
         cwd: dir,

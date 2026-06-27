@@ -6,13 +6,21 @@ import { z } from "zod";
 
 import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
 import { canonicalizeRoot } from "../src/platform/sandbox/policy";
-import { __internal as codexAppServerClientInternal } from "../src/providers/codexAppServerClient";
+import {
+  type CodexAppServerClient,
+  type CodexAppServerJsonRpcNotification,
+  type CodexAppServerJsonRpcRawMessage,
+  __internal as codexAppServerClientInternal,
+} from "../src/providers/codexAppServerClient";
 import { createRuntime } from "../src/runtime";
 import { handleServerRequest } from "../src/runtime/codexAppServer/serverRequests";
 import { VERSION } from "../src/version";
-import { createMockClient, writeMockAppServer } from "./fixtures/codexAppServerMock";
 import {
-  expectedManagedSofficeShimPath,
+  createMockClient,
+  mockInterrupts,
+  writeMockAppServer,
+} from "./fixtures/codexAppServerMock";
+import {
   installCodexAppServerTestHooks,
   makeConfig,
   readCapturedRequests,
@@ -43,78 +51,17 @@ describe("codex app-server runtime", () => {
       maxSteps: 1,
       toolEnv: {
         PATH: "/tmp/cowork-managed-bin",
-        COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+        COWORK_TEST_TOOL_ENV: "preserved",
       },
     });
 
     expect(receivedOpts?.env).toMatchObject({
       PATH: "/tmp/cowork-managed-bin",
-      COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+      COWORK_TEST_TOOL_ENV: "preserved",
     });
   });
 
-  test.serial("prepares managed soffice env and instructions for app-server turns", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-soffice-"));
-    const home = path.join(dir, "home");
-    const capturePath = path.join(dir, "requests.jsonl");
-    await fs.mkdir(home, { recursive: true });
-    const previousHome = process.env.HOME;
-    process.env.HOME = home;
-    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
-
-    let receivedOpts:
-      | Parameters<
-          NonNullable<Parameters<typeof codexAppServerClientInternal.setClientFactoryForTests>[0]>
-        >[0]
-      | null = null;
-    codexAppServerClientInternal.setClientFactoryForTests(async (opts) => {
-      receivedOpts = opts;
-      return createMockClient();
-    });
-
-    try {
-      const runtime = createRuntime(makeConfig(dir));
-      await runtime.runTurn({
-        config: makeConfig(dir),
-        system: "You are Codex.",
-        messages: [{ role: "user", content: "Say hi" }],
-        tools: {},
-        maxSteps: 1,
-      });
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-    }
-
-    const shimDir = path.join(home, ".cache", "cowork", "libreoffice", "bin");
-    const shimPath = expectedManagedSofficeShimPath(shimDir);
-    expect(receivedOpts?.env?.COWORK_SOFFICE).toBe(shimPath);
-    expect(receivedOpts?.env?.COWORK_MANAGED_SOFFICE_SHIM_DIR).toBe(shimDir);
-    const pathEnvKey = Object.keys(receivedOpts?.env ?? {}).find(
-      (key) => key.toLowerCase() === "path",
-    );
-    expect(pathEnvKey ? receivedOpts?.env?.[pathEnvKey]?.split(path.delimiter)[0] : undefined).toBe(
-      shimDir,
-    );
-
-    const requests = await readCapturedRequests(capturePath);
-    const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
-    expect(startParams?.baseInstructions).toContain("Managed LibreOffice Runtime");
-    expect(startParams?.baseInstructions).toContain(shimPath);
-    const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
-      | { sandboxPolicy?: { writableRoots?: string[] } }
-      | undefined;
-    expect(turnStart?.sandboxPolicy?.writableRoots ?? []).toContain(
-      canonicalizeRoot(path.join(home, ".cache", "cowork", "libreoffice")),
-    );
-    if (process.platform === "win32") {
-      expect(startParams?.baseInstructions).toContain(`$env:PATH = '${shimDir};' + $env:PATH`);
-    } else {
-      expect(startParams?.baseInstructions).toContain(`PATH=${shimDir}:$PATH`);
-    }
-  });
-
-  test.serial("adds artifact runtime dependency instructions for app-server turns", async () => {
+  test.serial("adds Cowork runtime dependency instructions for app-server turns", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-runtime-"));
     const capturePath = path.join(dir, "requests.jsonl");
     const nodeModulesPath = path.join(dir, "runtime", "node", "node_modules");
@@ -137,40 +84,40 @@ describe("codex app-server runtime", () => {
       maxSteps: 1,
       toolEnv: {
         PATH: "/tmp/cowork-managed-bin",
-        COWORK_SOFFICE: path.join(dir, "soffice"),
-        COWORK_ARTIFACT_RUNTIME_NODE: nodePath,
-        COWORK_ARTIFACT_RUNTIME_NODE_MODULES: nodeModulesPath,
-        COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: resolverPath,
+        COWORK_RUNTIME_NODE: nodePath,
+        COWORK_RUNTIME_NODE_MODULES: nodeModulesPath,
+        COWORK_RUNTIME_NODE_RESOLVER: resolverPath,
       },
     });
 
     const requests = await readCapturedRequests(capturePath);
     const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
-    expect(startParams?.baseInstructions).toContain("Artifact Runtime Dependencies");
-    expect(startParams?.baseInstructions).toContain(nodePath);
-    expect(startParams?.baseInstructions).toContain("bare imports");
-    expect(startParams?.baseInstructions).toContain('import "@oai/artifact-tool"');
-    expect(startParams?.baseInstructions).not.toContain(
+    expect(startParams).not.toHaveProperty("baseInstructions");
+    expect(startParams?.developerInstructions).toContain("Cowork Runtime");
+    expect(startParams?.developerInstructions).toContain(nodePath);
+    expect(startParams?.developerInstructions).toContain("Bare Node imports");
+    expect(startParams?.developerInstructions).toContain("@oai/artifact-tool");
+    expect(startParams?.developerInstructions).not.toContain(
       process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",
     );
   });
 
-  test("includes artifact runtime dependency paths in app-server pool fingerprints", () => {
+  test("includes Cowork runtime dependency paths in app-server pool fingerprints", () => {
     const base = codexAppServerClientInternal.pooledEnvFingerprint({
       PATH: "/bin",
-      COWORK_ARTIFACT_RUNTIME_NODE: "/runtime/node/bin/node",
-      COWORK_ARTIFACT_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-a",
-      COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
+      COWORK_RUNTIME_NODE: "/runtime/node/bin/node",
+      COWORK_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-a",
+      COWORK_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
     });
     const changed = codexAppServerClientInternal.pooledEnvFingerprint({
       PATH: "/bin",
-      COWORK_ARTIFACT_RUNTIME_NODE: "/runtime/node/bin/node",
-      COWORK_ARTIFACT_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-b",
-      COWORK_ARTIFACT_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
+      COWORK_RUNTIME_NODE: "/runtime/node/bin/node",
+      COWORK_RUNTIME_NODE_MODULES: "/runtime/node/node_modules-b",
+      COWORK_RUNTIME_NODE_RESOLVER: "/runtime/node-resolver/register.mjs",
     });
 
     expect(base).not.toBe(changed);
-    expect(base).toContain("COWORK_ARTIFACT_RUNTIME_NODE_MODULES");
+    expect(base).toContain("COWORK_RUNTIME_NODE_MODULES");
   });
 
   test.serial("initializes app-server with the Cowork package version", async () => {
@@ -702,11 +649,12 @@ rl.on("line", (line) => {
     expect(
       (startParams?.dynamicTools as Array<{ name?: string }>).map((tool) => tool.name),
     ).not.toContain("bash");
-    expect(startParams?.baseInstructions).toContain("## Codex App-Server Tool Boundary");
-    expect(startParams?.baseInstructions).toContain(
+    expect(startParams).not.toHaveProperty("baseInstructions");
+    expect(startParams?.developerInstructions).toContain("## Codex App-Server Tool Boundary");
+    expect(startParams?.developerInstructions).toContain(
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
     );
-    expect(startParams?.baseInstructions).toContain(
+    expect(startParams?.developerInstructions).toContain(
       "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
     );
   });
@@ -784,6 +732,65 @@ rl.on("line", (line) => {
       contentItems: [{ text: expect.stringContaining("boom") }],
     });
   });
+
+  test.serial(
+    "gates yolo native execution after Cowork dynamic tools can lock the source chat",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-yolo-dynamic-native-"));
+      const nativeWritePath = path.join(dir, "native-output.txt");
+      const capturePath = path.join(dir, "requests.jsonl");
+      const previousArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS;
+      const previousNativePath = process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH;
+      const previousCapturePath = process.env.CODEX_APP_SERVER_CAPTURE_PATH;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = "dynamic-lock-then-native";
+      process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH = nativeWritePath;
+      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+      let locked = false;
+      const gateCalls: string[] = [];
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        await runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Create task then run native command" }],
+          tools: {
+            createTask: {
+              description: "Create a Cowork task and lock this source chat.",
+              inputSchema: z.object({}),
+              execute: () => {
+                locked = true;
+                return "created task";
+              },
+            },
+          },
+          maxSteps: 1,
+          yolo: true,
+          shellPolicy: "full",
+          assertCanMutate: async (toolName: string) => {
+            gateCalls.push(toolName);
+            if (locked) throw new Error("task locked");
+          },
+        });
+
+        const requests = await readCapturedRequests(capturePath);
+        const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as
+          | { approvalPolicy?: string }
+          | undefined;
+        expect(turnStart?.approvalPolicy).toBe("on-request");
+        expect(gateCalls).toContain("codex:commandExecution");
+        await expect(fs.access(nativeWritePath)).rejects.toThrow();
+      } finally {
+        if (previousArgs === undefined) delete process.env.COWORK_CODEX_APP_SERVER_ARGS;
+        else process.env.COWORK_CODEX_APP_SERVER_ARGS = previousArgs;
+        if (previousNativePath === undefined) delete process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH;
+        else process.env.CODEX_APP_SERVER_NATIVE_WRITE_PATH = previousNativePath;
+        if (previousCapturePath === undefined) delete process.env.CODEX_APP_SERVER_CAPTURE_PATH;
+        else process.env.CODEX_APP_SERVER_CAPTURE_PATH = previousCapturePath;
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test.serial(
     "passes workspace-write sandbox and approval prompts for regular Codex turns",
@@ -1105,5 +1112,403 @@ rl.on("line", (line) => {
     );
 
     expect(response).toEqual({ decision: "accept" });
+  });
+
+  test("rechecks native Codex command approval after the explicit approval wait", async () => {
+    let locked = false;
+    let gateCalls = 0;
+    const approvalEntered = Promise.withResolvers<void>();
+    const releaseApproval = Promise.withResolvers<void>();
+    const responsePromise = handleServerRequest(
+      {
+        id: "command-approval-race",
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        params: { command: "touch escaped.txt" },
+      },
+      {
+        shellPolicy: "full",
+        yolo: false,
+        assertCanMutate: async (toolName: string) => {
+          expect(toolName).toBe("codex:commandExecution");
+          gateCalls += 1;
+          if (locked) throw new Error("task locked");
+        },
+        approveCommand: async () => {
+          approvalEntered.resolve();
+          await releaseApproval.promise;
+          return true;
+        },
+        log: () => {},
+      } as never,
+    );
+
+    await approvalEntered.promise;
+    locked = true;
+    releaseApproval.resolve();
+
+    await expect(responsePromise).resolves.toEqual({ decision: "decline" });
+    expect(gateCalls).toBe(2);
+  });
+
+  test("rechecks native Codex file approval after yolo auto-approval", async () => {
+    let gateCalls = 0;
+    let approvals = 0;
+    const response = await handleServerRequest(
+      {
+        id: "file-approval-yolo-race",
+        jsonrpc: "2.0",
+        method: "item/fileChange/requestApproval",
+        params: { path: "src/escaped.ts" },
+      },
+      {
+        shellPolicy: "full",
+        yolo: true,
+        assertCanMutate: async (toolName: string) => {
+          expect(toolName).toBe("codex:fileChange");
+          gateCalls += 1;
+          if (gateCalls === 2) throw new Error("task locked");
+        },
+        approveCommand: async () => {
+          approvals += 1;
+          return true;
+        },
+        log: () => {},
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(gateCalls).toBe(2);
+    expect(approvals).toBe(0);
+  });
+
+  for (const nativeKind of ["command", "file"] as const) {
+    test.serial(
+      `interrupts yolo native Codex ${nativeKind} execution when the turn aborts before the request returns`,
+      async () => {
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), `cowork-codex-yolo-${nativeKind}-`));
+        const nativeWritePath = path.join(dir, `${nativeKind}-escaped.txt`);
+        const abortController = new AbortController();
+        const nativeEntered = Promise.withResolvers<void>();
+        const releaseNativeDrain = Promise.withResolvers<void>();
+        const turnStartResponse = Promise.withResolvers<unknown>();
+        const notificationListeners = new Set<
+          (notification: CodexAppServerJsonRpcNotification) => void
+        >();
+        const rawListeners = new Set<(message: CodexAppServerJsonRpcRawMessage) => void>();
+        const unhandledRejections: unknown[] = [];
+        const onUnhandledRejection = (error: unknown) => {
+          unhandledRejections.push(error);
+        };
+        const interruptCalls: Array<{ threadId: string; turnId?: string }> = [];
+        let interrupted = false;
+        let turnStartParams: { approvalPolicy?: string; sandboxPolicy?: unknown } | null = null;
+        let nextRequestId = 1;
+        let turnStartRequested = false;
+        let turnStartReleased = false;
+        let turnPromise: Promise<unknown> | undefined;
+
+        const emitRaw = (message: CodexAppServerJsonRpcRawMessage) => {
+          for (const listener of rawListeners) listener(message);
+        };
+        const emitNotification = (notification: CodexAppServerJsonRpcNotification) => {
+          emitRaw({
+            direction: "server_notification",
+            message: notification as Record<string, unknown>,
+          });
+          for (const listener of notificationListeners) listener(notification);
+        };
+        const rejectTurnStart = () => {
+          if (turnStartReleased || !turnStartRequested) return;
+          turnStartReleased = true;
+          turnStartResponse.reject(new Error("late yolo turn/start rejection"));
+        };
+        const client: CodexAppServerClient = {
+          command: { command: "mock-codex-app-server", args: [], source: "override" },
+          isClosed: () => false,
+          getLastCloseInfo: () => null,
+          request: async (method: string, params?: unknown) => {
+            const id = nextRequestId++;
+            emitRaw({
+              direction: "client_request",
+              message: { id, method, ...(params !== undefined ? { params } : {}) },
+            });
+            if (method === "initialize") {
+              const result = { userAgent: "mock" };
+              emitRaw({ direction: "server_response", message: { id, result } });
+              return result;
+            }
+            if (method === "model/list") {
+              const result = {
+                data: [
+                  { id: "gpt-5.4", model: "gpt-5.4", displayName: "GPT-5.4", isDefault: true },
+                ],
+                nextCursor: null,
+              };
+              emitRaw({ direction: "server_response", message: { id, result } });
+              return result;
+            }
+            if (method === "thread/start") {
+              const record = params as {
+                model?: string;
+                approvalPolicy?: string;
+                sandbox?: string;
+              };
+              const result = {
+                thread: { id: "thread_1", modelProvider: "openai", turns: [] },
+                model: record.model ?? "gpt-5.4",
+                modelProvider: "openai",
+                cwd: dir,
+                approvalPolicy: record.approvalPolicy,
+                sandbox: record.sandbox,
+                reasoningEffort: "high",
+              };
+              emitRaw({ direction: "server_response", message: { id, result } });
+              return result;
+            }
+            if (method === "turn/start") {
+              turnStartRequested = true;
+              turnStartParams = params as { approvalPolicy?: string; sandboxPolicy?: unknown };
+              nativeEntered.resolve();
+              await releaseNativeDrain.promise;
+              if (!interrupted) {
+                await fs.writeFile(nativeWritePath, `${nativeKind} side effect escaped`, "utf8");
+              }
+              emitNotification({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread_1",
+                  turn: {
+                    id: `turn_${nativeKind}`,
+                    threadId: "thread_1",
+                    status: "cancelled",
+                    items: [],
+                    error: null,
+                  },
+                },
+              });
+              return await turnStartResponse.promise;
+            }
+            return {};
+          },
+          interruptTurn: async (params) => {
+            interrupted = true;
+            interruptCalls.push(params);
+          },
+          notify: () => {},
+          onNotification: (listener) => {
+            notificationListeners.add(listener);
+            return () => notificationListeners.delete(listener);
+          },
+          onServerRequest: () => () => {},
+          onJsonRpcMessage: (listener) => {
+            rawListeners.add(listener);
+            return () => rawListeners.delete(listener);
+          },
+          onClose: () => () => {},
+          close: async () => {},
+        };
+
+        process.on("unhandledRejection", onUnhandledRejection);
+        codexAppServerClientInternal.setClientFactoryForTests(async () => client);
+
+        try {
+          const runtime = createRuntime(makeConfig(dir));
+          turnPromise = runtime.runTurn({
+            config: makeConfig(dir),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: `Run native ${nativeKind}` }],
+            tools: {},
+            maxSteps: 1,
+            yolo: true,
+            shellPolicy: "full",
+            abortSignal: abortController.signal,
+          });
+
+          await nativeEntered.promise;
+          expect(turnStartParams).toMatchObject({ approvalPolicy: "never" });
+          abortController.abort();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          expect(interrupted).toBe(true);
+          expect(interruptCalls).toEqual([{ threadId: "thread_1" }]);
+          const settledBeforeNativeRequestSettled = await Promise.race([
+            turnPromise.then(
+              () => true,
+              () => true,
+            ),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25)),
+          ]);
+          expect(settledBeforeNativeRequestSettled).toBe(false);
+
+          releaseNativeDrain.resolve();
+          await expect(turnPromise).rejects.toThrow(/Cancelled by user/);
+          await expect(fs.access(nativeWritePath)).rejects.toThrow();
+        } finally {
+          releaseNativeDrain.resolve();
+          rejectTurnStart();
+          await turnPromise?.catch(() => {});
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          expect(unhandledRejections).toEqual([]);
+          process.off("unhandledRejection", onUnhandledRejection);
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
+
+  test.serial("does not attach partial assistant text after Codex turn abort", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-abort-partial-"));
+    const abortController = new AbortController();
+    const notificationListeners = new Set<(notification: Record<string, unknown>) => void>();
+    const rawListeners = new Set<(message: Record<string, unknown>) => void>();
+    let interrupted = false;
+
+    const emitNotification = (notification: Record<string, unknown>) => {
+      for (const listener of rawListeners) {
+        listener({ direction: "server_notification", message: notification });
+      }
+      for (const listener of notificationListeners) listener(notification);
+    };
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => ({
+      command: { command: "mock-codex-app-server", args: [], source: "override" },
+      isClosed: () => false,
+      getLastCloseInfo: () => null,
+      request: async (method: string, params?: unknown) => {
+        if (method === "initialize") return { userAgent: "mock" };
+        if (method === "model/list") {
+          return {
+            data: [{ id: "gpt-5.4", model: "gpt-5.4", displayName: "GPT-5.4", isDefault: true }],
+            nextCursor: null,
+          };
+        }
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread_1", modelProvider: "openai", turns: [] },
+            model: "gpt-5.4",
+            modelProvider: "openai",
+            cwd: dir,
+          };
+        }
+        if (method === "turn/start") {
+          const threadId = (params as { threadId?: string } | undefined)?.threadId ?? "thread_1";
+          const turnId = "turn_partial";
+          queueMicrotask(() => {
+            emitNotification({
+              method: "item/started",
+              params: {
+                threadId,
+                turnId,
+                item: {
+                  type: "agentMessage",
+                  id: "item_partial",
+                  text: "",
+                  phase: null,
+                  memoryCitation: null,
+                },
+              },
+            });
+            emitNotification({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId,
+                turnId,
+                itemId: "item_partial",
+                delta: "partial text must not reach history",
+              },
+            });
+            abortController.abort();
+            emitNotification({
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: {
+                  id: turnId,
+                  threadId,
+                  status: "completed",
+                  items: [
+                    {
+                      type: "agentMessage",
+                      id: "item_partial",
+                      text: "partial text must not reach history",
+                    },
+                  ],
+                  error: null,
+                },
+              },
+            });
+          });
+          return { turn: { id: turnId, status: "inProgress", items: [], error: null } };
+        }
+        return {};
+      },
+      notify: () => {},
+      interruptTurn: async () => {
+        interrupted = true;
+      },
+      onNotification: (listener: (notification: Record<string, unknown>) => void) => {
+        notificationListeners.add(listener);
+        return () => notificationListeners.delete(listener);
+      },
+      onServerRequest: () => () => {},
+      onJsonRpcMessage: (listener: (message: Record<string, unknown>) => void) => {
+        rawListeners.add(listener);
+        return () => rawListeners.delete(listener);
+      },
+      onClose: () => () => {},
+      close: async () => {},
+    }));
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      let caught: unknown;
+      try {
+        await runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Abort after partial" }],
+          tools: {},
+          maxSteps: 1,
+          abortSignal: abortController.signal,
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain("Cancelled by user");
+      expect((caught as { responseMessages?: unknown }).responseMessages).toBeUndefined();
+      expect(interrupted).toBe(true);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("declines native Codex approvals when the lifecycle mutation gate is closed", async () => {
+    let approvals = 0;
+    const response = await handleServerRequest(
+      {
+        id: "command-approval-locked",
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        params: { command: "touch escaped.txt" },
+      },
+      {
+        shellPolicy: "full",
+        yolo: true,
+        assertCanMutate: async (toolName: string) => {
+          expect(toolName).toBe("codex:commandExecution");
+          throw new Error("task locked");
+        },
+        approveCommand: async () => {
+          approvals += 1;
+          return true;
+        },
+        log: () => {},
+      } as never,
+    );
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(approvals).toBe(0);
   });
 });

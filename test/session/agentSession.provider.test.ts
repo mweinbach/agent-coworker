@@ -394,6 +394,12 @@ describe("AgentSession", () => {
 
     test("logoutProviderAuth emits provider_auth_result and clears provider state", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-provider-logout-"));
+      const logoutProviderAuthImpl = mock(async ({ provider }: { provider: "codex-cli" }) => ({
+        ok: true as const,
+        provider,
+        storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
+        message: "Codex connection cleared via test.",
+      }));
       const getProviderCatalogImpl = mock(async () => ({
         all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
         default: { "codex-cli": "gpt-5.2" },
@@ -413,6 +419,7 @@ describe("AgentSession", () => {
         getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
         getProviderCatalogImpl: getProviderCatalogImpl as any,
         getProviderStatusesImpl: getProviderStatusesImpl as any,
+        logoutProviderAuthImpl: logoutProviderAuthImpl as any,
       });
       (session as any).state.providerState = {
         provider: "codex-cli",
@@ -434,6 +441,7 @@ describe("AgentSession", () => {
       expect(events.some((e) => e.type === "provider_status")).toBe(true);
       expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
       expect((session as any).state.providerState).toBeNull();
+      expect(logoutProviderAuthImpl).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Task Mode"
+  short_description: "Promote substantial work into managed task mode"
+  default_prompt: "Use $task to turn this objective into a managed task with a complete work plan."

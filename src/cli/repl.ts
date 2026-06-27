@@ -538,6 +538,14 @@ export async function runCliRepl(
     streamState,
     activateNextPrompt: activatePrompt,
     resetModelStreamState,
+    openTaskThread: async (taskThreadId) => {
+      try {
+        const result = await rpcRequest("thread/resume", { threadId: taskThreadId });
+        await applyThreadDescriptor(result, workspaceCwd);
+      } catch (error) {
+        console.error(`Unable to open task thread: ${String(error)}`);
+      }
+    },
   });
 
   const connectToServer = async (url: string, rl: readline.Interface, resumeThreadId?: string) => {

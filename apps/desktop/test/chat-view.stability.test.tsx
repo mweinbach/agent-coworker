@@ -138,6 +138,23 @@ describe("desktop chat view stability", () => {
       ],
       threads: [],
       threadRuntimeById: {},
+      providerCatalog: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [
+            {
+              id: "gpt-5.4",
+              displayName: "GPT-5.4",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+              reasoning: { defaultEffort: "high" },
+            },
+          ],
+          defaultModel: "gpt-5.4",
+        },
+      ],
+      providerConnected: ["openai"],
       composerText: "",
     });
 
@@ -157,6 +174,14 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).not.toContain("Let's build");
       expect(container.textContent).not.toContain("New thread");
       expect(container.querySelector('[data-slot="select-trigger"]')).not.toBeNull();
+      const reasoningToggle = container.querySelector<HTMLButtonElement>(
+        '[data-slot="composer-reasoning-toggle"]',
+      );
+      expect(reasoningToggle?.getAttribute("aria-pressed")).toBe("true");
+      await act(async () => {
+        reasoningToggle?.click();
+      });
+      expect(reasoningToggle?.getAttribute("aria-pressed")).toBe("false");
     } finally {
       if (root) {
         await act(async () => {
@@ -982,7 +1007,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("shows the pending draft model in an editable footer selector before the first message", async () => {
+  test("shows the draft model selector with its reasoning toggle before the first message", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -1035,6 +1060,23 @@ describe("desktop chat view stability", () => {
           draftComposerModel: null,
         },
       },
+      providerCatalog: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [
+            {
+              id: "gpt-5.2-draft-default",
+              displayName: "GPT-5.2 Draft Default",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+              reasoning: { defaultEffort: "high" },
+            },
+          ],
+          defaultModel: "gpt-5.2-draft-default",
+        },
+      ],
+      providerConnected: ["openai"],
       composerText: "",
     });
 
@@ -1052,6 +1094,16 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("Send a message to start.");
       const modelSelector = container.querySelector('[data-slot="select-trigger"]');
       expect(modelSelector).not.toBeNull();
+      const reasoningToggle = container.querySelector<HTMLButtonElement>(
+        '[data-slot="composer-reasoning-toggle"]',
+      );
+      expect(reasoningToggle?.getAttribute("aria-pressed")).toBe("true");
+      await act(async () => {
+        reasoningToggle?.click();
+      });
+      expect(useAppStore.getState().threadRuntimeById["thread-1"]?.composerReasoningEffort).toBe(
+        "none",
+      );
     } finally {
       if (root) {
         await act(async () => {

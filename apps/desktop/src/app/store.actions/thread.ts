@@ -529,6 +529,7 @@ export function createThreadActions(
   | "clearThreadUsageHardCap"
   | "dispatchA2uiAction"
   | "setThreadModel"
+  | "setThreadReasoningEffort"
   | "setComposerText"
   | "setInjectContext"
   | "answerAsk"
@@ -932,6 +933,7 @@ export function createThreadActions(
             transcriptOnly: false,
             draftComposerProvider: opts?.provider ?? null,
             draftComposerModel: opts?.model?.trim() || null,
+            composerReasoningEffort: opts?.reasoningEffort ?? null,
           },
         },
       }));
@@ -1263,6 +1265,7 @@ export function createThreadActions(
               ...s.threadRuntimeById[threadId],
               draftComposerProvider: provider,
               draftComposerModel: model,
+              composerReasoningEffort: null,
             },
           },
         }));
@@ -1271,6 +1274,15 @@ export function createThreadActions(
 
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
+      set((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId],
+            composerReasoningEffort: null,
+          },
+        },
+      }));
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
       if (pendingApply?.draftModelSelection) {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
@@ -1290,6 +1302,46 @@ export function createThreadActions(
           sessionId: rt.sessionId,
           provider,
           model,
+        });
+      }
+    },
+
+    setThreadReasoningEffort: (threadId, provider, effort) => {
+      if (provider !== "openai" && provider !== "codex-cli") return;
+      const thread = get().threads.find((candidate) => candidate.id === threadId);
+      if (!thread) return;
+      ensureThreadRuntime(get, set, threadId);
+      const currentRuntime = get().threadRuntimeById[threadId];
+      if (!thread.draft && currentRuntime?.busy) return;
+
+      set((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId],
+            composerReasoningEffort: effort,
+          },
+        },
+      }));
+
+      if (thread.draft) return;
+      const rt = currentRuntime;
+      if (!rt?.sessionId) return;
+      const config = {
+        providerOptions: {
+          [provider]: { reasoningEffort: effort },
+        },
+      };
+      const ok = sendThread(get, threadId, (sessionId) => ({
+        type: "set_config",
+        sessionId,
+        config,
+      }));
+      if (ok) {
+        appendThreadTranscript(threadId, "client", {
+          type: "set_config",
+          sessionId: rt.sessionId,
+          config,
         });
       }
     },

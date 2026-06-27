@@ -129,7 +129,7 @@ export function codexThreadConfig(
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-export function codexBaseInstructions(
+export function codexDeveloperInstructions(
   system: string,
   env?: Record<string, string | undefined>,
 ): string {
@@ -144,6 +144,7 @@ export function codexBaseInstructions(
       "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
       "Use Codex-native tools for local files, commands, and web access.",
       "Use Cowork dynamic tools for tasks, subagents, memory, skills, todos, and A2UI.",
+      "For user clarification, call Cowork's dynamic `AskUserQuestion` tool directly. Never call the native `request_user_input` tool, which is unavailable on Cowork's Default-mode turns.",
       "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
     ].join("\n"),
     ...(coworkRuntimeInstructions ? [coworkRuntimeInstructions] : []),
@@ -159,9 +160,13 @@ export function codexDynamicToolSpecs(
     .map(([name, tool]): CodexDynamicToolSpec | null => {
       const record = asRecord(tool);
       if (!record) return null;
+      const description = asString(record.description) ?? name;
       return {
         name: codexDynamicToolName(name),
-        description: asString(record.description) ?? name,
+        description:
+          name === "AskUserQuestion"
+            ? `${description} Use this Cowork tool instead of the native request_user_input tool.`
+            : description,
         inputSchema: toPiJsonSchema(record.inputSchema, CODEX_APP_SERVER_PROVIDER),
       };
     })

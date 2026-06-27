@@ -195,6 +195,12 @@ const providerCatalogModelEntrySchema = z
     displayName: z.string(),
     knowledgeCutoff: z.string(),
     supportsImageInput: z.boolean(),
+    reasoning: z
+      .object({
+        defaultEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

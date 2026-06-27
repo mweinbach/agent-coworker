@@ -37,6 +37,7 @@ import type {
   TodoItem,
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
+import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
 import {
@@ -58,6 +59,7 @@ import {
   clearThreadSelectionRequest,
   clearWorkspaceJsonRpcSocketGeneration,
   clearWorkspaceStartState,
+  type DraftModelSelection,
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
   ensureThreadRuntime,
@@ -298,6 +300,7 @@ export type AppStoreState = {
     attachmentFiles?: File[];
     provider?: ProviderName;
     model?: string;
+    reasoningEffort?: ReasoningEffortValue;
   }) => Promise<boolean>;
   openNewChatLanding: (opts?: {
     defaultTargetKind?: "project" | "oneOff";
@@ -338,6 +341,11 @@ export type AppStoreState = {
     payload?: Record<string, unknown>;
   }) => Promise<boolean>;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
+  setThreadReasoningEffort: (
+    threadId: string,
+    provider: ProviderName,
+    effort: ReasoningEffortValue,
+  ) => void;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;
@@ -478,7 +486,7 @@ export type AppStoreState = {
   applyWorkspaceDefaultsToThread: (
     threadId: string,
     mode?: "auto" | "auto-resume" | "explicit",
-    draftModelSelection?: { provider: ProviderName; model: string } | null,
+    draftModelSelection?: DraftModelSelection | null,
     opts?: { allowBeforeHydration?: boolean },
   ) => Promise<void>;
   updateWorkspaceDefaults: (

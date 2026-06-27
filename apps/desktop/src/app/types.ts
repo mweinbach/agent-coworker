@@ -43,7 +43,10 @@ import type {
   SkillInstallPreview,
   SkillUpdateCheckResult,
 } from "../lib/wsProtocol";
-import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
+import type {
+  ReasoningEffortValue,
+  WorkspaceProviderOptions,
+} from "./openaiCompatibleProviderOptions";
 
 export type WorkspaceUserProfile = {
   instructions: string;
@@ -627,6 +630,8 @@ export type ThreadRuntime = {
   /** Draft-thread composer model (no session yet). Cleared on server_hello. */
   draftComposerProvider?: ProviderName | null;
   draftComposerModel?: string | null;
+  /** Optimistic or draft reasoning effort selected from the composer. */
+  composerReasoningEffort?: ReasoningEffortValue | null;
 };
 
 export type HydratedTranscriptSnapshot = {

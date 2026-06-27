@@ -1,5 +1,6 @@
 import {
   isUserFacingProviderEnabled,
+  reasoningConfigForProviderModel,
   userFacingAvailableModelsForProvider,
 } from "@cowork/providers/catalog";
 import { type DesktopPlatform, getDesktopPlatformInfo } from "./desktopPlatform";
@@ -40,6 +41,25 @@ export function modelOptionsForProvider(
 }
 
 type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
+
+export type ComposerReasoningConfig = NonNullable<
+  ProviderCatalogEntry["models"][number]["reasoning"]
+>;
+
+export function reasoningConfigFromCatalog(
+  catalog: readonly ProviderCatalogEntry[],
+  provider: ProviderName,
+  modelId: string,
+): ComposerReasoningConfig | null {
+  const normalizedModelId = modelId.trim();
+  if (!normalizedModelId) return null;
+  return (
+    catalog
+      .find((entry) => entry.id === provider)
+      ?.models.find((model) => model.id === normalizedModelId)?.reasoning ??
+    reasoningConfigForProviderModel(provider, normalizedModelId)
+  );
+}
 
 /** Select value is `provider:modelId` with a single separator (model ids may contain `:`). */
 export function encodeProviderModelSelection(provider: ProviderName, modelId: string): string {

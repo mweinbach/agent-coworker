@@ -11,6 +11,7 @@ import {
   modelDisplayNamesFromCatalog,
   modelOptionsForProvider,
   modelOptionsFromCatalog,
+  reasoningConfigFromCatalog,
   resolveModelDisplayLabel,
 } from "../src/lib/modelChoices";
 import type { ProviderName } from "../src/lib/wsProtocol";
@@ -56,6 +57,50 @@ describe("modelDisplayNamesFromCatalog", () => {
     expect(resolveModelDisplayLabel("fireworks", "accounts/fireworks/models/glm-5p1", map)).toBe(
       "GLM 5.1",
     );
+  });
+});
+
+describe("reasoningConfigFromCatalog", () => {
+  const catalog = [
+    {
+      id: "openai" as const,
+      name: "OpenAI",
+      models: [
+        {
+          id: "gpt-5.4",
+          displayName: "GPT-5.4",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+          reasoning: { defaultEffort: "high" as const },
+        },
+        {
+          id: "gpt-4.1",
+          displayName: "GPT-4.1",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+        },
+      ],
+      defaultModel: "gpt-5.4",
+    },
+  ];
+
+  test("returns reasoning metadata for the exact selected model", () => {
+    expect(reasoningConfigFromCatalog(catalog, "openai", "gpt-5.4")).toEqual({
+      defaultEffort: "high",
+    });
+  });
+
+  test("returns null for models without reasoning configuration", () => {
+    expect(reasoningConfigFromCatalog(catalog, "openai", "gpt-4.1")).toBeNull();
+    expect(reasoningConfigFromCatalog(catalog, "google", "gemini-3.1-pro-preview")).toBeNull();
+  });
+
+  test("uses exact static model metadata while the live catalog is loading", () => {
+    expect(reasoningConfigFromCatalog([], "codex-cli", "gpt-5.4")).toEqual({
+      defaultEffort: "high",
+    });
+    expect(reasoningConfigFromCatalog([], "google", "gemini-3.5-flash")).toBeNull();
+    expect(reasoningConfigFromCatalog([], "codex-cli", "future-model")).toBeNull();
   });
 });
 

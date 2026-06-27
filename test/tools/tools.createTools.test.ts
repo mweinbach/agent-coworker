@@ -545,7 +545,11 @@ describe("createTools", () => {
 
     const dynamicTools = filterToolsForCodexDynamicBoundary(rawTools);
     expect(dynamicTools).toHaveProperty("webSearch");
-    expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("webSearch");
+    const dynamicToolSpecs = codexDynamicToolSpecs(dynamicTools);
+    expect(dynamicToolSpecs.map((tool) => tool.name)).toContain("webSearch");
+    expect(dynamicToolSpecs.find((tool) => tool.name === "AskUserQuestion")?.description).toContain(
+      "instead of the native request_user_input tool",
+    );
   });
 
   test("exposes manageMemory through the Codex dynamic tool boundary", async () => {

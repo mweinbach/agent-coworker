@@ -92,11 +92,12 @@ describe("codex app-server runtime", () => {
 
     const requests = await readCapturedRequests(capturePath);
     const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
-    expect(startParams?.baseInstructions).toContain("Cowork Runtime");
-    expect(startParams?.baseInstructions).toContain(nodePath);
-    expect(startParams?.baseInstructions).toContain("Bare Node imports");
-    expect(startParams?.baseInstructions).toContain("@oai/artifact-tool");
-    expect(startParams?.baseInstructions).not.toContain(
+    expect(startParams).not.toHaveProperty("baseInstructions");
+    expect(startParams?.developerInstructions).toContain("Cowork Runtime");
+    expect(startParams?.developerInstructions).toContain(nodePath);
+    expect(startParams?.developerInstructions).toContain("Bare Node imports");
+    expect(startParams?.developerInstructions).toContain("@oai/artifact-tool");
+    expect(startParams?.developerInstructions).not.toContain(
       process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",
     );
   });
@@ -648,11 +649,12 @@ rl.on("line", (line) => {
     expect(
       (startParams?.dynamicTools as Array<{ name?: string }>).map((tool) => tool.name),
     ).not.toContain("bash");
-    expect(startParams?.baseInstructions).toContain("## Codex App-Server Tool Boundary");
-    expect(startParams?.baseInstructions).toContain(
+    expect(startParams).not.toHaveProperty("baseInstructions");
+    expect(startParams?.developerInstructions).toContain("## Codex App-Server Tool Boundary");
+    expect(startParams?.developerInstructions).toContain(
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
     );
-    expect(startParams?.baseInstructions).toContain(
+    expect(startParams?.developerInstructions).toContain(
       "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
     );
   });

@@ -1127,9 +1127,8 @@ describe("desktop JSON-RPC single connection path", () => {
     await flushAsyncWork();
 
     useAppStore.getState().renameThread("jsonrpc-thread-1", "Renamed thread");
-    useAppStore
-      .getState()
-      .setThreadModel("jsonrpc-thread-1", "google", "gemini-3.1-flash-lite-preview");
+    useAppStore.getState().setThreadModel("jsonrpc-thread-1", "openai", "gpt-5.4");
+    useAppStore.getState().setThreadReasoningEffort("jsonrpc-thread-1", "openai", "none");
     useAppStore.getState().clearThreadUsageHardCap("jsonrpc-thread-1");
     await useAppStore.getState().updateWorkspaceDefaults("ws-jsonrpc", {
       defaultEnableMcp: false,
@@ -1156,6 +1155,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "turn/start",
       "cowork/session/title/set",
       "cowork/session/model/set",
+      "cowork/session/config/set",
       "cowork/session/usageBudget/set",
       "cowork/session/defaults/apply",
       "cowork/session/defaults/apply",
@@ -1166,6 +1166,16 @@ describe("desktop JSON-RPC single connection path", () => {
       useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title,
     ).toBe("Renamed thread");
     expect(runtime?.enableMcp).toBe(false);
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/session/config/set")?.params,
+    ).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      config: {
+        providerOptions: {
+          openai: { reasoningEffort: "none" },
+        },
+      },
+    });
   });
 
   test("draft model selection applies before the first turn starts", async () => {
@@ -1178,6 +1188,7 @@ describe("desktop JSON-RPC single connection path", () => {
     const draftThreadId = useAppStore.getState().selectedThreadId;
     expect(draftThreadId).toBeTruthy();
     useAppStore.getState().setThreadModel(draftThreadId!, "openai", "gpt-5.4-mini");
+    useAppStore.getState().setThreadReasoningEffort(draftThreadId!, "openai", "none");
     jsonRpcRequests.length = 0;
 
     await useAppStore.getState().sendMessage("use the draft selection");
@@ -1202,6 +1213,11 @@ describe("desktop JSON-RPC single connection path", () => {
       threadId: "jsonrpc-thread-1",
       provider: "openai",
       model: "gpt-5.4-mini",
+      config: {
+        providerOptions: {
+          openai: { reasoningEffort: "none" },
+        },
+      },
     });
     expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.model).toBe(
       "gpt-5.4-mini",
@@ -1209,6 +1225,41 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.provider).toBe(
       "openai",
     );
+  });
+
+  test("new chat model reasoning selection applies before its first turn", async () => {
+    await useAppStore.getState().selectWorkspace("ws-jsonrpc");
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      scope: "project",
+      titleHint: "Reasoning off",
+      firstMessage: "start without reasoning",
+      mode: "session",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "none",
+    });
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+      cwd: "/tmp/jsonrpc-workspace",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+    });
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/session/defaults/apply")?.params,
+    ).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      config: {
+        providerOptions: {
+          openai: { reasoningEffort: "none" },
+        },
+      },
+    });
   });
 
   test("delayed thread/read does not clobber optimistic first-message feed items", async () => {

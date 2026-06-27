@@ -462,6 +462,9 @@ describe("codex app-server turn lifecycle", () => {
     const requests = await readCapturedRequests(capturePath);
     const resumeParams = requests.find((entry) => entry.method === "thread/resume")?.params;
     expect(resumeParams).not.toHaveProperty("baseInstructions");
+    expect(resumeParams?.developerInstructions).toContain(
+      "Never call the native `request_user_input` tool",
+    );
     expect(resumeParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -515,8 +518,10 @@ describe("codex app-server turn lifecycle", () => {
     expect(requests.map((entry) => entry.method)).toEqual(
       expect.arrayContaining(["thread/resume", "thread/start", "turn/start"]),
     );
-    expect(requests.find((entry) => entry.method === "thread/start")?.params).toHaveProperty(
-      "baseInstructions",
+    const freshThreadParams = requests.find((entry) => entry.method === "thread/start")?.params;
+    expect(freshThreadParams).not.toHaveProperty("baseInstructions");
+    expect(freshThreadParams?.developerInstructions).toContain(
+      "Never call the native `request_user_input` tool",
     );
     expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
       { type: "text", text: "User: Earlier question", text_elements: [] },

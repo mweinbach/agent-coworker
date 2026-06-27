@@ -7,6 +7,7 @@ import type {
   Ref,
   RefObject,
 } from "react";
+import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
 import { Button } from "../../components/ui/button";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
@@ -23,6 +24,7 @@ import {
 } from "../composer/MessageComposer";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
+import { ComposerReasoningToggle } from "./ComposerReasoningToggle";
 import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
 
@@ -55,6 +57,8 @@ export function ChatComposer(props: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   handleFileSelect: (event: ChangeEvent<HTMLInputElement>) => void;
   threadModelConfig: { provider: ProviderName; model: string } | null;
+  reasoningToggle: { enabled: boolean; enabledEffort: ReasoningEffortValue } | null;
+  onReasoningEnabledChange: (enabled: boolean) => void;
   threadDraft: boolean;
   selectedThreadId: string;
   modelDisplayNames: Record<ProviderName, Record<string, string>>;
@@ -85,6 +89,8 @@ export function ChatComposer(props: {
     fileInputRef,
     handleFileSelect,
     threadModelConfig,
+    reasoningToggle,
+    onReasoningEnabledChange,
     threadDraft,
     selectedThreadId,
     modelDisplayNames,
@@ -196,6 +202,13 @@ export function ChatComposer(props: {
                       modelDisplayNames={modelDisplayNames}
                     />
                   )
+                ) : null}
+                {reasoningToggle ? (
+                  <ComposerReasoningToggle
+                    enabled={reasoningToggle.enabled}
+                    disabled={inputDisabled || busy}
+                    onChange={onReasoningEnabledChange}
+                  />
                 ) : null}
               </MessageComposerTools>
               <div className="flex shrink-0 items-center gap-2">

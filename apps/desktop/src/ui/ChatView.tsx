@@ -12,6 +12,7 @@ import {
   buildAttachmentSignature,
   getAttachmentPickerValidationMessage,
 } from "../app/attachmentInputs";
+import type { ReasoningEffortValue } from "../app/openaiCompatibleProviderOptions";
 import {
   isSandboxApprovalThreadVisible,
   resolveSandboxApprovalThreadTarget,
@@ -26,7 +27,7 @@ import {
   resolveComposerAttachmentsForWorkspace,
   revokeComposerAttachmentPreview,
 } from "../lib/composerAttachments";
-import { modelDisplayNamesFromCatalog } from "../lib/modelChoices";
+import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
 import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
 import { buildChatRenderItems } from "./chat/activityGroups";
@@ -219,6 +220,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
+  const setThreadReasoningEffort = useAppStore((s) => s.setThreadReasoningEffort);
   const reconnectThread = useAppStore((s) => s.reconnectThread);
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
   const sourceTask = useMemo(() => {
@@ -459,6 +461,29 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     if (!rt || rt.sessionKind === "agent") return null;
     if (rt.transcriptOnly === true) return null;
 
+    const resolveConfig = (provider: ProviderName, model: string) => {
+      const reasoningConfig = reasoningConfigFromCatalog(providerCatalog, provider, model);
+      if (!reasoningConfig) return { provider, model, reasoning: null };
+      const configuredEffort =
+        provider === "openai" || provider === "codex-cli"
+          ? thread.draft
+            ? workspace?.providerOptions?.[provider]?.reasoningEffort
+            : rt.sessionConfig?.providerOptions?.[provider]?.reasoningEffort
+          : undefined;
+      const currentEffort =
+        rt.composerReasoningEffort ?? configuredEffort ?? reasoningConfig.defaultEffort;
+      const enabledEffort: ReasoningEffortValue =
+        reasoningConfig.defaultEffort === "none" ? "high" : reasoningConfig.defaultEffort;
+      return {
+        provider,
+        model,
+        reasoning: {
+          enabled: currentEffort !== "none",
+          enabledEffort,
+        },
+      };
+    };
+
     if (thread.draft) {
       if (!workspace) return null;
       const baseProvider =
@@ -474,14 +499,26 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           ? rt.draftComposerModel.trim()
           : workspace.defaultModel?.trim() || defaultModelForProvider(provider) || "";
       if (!modelRaw) return null;
-      return { provider, model: modelRaw };
+      return resolveConfig(provider, modelRaw);
     }
 
     if (rt.config?.provider && rt.config.model) {
-      return { provider: rt.config.provider as ProviderName, model: rt.config.model };
+      return resolveConfig(rt.config.provider as ProviderName, rt.config.model);
     }
     return null;
-  }, [selectedThreadId, thread, rt, workspace]);
+  }, [providerCatalog, selectedThreadId, thread, rt, workspace]);
+
+  const handleReasoningEnabledChange = useCallback(
+    (enabled: boolean) => {
+      if (!selectedThreadId || !threadModelConfig?.reasoning) return;
+      setThreadReasoningEffort(
+        selectedThreadId,
+        threadModelConfig.provider,
+        enabled ? threadModelConfig.reasoning.enabledEffort : "none",
+      );
+    },
+    [selectedThreadId, setThreadReasoningEffort, threadModelConfig],
+  );
 
   const handleStop = useCallback(() => {
     if (!selectedThreadId) return;
@@ -837,6 +874,8 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             fileInputRef={fileInputRef}
             handleFileSelect={handleFileSelect}
             threadModelConfig={threadModelConfig}
+            reasoningToggle={threadModelConfig?.reasoning ?? null}
+            onReasoningEnabledChange={handleReasoningEnabledChange}
             threadDraft={thread.draft === true}
             selectedThreadId={selectedThreadId}
             modelDisplayNames={modelDisplayNames}

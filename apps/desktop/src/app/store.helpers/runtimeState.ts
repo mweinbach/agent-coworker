@@ -1,5 +1,6 @@
 import type { JsonRpcSocket } from "../../lib/agentSocket";
 import type { ProviderName, TurnReference } from "../../lib/wsProtocol";
+import type { ReasoningEffortValue } from "../openaiCompatibleProviderOptions";
 import {
   clearThreadModelStreamRuntime,
   createThreadModelStreamRuntime,
@@ -22,6 +23,7 @@ type WorkspaceDefaultApplyMode = "auto" | "auto-resume" | "explicit";
 export type DraftModelSelection = {
   provider: ProviderName;
   model: string;
+  reasoningEffort?: ReasoningEffortValue;
 };
 
 type PendingWorkspaceDefaultApply = {
@@ -368,6 +370,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     a2uiDock: createDefaultA2uiDock(),
     hydrating: false,
     transcriptOnly: false,
+    composerReasoningEffort: null,
   };
 }
 

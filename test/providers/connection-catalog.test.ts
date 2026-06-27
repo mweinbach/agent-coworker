@@ -15,6 +15,23 @@ const noCodexAccount = async () => ({
 });
 
 describe("providers/connectionCatalog", () => {
+  test("marks only models with toggleable reasoning effort", async () => {
+    const entries = await listProviderCatalogEntries({ platform: "linux" });
+    const openAiModel = entries
+      .find((entry) => entry.id === "openai")
+      ?.models.find((model) => model.id === "gpt-5.4");
+    const googleModel = entries
+      .find((entry) => entry.id === "google")
+      ?.models.find((model) => model.id === "gemini-3.1-pro-preview");
+    const anthropicModel = entries
+      .find((entry) => entry.id === "anthropic")
+      ?.models.find((model) => model.id === "claude-opus-4-8");
+
+    expect(openAiModel?.reasoning).toEqual({ defaultEffort: "high" });
+    expect(googleModel?.reasoning).toBeUndefined();
+    expect(anthropicModel?.reasoning).toBeUndefined();
+  });
+
   test("catalog entries stay aligned with provider names and default-model map", async () => {
     const payload = await getProviderCatalog({
       platform: "linux",

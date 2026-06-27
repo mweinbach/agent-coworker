@@ -17,7 +17,7 @@ import type {
 import { startCodexAppServer } from "./clientLifecycle";
 import {
   codexApprovalPolicy,
-  codexBaseInstructions,
+  codexDeveloperInstructions,
   codexDynamicToolSpecs,
   codexSandboxMode,
   codexSandboxPolicy,
@@ -108,6 +108,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const sandboxPolicy = codexSandboxPolicy(preparedParams);
         const threadConfig = codexThreadConfig(preparedParams);
         const dynamicTools = codexDynamicToolSpecs(params.tools);
+        const developerInstructions = codexDeveloperInstructions(params.system, appServerEnv);
         const resumeState = currentState?.model === effectiveModel ? currentState : null;
         let resumedThread = resumeState !== null;
         const startThread = async () =>
@@ -121,7 +122,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               approvalPolicy,
               sandbox: sandboxMode,
               ...(threadConfig ? { config: threadConfig } : {}),
-              baseInstructions: codexBaseInstructions(params.system, appServerEnv),
+              developerInstructions,
               experimentalRawEvents: params.includeRawChunks ?? true,
               ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
             },
@@ -142,6 +143,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
                 approvalPolicy,
                 sandbox: sandboxMode,
                 ...(threadConfig ? { config: threadConfig } : {}),
+                developerInstructions,
                 experimentalRawEvents: params.includeRawChunks ?? true,
                 ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
               },

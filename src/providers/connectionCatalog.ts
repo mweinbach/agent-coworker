@@ -7,6 +7,10 @@ import {
   listSupportedModels,
   type SupportedModel,
 } from "../models/registry";
+import {
+  isOpenAiReasoningEffort,
+  type OpenAiReasoningEffort,
+} from "../shared/openaiCompatibleOptions";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { isAntigravitySupportedPlatform } from "./antigravitySupport";
@@ -37,7 +41,11 @@ function storedProviderApiKey(
 export type ProviderCatalogModelEntry = Pick<
   SupportedModel,
   "id" | "displayName" | "knowledgeCutoff" | "supportsImageInput"
->;
+> & {
+  reasoning?: {
+    defaultEffort: OpenAiReasoningEffort;
+  };
+};
 
 export type ProviderCatalogEntry = {
   id: ProviderName;
@@ -76,16 +84,29 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   antigravity: "Antigravity",
 };
 
+function reasoningConfigForModel(
+  model: Pick<SupportedModel, "providerOptionsDefaults">,
+): ProviderCatalogModelEntry["reasoning"] {
+  const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
+  return isOpenAiReasoningEffort(defaultEffort) ? { defaultEffort } : undefined;
+}
+
+function staticCatalogModelEntry(model: SupportedModel): ProviderCatalogModelEntry {
+  const reasoning = reasoningConfigForModel(model);
+  return {
+    id: model.id,
+    displayName: model.displayName,
+    knowledgeCutoff: model.knowledgeCutoff,
+    supportsImageInput: model.supportsImageInput,
+    ...(reasoning ? { reasoning } : {}),
+  };
+}
+
 function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): ProviderCatalogEntry {
   return {
     id: provider,
     name: PROVIDER_LABELS[provider],
-    models: listSupportedModels(provider).map((model) => ({
-      id: model.id,
-      displayName: model.displayName,
-      knowledgeCutoff: model.knowledgeCutoff,
-      supportsImageInput: model.supportsImageInput,
-    })),
+    models: listSupportedModels(provider).map(staticCatalogModelEntry),
     defaultModel: defaultSupportedModel(provider).id,
   };
 }
@@ -119,11 +140,13 @@ async function codexCatalogEntry(opts: {
   for (const model of appServerModels) {
     const live = resolveLiveModel(model);
     if (modelsById.has(live.id)) continue;
+    const reasoning = live.supported ? reasoningConfigForModel(live.supported) : undefined;
     modelsById.set(live.id, {
       id: live.id,
       displayName: model.displayName || live.supported?.displayName || live.id,
       knowledgeCutoff: live.supported?.knowledgeCutoff ?? "Unknown",
       supportsImageInput: live.supported?.supportsImageInput ?? model.supportsImageInput ?? false,
+      ...(reasoning ? { reasoning } : {}),
     });
   }
   const models = [...modelsById.values()];

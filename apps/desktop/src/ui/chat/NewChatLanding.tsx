@@ -11,6 +11,7 @@ import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAttachmentCountValidationMessage } from "../../../../../src/shared/attachments";
 import { buildAttachmentDisplayText } from "../../app/attachmentInputs";
+import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../app/store";
 import { ensureServerRunning } from "../../app/store.helpers";
 import type { FileAttachmentInput } from "../../app/store.helpers/jsonRpcSocket";
@@ -33,7 +34,7 @@ import {
   resolveComposerAttachmentsForWorkspace,
   revokeComposerAttachmentPreview,
 } from "../../lib/composerAttachments";
-import { modelDisplayNamesFromCatalog } from "../../lib/modelChoices";
+import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../../lib/modelChoices";
 import { resolveNewChatLandingTarget } from "../../lib/newChatLanding";
 import {
   MessageComposerAttachments,
@@ -47,6 +48,7 @@ import {
 } from "../composer/MessageComposer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
 import { type ComposerModelSelection, ComposerModelSelector } from "./ComposerModelSelector";
+import { ComposerReasoningToggle } from "./ComposerReasoningToggle";
 import { buildMentionCatalog, extractReferencesFromText } from "./composerMentions";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
 
@@ -121,7 +123,32 @@ export function NewChatLanding() {
   );
   const [modelSelection, setModelSelection] =
     useState<ComposerModelSelection>(defaultModelSelection);
+  const [reasoningOverride, setReasoningOverride] = useState<{
+    provider: ComposerModelSelection["provider"];
+    model: string;
+    effort: ReasoningEffortValue;
+  } | null>(null);
 
+  const reasoningConfig = useMemo(
+    () =>
+      reasoningConfigFromCatalog(providerCatalog, modelSelection.provider, modelSelection.model),
+    [modelSelection, providerCatalog],
+  );
+  const workspaceReasoningEffort =
+    modelSelection.provider === "openai" || modelSelection.provider === "codex-cli"
+      ? fallbackModelWorkspace?.providerOptions?.[modelSelection.provider]?.reasoningEffort
+      : undefined;
+  const reasoningEffort: ReasoningEffortValue | null = reasoningConfig
+    ? reasoningOverride?.provider === modelSelection.provider &&
+      reasoningOverride.model === modelSelection.model
+      ? reasoningOverride.effort
+      : (workspaceReasoningEffort ?? reasoningConfig.defaultEffort)
+    : null;
+  const enabledReasoningEffort: ReasoningEffortValue | null = reasoningConfig
+    ? reasoningConfig.defaultEffort === "none"
+      ? "high"
+      : reasoningConfig.defaultEffort
+    : null;
   useEffect(() => {
     if (!modelTouched) {
       setModelSelection(defaultModelSelection);
@@ -246,6 +273,7 @@ export function NewChatLanding() {
                 references: referencesArg,
                 provider: modelSelection.provider,
                 model: modelSelection.model,
+                reasoningEffort: reasoningEffort ?? undefined,
               })
             : await newThread({
                 scope: "oneOff",
@@ -256,6 +284,7 @@ export function NewChatLanding() {
                 references: referencesArg,
                 provider: modelSelection.provider,
                 model: modelSelection.model,
+                reasoningEffort: reasoningEffort ?? undefined,
               });
 
         if (ok) {
@@ -279,6 +308,7 @@ export function NewChatLanding() {
       modelSelection,
       newThread,
       pendingAttachments,
+      reasoningEffort,
       setComposerText,
       submitting,
       target,
@@ -479,16 +509,31 @@ export function NewChatLanding() {
                   </PopoverContent>
                 </Popover>
                 {modelSelection.model ? (
-                  <ComposerModelSelector
-                    provider={modelSelection.provider}
-                    model={modelSelection.model}
-                    modelDisplayNames={modelDisplayNames}
-                    disabled={submitting}
-                    onChange={(selection) => {
-                      setModelTouched(true);
-                      setModelSelection(selection);
-                    }}
-                  />
+                  <>
+                    <ComposerModelSelector
+                      provider={modelSelection.provider}
+                      model={modelSelection.model}
+                      modelDisplayNames={modelDisplayNames}
+                      disabled={submitting}
+                      onChange={(selection) => {
+                        setModelTouched(true);
+                        setModelSelection(selection);
+                      }}
+                    />
+                    {reasoningConfig && reasoningEffort && enabledReasoningEffort ? (
+                      <ComposerReasoningToggle
+                        enabled={reasoningEffort !== "none"}
+                        disabled={submitting}
+                        onChange={(enabled) => {
+                          setReasoningOverride({
+                            provider: modelSelection.provider,
+                            model: modelSelection.model,
+                            effort: enabled ? enabledReasoningEffort : "none",
+                          });
+                        }}
+                      />
+                    ) : null}
+                  </>
                 ) : null}
               </MessageComposerTools>
               <MessageComposerSubmit

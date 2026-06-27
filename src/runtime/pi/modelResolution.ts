@@ -157,8 +157,8 @@ function getBasetenPiModel(modelId: string): PiModel | null {
   };
 }
 
-function getBedrockPiModel(modelId: string): PiModel {
-  const model = pickKnownPiModel("amazon-bedrock", modelId);
+async function getBedrockPiModel(modelId: string): Promise<PiModel> {
+  const model = await pickKnownPiModel("amazon-bedrock", modelId);
   if (model) {
     return {
       ...model,
@@ -180,9 +180,9 @@ function getBedrockPiModel(modelId: string): PiModel {
   };
 }
 
-function getAnthropicPiModel(modelId: string): PiModel | null {
+async function getAnthropicPiModel(modelId: string): Promise<PiModel | null> {
   if (modelId === "claude-opus-4-8") {
-    const opus47 = pickKnownPiModel("anthropic", "claude-opus-4-7");
+    const opus47 = await pickKnownPiModel("anthropic", "claude-opus-4-7");
     if (!opus47) return null;
     return {
       ...opus47,
@@ -193,7 +193,7 @@ function getAnthropicPiModel(modelId: string): PiModel | null {
     };
   }
 
-  const model = pickKnownPiModel("anthropic", modelId);
+  const model = await pickKnownPiModel("anthropic", modelId);
   if (model) return model;
 
   return null;
@@ -303,7 +303,7 @@ export async function resolvePiModel(
   const provider = params.config.provider;
 
   if (provider === "openai") {
-    const model = pickKnownPiModel("openai", modelId);
+    const model = await pickKnownPiModel("openai", modelId);
     if (!model)
       throw new Error(`No PI model metadata available for provider openai (model: ${modelId}).`);
     return {
@@ -319,7 +319,7 @@ export async function resolvePiModel(
   }
 
   if (provider === "anthropic") {
-    const model = getAnthropicPiModel(modelId);
+    const model = await getAnthropicPiModel(modelId);
     if (!model)
       throw new Error(`No PI model metadata available for provider anthropic (model: ${modelId}).`);
     return {
@@ -332,7 +332,7 @@ export async function resolvePiModel(
     const auth = await resolveBedrockAuthConfig({ config: params.config });
     const streamOptions = auth ? bedrockClientConfig(auth) : undefined;
     return {
-      model: applySupportedModelMetadata(getBedrockPiModel(modelId), provider, modelId),
+      model: applySupportedModelMetadata(await getBedrockPiModel(modelId), provider, modelId),
       ...(streamOptions ? { streamOptions } : {}),
     };
   }

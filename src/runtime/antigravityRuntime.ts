@@ -275,7 +275,9 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
                     }
                     validatedArgs = parsed.data;
                   }
-                  const result = await toolDef.execute(validatedArgs);
+                  const result = await toolDef.execute(validatedArgs, {
+                    abortSignal: params.abortSignal,
+                  });
                   const executionError = extractToolExecutionErrorMessage(result);
                   if (executionError) {
                     await emitPart({
@@ -316,6 +318,7 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
                     toolCallId,
                     workingDirectory: params.config.workingDirectory,
                     toolOutputOverflowChars: params.config.toolOutputOverflowChars,
+                    assertCanMutate: params.assertCanMutate,
                     log: params.log,
                   });
                   const emittedOutput = overflow?.output ?? result;

@@ -17,7 +17,7 @@ import type {
 import { startCodexAppServer } from "./clientLifecycle";
 import {
   codexApprovalPolicy,
-  codexBaseInstructions,
+  codexDeveloperInstructions,
   codexDynamicToolSpecs,
   codexSandboxMode,
   codexSandboxPolicy,
@@ -48,10 +48,12 @@ async function requestWithAbort<T>(
   params: unknown,
   timeoutMs: number,
   abortSignal?: AbortSignal,
+  opts: { rejectOnAbort?: boolean } = {},
 ): Promise<T> {
   const requestPromise = client.request(method, params, timeoutMs) as Promise<T>;
   if (!abortSignal) return requestPromise;
   if (abortSignal.aborted) throw new Error("Cancelled by user");
+  if (opts.rejectOnAbort === false) return await requestPromise;
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new Error("Cancelled by user"));
     abortSignal.addEventListener("abort", onAbort, { once: true });
@@ -106,6 +108,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const sandboxPolicy = codexSandboxPolicy(preparedParams);
         const threadConfig = codexThreadConfig(preparedParams);
         const dynamicTools = codexDynamicToolSpecs(params.tools);
+        const developerInstructions = codexDeveloperInstructions(params.system, appServerEnv);
         const resumeState = currentState?.model === effectiveModel ? currentState : null;
         let resumedThread = resumeState !== null;
         const startThread = async () =>
@@ -119,7 +122,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               approvalPolicy,
               sandbox: sandboxMode,
               ...(threadConfig ? { config: threadConfig } : {}),
-              baseInstructions: codexBaseInstructions(params.system, appServerEnv),
+              developerInstructions,
               experimentalRawEvents: params.includeRawChunks ?? true,
               ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
             },
@@ -140,6 +143,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
                 approvalPolicy,
                 sandbox: sandboxMode,
                 ...(threadConfig ? { config: threadConfig } : {}),
+                developerInstructions,
                 experimentalRawEvents: params.includeRawChunks ?? true,
                 ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
               },
@@ -207,7 +211,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
 
         try {
           const completion = notificationRouter.waitForCompletion();
-          const turnResult = await requestWithAbort<unknown>(
+          const turnStartRequest = requestWithAbort<unknown>(
             client,
             "turn/start",
             {
@@ -227,34 +231,62 @@ export function createCodexAppServerRuntime(): LlmRuntime {
             },
             CODEX_STARTUP_RPC_TIMEOUT_MS,
             params.abortSignal,
+            { rejectOnAbort: false },
           );
-
-          const startedTurn = asRecord(asRecord(turnResult)?.turn);
-          startedTurnId = asString(startedTurn?.id);
-          if (params.registerSteerHandler && startedTurnId) {
-            unregisterSteerHandler = params.registerSteerHandler(async (steer) => {
-              if (!threadId || !startedTurnId) {
-                throw new Error("Codex app-server turn is not ready for steering.");
+          turnStartRequest.catch(() => {
+            // If a provider completion wins the race, the stale start response
+            // may still time out or reject later. The completion channel owns
+            // the turn outcome in that case.
+          });
+          let finalTurn: unknown;
+          const turnStartOutcome = turnStartRequest.then(
+            (result) => ({ kind: "started" as const, result }),
+            async (error) => {
+              if (params.abortSignal?.aborted) {
+                return { kind: "completed" as const, turn: await completion };
               }
-              const steerInput = buildCodexTurnInput(
-                [{ role: "user", content: steer.content ?? steer.text }],
-                { resumedThread: true },
-              );
-              await client.request(
-                "turn/steer",
-                {
-                  threadId,
-                  expectedTurnId: startedTurnId,
-                  input:
-                    steerInput.length > 0
-                      ? steerInput
-                      : [{ type: "text", text: steer.text, text_elements: [] }],
-                },
-                CODEX_STARTUP_RPC_TIMEOUT_MS,
-              );
-            });
+              throw error;
+            },
+          );
+          const startOrCompletion = await Promise.race([
+            turnStartOutcome,
+            completion.then((turn) => ({ kind: "completed" as const, turn })),
+          ]);
+
+          if (startOrCompletion.kind === "completed") {
+            finalTurn = startOrCompletion.turn;
+            startedTurnId = asString(asRecord(finalTurn)?.id);
+          } else {
+            const startedTurn = asRecord(asRecord(startOrCompletion.result)?.turn);
+            startedTurnId = asString(startedTurn?.id);
+            if (params.registerSteerHandler && startedTurnId) {
+              unregisterSteerHandler = params.registerSteerHandler(async (steer) => {
+                if (!threadId || !startedTurnId) {
+                  throw new Error("Codex app-server turn is not ready for steering.");
+                }
+                const steerInput = buildCodexTurnInput(
+                  [{ role: "user", content: steer.content ?? steer.text }],
+                  { resumedThread: true },
+                );
+                await client.request(
+                  "turn/steer",
+                  {
+                    threadId,
+                    expectedTurnId: startedTurnId,
+                    input:
+                      steerInput.length > 0
+                        ? steerInput
+                        : [{ type: "text", text: steer.text, text_elements: [] }],
+                  },
+                  CODEX_STARTUP_RPC_TIMEOUT_MS,
+                );
+              });
+            }
+            finalTurn = await completion;
           }
-          const finalTurn = await completion;
+          if (params.abortSignal?.aborted) {
+            throw new Error("Cancelled by user");
+          }
 
           const text = assistantTextFromTurn(finalTurn) || notificationRouter.assistantText();
           const reasoningText = reasoningTextFromTurn(finalTurn);
@@ -299,7 +331,9 @@ export function createCodexAppServerRuntime(): LlmRuntime {
             updatedAt: new Date().toISOString(),
           };
         }
-        const partialText = notificationRouter?.assistantText().trim();
+        const partialText = params.abortSignal?.aborted
+          ? ""
+          : notificationRouter?.assistantText().trim();
         if (partialText) {
           (contextualError as PartialTurnError).responseMessages = [
             { role: "assistant", content: partialText },

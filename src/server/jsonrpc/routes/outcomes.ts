@@ -25,12 +25,23 @@ export async function captureBindingOutcome<T extends SessionEvent>(
   binding: SessionBinding,
   action: () => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
+  timeoutMs?: number,
 ): Promise<JsonRpcSessionOutcome<T>> {
   return await context.events.capture(
     binding,
     async () => await action(),
     isOutcomeEvent(context, predicate),
+    timeoutMs,
   );
+}
+
+export async function captureBindingCorrelatedOutcome<T extends SessionEvent>(
+  context: JsonRpcRouteContext,
+  binding: SessionBinding,
+  action: () => Promise<void> | void,
+  predicate: (event: SessionEvent) => event is T,
+): Promise<T> {
+  return await context.events.capture(binding, async () => await action(), predicate);
 }
 
 export async function captureBindingMutationOutcome<T extends SessionEvent>(
@@ -79,11 +90,18 @@ export async function captureWorkspaceControlOutcome<T extends SessionEvent>(
   cwd: string,
   action: (runtime: SessionRuntime) => Promise<void> | void,
   predicate: (event: SessionEvent) => event is T,
+  timeoutMs?: number,
 ): Promise<JsonRpcSessionOutcome<T>> {
   return await context.workspaceControl.withSession(
     cwd,
     async (binding, session) =>
-      await captureBindingOutcome(context, binding, async () => await action(session), predicate),
+      await captureBindingOutcome(
+        context,
+        binding,
+        async () => await action(session),
+        predicate,
+        timeoutMs,
+      ),
   );
 }
 
@@ -128,5 +146,8 @@ export function sendSessionMutationError(
   context.jsonrpc.sendError(ws, id, {
     code: JSONRPC_ERROR_CODES.invalidRequest,
     message: event.message,
+    ...(event.code === "task_locked"
+      ? { data: event.data ?? { category: event.code, source: event.source } }
+      : {}),
   });
 }

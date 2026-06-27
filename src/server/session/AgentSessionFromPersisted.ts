@@ -55,6 +55,10 @@ export type AgentSessionFromPersistedOptions = {
   deleteWorkspaceBackupCheckpointImpl?: SessionDependencies["deleteWorkspaceBackupCheckpointImpl"];
   deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
   getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
+  getTaskContextImpl?: SessionDependencies["getTaskContextImpl"];
+  getTaskReviewMaterialImpl?: SessionDependencies["getTaskReviewMaterialImpl"];
+  applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
+  createTaskImpl?: SessionDependencies["createTaskImpl"];
   readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
   createA2uiSurfaceManagerImpl?: SessionDependencies["createA2uiSurfaceManagerImpl"];
   deriveA2uiSurfacesFromSnapshotImpl?: SessionDependencies["deriveA2uiSurfacesFromSnapshotImpl"];
@@ -65,6 +69,13 @@ export function createAgentSessionFromPersisted(
   opts: AgentSessionFromPersistedOptions,
 ): AgentSession {
   const { persisted } = opts;
+  // A root system prompt is derived from the current app version, workspace
+  // configuration, and discovered skill/plugin catalog. Do not reuse the
+  // persisted copy after a restart: files or prompt templates may have changed
+  // while the session was closed. An empty prompt makes AgentSession rebuild it
+  // before the next turn. Agent sessions keep their persisted role-specific
+  // prompt because loadSystemPromptWithSkills only builds the root prompt.
+  const regenerateRootSystemPrompt = persisted.sessionKind === "root";
   const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
   const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
   const migratedUnsupportedModel =
@@ -136,8 +147,8 @@ export function createAgentSessionFromPersisted(
 
   const session = new AgentSession({
     config,
-    system: persisted.systemPrompt,
-    discoveredSkills: opts.discoveredSkills,
+    system: regenerateRootSystemPrompt ? "" : persisted.systemPrompt,
+    discoveredSkills: regenerateRootSystemPrompt ? undefined : opts.discoveredSkills,
     yolo: opts.yolo,
     emit: opts.emit,
     connectProviderImpl: opts.connectProviderImpl,
@@ -167,6 +178,10 @@ export function createAgentSessionFromPersisted(
     deleteWorkspaceBackupCheckpointImpl: opts.deleteWorkspaceBackupCheckpointImpl,
     deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
     getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
+    getTaskContextImpl: opts.getTaskContextImpl,
+    getTaskReviewMaterialImpl: opts.getTaskReviewMaterialImpl,
+    applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
+    createTaskImpl: opts.createTaskImpl,
     readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,
     createA2uiSurfaceManagerImpl: opts.createA2uiSurfaceManagerImpl,
     deriveA2uiSurfacesFromSnapshotImpl: opts.deriveA2uiSurfacesFromSnapshotImpl,

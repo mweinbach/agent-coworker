@@ -780,6 +780,10 @@ export function createWebAdapter(): DesktopApi {
       return () => {};
     },
 
+    onWorkspaceServerStartupProgress(): () => void {
+      return () => {};
+    },
+
     onSystemAppearanceChanged(listener): () => void {
       appearanceListeners.add(listener);
       const mql = window.matchMedia("(prefers-color-scheme: dark)");

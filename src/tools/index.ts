@@ -9,6 +9,7 @@ import type { AgentConfig } from "../types";
 import { createAskTool } from "./ask";
 import { createBashTool } from "./bash";
 import type { ToolContext } from "./context";
+import { createTaskCreationTool } from "./createTask";
 import { createEditTool } from "./edit";
 import { createGlobTool } from "./glob";
 import { createGrepTool } from "./grep";
@@ -27,6 +28,8 @@ import { createReadPastConversationTool } from "./readPastConversation";
 import { createRecallMemoryTool } from "./recallMemory";
 import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
+import { createTaskReviewTool } from "./taskReview";
+import { createTaskUpdateTool } from "./taskUpdate";
 import { createTodoWriteTool } from "./todoWrite";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
@@ -86,6 +89,7 @@ export function listSessionToolNames(
   const coworkToolNames = [
     "AskUserQuestion",
     "todoWrite",
+    "createTask",
     "skill",
     ...(config.advancedMemory
       ? ["recallMemory", "readPastConversation", "manageMemory"]
@@ -115,6 +119,9 @@ export function listSessionToolNames(
 
 export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
+  const taskCreationTool = createTaskCreationTool(ctx);
+  const taskReviewTool = createTaskReviewTool(ctx);
+  const taskUpdateTool = createTaskUpdateTool(ctx);
   const includeLegacyWebSearch =
     !usesGoogleNativeWebTools(ctx) &&
     (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
@@ -131,8 +138,10 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     grep: createGrepTool(ctx),
     ...(includeLegacyWebSearch ? { webSearch: createWebSearchTool(ctx) } : {}),
     webFetch: createWebFetchTool(ctx),
-    AskUserQuestion: askTool,
-    todoWrite: createTodoWriteTool(ctx),
+    ...(ctx.taskContext ? {} : { AskUserQuestion: askTool }),
+    ...(taskUpdateTool ? { taskUpdate: taskUpdateTool } : { todoWrite: createTodoWriteTool(ctx) }),
+    ...(taskReviewTool ? { reviewTask: taskReviewTool } : {}),
+    ...(taskCreationTool ? { createTask: taskCreationTool } : {}),
     ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     skill: createSkillTool(ctx),
     ...(scopedChild

@@ -13,7 +13,7 @@ const BUILT_IN_MARKETPLACE_PATH = ".agents/plugins/marketplace.json";
 const BUILT_IN_MARKETPLACE_URL = `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/${BUILT_IN_MARKETPLACE_REF}`;
 export const DEFAULT_MARKETPLACE_PLUGIN_IDS = ["workspace-tools"] as const;
 const DEFAULT_MARKETPLACE_PLUGIN_LEGACY_TOMBSTONES: Record<string, readonly string[]> = {
-  "workspace-tools": ["documents", "presentations", "spreadsheets"],
+  "workspace-tools": ["documents", "pdf", "presentations", "spreadsheets"],
 };
 
 export function canonicalDefaultMarketplacePluginIdForTombstone(

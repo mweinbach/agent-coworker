@@ -819,7 +819,7 @@ describe("plugins catalog page", () => {
       expect(pageText).toContain("Workspace Figma Toolkit");
       expect(pageText).toContain("User Figma Toolkit");
       expect(pageText).toContain("Workspace plugin");
-      expect(pageText).toContain("User plugin");
+      expect(pageText).toContain("Library plugin");
     } finally {
       if (root) {
         await act(async () => {

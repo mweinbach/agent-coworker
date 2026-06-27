@@ -14,8 +14,8 @@
   --color-light-accent-foreground: #ffffff;
   --color-light-inverse-text: #ffffff;
   --color-light-danger-base: #bb3e3e;
-  --color-light-success-base: #1ea155;
-  --color-light-border-base: rgba(62, 74, 40, 0.12);
+  --color-light-success-base: #3ab665;
+  --color-light-border-base: rgba(62, 74, 40, 0.18);
   --color-light-shadow-surface-base:
     0px 1px 3px rgba(0, 0, 0, 0.05), inset 0px 1px 0px rgba(255, 255, 255, 0.4);
   --color-light-shadow-overlay-base: 0px 12px 30px rgba(0, 0, 0, 0.1);
@@ -26,10 +26,10 @@
   --color-dark-text-base: #eef0dc;
   --color-dark-muted-base: #c7ceaf;
   --color-dark-accent-base: #a8b963;
-  --color-dark-accent-foreground: #121a10;
+  --color-dark-accent-foreground: #ffffff;
   --color-dark-inverse-text: #ffffff;
   --color-dark-danger-base: #e86060;
-  --color-dark-success-base: #3fbb74;
+  --color-dark-success-base: #5ecc7e;
   --color-dark-border-base: rgba(238, 241, 220, 0.14);
   --color-dark-shadow-surface-base:
     0px 1px 2px rgba(0, 0, 0, 0.24), inset 0px 1px 0px rgba(255, 255, 255, 0.08);
@@ -38,24 +38,24 @@
   /* Semantic Default (Light Mode) */
   --surface-window: var(--color-light-app-bg);
   --surface-sidebar: var(--color-light-sidebar-bg);
-  --surface-card: #f2f4e6;
-  --surface-card-elevated: #f4f5ea;
+  --surface-card: #f6f8f0;
+  --surface-card-elevated: #f8f9f2;
   --surface-overlay: var(--color-light-panel-bg);
-  --surface-field: #f1f3e5;
-  --surface-secondary: #e2e6d6;
-  --surface-accent: #e2e7d5;
+  --surface-field: #f5f7ee;
+  --surface-secondary: #e8eadd;
+  --surface-accent: #e5e8d9;
   --surface-muted-fill: rgba(35, 42, 24, 0.06);
 
   --text-primary: var(--color-light-text-base);
   --text-secondary: rgba(35, 42, 24, 0.88);
   --text-muted: var(--color-light-muted-base);
-  --text-subtle: rgba(85, 96, 65, 0.78);
+  --text-subtle: rgba(85, 96, 65, 0.92);
   --text-inverse: var(--color-light-inverse-text);
   --text-link: var(--color-light-accent-base);
 
   --border-default: var(--color-light-border-base);
-  --border-subtle: rgba(62, 74, 40, 0.0912);
-  --border-strong: rgba(62, 74, 40, 0.1104);
+  --border-subtle: rgba(62, 74, 40, 0.137);
+  --border-strong: rgba(62, 74, 40, 0.166);
 
   --accent: var(--color-light-accent-base);
   --accent-foreground: var(--color-light-accent-foreground);
@@ -63,10 +63,10 @@
 
   --success: var(--color-light-success-base);
   --success-foreground: #ffffff;
-  --success-soft: rgba(30, 161, 85, 0.15);
-  --warning: #d99422;
+  --success-soft: rgba(58, 182, 101, 0.15);
+  --warning: #ecaa0b;
   --warning-foreground: #232a18;
-  --warning-soft: rgba(217, 148, 34, 0.16);
+  --warning-soft: rgba(236, 170, 11, 0.16);
   --danger: var(--color-light-danger-base);
   --danger-foreground: var(--color-light-inverse-text);
   --danger-soft: rgba(187, 62, 62, 0.12);
@@ -80,24 +80,24 @@
     /* Semantic Dark Mode */
     --surface-window: var(--color-dark-app-bg);
     --surface-sidebar: var(--color-dark-sidebar-bg);
-    --surface-card: #282f1f;
-    --surface-card-elevated: #293020;
+    --surface-card: #29301f;
+    --surface-card-elevated: #2a3120;
     --surface-overlay: var(--color-dark-panel-bg);
-    --surface-field: #282e1e;
-    --surface-secondary: #394229;
-    --surface-accent: #3b452a;
+    --surface-field: #282f1f;
+    --surface-secondary: #394128;
+    --surface-accent: #3c4429;
     --surface-muted-fill: rgba(238, 240, 220, 0.06);
 
     --text-primary: var(--color-dark-text-base);
     --text-secondary: rgba(238, 240, 220, 0.88);
     --text-muted: var(--color-dark-muted-base);
-    --text-subtle: rgba(199, 206, 175, 0.78);
+    --text-subtle: rgba(199, 206, 175, 0.92);
     --text-inverse: var(--color-dark-inverse-text);
     --text-link: var(--color-dark-accent-base);
 
     --border-default: var(--color-dark-border-base);
-    --border-subtle: rgba(238, 241, 220, 0.1064);
-    --border-strong: rgba(238, 241, 220, 0.1288);
+    --border-subtle: rgba(238, 241, 220, 0.106);
+    --border-strong: rgba(238, 241, 220, 0.129);
 
     --accent: var(--color-dark-accent-base);
     --accent-foreground: var(--color-dark-accent-foreground);
@@ -105,13 +105,13 @@
 
     --success: var(--color-dark-success-base);
     --success-foreground: #121a10;
-    --success-soft: rgba(63, 187, 116, 0.15);
-    --warning: #e0a131;
+    --success-soft: rgba(94, 204, 126, 0.15);
+    --warning: #f3b01d;
     --warning-foreground: #1a2012;
-    --warning-soft: rgba(224, 161, 49, 0.16);
+    --warning-soft: rgba(243, 176, 29, 0.16);
     --danger: var(--color-dark-danger-base);
     --danger-foreground: var(--color-dark-inverse-text);
-    --danger-soft: rgba(232, 96, 96, 0.16);
+    --danger-soft: rgba(232, 96, 96, 0.14);
 
     --shadow-surface: var(--color-dark-shadow-surface-base);
     --shadow-overlay: var(--color-dark-shadow-overlay-base);
@@ -195,6 +195,7 @@
     --radius-sm: 5px;
     --radius-md: 8px;
     --radius-lg: 10px;
+    --radius-xl: 12px;
     --radius-field: 7px;
     --radius-card: 16px;
     --radius-pill: 999px;

@@ -821,6 +821,27 @@ describe("desktop sidebar", () => {
               verified: false,
               mode: "api_key",
               account: null,
+              message: "Connected without a persisted key.",
+              checkedAt: "2026-05-15T00:00:00.000Z",
+            },
+          },
+        });
+      });
+
+      expect(container.textContent).not.toContain("Research");
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-1",
+          providerStatusByName: {
+            google: {
+              provider: "google",
+              authorized: true,
+              verified: false,
+              mode: "api_key",
+              account: null,
               message: "API key saved.",
               checkedAt: "2026-05-15T00:00:00.000Z",
               savedApiKeyMasks: { api_key: "goog...1234" },

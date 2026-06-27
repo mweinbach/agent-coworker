@@ -240,6 +240,7 @@ export function createOpenAiResponsesRuntime(
           stepMessages = providerManagedContinuation
             ? toolResultMessages
             : [...stepMessages, ...toolResultMessages];
+          if (params.shouldStopAfterToolStep?.()) break;
         }
 
         return {

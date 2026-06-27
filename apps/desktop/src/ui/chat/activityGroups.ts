@@ -59,11 +59,18 @@ function getRecordValue(record: Record<string, unknown>, keys: string[]): unknow
 import { isTerminalToolState } from "../../app/toolFeedState";
 
 function effectiveToolState(item: Extract<FeedItem, { kind: "tool" }>): ToolFeedState {
-  if (isTerminalToolState(item.state) || item.result === undefined) return item.state;
-  if (isRecord(item.result)) {
+  if (item.result !== undefined && isRecord(item.result)) {
     if (item.result.denied === true) return "output-denied";
-    if ("error" in item.result) return "output-error";
+    if ("error" in item.result || item.result.ok === false) return "output-error";
   }
+  if (
+    item.name.toLowerCase() === "skill" &&
+    typeof item.result === "string" &&
+    /\bnot found\b/i.test(item.result)
+  ) {
+    return "output-error";
+  }
+  if (isTerminalToolState(item.state) || item.result === undefined) return item.state;
   return "output-available";
 }
 
@@ -72,15 +79,6 @@ function normalizeToolActivityItem(
 ): Extract<FeedItem, { kind: "tool" }> {
   const state = effectiveToolState(item);
   return state === item.state ? item : { ...item, state };
-}
-
-function normalizedToolName(name: string): string {
-  return name.toLowerCase().replace(/[\s_-]+/g, "");
-}
-
-function isInternalSelfRepairTool(name: string): boolean {
-  const normalized = normalizedToolName(name);
-  return normalized === "commandexecution" || normalized === "filechange";
 }
 
 function toolValueSignature(value: unknown): string | null {
@@ -275,7 +273,7 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
     entries.push({ kind: "tool", item: { ...toolItem, sourceIds: [toolItem.id] } });
   }
 
-  const visibleEntries = filterRecoveredInternalToolErrors(entries);
+  const visibleEntries = filterRecoveredToolErrors(entries);
 
   if (visibleEntries.length === 0 && firstBlankReasoning) {
     return [{ kind: "reasoning", item: firstBlankReasoning }];
@@ -284,16 +282,14 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
   return visibleEntries;
 }
 
-function filterRecoveredInternalToolErrors(entries: ActivityTraceEntry[]): ActivityTraceEntry[] {
+function filterRecoveredToolErrors(entries: ActivityTraceEntry[]): ActivityTraceEntry[] {
   return entries.filter((entry, index) => {
     if (entry.kind !== "tool") return true;
     if (effectiveToolState(entry.item) !== "output-error") return true;
-    if (!isInternalSelfRepairTool(entry.item.name)) return true;
 
     return !entries.slice(index + 1).some((next) => {
       if (next.kind !== "tool") return false;
-      const state = effectiveToolState(next.item);
-      return isTerminalToolState(state) && state === "output-available";
+      return effectiveToolState(next.item) !== "output-error";
     });
   });
 }

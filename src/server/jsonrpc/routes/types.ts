@@ -1,10 +1,11 @@
-import type { ManagedSofficeRuntimeDiagnostic } from "../../../managedSofficeRuntime";
+import type { LibreOfficeCapabilityDiagnostic } from "../../../coworkRuntime";
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
 import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../../startServer/types";
+import type { TaskCoordinator } from "../../tasks/TaskCoordinator";
 import type { WebDesktopServiceLike } from "../../webDesktopService";
 import type { JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteRequest } from "../protocol";
 
@@ -53,7 +54,18 @@ export type JsonRpcRequestHandlerMap = Record<string, JsonRpcRequestHandler>;
 
 export interface JsonRpcRouteContext {
   getConfig(): AgentConfig;
+  homedir?: string;
   research: ResearchService;
+  tasks: TaskCoordinator;
+  taskRequests?: {
+    onStarted?(input: { ws: StartServerSocket; method: string; workspacePath: string }):
+      | undefined
+      | {
+          commit: () => void;
+          rollback: () => void;
+        };
+    onSucceeded?(input: { ws: StartServerSocket; method: string; workspacePath: string }): void;
+  };
   threads: {
     create(options: {
       cwd: string;
@@ -124,7 +136,7 @@ export interface JsonRpcRouteContext {
     ): Promise<T[]>;
   };
   runtime: {
-    checkLibreOffice(opts: { smoke?: boolean }): Promise<ManagedSofficeRuntimeDiagnostic>;
+    checkLibreOffice(opts: { smoke?: boolean }): Promise<LibreOfficeCapabilityDiagnostic>;
   };
   jsonrpc: {
     send(ws: StartServerSocket, payload: unknown): void;

@@ -167,6 +167,7 @@ function createRouteHarness(
   const results: Array<{ id: string | number | null; result: unknown }> = [];
   const errors: Array<{ id: string | number | null; error: { code: number; message: string } }> =
     [];
+  const captureTimeouts: Array<number | undefined> = [];
   const runtime = createRuntimeDouble(session);
   const binding = { session, runtime } as any;
   const threadId = opts?.threadId ?? "thread-1";
@@ -204,7 +205,9 @@ function createRouteHarness(
         _binding: any,
         action: () => Promise<void> | void,
         predicate: (event: SessionEvent) => boolean,
+        timeoutMs?: number,
       ) => {
+        captureTimeouts.push(timeoutMs);
         await action();
         const match = emitted.find((event) => predicate(event));
         if (!match) {
@@ -260,6 +263,7 @@ function createRouteHarness(
     emitted,
     results,
     errors,
+    captureTimeouts,
     async invoke(
       handlers: JsonRpcRequestHandlerMap,
       method: string,
@@ -313,6 +317,36 @@ describe("JSON-RPC extracted route review fixes", () => {
 
     expect(response.error?.message).toContain('Unsupported auth method "missing_method"');
     expect(response.result).toBeUndefined();
+  });
+
+  test("provider auth callback allows the full browser sign-in window", async () => {
+    const harness = createRouteHarness({
+      callbackProviderAuth: async () => {
+        harness.emitted.push({
+          type: "provider_auth_result",
+          sessionId: "session-1",
+          provider: "codex-cli",
+          methodId: "oauth_cli",
+          ok: true,
+          mode: "oauth",
+          message: "Signed in.",
+        });
+      },
+    });
+
+    const handlers = createProviderRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/provider/auth/callback", {
+      cwd: "C:/workspace",
+      provider: "codex-cli",
+      methodId: "oauth_cli",
+    });
+
+    expect((response.result as any).event).toMatchObject({
+      type: "provider_auth_result",
+      provider: "codex-cli",
+      ok: true,
+    });
+    expect(harness.captureTimeouts.at(-1)).toBe(13 * 60_000);
   });
 
   test("session model set returns the current config when the mutation is a no-op", async () => {
@@ -821,12 +855,10 @@ describe("JSON-RPC extracted route review fixes", () => {
         checkedAt: "2026-05-21T00:00:00.000Z",
         message: checkOpts.smoke ? "Smoke passed." : "Version passed.",
         version: "26.2.3.2",
-        shimPath: "/tmp/soffice",
-        resolvedPath: "/tmp/LibreOffice.app/Contents/MacOS/soffice",
+        resolvedPath: "/usr/bin/soffice",
         smoke: {
           ok: true,
           durationMs: 125,
-          outputPath: "/tmp/check.pdf",
           sizeBytes: 2048,
         },
       }),

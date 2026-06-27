@@ -7,6 +7,22 @@ import { maybeSpillToolOutputToWorkspace } from "../src/runtime/toolOutputOverfl
 import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
 
 describe("tool output overflow", () => {
+  test("keeps oversized SKILL.md content inline", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-overflow-skill-inline-"));
+    const skillBody = `# Large skill\n\n${"Follow these instructions.\n".repeat(100)}`;
+
+    const result = await maybeSpillToolOutputToWorkspace({
+      output: skillBody,
+      toolName: "skill",
+      toolCallId: "call-skill",
+      workingDirectory: workspace,
+      toolOutputOverflowChars: 10,
+    });
+
+    expect(result).toBeNull();
+    await expect(fs.readdir(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+  });
+
   test("refuses to spill into a symlinked scratchpad directory", async () => {
     if (process.platform === "win32") {
       return;

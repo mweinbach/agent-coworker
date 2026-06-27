@@ -7,6 +7,7 @@ import type {
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
+import type { logoutProviderAuth } from "../../providers/authRegistry";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { RuntimeSteerHandler } from "../../runtime/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../../session/costTracker";
@@ -22,12 +23,21 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/ope
 import type { ProviderContinuationState } from "../../shared/providerContinuation";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type {
+  TaskContextSnapshot,
+  TaskCreationInput,
+  TaskCreationResult,
+  TaskDirective,
+  TaskDirectiveResult,
+  TaskReviewMaterialReference,
+} from "../../shared/tasks";
+import type {
   AgentConfig,
   ChildModelRoutingMode,
   HarnessContextState,
   ModelMessage,
   ReferencedPluginContext,
   ServerErrorCode,
+  ServerErrorData,
   ServerErrorSource,
   TodoItem,
   TurnReference,
@@ -211,6 +221,7 @@ export type SessionDependencies = {
   loadSystemPromptWithSkillsImpl: typeof loadSystemPromptWithSkills;
   getProviderCatalogImpl: typeof getProviderCatalog;
   getProviderStatusesImpl: typeof getProviderStatuses;
+  logoutProviderAuthImpl?: typeof logoutProviderAuth;
   sessionBackupFactory: SessionBackupFactory;
   harnessContextStore: HarnessContextStore;
   runTurnImpl: typeof runTurn;
@@ -219,6 +230,13 @@ export type SessionDependencies = {
   generateSessionTitleImpl: typeof generateSessionTitle;
   sessionDb: SessionDb | null;
   toolEnv?: Record<string, string | undefined>;
+  getTaskContextImpl?: (sessionId: string) => TaskContextSnapshot | null;
+  getTaskReviewMaterialImpl?: (sessionId: string) => Promise<TaskReviewMaterialReference | null>;
+  applyTaskDirectiveImpl?: (
+    sessionId: string,
+    directive: TaskDirective,
+  ) => Promise<TaskDirectiveResult>;
+  createTaskImpl?: (sessionId: string, input: TaskCreationInput) => Promise<TaskCreationResult>;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
   createAgentSessionImpl?: (
     opts: AgentSpawnContextOptions & {
@@ -259,7 +277,10 @@ export type SessionDependencies = {
     parentSessionId: string;
     agentId: string;
   }) => Promise<PersistentAgentSummary>;
-  cancelAgentSessionsImpl?: (parentSessionId: string) => void;
+  cancelAgentSessionsImpl?: (
+    parentSessionId: string,
+    opts?: { timeoutMs?: number },
+  ) => void | Promise<void>;
   deleteSessionImpl?: (opts: {
     requesterSessionId: string;
     targetSessionId: string;
@@ -298,6 +319,7 @@ export type SessionDependencies = {
   }) => Promise<WorkspaceBackupDeltaPreview>;
   getLiveSessionSnapshotImpl?: (sessionId: string) => SessionSnapshot | null;
   getLiveSessionWorkingDirectoryImpl?: (sessionId: string) => string | null;
+  getLiveSessionParentIdImpl?: (sessionId: string) => string | null;
   buildLegacySessionSnapshotImpl?: (
     record: import("../sessionDb").PersistedSessionRecord,
   ) => SessionSnapshot;
@@ -317,7 +339,12 @@ export type SessionContext = {
   state: SessionRuntimeState;
   deps: SessionDependencies;
   emit: (evt: SessionEvent) => void;
-  emitError: (code: ServerErrorCode, source: ServerErrorSource, message: string) => void;
+  emitError: (
+    code: ServerErrorCode,
+    source: ServerErrorSource,
+    message: string,
+    data?: ServerErrorData,
+  ) => void;
   emitTelemetry: (
     name: string,
     status: "ok" | "error",

@@ -542,8 +542,8 @@ describe("antigravity runtime", () => {
   test("antigravity local harness startup sees the prepared tool env", async () => {
     const runtime = createAntigravityRuntime({ platform: "linux" });
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-env-"));
-    const previousSoffice = process.env.COWORK_SOFFICE;
-    let capturedSoffice: string | undefined;
+    const previousToolEnv = process.env.COWORK_TEST_TOOL_ENV;
+    let capturedToolEnv: string | undefined;
 
     (Agent as any).__setChatMockImpl(async () => ({
       getChunks: async function* () {
@@ -552,29 +552,29 @@ describe("antigravity runtime", () => {
       usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
     }));
     (Agent as any).__setStartMockImpl(() => {
-      capturedSoffice = process.env.COWORK_SOFFICE;
+      capturedToolEnv = process.env.COWORK_TEST_TOOL_ENV;
     });
 
     try {
       process.env.GEMINI_API_KEY = "test-key";
-      process.env.COWORK_SOFFICE = "outside";
+      process.env.COWORK_TEST_TOOL_ENV = "outside";
 
       await runtime.runTurn(
         makeParams(makeConfig(homeDir), {
           toolEnv: {
-            COWORK_SOFFICE: "/tmp/cowork-managed-bin/soffice",
+            COWORK_TEST_TOOL_ENV: "inside",
           },
         }),
       );
 
-      expect(capturedSoffice).toBe("/tmp/cowork-managed-bin/soffice");
-      expect(process.env.COWORK_SOFFICE).toBe("outside");
+      expect(capturedToolEnv).toBe("inside");
+      expect(process.env.COWORK_TEST_TOOL_ENV).toBe("outside");
     } finally {
       (Agent as any).__setStartMockImpl(undefined);
-      if (previousSoffice === undefined) {
-        delete process.env.COWORK_SOFFICE;
+      if (previousToolEnv === undefined) {
+        delete process.env.COWORK_TEST_TOOL_ENV;
       } else {
-        process.env.COWORK_SOFFICE = previousSoffice;
+        process.env.COWORK_TEST_TOOL_ENV = previousToolEnv;
       }
     }
   });

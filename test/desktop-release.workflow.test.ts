@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/desktop-release.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
+const builderConfig = readFileSync(
+  new URL("../apps/desktop/electron-builder.yml", import.meta.url),
+  "utf8",
+);
 
 describe("desktop release workflow", () => {
   test("runs validation for tag-triggered releases before packaging", () => {
@@ -28,11 +32,23 @@ describe("desktop release workflow", () => {
       /- name: Build macOS desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}[\s\S]*?CSC_KEY_PASSWORD: \$\{\{ secrets\.CSC_KEY_PASSWORD \}\}/,
     );
     expect(workflow).toMatch(
-      /- name: Build Windows desktop artifacts[\s\S]*?if \(\$env:WIN_CSC_LINK -and \$env:WIN_CSC_KEY_PASSWORD\)[\s\S]*?\$env:CSC_LINK = \$env:WIN_CSC_LINK[\s\S]*?\$env:CSC_KEY_PASSWORD = \$env:WIN_CSC_KEY_PASSWORD/,
+      /- name: Build Windows desktop artifacts[\s\S]*?\$env:CSC_LINK = \$env:WIN_CSC_LINK[\s\S]*?\$env:CSC_KEY_PASSWORD = \$env:WIN_CSC_KEY_PASSWORD/,
     );
     expect(workflow).not.toMatch(
       /- name: Build Windows desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}/,
     );
+  });
+
+  test("builds and strictly verifies the native Apple Silicon release", () => {
+    expect(workflow).toContain("- os: macos-15");
+    expect(workflow).toMatch(/label: macOS[\s\S]*?build_arch: arm64/);
+    expect(workflow).toContain("- name: Verify native macOS sandbox and runtime");
+    expect(workflow).toMatch(
+      /- name: Build macOS desktop artifacts[\s\S]*?COWORK_BUILD_PLATFORM: darwin[\s\S]*?COWORK_BUILD_ARCH: arm64[\s\S]*?desktop:build -- --publish never --arm64/,
+    );
+    expect(workflow).toContain('codesign --verify --deep --strict --verbose=4 "$app_path"');
+    expect(workflow).toContain('xcrun stapler validate "$app_path"');
+    expect(workflow).toContain('spctl -a -vv --type exec "$app_path"');
   });
 
   test("passes only public telemetry variables into desktop package builds", () => {
@@ -73,12 +89,24 @@ describe("desktop release workflow", () => {
     expect(workflow).toMatch(
       /- name: Stage Windows desktop release assets[\s\S]*?apps\/desktop\/release\/\*-win-\$\{\{ matrix\.build_arch \}\}\.exe[\s\S]*?Copy-Item "apps\/desktop\/release\/latest\.yml" -Destination \(Join-Path \$stagingDir "\$\{\{ matrix\.updater_metadata_name \}\}"\)/,
     );
+    expect(workflow).toContain("- name: Validate Windows signing inputs");
+    expect(workflow).toContain("Unsigned Windows production releases are forbidden");
     expect(workflow).toContain(
-      "Windows signing secrets configured; publishing signed installer plus updater metadata.",
+      "Publishing Authenticode-signed installer, trusted helpers, and updater metadata.",
     );
-    expect(workflow).toContain(
-      "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata.",
-    );
+    expect(workflow).not.toContain("publishing unsigned installer");
+  });
+
+  test("verifies Authenticode and post-signing hashes for every sandbox helper", () => {
+    expect(workflow).toContain("cowork-win-sandbox.exe");
+    expect(workflow).toContain("codex-windows-sandbox-setup.exe");
+    expect(workflow).toContain("codex-command-runner.exe");
+    expect(workflow).toContain("Get-AuthenticodeSignature -LiteralPath $filePath");
+    expect(workflow).toContain("cowork-win-sandbox.sha256.json");
+    expect(workflow).toContain("Post-signing sandbox hash mismatch");
+    expect(builderConfig).toContain("afterPack: scripts/afterPack.cjs");
+    expect(builderConfig).toContain("forceCodeSigning: true");
+    expect(builderConfig).toContain("verifyUpdateCodeSignature: true");
   });
 
   test("ARM64 unpacked artifact is for smoke only and excluded from publish download glob", () => {
@@ -106,9 +134,7 @@ describe("desktop release workflow", () => {
     expect(workflow).toContain(
       'throw "ARM64 unpacked sidecar manifest does not point at the expected Bun runtime payload"',
     );
-    expect(workflow).toContain(
-      'Join-Path $sidecarRoot "server\\\\assets\\\\managed-soffice-helper.mjs"',
-    );
+    expect(workflow).not.toContain("managed-soffice-helper.mjs");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_OUTPUT");
     expect(workflow).toContain(

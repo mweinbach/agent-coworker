@@ -11,6 +11,7 @@ import {
   jsonRpcAgentProfilesResultSchemas,
 } from "./schema.agentProfiles";
 import { jsonRpcBackupsRequestSchemas, jsonRpcBackupsResultSchemas } from "./schema.backups";
+import { jsonRpcCommandRequestSchemas, jsonRpcCommandResultSchemas } from "./schema.commands";
 import {
   jsonRpcConnectorsRequestSchemas,
   jsonRpcConnectorsResultSchemas,
@@ -34,6 +35,11 @@ import {
   jsonRpcSessionResultSchemas,
 } from "./schema.session";
 import { jsonRpcSkillsRequestSchemas, jsonRpcSkillsResultSchemas } from "./schema.skills";
+import {
+  jsonRpcTaskNotificationSchemas,
+  jsonRpcTaskRequestSchemas,
+  jsonRpcTaskResultSchemas,
+} from "./schema.tasks";
 import {
   jsonRpcThreadTurnNotificationSchemas,
   jsonRpcThreadTurnRequestSchemas,
@@ -61,7 +67,9 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcImportRequestSchemas,
   ...jsonRpcMemoryRequestSchemas,
   ...jsonRpcBackupsRequestSchemas,
+  ...jsonRpcCommandRequestSchemas,
   ...jsonRpcWorkspaceRequestSchemas,
+  ...jsonRpcTaskRequestSchemas,
 } as const;
 
 export const jsonRpcNotificationSchemas = {
@@ -71,6 +79,7 @@ export const jsonRpcNotificationSchemas = {
   ...jsonRpcAgentProfilesNotificationSchemas,
   ...jsonRpcResearchNotificationSchemas,
   ...jsonRpcMiscNotificationSchemas,
+  ...jsonRpcTaskNotificationSchemas,
 } as const;
 
 export const jsonRpcServerRequestSchemas = {
@@ -93,7 +102,9 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcImportResultSchemas,
   ...jsonRpcMemoryResultSchemas,
   ...jsonRpcBackupsResultSchemas,
+  ...jsonRpcCommandResultSchemas,
   ...jsonRpcWorkspaceResultSchemas,
+  ...jsonRpcTaskResultSchemas,
 } as const;
 
 export const jsonRpcSchemaBundleSchema = z.object({

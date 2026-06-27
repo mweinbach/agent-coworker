@@ -2,6 +2,7 @@ import { JSONRPC_ERROR_CODES } from "../protocol";
 
 import { createAgentProfilesRouteHandlers } from "./agentProfiles";
 import { createAgentRouteHandlers } from "./agents";
+import { createCommandRouteHandlers } from "./commands";
 import { createConnectorsRouteHandlers } from "./connectors";
 import { createImportRouteHandlers } from "./import";
 import { createMcpRouteHandlers } from "./mcp";
@@ -12,6 +13,7 @@ import { createResearchRouteHandlers } from "./research";
 import { createRuntimeRouteHandlers } from "./runtime";
 import { createSessionRouteHandlers } from "./session";
 import { createSkillsRouteHandlers } from "./skills";
+import { createTaskRouteHandlers } from "./tasks";
 import { createThreadRouteHandlers } from "./thread";
 import { createTurnRouteHandlers } from "./turn";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
@@ -31,6 +33,7 @@ export function createJsonRpcRequestRouter(
     ...createAgentRouteHandlers(context),
     ...createAgentProfilesRouteHandlers(context),
     ...createConnectorsRouteHandlers(context),
+    ...createCommandRouteHandlers(context),
     ...createProviderRouteHandlers(context),
     ...createRuntimeRouteHandlers(context),
     ...createResearchRouteHandlers(context),
@@ -41,6 +44,7 @@ export function createJsonRpcRequestRouter(
     ...createMemoryRouteHandlers(context),
     ...createWorkspaceBackupRouteHandlers(context),
     ...createWorkspaceRouteHandlers(context),
+    ...createTaskRouteHandlers(context),
     ...(opts.experimentalHandlers ?? {}),
   };
 

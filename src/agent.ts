@@ -3,18 +3,12 @@ import path from "node:path";
 import { z } from "zod";
 
 import { resolveAdvancedMemoryWriteRoots } from "./advancedMemory/store";
-import {
-  ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING,
-  prepareArtifactRuntimeToolEnv,
-  renderArtifactRuntimeInstructions,
-} from "./artifactRuntime";
-import { ARTIFACT_RUNTIME_ENV_DIR } from "./artifactRuntime/constants";
-import { artifactRuntimeCacheRoot } from "./artifactRuntime/runtimeDiscovery";
 import { getModel as realGetModel } from "./config";
 import {
-  prepareManagedSofficeToolEnv,
-  renderManagedSofficeRuntimeInstructions,
-} from "./managedSofficeRuntime";
+  COWORK_RUNTIME_INSTRUCTIONS_HEADING,
+  prepareCoworkRuntimeToolEnv,
+  renderCoworkRuntimeInstructions,
+} from "./coworkRuntime";
 import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { policyAllowsNetwork, resolveSandboxPolicy } from "./platform/sandbox";
@@ -33,6 +27,14 @@ import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTra
 import type { AgentProfileSnapshot } from "./shared/agentProfiles";
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
+import type {
+  TaskContextSnapshot,
+  TaskCreationInput,
+  TaskCreationResult,
+  TaskDirective,
+  TaskDirectiveResult,
+  TaskReviewMaterialReference,
+} from "./shared/tasks";
 import type { AgentControl } from "./tools";
 import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
@@ -94,6 +96,11 @@ export interface RunTurnParams {
   allMessages?: ModelMessage[];
   providerState?: ProviderContinuationState | null;
   harnessContext?: HarnessContextState | null;
+  taskContext?: TaskContextSnapshot | null;
+  getTaskContext?: () => TaskContextSnapshot | null;
+  getTaskReviewMaterial?: () => Promise<TaskReviewMaterialReference | null>;
+  applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
+  createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
   /** Plugins the user @-mentioned this turn; rendered as a soft-awareness system block. */
   referencedPlugins?: ReferencedPluginContext[];
   agentControl?: AgentControl;
@@ -142,6 +149,9 @@ export interface RunTurnParams {
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
 
+  /** Server-authoritative write gate for mutating tool side effects. */
+  assertCanMutate?: (toolName: string) => void | Promise<void>;
+
   /**
    * Apply an A2UI v0.9 envelope to the session's surface state, returning a
    * per-envelope outcome. Plumbed into the `a2ui` tool's ToolContext when
@@ -184,6 +194,51 @@ function mergeToolSets(
     merged[alias] = toolDef;
   }
   return merged;
+}
+
+function wrapToolSetWithMutationGate(
+  tools: Record<string, any>,
+  assertCanMutate: RunTurnParams["assertCanMutate"],
+  abortSignal?: AbortSignal,
+): Record<string, any> {
+  if (!assertCanMutate) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [
+      name,
+      wrapToolWithMutationGate(name, tool, assertCanMutate, abortSignal),
+    ]),
+  );
+}
+
+function wrapToolWithMutationGate(
+  name: string,
+  tool: unknown,
+  assertCanMutate: NonNullable<RunTurnParams["assertCanMutate"]>,
+  abortSignal?: AbortSignal,
+): unknown {
+  if ((typeof tool !== "object" && typeof tool !== "function") || tool === null) return tool;
+  const record = tool as Record<string, unknown>;
+  if (typeof record.execute !== "function") return tool;
+  const execute = record.execute as (...args: unknown[]) => unknown;
+  return {
+    ...record,
+    execute: async (...args: unknown[]) => {
+      await assertCanMutate(name);
+      const input = args[0];
+      const executionOptions =
+        args.length > 1 && typeof args[1] === "object" && args[1] !== null
+          ? { ...(args[1] as Record<string, unknown>), ...(abortSignal ? { abortSignal } : {}) }
+          : abortSignal
+            ? { abortSignal }
+            : args[1];
+      const result = await execute.call(
+        tool,
+        input,
+        ...(executionOptions === undefined ? [] : [executionOptions]),
+      );
+      return result;
+    },
+  };
 }
 
 function mergePrepareStepOverrides(
@@ -283,53 +338,15 @@ function providerOwnsExecutableTools(config: AgentConfig): boolean {
   return config.provider === "codex-cli";
 }
 
-function collectToolRuntimeWritableRoots(
-  config: AgentConfig,
-  env: Record<string, string | undefined> | undefined,
-): string[] | undefined {
-  const writableRoots: string[] = [];
-  const artifactRuntimeDir = env?.[ARTIFACT_RUNTIME_ENV_DIR]?.trim();
-  if (artifactRuntimeDir) {
-    const cacheRoot = artifactRuntimeCacheRoot(resolveAuthHomeDir(config));
-    const relativeToCache = path.relative(
-      path.resolve(cacheRoot),
-      path.resolve(artifactRuntimeDir),
-    );
-    const runtimeIsInCache =
-      relativeToCache === "" ||
-      (!relativeToCache.startsWith("..") && !path.isAbsolute(relativeToCache));
-    if (runtimeIsInCache) writableRoots.push(cacheRoot);
-  }
-
-  const managedSofficeRoot = env?.COWORK_MANAGED_SOFFICE_ROOT?.trim();
-  if (managedSofficeRoot) writableRoots.push(managedSofficeRoot);
-
-  return writableRoots.length > 0 ? writableRoots : undefined;
-}
-
 async function prepareTurnToolEnv(
   params: Pick<RunTurnParams, "config" | "toolEnv" | "log">,
 ): Promise<Record<string, string | undefined> | undefined> {
   const homedir = resolveAuthHomeDir(params.config);
-  const withArtifactRuntime = await prepareArtifactRuntimeToolEnv({
+  return await prepareCoworkRuntimeToolEnv({
     homedir,
     env: params.toolEnv ?? { ...process.env },
-    log: (line) => params.log?.(`[artifact-runtime] ${line}`),
+    log: (line) => params.log?.(`[cowork-runtime] ${line}`),
   });
-  return await prepareManagedSofficeToolEnv({
-    homedir,
-    env: withArtifactRuntime,
-    log: (line) => params.log?.(`[managed-soffice] ${line}`),
-  });
-}
-
-function appendManagedSofficeInstructions(
-  system: string,
-  env: Record<string, string | undefined> | undefined,
-): string {
-  if (system.includes("## Managed LibreOffice Runtime")) return system;
-  const instructions = renderManagedSofficeRuntimeInstructions(env);
-  return instructions ? `${system}\n\n${instructions}` : system;
 }
 
 function appendRuntimeInstructions(
@@ -337,13 +354,13 @@ function appendRuntimeInstructions(
   env: Record<string, string | undefined> | undefined,
 ): string {
   let nextSystem = system;
-  if (!nextSystem.includes(ARTIFACT_RUNTIME_INSTRUCTIONS_HEADING)) {
-    const artifactRuntimeInstructions = renderArtifactRuntimeInstructions(env);
-    if (artifactRuntimeInstructions) {
-      nextSystem = `${nextSystem}\n\n${artifactRuntimeInstructions}`;
+  if (!nextSystem.includes(COWORK_RUNTIME_INSTRUCTIONS_HEADING)) {
+    const coworkRuntimeInstructions = renderCoworkRuntimeInstructions(env);
+    if (coworkRuntimeInstructions) {
+      nextSystem = `${nextSystem}\n\n${coworkRuntimeInstructions}`;
     }
   }
-  return appendManagedSofficeInstructions(nextSystem, env);
+  return nextSystem;
 }
 
 type RunTurnDeps = {
@@ -429,13 +446,12 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       projectRoot: path.dirname(config.projectCoworkDir),
       outputDirectory: config.outputDirectory,
       uploadsDirectory: config.uploadsDirectory,
-      toolRuntimeWritableRoots: [
-        ...(collectToolRuntimeWritableRoots(config, turnToolEnv) ?? []),
-        ...resolveAdvancedMemoryWriteRoots(config),
-      ],
+      toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
       targetPaths: params.agentTargetPaths,
     });
 
+    let taskPauseRequested = false;
+    let taskModeSwitchRequested = false;
     const toolCtx = {
       config,
       log,
@@ -448,6 +464,25 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       turnUserPrompt: extractTurnUserPrompt(messages),
       getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
       harnessContext: params.harnessContext,
+      taskContext: params.taskContext,
+      getTaskContext: params.getTaskContext,
+      getTaskReviewMaterial: params.getTaskReviewMaterial,
+      applyTaskDirective: params.applyTaskDirective
+        ? async (directive: TaskDirective) => {
+            const directiveResult = await params.applyTaskDirective?.(directive);
+            if (!directiveResult) throw new Error("Task directive handler is unavailable");
+            if (directiveResult.continuation === "pause_for_input") taskPauseRequested = true;
+            return directiveResult;
+          }
+        : undefined,
+      createTask: params.createTask
+        ? async (input: TaskCreationInput) => {
+            const result = await params.createTask?.(input);
+            if (!result) throw new Error("Task creation handler is unavailable");
+            taskModeSwitchRequested = true;
+            return result;
+          }
+        : undefined,
       agentRole: params.agentRole,
       agentProfile: params.agentProfile,
       agentTargetPaths: params.agentTargetPaths,
@@ -459,6 +494,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
       onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
+      assertCanMutate: params.assertCanMutate,
       applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);
@@ -498,9 +534,10 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           allowProfileMcp: !!params.agentProfile,
         })
       : mergedTools;
-    const tools = params.agentProfile
+    const filteredTools = params.agentProfile
       ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
       : roleFilteredTools;
+    const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
     const mcpToolNames = Object.keys(tools)
       .filter((name) => name.startsWith("mcp__"))
       .sort();
@@ -511,6 +548,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         mcpToolNames,
         params.harnessContext,
         params.referencedPlugins,
+        params.taskContext,
       ),
       turnToolEnv,
     );
@@ -549,6 +587,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           },
         });
         if (useLegacyModelApi && legacyStreamText && legacyStepCountIs) {
+          const stepLimitStop = legacyStepCountIs(params.maxSteps ?? 100);
           const streamTextInput: LegacyStreamTextInput = {
             model: legacyModelResolver(config),
             system: turnSystem,
@@ -556,7 +595,10 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
             tools,
             providerOptions: turnProviderOptions,
             ...(telemetry ? { experimental_telemetry: telemetry } : {}),
-            stopWhen: legacyStepCountIs(params.maxSteps ?? 100),
+            stopWhen:
+              params.applyTaskDirective || params.createTask
+                ? [stepLimitStop, () => taskPauseRequested || taskModeSwitchRequested]
+                : stepLimitStop,
             ...(prepareStep ? { prepareStep } : {}),
             abortSignal,
             ...(typeof config.modelSettings?.maxRetries === "number"
@@ -676,6 +718,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           includeRawChunks: params.includeRawChunks ?? true,
           telemetry,
           ...(prepareStep ? { prepareStep } : {}),
+          shouldStopAfterToolStep: () => taskPauseRequested || taskModeSwitchRequested,
           ...(params.registerSteerHandler
             ? { registerSteerHandler: params.registerSteerHandler }
             : {}),
@@ -683,6 +726,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           askUser,
           approveCommand,
           updateTodos,
+          assertCanMutate: params.assertCanMutate,
           onModelStreamPart: params.onModelStreamPart,
           onModelRawEvent: params.onModelRawEvent,
           onModelError: params.onModelError,

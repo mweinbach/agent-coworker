@@ -253,19 +253,33 @@ async function main() {
     arch: process.arch,
   });
 
-  const [{ DEFAULT_PROVIDER_OPTIONS }, { startAgentServer }] = await Promise.all([
+  const [
+    { DEFAULT_PROVIDER_OPTIONS },
+    { startAgentServer },
+    { createCoworkRuntimeStartupProgressEvent },
+  ] = await Promise.all([
     import("../providers/providerOptions"),
     import("./startServer"),
+    import("./startupProgress"),
   ]);
+
+  const serverEnv: NodeJS.ProcessEnv = { ...process.env, AGENT_WORKING_DIR: cwd };
+  const onCoworkRuntimeBootstrapProgress =
+    json && serverEnv.COWORK_DESKTOP_STARTUP_EVENTS === "1"
+      ? (progress: Parameters<typeof createCoworkRuntimeStartupProgressEvent>[0]) => {
+          console.log(JSON.stringify(createCoworkRuntimeStartupProgressEvent(progress)));
+        }
+      : undefined;
 
   const { server, mobileServer, config, url, browserAccessToken } = await startAgentServer({
     cwd,
     hostname: host,
     port,
-    env: { ...process.env, AGENT_WORKING_DIR: cwd },
+    env: serverEnv,
     providerOptions: DEFAULT_PROVIDER_OPTIONS,
     yolo,
     preloadSystemPrompt: false,
+    onCoworkRuntimeBootstrapProgress,
     ...(mobileH3
       ? {
           mobileH3: {

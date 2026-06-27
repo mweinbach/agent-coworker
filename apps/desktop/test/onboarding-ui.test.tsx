@@ -523,4 +523,57 @@ describe("DeveloperPage rerun onboarding button", () => {
       harness.restore();
     }
   });
+
+  test("workspace step shows runtime download progress during first-run startup", async () => {
+    const harness = setupOnboardingJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: true,
+          onboardingStep: "workspace",
+          workspaces: [
+            {
+              id: "ws-downloading",
+              name: "Downloading Workspace",
+              path: "/tmp/downloading",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-downloading",
+          workspaceRuntimeById: {
+            "ws-downloading": {
+              ...defaultWorkspaceRuntime(),
+              starting: true,
+              startupProgress: {
+                phase: "downloading",
+                version: "2026-06-22",
+                transferredBytes: 25,
+                totalBytes: 100,
+                percent: 25,
+              },
+            },
+          },
+        });
+        root.render(createElement(DesktopOnboarding));
+      });
+
+      expect(container.textContent).toContain("Getting Cowork ready");
+      expect(container.textContent).toContain("Downloading runtime");
+      expect(container.textContent).toContain("25%");
+      expect(container.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
+        "25",
+      );
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
 });

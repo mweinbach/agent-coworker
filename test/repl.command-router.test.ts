@@ -144,6 +144,29 @@ describe("handleSlashCommand — unknown slash command", () => {
   });
 });
 
+describe("handleSlashCommand — /task", () => {
+  test("executes the bundled task skill through JSON-RPC", async () => {
+    const { ctx, calls } = makeCtx({ getThreadId: () => "source-chat-1" });
+    const result = await handleSlashCommand("/task Build a release report", ctx);
+
+    expect(result).toBe(true);
+    const request = calls.find((call) => call.method === "command/execute");
+    expect(request?.params).toEqual(
+      expect.objectContaining({
+        threadId: "source-chat-1",
+        name: "task",
+        arguments: "Build a release report",
+      }),
+    );
+  });
+
+  test("does not execute while the source chat is busy", async () => {
+    const { ctx, calls } = makeCtx({ getBusy: () => true });
+    await captureConsole(() => handleSlashCommand("/task Build a report", ctx));
+    expect(calls.some((call) => call.method === "command/execute")).toBe(false);
+  });
+});
+
 describe("handleSlashCommand — /help", () => {
   test("returns true and calls printHelp + activateNextPrompt", async () => {
     const { ctx, calls } = makeCtx();

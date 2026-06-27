@@ -31,7 +31,7 @@ let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
  * affects persistence, not runtime behavior.
  */
 function buildPersistableThreads(state: AppStoreState) {
-  return state.threads.filter((thread) => thread.draft !== true);
+  return state.threads.filter((thread) => thread.draft !== true && !thread.taskId);
 }
 
 function buildPersistedState(state: AppStoreState): PersistedState {
@@ -78,6 +78,7 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
     ),
     pluginManagementMode: state.pluginManagementMode,
     selectedThreadId,
+    selectedTaskId: state.selectedTaskId,
     view: state.view,
     settingsPage: state.settingsPage,
     lastNonSettingsView: state.lastNonSettingsView,

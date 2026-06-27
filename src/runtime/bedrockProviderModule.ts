@@ -15,17 +15,24 @@ import {
   ImageFormat,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-
-import { calculateCost } from "../../node_modules/@earendil-works/pi-ai/dist/models.js";
+import {
+  AssistantMessageEventStream,
+  calculateCost,
+  parseStreamingJson,
+} from "@earendil-works/pi-ai";
 import {
   adjustMaxTokensForThinking,
   buildBaseOptions,
   clampReasoning,
-} from "../../node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js";
-import { transformMessages } from "../../node_modules/@earendil-works/pi-ai/dist/providers/transform-messages.js";
-import { AssistantMessageEventStream } from "../../node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js";
-import { parseStreamingJson } from "../../node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js";
-import { sanitizeSurrogates } from "../../node_modules/@earendil-works/pi-ai/dist/utils/sanitize-unicode.js";
+} from "@earendil-works/pi-ai/api/simple-options";
+import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
+
+function sanitizeSurrogates(text: string): string {
+  return text.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "",
+  );
+}
 
 export const streamBedrock = (model, context, options = {}) => {
   const stream = new AssistantMessageEventStream();

@@ -13,7 +13,7 @@ import {
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
 import { Input } from "../../../components/ui/input";
-import { modelChoicesFromCatalog, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
+import { isUiDisabledProvider, modelChoicesFromCatalog } from "../../../lib/modelChoices";
 import {
   displayProviderName,
   fallbackAuthMethods,
@@ -139,7 +139,7 @@ export function ProvidersPage({
       .map((entry) => entry.id)
       .filter((provider): provider is ProviderName => isProviderNameString(provider));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
-    const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
+    const filtered = source.filter((provider) => !isUiDisabledProvider(provider));
 
     const isModelProvider = (provider: ProviderName) =>
       provider === "lmstudio" ||

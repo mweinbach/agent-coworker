@@ -3,9 +3,68 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createGoogleInteractionsRuntime } from "../../../src/runtime/googleInteractionsRuntime";
+import type { TaskContextSnapshot } from "../../../src/shared/tasks";
+import type { ToolContext } from "../../../src/tools/context";
+import { createTaskUpdateTool } from "../../../src/tools/taskUpdate";
 import { makeConfig, makeParams } from "./fixtures";
 
 describe("google interactions runtime — tools", () => {
+  test("normalizes the task update discriminated union to object parameters", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-task-schema-"));
+    let sentTools: Array<Record<string, unknown>> = [];
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (request) => {
+        sentTools = request.tools;
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "Task started." }],
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "interaction_task_schema",
+        };
+      },
+    });
+    const taskUpdate = createTaskUpdateTool({
+      taskContext: {} as TaskContextSnapshot,
+      applyTaskDirective: async () => {
+        throw new Error("taskUpdate should not execute in this schema test");
+      },
+    } as unknown as ToolContext);
+    if (!taskUpdate) throw new Error("Expected taskUpdate to be available in task mode");
+
+    await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        tools: { taskUpdate },
+      }),
+    );
+
+    const sentTaskUpdate = sentTools.find((tool) => tool.name === "taskUpdate");
+    expect(sentTaskUpdate?.parameters).toMatchObject({
+      type: "object",
+      properties: {
+        type: {
+          type: "string",
+          enum: [
+            "update_plan",
+            "mark_work_item",
+            "record_decision",
+            "report_progress",
+            "request_input",
+            "report_blocker",
+            "register_artifact",
+            "address_review",
+            "propose_completion",
+            "create_thread",
+          ],
+        },
+      },
+      required: ["idempotencyKey", "type"],
+    });
+    expect(sentTaskUpdate?.parameters).not.toHaveProperty("oneOf");
+  });
+
   test("native Google tool blocks are preserved in responseMessages", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-native-history-"));
     const runtime = createGoogleInteractionsRuntime({
@@ -197,6 +256,46 @@ describe("google interactions runtime — tools", () => {
     expect(toolExecuted).toBe(true);
     expect(stepCount).toBe(2);
     expect(result.text).toBe("Tool result received.");
+  });
+
+  test("stops after a tool step when task input requests a pause", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-task-pause-"));
+    let modelSteps = 0;
+    let toolCalls = 0;
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async () => {
+        modelSteps += 1;
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_pause", name: "requestInput", arguments: {} }],
+            usage: { input: 10, output: 5, totalTokens: 15 },
+            stopReason: "tool_calls",
+            timestamp: Date.now(),
+          },
+          interactionId: "interaction_pause",
+        };
+      },
+    });
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 3,
+        shouldStopAfterToolStep: () => true,
+        tools: {
+          requestInput: {
+            execute: async () => {
+              toolCalls += 1;
+              return "Task paused for input";
+            },
+          },
+        },
+      }),
+    );
+
+    expect(modelSteps).toBe(1);
+    expect(toolCalls).toBe(1);
+    expect(result.responseMessages.some((message) => message.role === "tool")).toBe(true);
   });
 
   test("usage is accumulated across multiple steps", async () => {

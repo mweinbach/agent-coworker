@@ -208,9 +208,120 @@ export type UserMessageAttachmentHelpers = {
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    options?: UserMessageContentBuildOptions,
   ) => Promise<string | Array<Record<string, unknown>>>;
   validateUploadedFileAttachments: (attachments?: readonly FileAttachment[]) => Promise<void>;
 };
+
+export type UserContentMaterializationTransaction = {
+  trackCreatedFile: (filePath: string) => void;
+  trackCreatedDirectory: (dirPath: string) => void;
+  commit: () => void;
+  rollback: () => Promise<void>;
+};
+
+export type UserMessageContentBuildOptions = {
+  assertCanMaterialize?: () => void;
+  materialization?: UserContentMaterializationTransaction;
+};
+
+export type UserContentMaterializationCheckpoint =
+  | {
+      phase: "uploads_directory_ready";
+      path: string;
+    }
+  | {
+      phase: "inline_file_written";
+      path: string;
+      filename: string;
+    }
+  | {
+      phase: "attachments_validated";
+      filenames: string[];
+    };
+
+type UserContentMaterializationCheckpointHook = (
+  checkpoint: UserContentMaterializationCheckpoint,
+) => void | Promise<void>;
+
+let userContentMaterializationCheckpointHook: UserContentMaterializationCheckpointHook | null =
+  null;
+
+async function runUserContentMaterializationCheckpoint(
+  checkpoint: UserContentMaterializationCheckpoint,
+): Promise<void> {
+  await userContentMaterializationCheckpointHook?.(checkpoint);
+}
+
+export function createUserContentMaterializationTransaction(): UserContentMaterializationTransaction {
+  const createdFiles: string[] = [];
+  const createdDirectories = new Set<string>();
+  let committed = false;
+  return {
+    trackCreatedFile: (filePath) => {
+      if (!committed) createdFiles.push(filePath);
+    },
+    trackCreatedDirectory: (dirPath) => {
+      if (!committed) createdDirectories.add(path.resolve(dirPath));
+    },
+    commit: () => {
+      committed = true;
+    },
+    rollback: async () => {
+      if (committed) return;
+      for (const filePath of [...createdFiles].reverse()) {
+        await fs.rm(filePath, { force: true }).catch(() => undefined);
+      }
+      for (const dirPath of [...createdDirectories].sort((a, b) => b.length - a.length)) {
+        await fs.rmdir(dirPath).catch(() => undefined);
+      }
+    },
+  };
+}
+
+async function directoryExists(dirPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(dirPath);
+    return stat.isDirectory();
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function getMissingDirectoryChain(dirPath: string): Promise<string[]> {
+  const missing: string[] = [];
+  let current = path.resolve(dirPath);
+
+  while (!(await directoryExists(current))) {
+    missing.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return missing.reverse();
+}
+
+async function ensureMaterializedDirectory(
+  dirPath: string,
+  materialization?: UserContentMaterializationTransaction,
+): Promise<void> {
+  for (const missingDir of await getMissingDirectoryChain(dirPath)) {
+    try {
+      await fs.mkdir(missingDir);
+      materialization?.trackCreatedDirectory(missingDir);
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "EEXIST") {
+        throw error;
+      }
+      const stat = await fs.stat(missingDir);
+      if (!stat.isDirectory()) {
+        throw error;
+      }
+    }
+  }
+}
 
 export function createUserMessageAttachmentHelpers(
   context: SessionContext,
@@ -277,14 +388,23 @@ export function createUserMessageAttachmentHelpers(
     text: string,
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
+    options?: UserMessageContentBuildOptions,
   ): Promise<string | Array<Record<string, unknown>>> => {
+    const assertCanMaterialize = options?.assertCanMaterialize ?? (() => {});
+    const materialization = options?.materialization;
+    assertCanMaterialize();
     if (!attachments || attachments.length === 0) {
       return text;
     }
 
     const config = context.state.config;
     let resolvedUploadsDir = await resolveUploadsDirectory();
-    await fs.mkdir(resolvedUploadsDir, { recursive: true });
+    assertCanMaterialize();
+    await ensureMaterializedDirectory(resolvedUploadsDir, materialization);
+    await runUserContentMaterializationCheckpoint({
+      phase: "uploads_directory_ready",
+      path: resolvedUploadsDir,
+    });
     resolvedUploadsDir = await resolveUploadsDirectory();
 
     const provider = config.provider;
@@ -339,34 +459,13 @@ export function createUserMessageAttachmentHelpers(
           }
         }
 
-        const filePath = path.resolve(resolvedUploadsDir, finalName);
+        let filePath = path.resolve(resolvedUploadsDir, finalName);
         if (!isPathInside(resolvedUploadsDir, filePath)) {
           throw makeStructuredSessionError(
             "validation_failed",
             `Invalid attachment filename: ${attachment.filename}`,
           );
         }
-
-        diskPath = filePath;
-        try {
-          await fs.access(diskPath);
-          const ext = path.extname(finalName);
-          const base = finalName.slice(0, finalName.length - ext.length);
-          let counter = 1;
-          while (true) {
-            diskPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
-            try {
-              await fs.access(diskPath);
-              counter++;
-            } catch {
-              break;
-            }
-          }
-          finalName = path.basename(diskPath);
-        } catch {
-          // File doesn't exist, use as-is.
-        }
-        usedNames.add(finalName);
 
         const attachmentValidationMessage = getAttachmentValidationMessage([inlineAttachment]);
         if (attachmentValidationMessage) {
@@ -380,7 +479,47 @@ export function createUserMessageAttachmentHelpers(
             `Invalid base64 attachment: ${safeName}`,
           );
         }
-        await fs.writeFile(diskPath, decoded);
+        assertCanMaterialize();
+        const ext = path.extname(finalName);
+        const base = finalName.slice(0, finalName.length - ext.length);
+        let counter = usedNames.has(finalName) ? 1 : 0;
+        let fileHandle: Awaited<ReturnType<typeof fs.open>> | null = null;
+        while (true) {
+          const candidateName = counter === 0 ? finalName : `${base}_${counter}${ext}`;
+          filePath = path.resolve(resolvedUploadsDir, candidateName);
+          if (!isPathInside(resolvedUploadsDir, filePath)) {
+            throw makeStructuredSessionError(
+              "validation_failed",
+              `Invalid attachment filename: ${attachment.filename}`,
+            );
+          }
+          try {
+            fileHandle = await fs.open(filePath, "wx");
+            finalName = candidateName;
+            diskPath = filePath;
+            break;
+          } catch (error) {
+            if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+            counter++;
+          }
+        }
+        const openedFile = fileHandle;
+        if (!openedFile) {
+          throw new Error("Failed to create attachment file");
+        }
+        materialization?.trackCreatedFile(diskPath);
+        usedNames.add(finalName);
+        try {
+          await openedFile.writeFile(decoded);
+        } finally {
+          await openedFile.close();
+        }
+        await runUserContentMaterializationCheckpoint({
+          phase: "inline_file_written",
+          path: diskPath,
+          filename: finalName,
+        });
+        assertCanMaterialize();
         contentReadPath = diskPath;
         multimodalData = decoded.toString("base64");
       } else {
@@ -421,7 +560,9 @@ export function createUserMessageAttachmentHelpers(
       }
 
       if (!multimodalData && contentPartType) {
+        assertCanMaterialize();
         multimodalData = (await fs.readFile(contentReadPath)).toString("base64");
+        assertCanMaterialize();
       }
 
       if (multimodalData && contentPartType) {
@@ -480,6 +621,12 @@ export function createUserMessageAttachmentHelpers(
 
     const uploadedAttachments = allAttachments.filter(isUploadedFileAttachment);
     if (uploadedAttachments.length === 0) {
+      if (allAttachments.length > 0) {
+        await runUserContentMaterializationCheckpoint({
+          phase: "attachments_validated",
+          filenames: allAttachments.map((attachment) => path.basename(attachment.filename)),
+        });
+      }
       return;
     }
 
@@ -507,6 +654,10 @@ export function createUserMessageAttachmentHelpers(
     if (validationMessage) {
       throw makeStructuredSessionError("validation_failed", validationMessage);
     }
+    await runUserContentMaterializationCheckpoint({
+      phase: "attachments_validated",
+      filenames: allAttachments.map((attachment) => path.basename(attachment.filename)),
+    });
   };
 
   return {
@@ -514,3 +665,20 @@ export function createUserMessageAttachmentHelpers(
     validateUploadedFileAttachments,
   };
 }
+
+export const __internal = {
+  setUserContentMaterializationCheckpointHookForTests(
+    hook: UserContentMaterializationCheckpointHook | null,
+  ): () => void {
+    const previous = userContentMaterializationCheckpointHook;
+    userContentMaterializationCheckpointHook = hook;
+    return () => {
+      if (userContentMaterializationCheckpointHook === hook) {
+        userContentMaterializationCheckpointHook = previous;
+      }
+    };
+  },
+  resetUserContentMaterializationCheckpointHookForTests(): void {
+    userContentMaterializationCheckpointHook = null;
+  },
+};

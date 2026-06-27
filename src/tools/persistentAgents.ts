@@ -38,6 +38,7 @@ export function createSendAgentInputTool(ctx: ToolContext) {
       interrupt?: boolean;
     }) => {
       ctx.log(`tool> sendAgentInput ${JSON.stringify({ agentId, interrupt: interrupt === true })}`);
+      await ctx.assertCanMutate?.("sendAgentInput");
       await requireAgentControl(ctx).sendInput({ agentId, message, interrupt });
       ctx.log(`tool< sendAgentInput ${JSON.stringify({ agentId })}`);
       return { agentId, queued: true };
@@ -130,6 +131,7 @@ export function createResumeAgentTool(ctx: ToolContext) {
     }),
     execute: async ({ agentId }: { agentId: string }) => {
       ctx.log(`tool> resumeAgent ${JSON.stringify({ agentId })}`);
+      await ctx.assertCanMutate?.("resumeAgent");
       const result = await requireAgentControl(ctx).resume({ agentId });
       ctx.log(`tool< resumeAgent ${JSON.stringify({ agentId })}`);
       return result;

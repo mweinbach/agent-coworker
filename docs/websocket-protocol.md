@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.35`
+- Current protocol version: `7.39`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -36,20 +36,26 @@ auth, MCP auth, backups, workspace settings, and server-request responses. Readi
 (`thread/list`, `thread/read`, `thread/hydrate`, and `thread/resume`, which streams a thread's live
 content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
 stays always-allowed. Newly paired devices default to no `conversations` access until it is granted;
-devices paired before this permission existed are grandfathered to preserve their prior read access. The whole
-`cowork/mcp/*` config surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth
-permission) requires the workspace-settings permission: `cowork/mcp/servers/read` can expose
-configured transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP
-command (spawns a local subprocess) while connecting. The `cowork/memory/*` surface (including the
-`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the workspace-settings
-permission, because memory holds long-lived private user/project content. `cowork/plugins/install/preview` and
-`cowork/skills/install/preview` also require the workspace-settings permission, because they
-materialize an attacker-selectable local or GitHub source (only the passive plugin/skill
-catalog/list/detail reads stay always-allowed). The workspace document surface `cowork/workspace/presentation/preview` (which runs a workspace
-slide module on the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content
-from a caller-selected `cwd` that is not confined to the active workspace) require the
-workspace-settings permission. `cowork/session/state/read` (workspace/session config, provider
-options, userName/userProfile) also requires the workspace-settings permission, and
+devices paired before this permission existed are grandfathered to preserve their prior read access.
+Task reads (`task/list`, `task/read`, `task/artifact/version/compare`, and
+`task/artifact/version/preview`) also require `conversations`. Task mutations, lifecycle operations,
+task thread creation, direct task creation, and artifact writes require both `conversations` and
+`turns`. `task/artifact/read` also requires both `conversations` and `turns` because active legacy
+artifact reads can lazily materialize the immutable baseline. The whole `cowork/mcp/*` config
+surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth permission) requires the
+workspace-settings permission: `cowork/mcp/servers/read` can expose configured transport
+env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command (spawns a
+local subprocess) while connecting. The `cowork/memory/*` surface (including the
+`cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the
+workspace-settings permission, because memory holds long-lived private user/project content.
+`cowork/plugins/install/preview` and `cowork/skills/install/preview` also require the
+workspace-settings permission, because they materialize an attacker-selectable local or GitHub
+source (only the passive plugin/skill catalog/list/detail reads stay always-allowed). The workspace
+document surface `cowork/workspace/presentation/preview` (which runs a workspace slide module on
+the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content from a
+caller-selected `cwd` that is not confined to the active workspace) require the workspace-settings
+permission. `cowork/session/state/read` (workspace/session config, provider options,
+userName/userProfile) also requires the workspace-settings permission, and
 `cowork/workspace/bootstrap` requires both the workspace-settings and conversations permissions
 because it returns that control state plus thread summaries. None of these are always-allowed
 defaults.
@@ -126,6 +132,16 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `turn/start`
 - `turn/steer`
 - `turn/interrupt`
+- `command/list`
+- `command/execute`
+- `task/create`
+- `task/list`
+- `task/read`
+- `task/questions/resolve`
+- `task/artifact/read`
+- `task/artifact/version/compare`
+- `task/artifact/version/preview`
+- `task/artifact/revision/start`
 - `cowork/workspace/bootstrap`
 - `cowork/workspace/spreadsheet/workbook`
 - `cowork/workspace/spreadsheet/version`
@@ -133,6 +149,8 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/presentation/preview`
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
+
+`command/list` takes `{ threadId }` and returns the server-resolved slash command catalog, including enabled skills. `command/execute` takes `{ threadId, name, arguments?, clientMessageId? }`, expands the command or skill in the harness, and starts a normal projected turn. Clients should send `/task ...` through `command/execute` with `name: "task"` rather than treating it as ordinary message text.
 
 #### File attachments in `turn/start` and `turn/steer`
 
@@ -426,6 +444,97 @@ OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-s
 
 Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Codex apps endpoint. Connector execution, connector discovery, and app enablement are delegated to `codex app-server`.
 
+### Task mode JSON-RPC methods
+
+Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. Task-owned sessions must be preserved by clients outside ordinary chat-list reconciliation. Once a task reaches `completed`, `failed`, or `cancelled`, its task threads reject `turn/start` and `turn/steer` with `task_locked` until an explicit lifecycle operation (`task/reopen` or `task/retry`) moves it back into active work. That terminal rejection is server-authoritative and returned as a JSON-RPC error with code `-32600` plus `error.data: { "category": "task_locked", "source": "session", "lockKind": "terminal_task_thread", "taskId": string, "taskStatus": "completed" | "cancelled" | "failed" }`; clients should render the task read-only and offer only the matching lifecycle action. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace. Active source-chat lock rejections use `error.data: { "category": "task_locked", "source": "session", "lockKind": "active_source_chat", "taskId": string, "taskStatus": TaskStatus, "taskTitle": string }`; clients should navigate to/open the active task instead of offering terminal Reopen/Retry actions.
+
+Task terminalization is visible only after the coordinator has closed new write admissions and the
+affected task-owned turns have settled. While that quiesce is pending, task-thread and source-chat
+write attempts fail closed with the same structured `task_locked` data rather than racing against
+the eventual terminal `task/updated` notification. A `turn/steer` request that was already accepted
+for an active turn can still be dropped asynchronously if a task lock closes before the steer is
+actually committed; in that case the request result stays accepted, but the conversation feed emits
+one projected `error` item with `code: "task_locked"` and the structured `data` described above. No
+queued user message, referenced plugin context, history append, or provider continuation is committed
+for that dropped steer batch.
+
+Task RPCs are authorized in the harness/server. Read-only task methods require the same
+conversation-history permission as `thread/list` and `thread/read`; mutating task methods require
+both conversation access and turn-start access. An omitted `cwd` resolves to the canonical active
+workspace, and a provided `cwd` must resolve to that same canonical active workspace or, in desktop
+relay mode, an exact desktop-persisted workspace path. In all cases, the resolved task workspace
+must have `workspaceKind` `project`. `oneOffChat` workspaces enter Task mode only through the
+ordinary chat-to-task promotion flow, which links and locks the source chat. Task RPCs reject
+outside directories, project-local chat aliases, symlink aliases, drive-relative inputs, and task or
+artifact IDs whose stored workspace does not match the authorized request context. Workspace-kind
+classification canonicalizes the configured home, global one-off chat root, and requested workspace
+path before applying the `~/.cowork/chats` rule, so filesystem aliases such as symlinked homes do
+not turn hidden one-off chat directories into generic project workspaces. Legacy desktop records
+whose `project` kind was defaulted from an omitted `workspaceKind` are still classified by path;
+only an explicitly persisted `workspaceKind: "project"` preserves an intentional promoted project
+under the one-off chat root.
+
+Every mutation after creation carries `expectedRevision`. A stale revision fails with a structured conflict containing the current task revision so clients can reload rather than overwrite concurrent work.
+
+Requests:
+
+- `task/create` — params `{ cwd?, idempotencyKey, title, objective, context, requirements, workItems, decisions?, reviewRequired?, reviewRounds?, provider?, model? }`; creates a validated full plan directly in `working` state and returns `{ task, thread }`. `reviewRounds` is the required minimum, accepts integers from 0–10, and defaults to 3. `requirements` must include an `acceptance_criterion`; work-item keys must be unique, dependencies must be acyclic, and at least one work item must declare an expected output.
+- `task/list` — params `{ cwd? }`; result `{ tasks, total }`
+- `task/read` — params `{ cwd?, taskId }`; result `{ task }`
+- `task/updateBrief` — params `{ cwd?, taskId, expectedRevision, title?, objective?, requirements? }`; result `{ task }`
+- `task/updateGraph` — params `{ cwd?, taskId, expectedRevision, workItems }`; reconciles the validated dependency graph by stable work-item IDs and returns `{ task }`; this is a trusted user/admin graph edit with no task-thread identity, so explicit `status` fields are accepted as operator overrides, compatible updates preserve ownership, evidence, artifact links, thread links, and active artifact revision rows, terminal statuses (`blocked`, `done`, `abandoned`) clear active work-item claims, status overrides do not complete the task or bypass the separate completion/review gates, and removing or rekeying active revision work rejects atomically
+- `task/workItem/claim` — params `{ cwd?, taskId, expectedRevision, workItemId, taskThreadId }`; atomically claims one work item for one task thread
+- `task/workItem/mark` — params `{ cwd?, taskId, expectedRevision, workItemId, status, completionEvidence? }`; result `{ task }`
+- `task/decision/record` — params `{ cwd?, taskId, expectedRevision, question, resolution, source?, scope?, confidence?, supersedes? }`; result `{ task }`
+- `task/questions/resolve` — params `{ cwd?, taskId, expectedRevision, answers }`, where `answers` contains 1–3 `{ questionId, optionId }` or `{ questionId, text }` entries; records the answers atomically and returns `{ task, resumeStatus }`, with `resumeStatus` equal to `queued`, `steered`, `not_needed`, or `failed`
+- `task/blocker/report` — params `{ cwd?, taskId, expectedRevision, description, blocking, workItemId? }`; result `{ task }`
+- `task/blocker/resolve` — params `{ cwd?, taskId, expectedRevision, blockerId }`; result `{ task }`
+- `task/artifact/register` — params `{ cwd?, taskId, expectedRevision, path, title, kind, artifactId?, baseVersionId?, changeSummary?, workItemId?, provenance? }`; captures immutable bytes from a workspace-contained path as a new logical artifact or version and returns `{ task }`; completed, cancelled, and failed tasks reject registration
+- `task/artifact/read` — params `{ cwd?, taskId, artifactId }`; lazily captures a baseline for legacy artifacts when necessary and returns `{ detail }`; requires both `conversations` and `turns`; completed, cancelled, and failed tasks remain readable but do not create new baselines
+- `task/artifact/version/capture` — params `{ cwd?, taskId, artifactId, expectedRevision, changeSummary? }`; explicitly captures externally edited live bytes and returns `{ task, detail }`; completed, cancelled, and failed tasks reject capture
+- `task/artifact/version/compare` — params `{ cwd?, taskId, artifactId, baseVersionId, targetVersionId }`; returns `{ comparison }` with bounded text, DOCX, PPTX, XLSX, or binary changes
+- `task/artifact/version/preview` — params `{ cwd?, taskId, artifactId, versionId }`; returns `{ versionId, preview }` from immutable historical bytes
+- `task/artifact/version/restore` — params `{ cwd?, taskId, artifactId, versionId, expectedRevision }`; verifies the live fingerprint, restores the selected bytes as a new draft version, and returns `{ task, detail }`; completed, cancelled, and failed tasks reject restore before file bytes change
+- `task/artifact/version/accept` — params `{ cwd?, taskId, artifactId, expectedRevision, versionId? }`; records the accepted version and returns `{ task, detail }`; completed, cancelled, and failed tasks reject accept
+- `task/artifact/revision/start` — params `{ cwd?, taskId, artifactId, baseVersionId, expectedRevision, instruction }`; creates one focused revision work item and task thread for the artifact and returns `{ task, detail, revision, thread }`; completed, cancelled, and failed tasks reject revision starts before artifact or thread state changes
+- `task/thread/create` — params `{ cwd?, taskId, expectedRevision, title, workItemId?, provider?, model? }`; result `{ task, thread }`; completed, cancelled, and failed tasks reject new thread creation until `task/reopen` or `task/retry` returns them to `working`
+- `task/proposeCompletion` — params `{ cwd?, taskId, expectedRevision, summary, caveats? }`; validates plan, evidence, live artifact files, required independent review rounds, and implemented feedback, then moves the task to `awaiting_review` when user review is required
+- `task/accept` — params `{ cwd?, taskId, expectedRevision }`; revalidates fresh independent review fingerprints against the current live delivery state when review rounds are required, bulk-accepts eligible latest artifact drafts, and completes an `awaiting_review` task
+- `task/requestChanges` — params `{ cwd?, taskId, expectedRevision, feedback }`; returns an `awaiting_review` task to working state and rejects every other lifecycle state; stale `expectedRevision` conflicts are reported before lifecycle-state validation
+- `task/cancel` — params `{ cwd?, taskId, expectedRevision, reason? }`; cancels the task and interrupts its live task threads
+- `task/reopen` — params `{ cwd?, taskId, expectedRevision, reason? }`; explicitly reopens a completed or cancelled task. If unresolved blocking questions or active blocking issues remain, the reopened task returns as `blocked` until those blockers are resolved.
+- `task/retry` — params `{ cwd?, taskId, expectedRevision }`; retries a failed task in its existing primary thread and returns `{ task, retryStatus }`, where `retryStatus` is `queued`, `steered`, or `failed`
+
+Task records contain the durable brief, requirements, task threads, dependency-aware work items, decisions, queued questions, logical artifacts, blockers, semantic activity, latest checkpoint, and `reviewRounds`. Summaries expose `pendingQuestionCount` and `blockingQuestionCount`; full records expose each question's urgency, options, default, provisional decision, answer, and resolution status. Artifact bytes are immutable, content-addressed objects under `~/.cowork/artifacts`; SQLite stores version lineage, independent review rows, provenance, and active revision ownership. The workspace path remains the live editable copy. The coordinator owns lifecycle transitions; an agent proposes changes through the task directive tool but cannot bypass revision, evidence, dependency, ownership, fingerprint, question, review, or artifact checks. Thread-scoped `update_plan` directives that carry status-bearing or otherwise mutated work items must come from a task member thread, cannot mutate, remove, or rekey work assigned or claimed by another thread, cannot remove incomplete dependencies from existing work, cannot advance dependency-gated statuses while prerequisites are incomplete, cannot mark work `done` without existing completion evidence, and reject atomically before writing activity or idempotency receipts. Artifact revision outcomes may close their revision row and update artifact/work-item state, but they advance the task only by reusing the ordinary coordinator completion gates for the exact current material. Late callbacks for closed or terminal revisions are inert snapshots, and a cancelled/failed/completed task stays terminal until `task/reopen` or `task/retry`. Plan updates are prevalidated and persisted atomically with compatible work items reconciled in place; invalid graphs or active-revision rekeys leave the brief, plan, revisions, activity, and task revision unchanged. Completed, cancelled, and failed tasks are read-only for fresh taskUpdate directives and server mutation routes; replaying an already-recorded directive idempotency key is accepted without mutation so in-flight retries remain safe. Fresh directives are serialized with lifecycle transitions, and automatic post-turn task checkpoints are skipped after terminal states unless they are part of the directive that finalized the task. `task/reopen` and `task/retry` are the only APIs that return terminal tasks to an active state; `task/reopen` may restore `blocked` when unresolved blocking input or issues still need user action. An error from the primary task thread moves an active task to `failed`; server startup also reconciles older `working` tasks whose persisted primary session already ended in an error. Retrying preserves the task brief, work graph, decisions, artifacts, and thread history.
+
+New tasks require a minimum of three independent model review rounds by default. In a task thread, the task-only `reviewTask` tool first captures the current material fingerprint from the coordinator, then spawns a fresh read-only `reviewer` agent using the configured preferred child model (or an explicitly requested model). Its briefing includes the authoritative objective, acceptance criteria, work evidence, artifacts, and prior review responses. The reviewer must inspect actual deliverables, probe for correctness and edge cases, identify shallow or placeholder work, run adversarial verification, and return `PASS`, `PARTIAL`, or `FAIL`. The tool carries the captured fingerprint through the internal `record_review` directive as `expectedMaterialFingerprint`; the coordinator rejects the review if the current material differs before the verdict is recorded, forcing a fresh reviewer pass over the changed state. Each accepted result is persisted in `task_reviews` with verdict, feedback, reviewer/provider/model provenance, round, reviewed task revision, and a deterministic material fingerprint/snapshot; task directive results include the durable review rows so task tools do not depend on the pruned activity projection. A matching `review_completed` activity row is still emitted for UI/audit display but is not the completion enforcement source. After the minimum is met, the task agent may run additional rounds when material findings, risky changes, or residual uncertainty warrant more assurance, up to a 10-round safety cap.
+
+The material review fingerprint is centralized in the coordinator policy and excludes volatile timestamps, checkpoints, and cosmetic activity. It binds completion eligibility to objective/context, active requirements and acceptance criteria, work-plan status/dependencies/evidence/expected outputs, active decisions/questions/blockers relevant to acceptance, each artifact's manifest plus current version/hash/revision state, and the current live workspace file for every registered artifact. Live artifact file evidence includes the workspace-confined canonical relative target, SHA-256, and byte size. Review recording, completion proposal, and final task acceptance all resolve artifact paths through the same workspace boundary checks and reject missing, unreadable, non-file, or symlink-escaped artifacts instead of treating old version rows as sufficient. `task/proposeCompletion` rechecks the material fingerprint before entering `awaiting_review`; `task/accept` revalidates reviewed material again before completion when independent rounds are required and returns stale reviewed tasks to `working` when possible so a fresh independent pass plus proposal can cover the new fingerprint. Legacy databases gain an empty `task_reviews` table during migration; historical `review_completed` activity is preserved for audit display but is not silently trusted as a current pass.
+
+`PARTIAL` and `FAIL` results block the next review round. The primary agent must implement and verify the findings, refresh affected artifacts, and submit the taskUpdate `address_review` directive with the review ID and concrete implementation evidence; this records the implementation response in `task_reviews` and persists `review_addressed` activity. Addressing feedback never converts the review to PASS. A new independent reviewer agent is then required for the next round. `task/proposeCompletion` rejects tasks until all configured rounds have fresh PASS rows on the exact current material fingerprint, no non-pass review feedback is unresolved, and the latest durable review for the task is a PASS for that fingerprint. Later optional FAIL/PARTIAL results block completion even after the minimum was previously met. Material task or artifact changes after a PASS invalidate the pass until the current fingerprint is reviewed again. `reviewRequired` remains the separate final user-acceptance gate; setting it to false does not disable independent review rounds. Set `reviewRounds` to `0` explicitly to disable the model review loop.
+
+Task-mode agents request durable input with the `taskUpdate` directive `request_input`; the synchronous chat `AskUserQuestion` tool is not exposed in task threads. One directive may bundle 1–3 related questions. A non-blocking question must include a reversible `defaultAction`; the coordinator records that default as a provisional agent decision and lets the current turn continue. A later user answer supersedes the provisional decision. If delivery is proposed before the user answers, remaining non-blocking questions resolve to their recorded defaults.
+
+A blocking question must use urgency `now`. Persisting it moves an active task to `blocked` and stops the model loop after the directive tool result has been saved. Partial answers remain valid, but the task stays blocked while any blocking question or explicit blocking issue remains. Resolving the final blocking question moves the task to `working` and automatically continues the primary task thread: an active turn is steered, while an idle thread receives a new visible continuation turn. Answers remain saved if continuation fails, and `input_resume_failed` activity records the recovery failure. Cancelling a task dismisses its pending questions; unresolved blocking questions prevent completion.
+
+Artifact comparisons cap detailed changes at 10,000 while preserving aggregate counts. Unsupported or corrupt Office packages return a binary comparison or preview with explicit warnings instead of discarding either version. A live-file fingerprint conflict is returned as structured JSON-RPC error data with category `artifact_conflict`; clients must offer capture/reload rather than silently overwrite external edits.
+
+Notifications:
+
+- `task/created` — params `{ cwd, task, sourceSessionId, takeover, workspaceDisposition }`; `workspaceDisposition` is `existing_project` or `promote_one_off`
+- `task/updated` — params `{ cwd, task }`
+- `task/activity` — params `{ cwd, taskId, activity }`
+- `task/checkpointCreated` — params `{ cwd, taskId, checkpoint }`
+
+Task notifications are fan-out filtered by workspace subscription and task read permission. A
+recipient without conversation access for that workspace receives no task existence, ID, summary,
+question, approval, artifact, thread, checkpoint, or workspace metadata through task
+notifications. A successful authorized request against a project task workspace subscribes that
+connection to task notifications for that workspace; these task subscriptions are additive and
+idempotent across multiple authorized project workspaces on the same connection, and disconnecting
+removes every membership. This is separate from `cowork/control/event`, whose workspace-control
+subscription remains scoped to the latest requested workspace.
+
 ### Research JSON-RPC methods
 
 Research traffic is scoped to the active workspace and separate from chat threads. The desktop `Research` tab reaches the service through that workspace's JSON-RPC connection. Export artifacts and staged uploads live under `~/.cowork/research/*`; canonical metadata rows live in the shared SQLite database with a workspace discriminator.
@@ -610,6 +719,11 @@ Projected item kinds:
 - `error`
 
 Non-turn feed items such as `system`, `log`, `todos`, and `error` are emitted with `turnId: null`.
+Projected `error` items include optional `data` when the underlying session error carried structured
+data. For `task_locked`, this is the same `lockKind`/`taskId`/`taskStatus` contract returned on
+direct JSON-RPC errors, so clients that render only `item/*` notifications or hydrated
+`thread/read.coworkSnapshot` items can still distinguish terminal task-thread locks from active
+source-chat locks.
 
 Ask/approval prompts still arrive as server requests, but the harness also emits matching projected `system` feed items so snapshots and live feeds stay aligned.
 
@@ -627,6 +741,14 @@ Ask/approval prompts still arrive as server requests, but the harness also emits
 | `-32001` | `serverOverloaded` | Bounded-queue overload; retryable with backoff (see below) |
 | `-32002` | `notInitialized` | Request arrived before the `initialize`/`initialized` handshake completed |
 | `-32003` | `alreadyInitialized` | A second `initialize` was received on an already-initialized connection |
+
+Terminal task-thread `turn/start` and `turn/steer` rejections use `-32600` with structured
+`error.data` `{ "category": "task_locked", "source": "session", "lockKind": "terminal_task_thread",
+"taskId": string, "taskStatus": "completed" | "cancelled" | "failed" }`. Clients should treat this
+as a read-only task lifecycle state, not as a transient transport failure. Source chats locked by an
+active promoted task use `lockKind: "active_source_chat"` plus the active `taskId`, `taskStatus`, and
+`taskTitle`; clients should route users to the active task rather than rendering terminal lifecycle
+actions.
 
 ### JSON-RPC overload behavior
 
@@ -655,6 +777,30 @@ The remainder of this document describes the JSON-RPC method and notification pa
 
 ## Protocol v7 Notes
 
+Changes in `7.39`:
+
+- Terminal task-owned threads now return structured `task_locked` JSON-RPC error data for
+  `turn/start` and `turn/steer`, including after reconnect/restart. Active source-chat task locks
+  are disambiguated from terminal task-thread locks with `lockKind`. Terminal transitions also
+  interrupt live task-thread turns before late output or tool writes are projected.
+
+Changes in `7.38`:
+
+- Added `task/retry` to resume a failed task in its existing primary thread without discarding completed work or artifacts.
+- Primary task-thread errors now transition active tasks to `failed`, and persisted errored runs are reconciled on server startup so clients can offer retry.
+
+Changes in `7.37`:
+
+- Added the one-shot `createTask` model tool and bundled `/task` skill for chat-to-task promotion with a complete initial plan.
+- Added `command/list` and `command/execute` so thin clients invoke slash commands through the harness.
+- Added `task/created` takeover notifications, source-chat locking, and promotion of one-off chat workspaces into persistent projects.
+
+Changes in `7.36`:
+
+- Added explicit project Task mode with `task/*` lifecycle, brief, work-graph, decision, blocker, artifact, review, and task-thread controls.
+- Task-owned sessions are intentionally excluded from ordinary chat listings and workspace bootstrap thread lists. Standard chats are not auto-promoted or wrapped in task state.
+- Added semantic task notifications and coordinator checkpoints so clients can resume long-running work without replaying chat history.
+
 Changes in `7.35`:
 
 - Added user-created subagent profile controls: `cowork/agentProfiles/catalog/read`, `cowork/agentProfiles/upsert`, `cowork/agentProfiles/delete`, and `cowork/agentProfiles/copy`. Catalog snapshots use the `agent_profiles_catalog` event payload.
@@ -670,7 +816,7 @@ Changes in `7.34`:
 
 Changes in `7.33`:
 
-- Added `cowork/runtime/libreoffice/check`, which returns `{ status }` for the Cowork-managed LibreOffice `soffice` shim and can run an optional PDF conversion smoke test with `smoke: true`.
+- `cowork/runtime/libreoffice/check` returns `{ status }` for the managed headless LibreOffice launcher and can run a real PDF conversion smoke test with `smoke: true`. A missing or failing launcher means the active unified runtime must be reinstalled or rolled back; Cowork never falls back to host `soffice`.
 - Runtime subprocesses now receive the harness-prepared tool environment so managed executables such as `soffice` resolve consistently across Antigravity, Codex app-server, and local tool execution.
 
 Changes in `7.32`:
@@ -1441,7 +1587,8 @@ the specific blocked capability widened.
 ```
 "invalid_json" | "invalid_payload" | "missing_type" | "unknown_type"
 | "unknown_session" | "busy" | "validation_failed" | "permission_denied"
-| "provider_error" | "backup_error" | "observability_error" | "internal_error"
+| "provider_error" | "task_locked" | "backup_error" | "observability_error"
+| "internal_error"
 ```
 
 ### ServerErrorSource
@@ -2136,6 +2283,7 @@ Acknowledges that a `steer_message` was accepted for the active turn. The steer 
 | `turnId` | `string` | Active turn identifier |
 | `text` | `string` | Accepted steer text |
 | `clientMessageId` | `string?` | Echoed from the original `steer_message` if provided |
+| `steerRequestId` | `string?` | Server-generated JSON-RPC correlation id for matching concurrent `turn/steer` outcomes; clients should continue to use `clientMessageId` for optimistic UI reconciliation |
 
 ---
 
@@ -2189,7 +2337,7 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 | `rawPart` | `unknown?` | Optional raw provider/runtime part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
 
 Notes:
-- When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload.
+- When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload. The `skill` tool and every `read` result are exempt so complete `SKILL.md` instructions, references, and script source remain inline.
 - `preview` is a fixed inline preview of the first 5,000 characters plus a truncation note when additional content was written to disk.
 - The runtime emits a companion `file` chunk with `{ "kind": "tool-output-overflow", "toolName": "...", "toolCallId": "...", "path": "...", "chars": 12345, "preview": "..." }`.
 
@@ -3484,7 +3632,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied. Defaults to `false`. |
 | `config.advancedMemory` | `boolean` | Whether file-based advanced memory is enabled for the live session. This is a global persisted default, not a per-workspace toggle. Defaults to `false`. |
 | `config.memoryGenerationModel` | `string` | Explicit model id or `provider:modelId` ref used for advanced-memory generation; omitted when the session inherits the active model. |
-| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
+| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). The `skill` tool and all file content returned by `read` (including skill references and script source) stay inline regardless of this threshold. |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.preferredChildModel` | `string` | Normalized same-provider fallback model identifier used for legacy/default suggestion state |
 | `config.childModelRoutingMode` | `"same-provider" \| "cross-provider-allowlist"` | Workspace child-routing policy |
@@ -3590,6 +3738,8 @@ Structured error event. Can be emitted in response to any client message or duri
 | `message` | `string` | Human-readable error description |
 | `code` | `ServerErrorCode` | Machine-readable error code (see [ServerErrorCode](#servererrorcode)) |
 | `source` | `ServerErrorSource` | Error origin (see [ServerErrorSource](#servererrorsource)) |
+| `data` | `ServerErrorData?` | Optional structured error payload, for example task lock data with `lockKind`, `taskId`, and `taskStatus` |
+| `steerRequestId` | `string?` | Server-generated JSON-RPC correlation id when the error is the direct outcome of a `turn/steer` request |
 
 ---
 

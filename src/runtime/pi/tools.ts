@@ -111,7 +111,7 @@ export async function executeToolCall(
 
   try {
     const parsedInput = validateToolInput(toolDef, toolCall.arguments);
-    const result = await toolDef.execute(parsedInput);
+    const result = await toolDef.execute(parsedInput, { abortSignal: params.abortSignal });
     const executionError = extractToolExecutionErrorMessage(result);
     if (executionError) {
       await emitPart({
@@ -137,6 +137,7 @@ export async function executeToolCall(
       toolCallId: toolCall.id,
       workingDirectory: params.config.workingDirectory,
       toolOutputOverflowChars: params.config.toolOutputOverflowChars,
+      assertCanMutate: params.assertCanMutate,
       log: params.log,
     });
     const emittedOutput = overflow?.output ?? result;

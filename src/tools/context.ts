@@ -10,6 +10,14 @@ import type {
   AgentSpawnContextOptions,
   PersistentAgentSummary,
 } from "../shared/agents";
+import type {
+  TaskContextSnapshot,
+  TaskCreationInput,
+  TaskCreationResult,
+  TaskDirective,
+  TaskDirectiveResult,
+  TaskReviewMaterialReference,
+} from "../shared/tasks";
 import type { AgentConfig, ApproveCommandOptions, HarnessContextState, TodoItem } from "../types";
 
 export interface AgentControl {
@@ -67,6 +75,11 @@ export interface ToolContext {
 
   /** Structured run intent for the active session/turn. */
   harnessContext?: HarnessContextState | null;
+  taskContext?: TaskContextSnapshot | null;
+  getTaskContext?: () => TaskContextSnapshot | null;
+  getTaskReviewMaterial?: () => Promise<TaskReviewMaterialReference | null>;
+  applyTaskDirective?: (directive: TaskDirective) => Promise<TaskDirectiveResult>;
+  createTask?: (input: TaskCreationInput) => Promise<TaskCreationResult>;
 
   /** Active session id, used for memory provenance and session-scoped tool state. */
   sessionId?: string;
@@ -104,6 +117,12 @@ export interface ToolContext {
 
   /** Notify the session when an advanced-memory tool mutates a memory folder. */
   onAdvancedMemoryChanged?: (folder: string) => void | Promise<void>;
+
+  /**
+   * Server-authoritative write gate for tools with side effects. Mutating tools
+   * call this immediately before filesystem/process side effects.
+   */
+  assertCanMutate?: (toolName: string) => void | Promise<void>;
 
   /**
    * Apply an A2UI v0.9 envelope to the session's surface state. Returns a

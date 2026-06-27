@@ -66,13 +66,11 @@ const SETTINGS_ACTIONS = [
 
 function useThreadHomeTheme() {
   const theme = useAppTheme();
+  // Use the shared olive token system (matching desktop + the non-iOS thread home)
+  // rather than hardcoded Apple system grays. `sectionHeader` is the only extra key.
   return {
     ...theme,
-    backgroundMuted: theme.isDark ? "#000000" : "#f2f2f7",
-    surface: theme.isDark ? "#1c1c1e" : "#ffffff",
-    surfaceMuted: theme.isDark ? "#2c2c2e" : "#f2f2f7",
-    borderMuted: theme.isDark ? "rgba(84, 84, 88, 0.65)" : "rgba(60, 60, 67, 0.18)",
-    sectionHeader: theme.isDark ? "rgba(235, 235, 245, 0.6)" : "rgba(60, 60, 67, 0.6)",
+    sectionHeader: theme.textTertiary,
   };
 }
 

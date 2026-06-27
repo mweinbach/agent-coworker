@@ -128,6 +128,34 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
       value: () => {},
     });
   }
+  if (typeof dom.window.HTMLElement.prototype.hasPointerCapture !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "hasPointerCapture", {
+      configurable: true,
+      writable: true,
+      value: () => false,
+    });
+  }
+  if (typeof dom.window.HTMLElement.prototype.setPointerCapture !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "setPointerCapture", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+  }
+  if (typeof dom.window.HTMLElement.prototype.releasePointerCapture !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "releasePointerCapture", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+  }
+  if (typeof dom.window.HTMLElement.prototype.scrollIntoView !== "function") {
+    Object.defineProperty(dom.window.HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+  }
 
   setGlobalProperty("HTMLElement", dom.window.HTMLElement);
   setGlobalProperty("Element", dom.window.Element);

@@ -11,12 +11,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog";
-import { revealPath } from "../../lib/desktopCommands";
+import { confirmAction, revealPath } from "../../lib/desktopCommands";
 import { isInstalledPluginCatalogEntry } from "../../lib/wsProtocol";
 import { actionPending } from "../skills/utils";
 
 function pluginScopeLabel(scope: "workspace" | "user"): string {
-  return scope === "workspace" ? "Workspace" : "User";
+  return scope === "workspace" ? "Workspace" : "Library";
 }
 
 function pluginDiscoveryLabel(kind: "marketplace" | "direct"): string {
@@ -345,7 +345,19 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     variant="destructive"
                     size="sm"
                     disabled={deletePending}
-                    onClick={() => void deletePlugin(plugin.id, plugin.scope)}
+                    onClick={async () => {
+                      const confirmed = await confirmAction({
+                        title: "Delete plugin",
+                        message: `Delete ${plugin.displayName}? This removes the plugin and its bundled skills from this scope.`,
+                        detail: plugin.id,
+                        kind: "warning",
+                        confirmLabel: "Delete Plugin",
+                        cancelLabel: "Cancel",
+                        defaultAction: "cancel",
+                      });
+                      if (!confirmed) return;
+                      void deletePlugin(plugin.id, plugin.scope);
+                    }}
                   >
                     {deletePending ? "Deleting..." : "Delete Plugin"}
                   </Button>

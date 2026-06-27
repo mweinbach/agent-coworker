@@ -1,5 +1,6 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
-import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import { LockKeyholeIcon } from "lucide-react";
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
 import {
@@ -11,9 +12,14 @@ import {
   buildAttachmentSignature,
   getAttachmentPickerValidationMessage,
 } from "../app/attachmentInputs";
+import type { ReasoningEffortValue } from "../app/openaiCompatibleProviderOptions";
+import {
+  isSandboxApprovalThreadVisible,
+  resolveSandboxApprovalThreadTarget,
+} from "../app/sandboxApprovalVisibility";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
-import { ConversationScrollButton } from "../components/ai-elements/conversation";
+import { Button } from "../components/ui/button";
 import {
   buildComposerAttachmentSignature,
   type ComposerAttachmentFile,
@@ -21,7 +27,7 @@ import {
   resolveComposerAttachmentsForWorkspace,
   revokeComposerAttachmentPreview,
 } from "../lib/composerAttachments";
-import { modelDisplayNamesFromCatalog } from "../lib/modelChoices";
+import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
 import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
 import { buildChatRenderItems } from "./chat/activityGroups";
@@ -38,6 +44,7 @@ import {
   parseA2uiActionMessage,
   resolveComposerBusyPolicy,
 } from "./chat/chatLogic";
+import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
@@ -49,12 +56,16 @@ import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 // cap (messageBarHeight), or raising the cap would over-reserve empty feed space
 // above a short bar.
 const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
-const SCROLL_BUTTON_BOTTOM_GAP_PX = 14;
-const FEED_BOTTOM_STICKY_THRESHOLD_PX = 220;
-const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
 // Stable empty reference so the sandbox-approvals selector doesn't allocate a new
 // array each render (which would defeat zustand's reference equality check).
 const EMPTY_SANDBOX_APPROVALS: VisibleSandboxApproval[] = [];
+const ACTIVE_TASK_STATUSES = new Set([
+  "draft",
+  "planning",
+  "working",
+  "blocked",
+  "awaiting_review",
+]);
 
 export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
@@ -75,7 +86,26 @@ export {
 } from "./chat/chatLogic";
 export { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 
-export function ChatView() {
+type ChatViewReadOnlyNotice = {
+  id?: string;
+  title: string;
+  detail: string;
+  action?: {
+    label: string;
+    pendingLabel?: string;
+    pending?: boolean;
+    disabled?: boolean;
+    icon?: ReactNode;
+    pendingIcon?: ReactNode;
+    onClick: () => void;
+  };
+};
+
+type ChatViewProps = {
+  readOnlyNotice?: ChatViewReadOnlyNotice;
+};
+
+export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const thread = useAppStore((s) => {
@@ -97,28 +127,73 @@ export function ChatView() {
     [workspaceSkills, workspacePluginsCatalog],
   );
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
+  const view = useAppStore((s) => s.view);
+  const selectedTaskId = useAppStore((s) => s.selectedTaskId);
+  const allThreads = useAppStore((s) => s.threads);
+  const tasksById = useAppStore((s) => s.tasksById);
   const sandboxApprovalsByThread = useAppStore((s) => s.sandboxApprovalsByThread);
   const sandboxApprovals = useMemo(() => {
     const entries = Object.entries(sandboxApprovalsByThread);
     if (entries.length === 0) return EMPTY_SANDBOX_APPROVALS;
 
+    const visibilityContext = {
+      view,
+      selectedTaskId,
+      selectedThreadId,
+      threads: allThreads,
+      tasksById,
+    };
+
     const visible: VisibleSandboxApproval[] = [];
-    if (selectedThreadId) {
+    if (selectedThreadId && isSandboxApprovalThreadVisible(visibilityContext, selectedThreadId)) {
       const selectedPrompts = sandboxApprovalsByThread[selectedThreadId] ?? [];
       for (const prompt of selectedPrompts) {
         visible.push({ threadId: selectedThreadId, prompt });
       }
     }
     for (const [threadId, prompts] of entries) {
-      if (threadId === selectedThreadId) continue;
+      if (
+        threadId === selectedThreadId ||
+        !isSandboxApprovalThreadVisible(visibilityContext, threadId)
+      ) {
+        continue;
+      }
       for (const prompt of prompts) {
         visible.push({ threadId, prompt });
       }
     }
 
     return visible.length > 0 ? visible : EMPTY_SANDBOX_APPROVALS;
-  }, [sandboxApprovalsByThread, selectedThreadId]);
+  }, [allThreads, sandboxApprovalsByThread, selectedTaskId, selectedThreadId, tasksById, view]);
   const answerApproval = useAppStore((s) => s.answerApproval);
+  const selectThread = useAppStore((s) => s.selectThread);
+  const selectTask = useAppStore((s) => s.selectTask);
+  const selectTaskThread = useAppStore((s) => s.selectTaskThread);
+  const selectApprovalThread = useCallback(
+    (threadId: string) => {
+      const target = resolveSandboxApprovalThreadTarget(
+        { selectedThreadId, threads: allThreads, tasksById },
+        threadId,
+      );
+      if (target?.kind === "task") {
+        if (target.taskThreadId) {
+          void selectTaskThread(target.taskId, target.taskThreadId);
+        } else {
+          void selectTask(target.taskId);
+        }
+        return;
+      }
+      if (target?.kind === "chat") void selectThread(threadId);
+    },
+    [allThreads, selectTask, selectTaskThread, selectThread, selectedThreadId, tasksById],
+  );
+  const threadTitleById = useMemo(() => {
+    const onlyOtherThreads = sandboxApprovals.some((a) => a.threadId !== selectedThreadId);
+    if (!onlyOtherThreads) return undefined;
+    const map = new Map<string, string>();
+    for (const t of allThreads) map.set(t.id, t.title);
+    return map;
+  }, [allThreads, sandboxApprovals, selectedThreadId]);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const desktopA2uiEnabled = useAppStore((s) => s.desktopFeatureFlags.a2ui);
@@ -134,7 +209,6 @@ export function ChatView() {
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachmentFile[]>([]);
   const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null);
   const [preparingAttachments, setPreparingAttachments] = useState(false);
-  const [showScrollButton, setShowScrollButton] = useState(false);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(composerOverlayMinHeight);
   const [submittedAttachmentSignature, setSubmittedAttachmentSignature] = useState<string | null>(
     null,
@@ -142,69 +216,45 @@ export function ChatView() {
 
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
   const isUploading = preparingAttachments || pendingTurnStart?.status === "sending";
-  const [uploadProgress, setUploadProgress] = useState(0);
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | undefined;
-    if (isUploading) {
-      setUploadProgress(10);
-      timer = setInterval(() => {
-        setUploadProgress((prev) => {
-          if (prev >= 95) return prev;
-          return prev + Math.floor(Math.random() * 5) + 1;
-        });
-      }, 500);
-    } else {
-      setUploadProgress(100);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [isUploading]);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
+  const setThreadReasoningEffort = useAppStore((s) => s.setThreadReasoningEffort);
   const reconnectThread = useAppStore((s) => s.reconnectThread);
+  const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
+  const sourceTask = useMemo(() => {
+    if (!selectedThreadId) return null;
+    const record = Object.values(tasksById).find(
+      (task) => task.sourceSessionId === selectedThreadId && ACTIVE_TASK_STATUSES.has(task.status),
+    );
+    if (record) return { id: record.id, title: record.title };
+    for (const summaries of Object.values(taskSummariesByWorkspaceId)) {
+      const summary = summaries.find(
+        (task) =>
+          task.sourceSessionId === selectedThreadId && ACTIVE_TASK_STATUSES.has(task.status),
+      );
+      if (summary) return { id: summary.id, title: summary.title };
+    }
+    return null;
+  }, [selectedThreadId, taskSummariesByWorkspaceId, tasksById]);
 
-  const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const messageBarOverlayRef = useRef<HTMLDivElement | null>(null);
-  const lastCountRef = useRef<number>(0);
-  const autoScrolledThreadIdRef = useRef<string | null>(null);
-  const userScrolledAwayRef = useRef(false);
+  const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const messageBarOverlayRef = useCallback((element: HTMLDivElement | null) => {
+    setMessageBarOverlayElement(element);
+  }, []);
   const pendingAttachmentsRef = useRef<ComposerAttachmentFile[]>([]);
-  const scrollButtonBottomOffset = composerOverlayHeight + SCROLL_BUTTON_BOTTOM_GAP_PX;
-
-  const updateScrollState = useCallback(() => {
-    const el = feedRef.current;
-    if (!el) {
-      setShowScrollButton(false);
-      userScrolledAwayRef.current = false;
-      return;
-    }
-
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    userScrolledAwayRef.current = distanceFromBottom > FEED_AUTO_SCROLL_THRESHOLD_PX;
-    const nextVisible = distanceFromBottom > FEED_BOTTOM_STICKY_THRESHOLD_PX;
-    setShowScrollButton((current) => (current === nextVisible ? current : nextVisible));
-  }, []);
-
-  const scrollFeedToBottom = useCallback(() => {
-    const el = feedRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    userScrolledAwayRef.current = false;
-    setShowScrollButton(false);
-  }, []);
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
   }, [pendingAttachments]);
 
   useLayoutEffect(() => {
-    const el = messageBarOverlayRef.current;
+    const el = messageBarOverlayElement;
     if (!el) {
       setComposerOverlayHeight(composerOverlayMinHeight);
       return;
@@ -224,7 +274,7 @@ export function ChatView() {
     const observer = new ResizeObserverCtor(updateHeight);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [composerOverlayMinHeight]);
+  }, [composerOverlayMinHeight, messageBarOverlayElement]);
 
   useEffect(() => {
     return () => {
@@ -311,7 +361,9 @@ export function ChatView() {
     rt?.sessionConfig?.featureFlags?.workspace?.a2ui,
   ]);
   const visibleFeed = useMemo(() => {
-    const baseVisibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
+    const baseVisibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode).filter(
+      (item) => !isHiddenRetryTurnMessage(item),
+    );
     if (a2uiEnabled) {
       return baseVisibleFeed;
     }
@@ -409,6 +461,29 @@ export function ChatView() {
     if (!rt || rt.sessionKind === "agent") return null;
     if (rt.transcriptOnly === true) return null;
 
+    const resolveConfig = (provider: ProviderName, model: string) => {
+      const reasoningConfig = reasoningConfigFromCatalog(providerCatalog, provider, model);
+      if (!reasoningConfig) return { provider, model, reasoning: null };
+      const configuredEffort =
+        provider === "openai" || provider === "codex-cli"
+          ? thread.draft
+            ? workspace?.providerOptions?.[provider]?.reasoningEffort
+            : rt.sessionConfig?.providerOptions?.[provider]?.reasoningEffort
+          : undefined;
+      const currentEffort =
+        rt.composerReasoningEffort ?? configuredEffort ?? reasoningConfig.defaultEffort;
+      const enabledEffort: ReasoningEffortValue =
+        reasoningConfig.defaultEffort === "none" ? "high" : reasoningConfig.defaultEffort;
+      return {
+        provider,
+        model,
+        reasoning: {
+          enabled: currentEffort !== "none",
+          enabledEffort,
+        },
+      };
+    };
+
     if (thread.draft) {
       if (!workspace) return null;
       const baseProvider =
@@ -424,14 +499,26 @@ export function ChatView() {
           ? rt.draftComposerModel.trim()
           : workspace.defaultModel?.trim() || defaultModelForProvider(provider) || "";
       if (!modelRaw) return null;
-      return { provider, model: modelRaw };
+      return resolveConfig(provider, modelRaw);
     }
 
     if (rt.config?.provider && rt.config.model) {
-      return { provider: rt.config.provider as ProviderName, model: rt.config.model };
+      return resolveConfig(rt.config.provider as ProviderName, rt.config.model);
     }
     return null;
-  }, [selectedThreadId, thread, rt, workspace]);
+  }, [providerCatalog, selectedThreadId, thread, rt, workspace]);
+
+  const handleReasoningEnabledChange = useCallback(
+    (enabled: boolean) => {
+      if (!selectedThreadId || !threadModelConfig?.reasoning) return;
+      setThreadReasoningEffort(
+        selectedThreadId,
+        threadModelConfig.provider,
+        enabled ? threadModelConfig.reasoning.enabledEffort : "none",
+      );
+    },
+    [selectedThreadId, setThreadReasoningEffort, threadModelConfig],
+  );
 
   const handleStop = useCallback(() => {
     if (!selectedThreadId) return;
@@ -450,57 +537,6 @@ export function ChatView() {
     },
     [cancelThread, selectedThreadId],
   );
-
-  useEffect(() => {
-    const el = feedRef.current;
-    if (!el) return;
-
-    const isThreadChange = autoScrolledThreadIdRef.current !== selectedThreadId;
-    if (isThreadChange) {
-      autoScrolledThreadIdRef.current = selectedThreadId;
-      lastCountRef.current = visibleFeed.length;
-      userScrolledAwayRef.current = false;
-      window.requestAnimationFrame(() => {
-        const nextEl = feedRef.current;
-        if (nextEl) {
-          nextEl.scrollTop = nextEl.scrollHeight;
-        }
-      });
-      setShowScrollButton(false);
-      return;
-    }
-
-    const previousCount = lastCountRef.current;
-    lastCountRef.current = visibleFeed.length;
-
-    if (previousCount === 0 && visibleFeed.length > 0) {
-      window.requestAnimationFrame(() => {
-        const nextEl = feedRef.current;
-        if (nextEl) {
-          nextEl.scrollTop = nextEl.scrollHeight;
-        }
-      });
-      setShowScrollButton(false);
-      return;
-    }
-
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (!userScrolledAwayRef.current && distFromBottom <= FEED_AUTO_SCROLL_THRESHOLD_PX) {
-      window.requestAnimationFrame(() => {
-        const nextEl = feedRef.current;
-        if (nextEl && !userScrolledAwayRef.current) {
-          nextEl.scrollTop = nextEl.scrollHeight;
-        }
-      });
-      setShowScrollButton(false);
-    } else {
-      setShowScrollButton(true);
-    }
-  }, [selectedThreadId, visibleFeed]);
-
-  useEffect(() => {
-    updateScrollState();
-  }, [composerOverlayHeight, updateScrollState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -528,9 +564,14 @@ export function ChatView() {
     };
   }, [citationOverflowFilePathsByMessageId]);
 
+  const didAutoFocusRef = useRef(false);
   useEffect(() => {
-    if (selectedThreadId && textareaRef.current) {
+    // Focus the composer once on first mount so the user can type immediately,
+    // but don't steal focus on every thread switch (that disrupts reading
+    // history and races the scroll-restore below).
+    if (selectedThreadId && !didAutoFocusRef.current && textareaRef.current) {
       textareaRef.current.focus();
+      didAutoFocusRef.current = true;
     }
   }, [selectedThreadId]);
 
@@ -675,12 +716,27 @@ export function ChatView() {
     [rt?.busy, submitComposer, setComposerText],
   );
 
+  const retryFailedTurn = useCallback(async (): Promise<boolean> => {
+    if (!thread || useAppStore.getState().selectedThreadId !== thread.id) return false;
+    const draftBeforeRetry = useAppStore.getState().composerText;
+    const accepted = await sendMessage(HIDDEN_RETRY_TURN_PROMPT, "reject");
+    if (accepted && draftBeforeRetry && useAppStore.getState().composerText === "") {
+      setComposerText(draftBeforeRetry);
+    }
+    return accepted;
+  }, [sendMessage, setComposerText, thread]);
+
   if (!selectedThreadId || !thread) {
     return <NewChatLanding />;
   }
 
   const busy = rt?.busy === true;
-  const inputDisabled = hasPromptModal || hasFilePreview || preparingAttachments;
+  const inputDisabled =
+    hasPromptModal ||
+    hasFilePreview ||
+    preparingAttachments ||
+    sourceTask !== null ||
+    readOnlyNotice !== undefined;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||
@@ -713,8 +769,6 @@ export function ChatView() {
     <ChatViewContext.Provider value={contextValue}>
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
         <ChatFeed
-          feedRef={feedRef}
-          onScroll={updateScrollState}
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
           onReconnect={() => void reconnectThread(selectedThreadId)}
@@ -731,11 +785,13 @@ export function ChatView() {
           composerOverlayHeight={composerOverlayHeight}
           sandboxApprovals={sandboxApprovals}
           onAnswerApproval={answerApproval}
-        />
-        <ConversationScrollButton
-          bottomOffset={scrollButtonBottomOffset}
-          visible={showScrollButton}
-          onClick={scrollFeedToBottom}
+          selectedThreadId={selectedThreadId}
+          threadTitleById={threadTitleById}
+          onSelectThread={selectApprovalThread}
+          onRetryFailedTurn={retryFailedTurn}
+          retryFailedTurnDisabled={
+            busy || inputDisabled || hydrating || transcriptOnly || pendingTurnStart !== null
+          }
         />
 
         {selectedThreadId && a2uiEnabled ? (
@@ -744,37 +800,89 @@ export function ChatView() {
           </div>
         ) : null}
 
-        <ChatComposer
-          messageBarOverlayRef={messageBarOverlayRef}
-          composerOverlayMinHeight={composerOverlayMinHeight}
-          messageBarHeight={messageBarHeight}
-          inputDisabled={inputDisabled}
-          transcriptOnly={transcriptOnly}
-          ingestAttachmentFiles={ingestAttachmentFiles}
-          isUploading={isUploading}
-          uploadProgress={uploadProgress}
-          pendingAttachments={pendingAttachments}
-          removeAttachment={removeAttachment}
-          submitComposer={submitComposer}
-          busy={busy}
-          composerHint={composerHint}
-          composerSubmitState={composerSubmitState}
-          attachmentPickerError={attachmentPickerError}
-          composerText={composerText}
-          setComposerText={setComposerText}
-          onComposerKeyDown={onComposerKeyDown}
-          mentionCatalog={mentionCatalog}
-          placeholder={placeholder}
-          textareaRef={textareaRef}
-          fileInputRef={fileInputRef}
-          handleFileSelect={handleFileSelect}
-          threadModelConfig={threadModelConfig}
-          threadDraft={thread.draft === true}
-          selectedThreadId={selectedThreadId}
-          modelDisplayNames={modelDisplayNames}
-          preparingAttachments={preparingAttachments}
-          onStop={selectedThreadId ? handleStop : undefined}
-        />
+        {readOnlyNotice ? (
+          <div
+            ref={messageBarOverlayRef}
+            id={readOnlyNotice.id}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-slot="message-bar-overlay"
+            className="absolute inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
+            style={{ minHeight: composerOverlayMinHeight }}
+          >
+            <div className="mx-auto flex max-w-3xl flex-col gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3 sm:flex-row sm:items-center">
+              <LockKeyholeIcon className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">{readOnlyNotice.title}</p>
+                <p className="text-xs leading-5 text-muted-foreground">{readOnlyNotice.detail}</p>
+              </div>
+              {readOnlyNotice.action ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="w-full shrink-0 sm:w-auto"
+                  disabled={readOnlyNotice.action.disabled || readOnlyNotice.action.pending}
+                  aria-busy={readOnlyNotice.action.pending || undefined}
+                  onClick={readOnlyNotice.action.onClick}
+                >
+                  {readOnlyNotice.action.pending
+                    ? readOnlyNotice.action.pendingIcon
+                    : readOnlyNotice.action.icon}
+                  {readOnlyNotice.action.pending
+                    ? (readOnlyNotice.action.pendingLabel ?? readOnlyNotice.action.label)
+                    : readOnlyNotice.action.label}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : sourceTask ? (
+          <div className="shrink-0 border-t border-border bg-background px-4 py-3">
+            <div className="mx-auto flex max-w-3xl items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+              <LockKeyholeIcon className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">This chat is locked while its task is active.</p>
+                <p className="truncate text-xs text-muted-foreground">{sourceTask.title}</p>
+              </div>
+              <Button type="button" size="sm" onClick={() => void selectTask(sourceTask.id)}>
+                Open task
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <ChatComposer
+            messageBarOverlayRef={messageBarOverlayRef}
+            composerOverlayMinHeight={composerOverlayMinHeight}
+            messageBarHeight={messageBarHeight}
+            inputDisabled={inputDisabled}
+            transcriptOnly={transcriptOnly}
+            ingestAttachmentFiles={ingestAttachmentFiles}
+            isUploading={isUploading}
+            pendingAttachments={pendingAttachments}
+            removeAttachment={removeAttachment}
+            submitComposer={submitComposer}
+            busy={busy}
+            composerHint={composerHint}
+            composerSubmitState={composerSubmitState}
+            attachmentPickerError={attachmentPickerError}
+            composerText={composerText}
+            setComposerText={setComposerText}
+            onComposerKeyDown={onComposerKeyDown}
+            mentionCatalog={mentionCatalog}
+            placeholder={placeholder}
+            textareaRef={textareaRef}
+            fileInputRef={fileInputRef}
+            handleFileSelect={handleFileSelect}
+            threadModelConfig={threadModelConfig}
+            reasoningToggle={threadModelConfig?.reasoning ?? null}
+            onReasoningEnabledChange={handleReasoningEnabledChange}
+            threadDraft={thread.draft === true}
+            selectedThreadId={selectedThreadId}
+            modelDisplayNames={modelDisplayNames}
+            preparingAttachments={preparingAttachments}
+            onStop={selectedThreadId ? handleStop : undefined}
+          />
+        )}
 
         <CancelSubagentsDialog
           open={cancelScopeDialogOpen}

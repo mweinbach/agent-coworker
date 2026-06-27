@@ -29,6 +29,8 @@ type ServerTransportData = {
   selectedSubprotocol?: string | null;
   connectionId?: string;
   workspaceControlEventsAllowed?: boolean;
+  taskReadAllowed?: boolean;
+  taskMutationAllowed?: boolean;
   rpc?: JsonRpcConnectionState;
 };
 

@@ -42,15 +42,17 @@ import {
 } from "../../../components/ui/select";
 import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
+import { confirmAction } from "../../../lib/desktopCommands";
 import {
   type CatalogVisibilityOptions,
   configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
+  isProviderUnsupportedOnDesktop,
+  isUiDisabledProvider,
   modelChoicesFromCatalog,
   modelDisplayNamesFromCatalog,
   resolveModelDisplayLabel,
-  UI_DISABLED_PROVIDERS,
 } from "../../../lib/modelChoices";
 import { displayProviderName } from "../../../lib/providerDisplayNames";
 import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
@@ -240,7 +242,7 @@ export function buildProfileModelGroups(
   const groups = sortProviderEntriesForSettings(
     PROVIDER_NAMES.filter(
       (provider) =>
-        !UI_DISABLED_PROVIDERS.has(provider) &&
+        !isUiDisabledProvider(provider) &&
         (visibility?.includedProviders ? visibility.includedProviders.includes(provider) : true) &&
         !visibility?.hiddenProviders?.includes(provider),
     )
@@ -265,6 +267,9 @@ export function buildProfileModelGroups(
   }
 
   const parsed = decodeProviderModelSelection(current);
+  if (parsed && isProviderUnsupportedOnDesktop(parsed.provider)) {
+    return { groups, customOptions: [] };
+  }
   if (!parsed) {
     return {
       groups,
@@ -574,9 +579,20 @@ export function SubagentsPage() {
                     setDraft(draftFromEntry(entry));
                   }}
                   onCopy={() => void copyProfile(entry)}
-                  onDelete={() =>
-                    void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id)
-                  }
+                  onDelete={async () => {
+                    const confirmed = await confirmAction({
+                      title: "Delete profile",
+                      message: `Delete the "${entry.profile.displayName}" profile?`,
+                      detail: "This profile will be permanently removed.",
+                      confirmLabel: "Delete",
+                      cancelLabel: "Cancel",
+                      kind: "warning",
+                      defaultAction: "cancel",
+                    });
+                    if (confirmed) {
+                      void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id);
+                    }
+                  }}
                 />
               ))}
             </div>
@@ -627,7 +643,7 @@ function WorkspaceTargetPicker({
           <Label className="text-xs text-muted-foreground">Workspace</Label>
           <Select value={selectedWorkspace.id} disabled={disabled} onValueChange={onValueChange}>
             <SelectTrigger className="w-full sm:w-[220px]">
-              <span>Change workspace</span>
+              <SelectValue placeholder="Change workspace" />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>

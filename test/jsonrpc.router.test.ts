@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   __internal as citationMetadataInternal,
@@ -7,6 +10,7 @@ import {
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createJsonRpcRequestRouter, type JsonRpcRouteContext } from "../src/server/jsonrpc/routes";
 import { jsonRpcNotificationSchemas } from "../src/server/jsonrpc/schema";
+import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 
 function createRuntime(session: any) {
   return {
@@ -30,6 +34,7 @@ function createRuntime(session: any) {
 function createRouterHarness(
   opts: {
     workingDirectory?: string;
+    homedir?: string;
     desktopService?: JsonRpcRouteContext["desktopService"];
     resolveWorkspacePath?: JsonRpcRouteContext["utils"]["resolveWorkspacePath"];
     persistedRecords?: Array<{
@@ -75,6 +80,7 @@ function createRouterHarness(
 
   const context: JsonRpcRouteContext = {
     getConfig: () => ({ workingDirectory }) as any,
+    homedir: opts.homedir,
     threads: {
       create: ({ cwd, provider, model }) => {
         created.push({ cwd, provider, model });
@@ -927,6 +933,42 @@ describe("JSON-RPC request router", () => {
         },
       },
     ]);
+  });
+
+  test("workspace/list classifies no-desktop fallback one-off cwd with configured home", async () => {
+    const homedir = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-list-home-"));
+    try {
+      const chatDir = path.join(getOneOffChatsRoot(homedir), "20260620-chat");
+      await fs.mkdir(chatDir, { recursive: true });
+      const chatCwd = await fs.realpath(chatDir);
+      const harness = createRouterHarness({
+        workingDirectory: chatCwd,
+        homedir,
+      });
+
+      await harness.router({} as any, {
+        id: 100,
+        method: "workspace/list",
+        params: {},
+      });
+
+      expect(harness.sent).toEqual([
+        {
+          id: 100,
+          result: {
+            activeWorkspaceId: expect.any(String),
+            workspaces: [
+              expect.objectContaining({
+                path: chatCwd,
+                workspaceKind: "oneOffChat",
+              }),
+            ],
+          },
+        },
+      ]);
+    } finally {
+      await fs.rm(homedir, { recursive: true, force: true });
+    }
   });
 
   test("thread/list applies limit after sorting by updatedAt", async () => {

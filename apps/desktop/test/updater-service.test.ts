@@ -17,6 +17,7 @@ setElectronMockOverrides({
 mock.module("electron", () => createElectronMock());
 
 const { __internal, DesktopUpdaterService } = await import("../electron/services/updater");
+const { flushLocalLogWrites } = await import("../electron/services/localLogs");
 
 type Handler = (...args: any[]) => void;
 
@@ -55,6 +56,7 @@ describe("desktop updater service", () => {
     if (!userDataDir) {
       return;
     }
+    await flushLocalLogWrites("updater.log");
     await fs.rm(userDataDir, { recursive: true, force: true });
     userDataDir = "";
   });

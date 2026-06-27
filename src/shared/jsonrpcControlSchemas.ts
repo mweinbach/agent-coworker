@@ -195,6 +195,12 @@ const providerCatalogModelEntrySchema = z
     displayName: z.string(),
     knowledgeCutoff: z.string(),
     supportsImageInput: z.boolean(),
+    reasoning: z
+      .object({
+        defaultEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -350,18 +356,15 @@ const libreOfficeRuntimeCheckRequestSchema = cwdRequestSchema
 
 const libreOfficeRuntimeDiagnosticSchema = z
   .object({
-    status: z.enum(["available", "unavailable", "disabled"]),
+    status: z.enum(["available", "unavailable"]),
     checkedAt: z.string(),
     message: z.string(),
     version: z.string().optional(),
-    shimPath: z.string().optional(),
     resolvedPath: z.string().optional(),
-    rootDir: z.string().optional(),
     smoke: z
       .object({
         ok: z.boolean(),
         durationMs: z.number().nonnegative(),
-        outputPath: z.string().optional(),
         sizeBytes: z.number().nonnegative().optional(),
         error: z.string().optional(),
       })

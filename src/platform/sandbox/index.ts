@@ -1,7 +1,14 @@
 import path from "node:path";
 
 import { buildBwrapCommand } from "./bwrap";
-import { findBwrap, findWindowsHelper, hasSeatbelt, isBwrapUsable } from "./detect";
+import {
+  findBwrap,
+  findWindowsHelper,
+  hasSeatbelt,
+  isBwrapUsable,
+  probeWindowsSandboxBundle,
+  type SandboxEnforcement,
+} from "./detect";
 import type { SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand } from "./windows";
@@ -16,7 +23,7 @@ export {
 } from "./policy";
 
 /** Concrete sandbox backend selected for a given platform + policy. */
-export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-restricted";
+export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-sandbox";
 
 /** Marker env var set on sandboxed children (mirrors Codex's `CODEX_SANDBOX`). */
 export const SANDBOX_ENV_VAR = "COWORK_SANDBOX";
@@ -28,6 +35,10 @@ export interface SandboxCapabilities {
   seatbelt: boolean;
   bwrapPath: string | null;
   windowsHelperPath: string | null;
+  windowsSandboxHome?: string;
+  windowsEnforcement?: SandboxEnforcement;
+  windowsSetupRequired?: boolean;
+  windowsWarning?: string;
 }
 
 export interface SandboxCommand {
@@ -49,14 +60,8 @@ export interface SandboxTransformResult extends SandboxCommand {
   sandbox: SandboxType;
   /** True when no OS sandbox wraps the command (full-access or unavailable). */
   unsandboxed: boolean;
-  /**
-   * Whether the selected backend actually ENFORCES the policy's filesystem/scope
-   * (true for Seatbelt/bwrap). The Windows restricted-token helper provides only
-   * process containment (no per-root FS/WFP scoping), so it is NOT enforcing —
-   * hard-floor contexts (read-only roles, scoped children) must fail closed
-   * rather than run unenforced under it. Absent means non-enforcing.
-   */
-  enforcesScope?: boolean;
+  /** Independently probed policy dimensions enforced by the selected backend. */
+  enforcement: SandboxEnforcement;
   /** Set when sandboxing was wanted but unavailable on this platform. */
   warning?: string;
 }
@@ -90,10 +95,21 @@ export function detectCapabilities(
   // unavailable, so the configured requireBackend fail-closed/fallback applies
   // instead of running commands that error during sandbox setup.
   const bwrapFound = platform === "linux" ? findBwrap(env) : null;
+  const windowsHelperPath = platform === "win32" ? findWindowsHelper(winDirs, env) : null;
+  const windowsProbe =
+    platform === "win32" ? probeWindowsSandboxBundle(windowsHelperPath, env) : null;
   return {
     seatbelt: platform === "darwin" ? hasSeatbelt() : false,
     bwrapPath: bwrapFound && isBwrapUsable(bwrapFound) ? bwrapFound : null,
-    windowsHelperPath: platform === "win32" ? findWindowsHelper(winDirs, env) : null,
+    windowsHelperPath,
+    ...(windowsProbe
+      ? {
+          windowsSandboxHome: windowsProbe.sandboxHome,
+          windowsEnforcement: windowsProbe.enforcement,
+          windowsSetupRequired: windowsProbe.setupRequired,
+          windowsWarning: windowsProbe.warning,
+        }
+      : {}),
   };
 }
 
@@ -114,7 +130,13 @@ export class SandboxManager {
     // that will not be sandboxed. A danger-full-access policy with network:false
     // still needs a network-only sandbox wrapper below.
     if (input.policy.kind === "danger-full-access" && input.policy.network !== false) {
-      return { ...inner, env: {}, sandbox: "none", unsandboxed: true };
+      return {
+        ...inner,
+        env: {},
+        sandbox: "none",
+        unsandboxed: true,
+        enforcement: { filesystem: false, network: false, process: false, integrity: false },
+      };
     }
 
     const platform = input.platform ?? process.platform;
@@ -135,6 +157,7 @@ export class SandboxManager {
       env: markerEnv("none"),
       sandbox: "none",
       unsandboxed: true,
+      enforcement: { filesystem: false, network: false, process: false, integrity: false },
       warning,
     });
 
@@ -149,7 +172,7 @@ export class SandboxManager {
           env: markerEnv("macos-seatbelt"),
           sandbox: "macos-seatbelt",
           unsandboxed: false,
-          enforcesScope: true,
+          enforcement: { filesystem: true, network: true, process: true, integrity: true },
         };
       }
       case "linux": {
@@ -167,31 +190,45 @@ export class SandboxManager {
           env: markerEnv("linux-bwrap"),
           sandbox: "linux-bwrap",
           unsandboxed: false,
-          enforcesScope: true,
+          enforcement: { filesystem: true, network: true, process: true, integrity: true },
         };
       }
       case "win32": {
         if (!capabilities.windowsHelperPath) {
           return unavailable("Windows sandbox helper (cowork-win-sandbox.exe) not found");
         }
+        const enforcement = capabilities.windowsEnforcement ?? {
+          filesystem: false,
+          network: false,
+          process: false,
+          integrity: false,
+        };
+        const requiresFilesystem = input.policy.kind !== "danger-full-access";
+        const missing = [
+          ...(requiresFilesystem && !enforcement.filesystem ? ["filesystem"] : []),
+          ...(networkRestricted && !enforcement.network ? ["network"] : []),
+          ...(!enforcement.process ? ["process"] : []),
+          ...(!enforcement.integrity ? ["integrity"] : []),
+        ];
+        if (missing.length > 0) {
+          return unavailable(
+            capabilities.windowsWarning ??
+              `Windows sandbox is not ready for ${missing.join(", ")} enforcement`,
+          );
+        }
         const wrapped = buildWindowsSandboxCommand(
           inner,
           input.policy,
           input.cwd,
           capabilities.windowsHelperPath,
+          capabilities.windowsSandboxHome,
         );
         return {
           ...wrapped,
-          env: markerEnv("windows-restricted"),
-          sandbox: "windows-restricted",
+          env: markerEnv("windows-sandbox"),
+          sandbox: "windows-sandbox",
           unsandboxed: false,
-          // The helper applies a restricted (LUA) token + kill-on-close Job Object
-          // (process containment), but per-root filesystem ACL scoping and WFP
-          // network isolation are not yet implemented — so workspace-write /
-          // read-only path scoping is NOT enforced here. Surface that clearly.
-          warning:
-            "Windows helper applies restricted-token + Job Object containment only; " +
-            "filesystem and network scoping are not yet enforced.",
+          enforcement,
         };
       }
       default:

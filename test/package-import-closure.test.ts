@@ -11,20 +11,8 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const SKIP = process.platform === "win32";
 
 // Files permitted to import a dependency through a relative `node_modules/` path.
-//
-// `@earendil-works/pi-ai` ships an `exports` map that only exposes a handful of
-// public entry points (`.`, `./anthropic`, `./bedrock-provider`, …). The Bedrock
-// override needs several *internal* dist modules that are not exported, so a bare
-// specifier (`@earendil-works/pi-ai/dist/...`) is rejected by both Bun and Node
-// (`ERR_PACKAGE_PATH_NOT_EXPORTED`). `bun build --compile` also needs a
-// statically-resolvable specifier to inline the dependency into the server
-// binary, which rules out a runtime `createRequire`/dynamic-import workaround.
-// The relative filesystem path is therefore deliberate. Any *new* file reaching
-// into node_modules this way is almost certainly a bug and must be justified by
-// adding it here.
-const NODE_MODULES_RELATIVE_IMPORT_ALLOWLIST = new Set<string>([
-  "src/runtime/bedrockProviderModule.ts",
-]);
+// New entries require a documented packaging reason; prefer public package exports.
+const NODE_MODULES_RELATIVE_IMPORT_ALLOWLIST = new Set<string>();
 
 const CODE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 const PACK_CLOSURE_TEST_TIMEOUT_MS = 20_000;

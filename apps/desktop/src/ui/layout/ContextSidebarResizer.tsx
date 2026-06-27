@@ -11,6 +11,7 @@ export function ContextSidebarResizer() {
   const filePreview = useAppStore((s) => s.filePreview);
   const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
   const setContextSidebarWidth = useAppStore((s) => s.setContextSidebarWidth);
+  const view = useAppStore((s) => s.view);
   const [dragging, setDragging] = useState(false);
 
   const startXRef = useRef(0);
@@ -18,7 +19,11 @@ export function ContextSidebarResizer() {
 
   const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
   const showCanvas = canvasEnabled && isCanvasSupported;
-  const activeWidth = showCanvas ? canvasSidebarWidth : contextSidebarWidth;
+  const activeWidth = showCanvas
+    ? canvasSidebarWidth
+    : view === "task"
+      ? Math.max(contextSidebarWidth, 420)
+      : contextSidebarWidth;
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent) => {
@@ -42,13 +47,13 @@ export function ContextSidebarResizer() {
         setContextSidebarWidth(activeWidth - step); // Moving right makes right sidebar narrower
       } else if (event.key === "Home") {
         event.preventDefault();
-        setContextSidebarWidth(200);
+        setContextSidebarWidth(view === "task" ? 420 : 200);
       } else if (event.key === "End") {
         event.preventDefault();
         setContextSidebarWidth(showCanvas ? 900 : 600);
       }
     },
-    [setContextSidebarWidth, activeWidth, showCanvas],
+    [setContextSidebarWidth, activeWidth, showCanvas, view],
   );
 
   useEffect(() => {
@@ -113,7 +118,7 @@ export function ContextSidebarResizer() {
       )}
       aria-orientation="vertical"
       aria-label="Resize context sidebar"
-      aria-valuemin={200}
+      aria-valuemin={view === "task" && !showCanvas ? 420 : 200}
       aria-valuemax={showCanvas ? 900 : 600}
       aria-valuenow={activeWidth}
       tabIndex={0}

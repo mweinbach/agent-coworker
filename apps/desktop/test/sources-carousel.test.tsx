@@ -14,12 +14,12 @@ mock.module("../src/lib/desktopCommands", () =>
   }),
 );
 
-const { SourcesCarousel } = await import("../src/components/ai-elements/sources-carousel");
+const { CitationSourcesCarousel } = await import("../src/ui/chat/CitationSourcesCarousel");
 const { openExternalSource } = await import("../src/lib/openExternalSource");
 
 describe("desktop sources carousel", () => {
   test("renders nothing when no sources are available", () => {
-    const html = renderToStaticMarkup(createElement(SourcesCarousel, { sources: [] }));
+    const html = renderToStaticMarkup(createElement(CitationSourcesCarousel, { sources: [] }));
     expect(html).toBe("");
   });
 
@@ -34,7 +34,7 @@ describe("desktop sources carousel", () => {
 
       await act(async () => {
         root.render(
-          createElement(SourcesCarousel, {
+          createElement(CitationSourcesCarousel, {
             sources: [
               {
                 title: "HeroUI Migration",

@@ -2,18 +2,18 @@ import { PaperclipIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
-import {
-  PromptInputAttachmentPreviews,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputForm,
-  PromptInputRoot,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
+import {
+  MessageComposerAttachments,
+  MessageComposerBody,
+  MessageComposerFooter,
+  MessageComposerForm,
+  MessageComposerRoot,
+  MessageComposerSubmit,
+  MessageComposerTextarea,
+  MessageComposerTools,
+} from "../composer/MessageComposer";
 import { useResearchAttachments } from "./useResearchAttachments";
 
 export function ResearchFollowUpComposer({
@@ -69,7 +69,7 @@ export function ResearchFollowUpComposer({
 
   return (
     <>
-      <PromptInputRoot
+      <MessageComposerRoot
         className={cn("max-w-none", className)}
         fileDrop={{
           disabled: disabled || submitting,
@@ -78,18 +78,18 @@ export function ResearchFollowUpComposer({
           },
         }}
       >
-        <PromptInputForm
+        <MessageComposerForm
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
           }}
         >
-          <PromptInputAttachmentPreviews
+          <MessageComposerAttachments
             attachments={attachmentPreviews}
             onRemove={removeAttachment}
           />
-          <PromptInputBody>
-            <PromptInputTextarea
+          <MessageComposerBody>
+            <MessageComposerTextarea
               ref={textareaRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -97,9 +97,9 @@ export function ResearchFollowUpComposer({
               rows={2}
               disabled={disabled || submitting}
             />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <PromptInputTools>
+          </MessageComposerBody>
+          <MessageComposerFooter>
+            <MessageComposerTools>
               <Button
                 type="button"
                 size="icon-sm"
@@ -111,14 +111,14 @@ export function ResearchFollowUpComposer({
               >
                 <PaperclipIcon className="h-4 w-4" />
               </Button>
-            </PromptInputTools>
-            <PromptInputSubmit
+            </MessageComposerTools>
+            <MessageComposerSubmit
               status={submitting ? "pending" : "ready"}
               disabled={disabled || !input.trim()}
             />
-          </PromptInputFooter>
-        </PromptInputForm>
-      </PromptInputRoot>
+          </MessageComposerFooter>
+        </MessageComposerForm>
+      </MessageComposerRoot>
 
       <input
         ref={fileInputRef}

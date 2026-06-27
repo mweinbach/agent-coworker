@@ -15,6 +15,7 @@ import { type ComponentType, useEffect, useEffectEvent, useMemo, useState } from
 
 import { useAppStore } from "../../../app/store";
 import { workspaceBackupActionKey } from "../../../app/store.helpers/backupActionKey";
+import { isStandardChatThread } from "../../../app/threadFilters";
 import type {
   WorkspaceBackupDeltaEvent,
   WorkspaceBackupEntry,
@@ -816,6 +817,7 @@ export function BackupPage(props: BackupPageProps = {}) {
       ? (threads.find(
           (thread) =>
             thread.workspaceId === workspace.id &&
+            isStandardChatThread(thread, { includeDrafts: true, includeArchived: true }) &&
             threadRuntimeById[thread.id]?.sessionId === selectedEntry.targetSessionId,
         ) ?? null)
       : null;

@@ -25,6 +25,7 @@ import {
   isFireworksInferenceProvider,
   listFireworksInferencePricingEntries,
 } from "../providers/fireworksShared";
+import { getOpenCodeModelPricing, getOpenCodeProviderConfig } from "../providers/opencodeShared";
 import type { ProviderName } from "../types";
 
 export type ModelPricing = {
@@ -77,12 +78,28 @@ function fireworksInferencePricingTable(): Record<string, ModelPricing> {
   return table;
 }
 
+function openCodeZenPricingTable(): Record<string, ModelPricing> {
+  const table: Record<string, ModelPricing> = {};
+  for (const modelId of getOpenCodeProviderConfig("opencode-zen").availableModels) {
+    const pricing = getOpenCodeModelPricing("opencode-zen", modelId);
+    if (!pricing) continue;
+    table[`opencode-zen:${modelId}`] = {
+      inputPerMillion: pricing.input,
+      outputPerMillion: pricing.output,
+      cachedInputPerMillion: pricing.cacheRead,
+      cacheWriteInputPerMillion: pricing.cacheWrite,
+    };
+  }
+  return table;
+}
+
 /**
  * Known model pricing. Keys are `provider:model` strings for direct lookup.
  * When an exact match isn't found we fall back to prefix matching.
  */
 const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   ...fireworksInferencePricingTable(),
+  ...openCodeZenPricingTable(),
   // ── Anthropic ────────────────────────────────────────────────────────
   "anthropic:claude-opus-4-6": {
     inputPerMillion: 5,
@@ -151,38 +168,6 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 3.2,
   },
   // OpenCode Go is intentionally excluded from local pricing estimates.
-  "opencode-zen:glm-5": {
-    inputPerMillion: 1,
-    outputPerMillion: 3.2,
-    cachedInputPerMillion: 0.2,
-  },
-  "opencode-zen:kimi-k2.5": {
-    inputPerMillion: 0.6,
-    outputPerMillion: 3,
-    cachedInputPerMillion: 0.08,
-  },
-  "opencode-zen:nemotron-3-super-free": {
-    inputPerMillion: 0,
-    outputPerMillion: 0,
-  },
-  "opencode-zen:mimo-v2-flash-free": {
-    inputPerMillion: 0,
-    outputPerMillion: 0,
-  },
-  "opencode-zen:big-pickle": {
-    inputPerMillion: 0,
-    outputPerMillion: 0,
-  },
-  "opencode-zen:minimax-m2.5-free": {
-    inputPerMillion: 0,
-    outputPerMillion: 0,
-  },
-  "opencode-zen:minimax-m2.5": {
-    inputPerMillion: 0.3,
-    outputPerMillion: 1.2,
-    cachedInputPerMillion: 0.06,
-    cacheWriteInputPerMillion: 0.375,
-  },
 
   // ── MiniMax (https://platform.minimax.io) ────────────────────────────
   "minimax:MiniMax-M3": {

@@ -47,6 +47,7 @@ function isOauthCliProvider(service: ConnectService): service is "codex-cli" {
 const connectOauthDepsDefaults = {
   isOauthCliProvider,
   runCodexLogin: loginCodexAppServerChatGpt,
+  runCodexLogout: logoutCodexAppServer,
 };
 
 const connectOauthDeps = {
@@ -256,7 +257,7 @@ export async function disconnectProvider(opts: {
     let logoutMessage = "";
     const codexHome = codexHomeFromPaths(paths);
     try {
-      const logoutResult = await logoutCodexAppServer({ codexHome });
+      const logoutResult = await connectOauthDeps.runCodexLogout({ codexHome });
       logoutMessage = logoutResult.message;
     } catch {
       // Best-effort logout; do not fail disconnect if app-server is unreachable.

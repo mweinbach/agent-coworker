@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 
 import type { SandboxPolicy } from "./policy";
@@ -6,19 +7,16 @@ import type { SandboxPolicy } from "./policy";
  * Windows sandbox generation. Unlike macOS/Linux there is no system sandbox
  * wrapper to call, so this module builds the command line for a bundled native helper
  * (`cowork-win-sandbox.exe`, see `crates/cowork-win-sandbox/`) that applies a
- * restricted token + Job Object before spawning the command. {@link SandboxManager}
- * DOES select this helper for restrictive policies (so explicitly degraded
- * commands can run with process containment), but it does NOT yet enforce
- * per-root filesystem scoping or WFP network isolation. The transform therefore
- * marks the result non-enforcing and surfaces a warning. The bash gate fails
- * closed for this helper when enforcement is required.
- *
- * Modeled on the restricted-token path of Codex's `windows-sandbox-rs`. Network
- * isolation (Codex's WFP layer) is intentionally out of scope for v1, so the
- * `--allow-network` flag is informational and not yet enforced.
+ * dedicated restricted identities, capability-SID ACLs, WFP network rules, a
+ * restricted token, and a kill-on-close Job Object before spawning the command.
+ * The helper's native probe must prove every policy dimension before
+ * {@link SandboxManager} treats it as enforcing.
  */
 
 export const WINDOWS_SANDBOX_HELPER_NAME = "cowork-win-sandbox.exe";
+export const WINDOWS_SANDBOX_SETUP_NAME = "codex-windows-sandbox-setup.exe";
+export const WINDOWS_SANDBOX_COMMAND_RUNNER_NAME = "codex-command-runner.exe";
+export const WINDOWS_SANDBOX_HASH_MANIFEST_NAME = "cowork-win-sandbox.sha256.json";
 
 export interface WindowsSandboxCommand {
   file: string;
@@ -27,7 +25,7 @@ export interface WindowsSandboxCommand {
 
 /**
  * Build the helper invocation that wraps `inner`. Returns
- * `{ file: helperPath, args: ["--mode", ..., "--writable-root", ..., "--cwd",
+ * `{ file: helperPath, args: ["run", "--mode", ..., "--writable-root", ..., "--cwd",
  * cwd, ("--allow-network"?), "--", inner.file, ...inner.args] }`.
  */
 export function buildWindowsSandboxCommand(
@@ -35,14 +33,15 @@ export function buildWindowsSandboxCommand(
   policy: SandboxPolicy,
   cwd: string,
   helperPath: string,
+  sandboxHome = path.join(os.homedir(), ".cowork"),
 ): WindowsSandboxCommand {
-  if (policy.kind === "danger-full-access") {
-    // Caller should not sandbox in this mode; return the command unchanged.
-    return inner;
-  }
-
-  const helperMode = policy.kind === "no-project-write" ? "read-only" : policy.kind;
-  const args: string[] = ["--mode", helperMode];
+  const helperMode =
+    policy.kind === "danger-full-access"
+      ? "network-only"
+      : policy.kind === "no-project-write"
+        ? "read-only"
+        : policy.kind;
+  const args: string[] = ["run", "--mode", helperMode, "--sandbox-home", path.resolve(sandboxHome)];
 
   if (policy.kind === "workspace-write") {
     for (const root of policy.writableRoots) {

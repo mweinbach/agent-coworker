@@ -215,6 +215,39 @@ describe("manageMemory tool", () => {
     expect((await store.readMemory(activeFolder, "existing"))?.body).toBe("Original body.");
   });
 
+  test("blocks advanced memory mutations through the mutation gate", async () => {
+    const config = makeConfig(dir, { advancedMemory: true, memoriesDir });
+    const activeFolder = resolveMemoryFolderName(config);
+    await store.writeMemory(activeFolder, {
+      name: "Existing",
+      description: "Existing memory",
+      body: "Original body.",
+    });
+    const tool = createManageMemoryTool(
+      makeCtx(dir, {
+        config,
+        assertCanMutate: () => {
+          throw new Error("task locked before advanced memory mutation");
+        },
+      }),
+    );
+
+    await expect(
+      tool.execute({
+        action: "create",
+        name: "Nope",
+        description: "Should not write",
+        body: "Blocked.",
+      }),
+    ).rejects.toThrow("task locked");
+    await expect(
+      tool.execute({ action: "edit", slug: "existing", body: "Blocked." }),
+    ).rejects.toThrow("task locked");
+    await expect(tool.execute({ action: "refresh_index" })).rejects.toThrow("task locked");
+    expect(await store.readMemory(activeFolder, "nope")).toBeNull();
+    expect((await store.readMemory(activeFolder, "existing"))?.body).toBe("Original body.");
+  });
+
   test("reads active memories first and can target chats read-only context", async () => {
     const config = makeConfig(dir, { advancedMemory: true, memoriesDir });
     const activeFolder = resolveMemoryFolderName(config);

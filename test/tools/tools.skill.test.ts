@@ -97,6 +97,7 @@ describe("skill tool", () => {
     const t: any = createSkillTool(ctx);
     const res: string = await t.execute({ skillName: "pdf" });
     expect(res).toContain("not found");
+    expect(res).toContain("do not guess a SKILL.md path");
   });
 
   test("returns 'not found' for missing skill", async () => {

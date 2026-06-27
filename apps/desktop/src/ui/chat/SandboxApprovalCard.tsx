@@ -1,4 +1,4 @@
-import { GlobeIcon, ShieldAlertIcon } from "lucide-react";
+import { ArrowUpRightIcon, GlobeIcon, ShieldAlertIcon } from "lucide-react";
 import type { SandboxApprovalPrompt } from "../../app/types";
 import { Button } from "../../components/ui/button";
 
@@ -12,6 +12,9 @@ export function SandboxApprovalCard(props: {
   threadId: string;
   prompt: SandboxApprovalPrompt;
   onAnswer: (threadId: string, requestId: string, approved: boolean) => void;
+  selectedThreadId?: string | null;
+  threadTitle?: string | null;
+  onSelectThread?: (threadId: string) => void;
 }) {
   const { threadId, prompt, onAnswer } = props;
   const Icon = prompt.category === "network" ? GlobeIcon : ShieldAlertIcon;
@@ -20,6 +23,9 @@ export function SandboxApprovalCard(props: {
     (prompt.category === "network"
       ? "The OS sandbox blocked network access for this command."
       : "The OS sandbox blocked a write outside the workspace for this command.");
+
+  const isFromOtherThread = props.selectedThreadId != null && threadId !== props.selectedThreadId;
+  const threadLabel = props.threadTitle?.trim() || "another thread";
 
   return (
     <section
@@ -33,6 +39,26 @@ export function SandboxApprovalCard(props: {
             <div className="text-[13px] font-semibold text-foreground">
               Blocked by the OS sandbox
             </div>
+            {isFromOtherThread ? (
+              <div className="flex flex-wrap items-center gap-1 text-xs leading-snug text-foreground">
+                <span className="text-muted-foreground">From thread:</span>
+                <span className="max-w-[220px] truncate font-medium" title={threadLabel}>
+                  {threadLabel}
+                </span>
+                {props.onSelectThread ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto gap-1 px-1.5 py-0 text-xs"
+                    onClick={() => props.onSelectThread?.(threadId)}
+                  >
+                    Open
+                    <ArrowUpRightIcon data-icon="inline-end" />
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             <div className="text-xs leading-snug text-muted-foreground">{detail}</div>
           </div>
           <code className="block max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/45 px-2.5 py-2 text-xs">

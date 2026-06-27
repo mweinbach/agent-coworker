@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,8 +8,25 @@ import { fileURLToPath } from "node:url";
 import { findInstalledElectronExecutable } from "../scripts/ensureElectronInstalled";
 
 const desktopRoot = fileURLToPath(new URL("..", import.meta.url));
+const require = createRequire(import.meta.url);
+
+function readInstalledPackageManifest(packageName: string): {
+  version: string;
+  peerDependencies?: Record<string, string>;
+} {
+  return JSON.parse(fs.readFileSync(require.resolve(`${packageName}/package.json`), "utf8"));
+}
 
 describe("Electron startup preflight", () => {
+  test("uses an electron-vite release compatible with the installed Vite version", () => {
+    const electronVite = readInstalledPackageManifest("electron-vite");
+    const vite = readInstalledPackageManifest("vite");
+    const supportedViteRange = electronVite.peerDependencies?.vite;
+
+    expect(supportedViteRange).toBeDefined();
+    expect(Bun.semver.satisfies(vite.version, supportedViteRange ?? "")).toBeTrue();
+  });
+
   test("runs before electron-vite launch commands", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"),

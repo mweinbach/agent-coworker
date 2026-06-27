@@ -4,8 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.0 - 2026-06-26
+
 ### Added
 
+- **Composer reasoning controls** — Added model-aware reasoning effort controls
+  beside the composer model selector and persisted the selected effort across
+  workspace defaults and active Codex/OpenAI sessions.
 - **Unified Cowork runtime** — Added checksum-verified, date-versioned runtime
   installation under `~/.cowork/runtime`, platform asset selection, atomic
   activation, executable verification, and two-version fallback retention.
@@ -27,6 +32,12 @@ All notable changes to this project will be documented in this file.
   primary runtime, managed LibreOffice downloader/shim, and duplicate bundled
   productivity skill copies after the marketplace-skill plus unified-runtime
   path was verified.
+
+### Fixed
+
+- **Codex clarification routing** — Preserved Codex app-server's native base
+  policy and routed Default-mode clarification prompts through Cowork's
+  `AskUserQuestion` tool instead of unavailable `request_user_input` calls.
 
 ## 1.1.19 - 2026-06-08
 

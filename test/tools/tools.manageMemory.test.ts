@@ -1,6 +1,9 @@
 import {
   AdvancedMemoryStore,
   CHATS_FOLDER,
+  MAX_ADVANCED_MEMORY_BODY_LENGTH,
+  MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH,
+  MAX_ADVANCED_MEMORY_NAME_LENGTH,
   MEMORY_INDEX_FILE,
   resolveMemoryFolderName,
 } from "../../src/advancedMemory/store";
@@ -149,6 +152,51 @@ describe("manageMemory tool", () => {
         body: "Nope.",
       }),
     ).rejects.toThrow("read-only");
+  });
+
+  test("rejects over-limit prompt-visible fields at the tool schema boundary", () => {
+    const tool = makeTool();
+    const validCreateInput = {
+      action: "create" as const,
+      name: "Memory limit",
+      description: "Valid prompt index summary",
+      body: "Valid recalled memory body.",
+    };
+    const cappedFields = [
+      {
+        field: "name",
+        maxLength: MAX_ADVANCED_MEMORY_NAME_LENGTH,
+      },
+      {
+        field: "slug",
+        maxLength: MAX_ADVANCED_MEMORY_NAME_LENGTH,
+      },
+      {
+        field: "description",
+        maxLength: MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH,
+      },
+      {
+        field: "body",
+        maxLength: MAX_ADVANCED_MEMORY_BODY_LENGTH,
+      },
+    ] satisfies Array<{
+      field: "name" | "slug" | "description" | "body";
+      maxLength: number;
+    }>;
+
+    for (const { field, maxLength } of cappedFields) {
+      const oversized = tool.inputSchema.safeParse({
+        ...validCreateInput,
+        [field]: "x".repeat(maxLength + 1),
+      });
+      expect(oversized.success).toBe(false);
+
+      const atLimit = tool.inputSchema.safeParse({
+        ...validCreateInput,
+        [field]: "x".repeat(maxLength),
+      });
+      expect(atLimit.success).toBe(true);
+    }
   });
 
   test("rejects mutating actions when sandbox policy is read-only", async () => {

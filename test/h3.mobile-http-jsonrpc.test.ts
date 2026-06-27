@@ -1079,22 +1079,67 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     });
   });
 
-  test("returns 400 for malformed HTTP RPC payloads", async () => {
+  test("returns 400 for malformed HTTP RPC payloads before dispatch", async () => {
+    let handledMessages = 0;
     const runtime = {
       openHttpConnection() {},
       handleDecodedMessage() {
+        handledMessages += 1;
         throw new Error("malformed payloads must not reach the runtime");
       },
       closeConnection() {},
     };
     const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    const malformedPayloadCases: Array<{
+      name: string;
+      raw: unknown;
+      expectedError: string;
+    }> = [
+      {
+        name: "null payload",
+        raw: null,
+        expectedError: "JSON-RPC payload must be an object.",
+      },
+      {
+        name: "array payload",
+        raw: [],
+        expectedError: "JSON-RPC payload must be an object.",
+      },
+      {
+        name: "missing method and id",
+        raw: {},
+        expectedError: "JSON-RPC method is required.",
+      },
+      {
+        name: "blank method",
+        raw: { method: "   " },
+        expectedError: "JSON-RPC method is required.",
+      },
+      {
+        name: "non-string method",
+        raw: { method: 42 },
+        expectedError: "JSON-RPC method is required.",
+      },
+      {
+        name: "request with boolean id",
+        raw: { id: true, method: "thread/list" },
+        expectedError: "JSON-RPC id must be a string or number.",
+      },
+      {
+        name: "response with null id",
+        raw: { id: null, result: { ok: true } },
+        expectedError: "JSON-RPC response id must be a string or number.",
+      },
+    ];
 
-    const response = await __internal.dispatchHttpRpcPayload(null, connection, trustedDevice());
+    for (const { name, raw, expectedError } of malformedPayloadCases) {
+      const response = await __internal.dispatchHttpRpcPayload(raw, connection, trustedDevice());
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "JSON-RPC payload must be an object.",
-    });
+      expect(response.status, name).toBe(400);
+      await expect(response.json(), name).resolves.toEqual({ error: expectedError });
+    }
+
+    expect(handledMessages).toBe(0);
     connection.close();
   });
 

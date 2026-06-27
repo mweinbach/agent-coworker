@@ -55,28 +55,6 @@ mock.module("../src/ui/layout/AppTopBar", () => ({
     ),
 }));
 
-mock.module("../src/ui/Sidebar", () => ({
-  Sidebar: () => createElement("div", { "data-testid": "left-sidebar" }),
-}));
-mock.module("../src/ui/layout/PrimaryContent", () => ({
-  PrimaryContent: () => createElement("main", { "data-testid": "primary-content" }),
-}));
-mock.module("../src/ui/layout/SidebarResizer", () => ({
-  SidebarResizer: () => createElement("div", { "data-testid": "sidebar-resizer" }),
-}));
-mock.module("../src/ui/PromptModal", () => ({
-  PromptModal: () => null,
-}));
-mock.module("../src/ui/layout/SettingsContent", () => ({
-  SettingsContent: () => createElement("div", { "data-testid": "settings-content" }),
-}));
-mock.module("../src/ui/menuBar/MenuBarUtilityShell", () => ({
-  MenuBarUtilityShell: () => createElement("div", { "data-testid": "menu-bar-shell" }),
-}));
-mock.module("../src/ui/quickChat/QuickChatShell", () => ({
-  QuickChatShell: () => createElement("div", { "data-testid": "quick-chat-shell" }),
-}));
-
 const { useAppStore } = await import("../src/app/store");
 const { defaultThreadRuntime, defaultWorkspaceRuntime } = await import("../src/app/store.helpers");
 const App = (await import("../src/App")).default;
@@ -86,7 +64,7 @@ type AppStoreState = ReturnType<typeof useAppStore.getState>;
 const initialState = useAppStore.getState();
 
 function setAppState(state: AppStoreState) {
-  useAppStore.setState(state, true);
+  useAppStore.setState(state);
 }
 
 function resetAppStore() {

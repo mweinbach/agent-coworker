@@ -16,10 +16,6 @@ const previousArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS;
 const previousCapturePath = process.env.CODEX_APP_SERVER_CAPTURE_PATH;
 const previousDelayCompletion = process.env.CODEX_APP_SERVER_DELAY_COMPLETION;
 
-export function expectedManagedSofficeShimPath(shimDir: string): string {
-  return path.join(shimDir, process.platform === "win32" ? "soffice.cmd" : "soffice");
-}
-
 export function makeConfig(dir: string): AgentConfig {
   return {
     provider: "codex-cli",

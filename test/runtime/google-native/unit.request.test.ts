@@ -51,9 +51,11 @@ describe("google native interactions request building", () => {
     const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
     googleNativeInternal.__testResetGoogleInteractionsClientCache();
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const bodyText =
-        typeof init?.body === "string" ? init.body : await new Response(init?.body).text();
-      seen.push({ url: String(input), body: JSON.parse(bodyText) as Record<string, unknown> });
+      const request = input instanceof Request ? input.clone() : new Request(input, init);
+      seen.push({
+        url: request.url,
+        body: JSON.parse(await request.text()) as Record<string, unknown>,
+      });
       return googleSseResponse([
         {
           event_type: "interaction.created",

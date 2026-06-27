@@ -12,6 +12,7 @@ import type { AgentConfig, ProviderName } from "../../types";
 import type { AgentSession } from "../session/AgentSession";
 import type { SeededSessionContext } from "../session/SessionContext";
 import type { SessionRuntime } from "../session/SessionRuntime";
+import type { TaskLockError } from "../session/taskLocks";
 import type { SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 
@@ -108,6 +109,7 @@ export type AgentControlDeps = {
     role: AgentRole,
     profile?: AgentProfileSnapshot,
   ) => Promise<string>;
+  getParentTaskLock?: (parentSessionId: string) => TaskLockError | null;
   disposeBinding: (
     binding: SessionBinding,
     reason: string,

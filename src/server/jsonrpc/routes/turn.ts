@@ -118,8 +118,8 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
-      const outcome = await captureBindingOutcome(
-        context,
+      const steerRequestId = crypto.randomUUID();
+      const outcome = await context.events.capture(
         binding,
         () =>
           runtime.turns.sendSteerMessage(
@@ -129,12 +129,15 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
             references,
+            steerRequestId,
           ),
-        (event): event is JsonRpcTurnSteerOutcome =>
-          (event.type === "steer_accepted" &&
-            event.sessionId === runtime.id &&
-            event.turnId === expectedTurnId) ||
-          context.utils.isSessionError(event),
+        (event): event is JsonRpcTurnSteerOutcome => {
+          if (event.sessionId !== runtime.id) return false;
+          if (event.type === "steer_accepted") {
+            return event.turnId === expectedTurnId && event.steerRequestId === steerRequestId;
+          }
+          return context.utils.isSessionError(event) && event.steerRequestId === steerRequestId;
+        },
       );
       if (outcome.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);

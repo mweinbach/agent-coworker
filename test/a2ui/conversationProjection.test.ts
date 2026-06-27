@@ -70,3 +70,39 @@ describe("conversationProjection a2ui_surface", () => {
     expect(new Set(ids).size).toBe(3);
   });
 });
+
+describe("conversationProjection error", () => {
+  test("projects structured task lock error data", () => {
+    const { projection, started, completed } = createProjection();
+    projection.handle({
+      type: "error",
+      sessionId: "sess",
+      message: "Task is locked",
+      code: "task_locked",
+      source: "session",
+      data: {
+        category: "task_locked",
+        source: "session",
+        lockKind: "active_source_chat",
+        taskId: "task-1",
+        taskStatus: "working",
+        taskTitle: "Focused task",
+      },
+    });
+
+    expect(started).toHaveLength(1);
+    expect(completed).toHaveLength(1);
+    const [, item] = started[0]!;
+    expect(item).toMatchObject({
+      type: "error",
+      message: "Task is locked",
+      code: "task_locked",
+      source: "session",
+      data: {
+        lockKind: "active_source_chat",
+        taskId: "task-1",
+        taskStatus: "working",
+      },
+    });
+  });
+});

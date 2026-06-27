@@ -1,3 +1,4 @@
+import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
 import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
@@ -21,6 +22,11 @@ export type StartWorkspaceServerInput = {
   yolo: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
+};
+
+export type WorkspaceServerStartupProgress = {
+  workspaceId: string;
+  progress: CoworkRuntimeBootstrapProgress;
 };
 
 export type CreateOneOffChatWorkspaceInput = {
@@ -543,6 +549,9 @@ export interface DesktopApi {
   getPlatformChrome(): Promise<PlatformChromeInfo>;
   setWindowAppearance(opts: SetWindowAppearanceInput): Promise<SystemAppearance>;
   onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void;
+  onWorkspaceServerStartupProgress(
+    listener: (event: WorkspaceServerStartupProgress) => void,
+  ): () => void;
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
   onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
   onMobileRelayStateChanged(listener: (state: MobileRelayBridgeState) => void): () => void;
@@ -617,6 +626,7 @@ export const DESKTOP_IPC_CHANNELS = {
 export const DESKTOP_EVENT_CHANNELS = {
   menuCommand: "desktop:event:menuCommand",
   updateStateChanged: "desktop:event:updateState",
+  workspaceServerStartupProgress: "desktop:event:workspaceServerStartupProgress",
   systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
   mobileRelayStateChanged: "desktop:event:mobileRelayStateChanged",
 } as const;

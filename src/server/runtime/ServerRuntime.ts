@@ -1,31 +1,17 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
-import { ensureArtifactRuntimeReady } from "../../artifactRuntime";
-import {
-  ensureCodexPrimaryRuntimeReady,
-  shouldBootstrapCodexPrimaryRuntime,
-  WORKSPACE_TOOLS_PLUGIN_ID,
-} from "../../codexPrimaryRuntime";
 import { loadConfig } from "../../config";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
+import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
+import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
 import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
-import {
-  checkManagedSofficeRuntime,
-  prepareManagedSofficeToolEnv,
-} from "../../managedSofficeRuntime";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
-import { readPluginOverrides } from "../../plugins/overrides";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
-import {
-  DEFAULT_GLOBAL_SKILLS,
-  ensureDefaultGlobalSkillsReady,
-  isDefaultPluginRemoved,
-} from "../../skills/defaultGlobalSkills";
+import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
 import { decodeJsonRpcMessage } from "../jsonrpc/decodeJsonRpcMessage";
 import {
@@ -45,12 +31,16 @@ import {
   requireWorkspacePath,
   shouldIncludeJsonRpcThreadSummary,
 } from "../jsonrpc/routes/shared";
+import { jsonRpcTaskRequestSchemas } from "../jsonrpc/schema.tasks";
+import { getTaskRpcRequiredPermissions } from "../jsonrpc/taskPermissions";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
 import { ResearchService } from "../research/ResearchService";
+import { getSessionTaskLock } from "../session/taskLocks";
 import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
 import { readSkillCatalogMtimeSnapshot } from "../skillCatalogMtime";
 import { refreshSessionsForSkillMutation } from "../skillMutationRefresh";
 import type { StartServerSocket } from "../startServer/types";
+import { TaskCoordinator } from "../tasks/TaskCoordinator";
 import type { WebDesktopServiceLike } from "../webDesktopService";
 import { isErrorWithCode, isPlainObject, mergeRuntimeProviderOptions } from "./ConfigPatchStore";
 import { SessionRegistry } from "./SessionRegistry";
@@ -58,6 +48,7 @@ import { SkillMutationBus } from "./SkillMutationBus";
 import { SocketSendQueue } from "./SocketSendQueue";
 import { ThreadJournal } from "./ThreadJournal";
 import { WorkspaceControl } from "./WorkspaceControl";
+import { WorkspaceJsonRpcSubscribers } from "./WorkspaceJsonRpcSubscribers";
 
 let observabilityOtelModulePromise: Promise<typeof import("../../observability/otel")> | null =
   null;
@@ -75,6 +66,20 @@ const loadPromptModule = async (): Promise<typeof import("../../prompt")> => {
 
 const lazyLoadAgentPrompt: typeof loadAgentPromptFn = async (...args) =>
   await (await loadPromptModule()).loadAgentPrompt(...args);
+
+function shouldRegisterTaskSubscriber(method: string, ws: StartServerSocket): boolean {
+  if (!Object.hasOwn(jsonRpcTaskRequestSchemas, method)) {
+    return false;
+  }
+  const requiredPermissions = getTaskRpcRequiredPermissions(method);
+  if (requiredPermissions.includes("conversations") && ws.data.taskReadAllowed === false) {
+    return false;
+  }
+  if (requiredPermissions.includes("turns") && ws.data.taskMutationAllowed === false) {
+    return false;
+  }
+  return true;
+}
 
 const lazyLoadSystemPromptWithSkills: typeof loadSystemPromptWithSkillsFn = async (...args) =>
   await (await loadPromptModule()).loadSystemPromptWithSkills(...args);
@@ -96,7 +101,10 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
+  loadAgentPromptImpl?: typeof loadAgentPromptFn;
   preloadSystemPrompt?: boolean;
+  taskTerminalQuiesceTimeoutMs?: number;
+  onCoworkRuntimeBootstrapProgress?: (progress: CoworkRuntimeBootstrapProgress) => void;
 }
 
 type JsonRpcRequest = { id: string | number; method: string; params?: unknown };
@@ -135,73 +143,42 @@ export async function createAgentServerRuntime(
       ? Math.floor(parsedJsonRpcMaxPendingRequests)
       : 128,
   );
+  const taskTerminalQuiesceTimeoutMs =
+    typeof opts.taskTerminalQuiesceTimeoutMs === "number" &&
+    Number.isFinite(opts.taskTerminalQuiesceTimeoutMs) &&
+    opts.taskTerminalQuiesceTimeoutMs >= 0
+      ? Math.floor(opts.taskTerminalQuiesceTimeoutMs)
+      : 30_000;
 
   const builtInDir =
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
-  let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
-  const codexPrimaryRuntimeEnabled = shouldBootstrapCodexPrimaryRuntime(env);
-  const defaultGlobalPlugins = codexPrimaryRuntimeEnabled
-    ? DEFAULT_GLOBAL_SKILLS.filter((plugin) => plugin.id !== WORKSPACE_TOOLS_PLUGIN_ID)
-    : DEFAULT_GLOBAL_SKILLS;
+  const coworkRuntimeSetup = await ensureCoworkRuntimeReady({
+    homedir: opts.homedir,
+    env,
+    onProgress: opts.onCoworkRuntimeBootstrapProgress,
+    log: (line) => {
+      console.warn(`[cowork-runtime] ${line}`);
+    },
+  });
+  if (coworkRuntimeSetup) Object.assign(env, coworkRuntimeSetup.runtimeEnv);
 
-  if (defaultGlobalPlugins.length > 0) {
-    await ensureDefaultGlobalSkillsReady({
-      homedir: opts.homedir,
-      env,
-      config,
-      plugins: defaultGlobalPlugins,
-      log: (line) => {
-        console.warn(`[default-skills] ${line}`);
-      },
-    });
-  }
+  let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+  await ensureDefaultGlobalSkillsReady({
+    homedir: opts.homedir,
+    env,
+    config,
+    log: (line) => {
+      console.warn(`[default-skills] ${line}`);
+    },
+  });
 
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,
     config.providerOptions,
   );
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
-
-  const packagedDesktopBundle = env.COWORK_DESKTOP_BUNDLE === "1";
-  const defaultAiCoworkerPaths = getAiCoworkerPathsDefault({ homedir: opts.homedir });
-  const pluginOverrides = await readPluginOverrides(config);
-  await ensureCodexPrimaryRuntimeReady({
-    homedir: opts.homedir,
-    workspaceDir: config.workingDirectory,
-    builtInSkillsDir: packagedDesktopBundle ? undefined : path.join(config.builtInDir, "skills"),
-    globalSkillsDir: defaultAiCoworkerPaths.skillsDir,
-    globalPluginsDir: path.join(defaultAiCoworkerPaths.rootDir, "plugins"),
-    skipGlobalWorkspaceToolsPlugin: isDefaultPluginRemoved(
-      WORKSPACE_TOOLS_PLUGIN_ID,
-      pluginOverrides,
-    ),
-    env,
-    log: (line) => {
-      console.warn(`[codex-primary-runtime] ${line}`);
-    },
-  });
-  const artifactRuntimeSetup = await ensureArtifactRuntimeReady({
-    homedir: opts.homedir,
-    env,
-    log: (line) => {
-      console.warn(`[artifact-runtime] ${line}`);
-    },
-  });
-  if (artifactRuntimeSetup) {
-    Object.assign(env, artifactRuntimeSetup.runtimeEnv);
-  }
-  Object.assign(
-    env,
-    await prepareManagedSofficeToolEnv({
-      homedir: opts.homedir,
-      env,
-      log: (line) => {
-        console.warn(`[managed-soffice] ${line}`);
-      },
-    }),
-  );
 
   await fs.mkdir(config.projectCoworkDir, { recursive: true });
 
@@ -232,8 +209,56 @@ export async function createAgentServerRuntime(
   });
   const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir: opts.homedir });
   const sendQueue = new SocketSendQueue();
+  const taskSubscribers = new WorkspaceJsonRpcSubscribers(sendQueue);
   const jsonRpcConnections = new Set<StartServerSocket>();
+  const threadSubscribers = new Map<string, Map<string, StartServerSocket>>();
+  const threadSubscriptionsByConnectionId = new Map<string, Set<string>>();
   let workspaceListRevision = 0;
+  const rememberThreadSubscriber = (ws: StartServerSocket, threadId: string): void => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) return;
+    const subscribers = threadSubscribers.get(threadId) ?? new Map<string, StartServerSocket>();
+    subscribers.set(connectionId, ws);
+    threadSubscribers.set(threadId, subscribers);
+
+    const threadIds = threadSubscriptionsByConnectionId.get(connectionId) ?? new Set<string>();
+    threadIds.add(threadId);
+    threadSubscriptionsByConnectionId.set(connectionId, threadIds);
+  };
+  const forgetThreadSubscriber = (ws: StartServerSocket, threadId: string): void => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) return;
+    const subscribers = threadSubscribers.get(threadId);
+    subscribers?.delete(connectionId);
+    if (subscribers?.size === 0) threadSubscribers.delete(threadId);
+
+    const threadIds = threadSubscriptionsByConnectionId.get(connectionId);
+    threadIds?.delete(threadId);
+    if (threadIds?.size === 0) threadSubscriptionsByConnectionId.delete(connectionId);
+  };
+  const forgetAllThreadSubscribers = (ws: StartServerSocket): void => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) return;
+    const threadIds = threadSubscriptionsByConnectionId.get(connectionId);
+    if (!threadIds) return;
+    for (const threadId of threadIds) {
+      const subscribers = threadSubscribers.get(threadId);
+      subscribers?.delete(connectionId);
+      if (subscribers?.size === 0) threadSubscribers.delete(threadId);
+    }
+    threadSubscriptionsByConnectionId.delete(connectionId);
+  };
+  const subscribeSourceChatToTaskWorkspace = (input: {
+    sourceSessionId: string;
+    workspacePath: string;
+  }): void => {
+    const subscribers = threadSubscribers.get(input.sourceSessionId);
+    if (!subscribers) return;
+    for (const ws of subscribers.values()) {
+      if (ws.data.taskReadAllowed === false) continue;
+      taskSubscribers.register(ws, input.workspacePath);
+    }
+  };
   const broadcastJsonRpcNotification = (method: string, params: unknown) => {
     for (const connection of jsonRpcConnections) {
       if (!connection.data.rpc || !sendQueue.shouldSendNotification(connection, method)) {
@@ -255,10 +280,66 @@ export async function createAgentServerRuntime(
     getConfig: () => config,
     sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
   });
+  let registry!: SessionRegistry;
+  const tasks = new TaskCoordinator({
+    sessionDb,
+    notify: ({ method, params }) => {
+      const cwd = typeof params.cwd === "string" ? params.cwd : null;
+      if (cwd) taskSubscribers.notify(cwd, method, params);
+    },
+    quiesceTaskThreads: async (task, reason) => {
+      const waits: Promise<void>[] = [];
+      const sessionIds = new Set(task.threads.map((thread) => thread.sessionId));
+      if (task.sourceSessionId) sessionIds.add(task.sourceSessionId);
+      for (const sessionId of sessionIds) {
+        const binding = registry.sessionBindings.get(sessionId);
+        const runtime = binding?.runtime;
+        if (!runtime) {
+          waits.push(
+            registry.cancelAgentSessions(sessionId, {
+              timeoutMs: taskTerminalQuiesceTimeoutMs,
+            }),
+          );
+          continue;
+        }
+        const disposeRuntime = () => {
+          try {
+            runtime.lifecycle.dispose(`task ${task.id} ${reason}`, {
+              closeSharedCodexClient: true,
+            });
+          } catch {
+            // Continue quiescing sibling task threads.
+          }
+        };
+        try {
+          const taskLock = getSessionTaskLock(sessionDb, sessionId);
+          waits.push(
+            runtime.turns
+              .cancelAndWaitForSettlement({
+                includeSubagents: true,
+                timeoutMs: taskTerminalQuiesceTimeoutMs,
+                ...(taskLock ? { taskLock } : {}),
+              })
+              .catch((error) => {
+                disposeRuntime();
+                throw error;
+              }),
+          );
+        } catch {
+          disposeRuntime();
+        }
+      }
+      const settled = await Promise.allSettled(waits);
+      const rejection = settled.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (rejection) throw rejection.reason;
+    },
+  });
   const threadJournal = new ThreadJournal(sessionDb);
   let workspaceControl: WorkspaceControl;
   let skillMutationBus: SkillMutationBus;
-  const registry = new SessionRegistry({
+  registry = new SessionRegistry({
     config,
     env,
     system,
@@ -269,8 +350,9 @@ export async function createAgentServerRuntime(
     getAiCoworkerPathsImpl,
     runTurnImpl: opts.runTurnImpl,
     sessionDb,
+    taskCoordinator: tasks,
     threadJournal,
-    loadAgentPrompt: lazyLoadAgentPrompt,
+    loadAgentPrompt: opts.loadAgentPromptImpl ?? lazyLoadAgentPrompt,
     setConfig: (nextConfig) => {
       config = nextConfig;
     },
@@ -291,7 +373,20 @@ export async function createAgentServerRuntime(
         await skillMutationBus.publish();
       }
     },
+    onTaskCreatedFromChat: subscribeSourceChatToTaskWorkspace,
   });
+  tasks.setThreadFactory(async ({ task, provider, model }) => {
+    const runtime = registry.createJsonRpcThreadSession(
+      task.workspacePath,
+      provider as AgentConfig["provider"] | undefined,
+      model,
+    );
+    await runtime.lifecycle.waitForPersistenceIdle();
+    return { sessionId: runtime.id };
+  });
+  tasks.setContinuationDispatcher(async (input) => await registry.dispatchTaskContinuation(input));
+  await tasks.reconcileFailedRuns();
+  await tasks.reconcilePendingArtifactRevisionSettlements();
 
   const refreshLocalSkillState = async ({
     workingDirectory,
@@ -357,7 +452,21 @@ export async function createAgentServerRuntime(
 
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
+    homedir: opts.homedir,
     research,
+    tasks,
+    taskRequests: {
+      onStarted: ({ ws, method, workspacePath }) => {
+        if (!shouldRegisterTaskSubscriber(method, ws)) return;
+        return taskSubscribers.beginBufferedRegistration(ws, workspacePath);
+      },
+      onSucceeded: ({ ws, method, workspacePath }) => {
+        workspaceControl.registerSubscriber(ws, workspacePath);
+        if (shouldRegisterTaskSubscriber(method, ws)) {
+          taskSubscribers.register(ws, workspacePath);
+        }
+      },
+    },
     threads: {
       create: ({ cwd, provider, model }) =>
         registry.createJsonRpcThreadSession(cwd, provider, model),
@@ -367,12 +476,21 @@ export async function createAgentServerRuntime(
       listPersisted: ({ cwd } = {}) =>
         sessionDb
           .listSessions({ ...(cwd ? { workingDirectory: cwd } : {}) })
+          .filter((record) => !tasks.isTaskThread(record.sessionId))
           .map((record) => sessionDb.getSessionRecord(record.sessionId))
           .filter((record): record is PersistedSessionRecord => record !== null),
-      listLiveRoot: ({ cwd } = {}) => registry.listLiveRoot({ cwd }),
-      subscribe: (ws, threadId, subscribeOpts) =>
-        jsonRpcTransport.subscribeThread(ws, threadId, subscribeOpts),
-      unsubscribe: (ws, threadId) => jsonRpcTransport.unsubscribeThread(ws, threadId),
+      listLiveRoot: ({ cwd } = {}) =>
+        registry.listLiveRoot({ cwd }).filter((runtime) => !tasks.isTaskThread(runtime.id)),
+      subscribe: (ws, threadId, subscribeOpts) => {
+        const binding = jsonRpcTransport.subscribeThread(ws, threadId, subscribeOpts);
+        if (binding?.runtime) rememberThreadSubscriber(ws, threadId);
+        return binding;
+      },
+      unsubscribe: (ws, threadId) => {
+        const result = jsonRpcTransport.unsubscribeThread(ws, threadId);
+        if (result === "unsubscribed") forgetThreadSubscriber(ws, threadId);
+        return result;
+      },
       readSnapshot: (threadId) => registry.readThreadSnapshot(threadId),
     },
     workspaceControl: {
@@ -395,8 +513,7 @@ export async function createAgentServerRuntime(
     },
     runtime: {
       checkLibreOffice: async (checkOpts) =>
-        await checkManagedSofficeRuntime({
-          homedir: opts.homedir,
+        await checkLibreOfficeCapability({
           env,
           smoke: checkOpts.smoke === true,
         }),
@@ -427,12 +544,18 @@ export async function createAgentServerRuntime(
 
   const routeJsonRpcRequest = async (ws: StartServerSocket, message: JsonRpcRequest) => {
     const params = isPlainObject(message.params) ? message.params : undefined;
-    if (params) {
+    if (params || message.method.startsWith("task/")) {
       try {
-        workspaceControl.registerSubscriber(
-          ws,
-          requireWorkspacePath(params, message.method, config.workingDirectory, opts.homedir),
-        );
+        const isTaskMethod = message.method.startsWith("task/");
+        if (!isTaskMethod) {
+          const cwd = requireWorkspacePath(
+            params ?? {},
+            message.method,
+            config.workingDirectory,
+            opts.homedir,
+          );
+          workspaceControl.registerSubscriber(ws, cwd);
+        }
       } catch {
         // Ignore non-workspace-control requests that do not resolve a cwd.
       }
@@ -474,6 +597,8 @@ export async function createAgentServerRuntime(
     closeConnection: (ws) => {
       jsonRpcConnections.delete(ws);
       workspaceControl.removeSubscriber(ws);
+      taskSubscribers.remove(ws);
+      forgetAllThreadSubscribers(ws);
       research.unsubscribeAll(ws);
       jsonRpcTransport.closeConnection(ws);
       sendQueue.deleteConnection(ws.data.connectionId);
@@ -492,6 +617,9 @@ export async function createAgentServerRuntime(
       disposeDesktopStateWatcher?.();
       skillMutationBus.stop();
       workspaceControl.clearSubscribers();
+      taskSubscribers.clear();
+      threadSubscribers.clear();
+      threadSubscriptionsByConnectionId.clear();
       await registry.disposeAll("server stopping");
       try {
         sessionDb.close();

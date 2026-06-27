@@ -68,6 +68,7 @@ import type {
   UpdaterState,
   UploadDiagnosticsBundleInput,
   WindowDragPointInput,
+  WorkspaceServerStartupProgress,
   WriteFileInput,
 } from "./desktopApi";
 import { normalizeQuickChatShortcutAccelerator } from "./quickChatShortcut";
@@ -106,6 +107,11 @@ function normalizePersistedSidebarSectionOrder(value: unknown): SidebarSectionKe
   return ordered;
 }
 const safeIdSchema = nonEmptyStringSchema.regex(SAFE_ID, "contains invalid characters");
+const optionalSafeIdSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return SAFE_ID.test(trimmed) ? trimmed : undefined;
+}, z.string().optional());
 const directionSchema = z.enum(["server", "client"]);
 const reasoningEffortSchema = z.enum(OPENAI_REASONING_EFFORT_VALUES);
 const reasoningSummarySchema = z.enum(OPENAI_REASONING_SUMMARY_VALUES);
@@ -334,6 +340,24 @@ export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInpu
   privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
 });
 
+export const workspaceServerStartupProgressSchema: z.ZodType<WorkspaceServerStartupProgress> = z
+  .object({
+    workspaceId: safeIdSchema,
+    progress: z
+      .object({
+        phase: z.enum(["waiting", "downloading", "installing", "ready"]),
+        version: z
+          .string()
+          .trim()
+          .regex(/^\d{4}-\d{2}-\d{2}$/),
+        transferredBytes: z.number().finite().nonnegative().nullable(),
+        totalBytes: z.number().finite().nonnegative().nullable(),
+        percent: z.number().finite().min(0).max(100).nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const createOneOffChatWorkspaceInputSchema: z.ZodType<CreateOneOffChatWorkspaceInput> =
   z.object({
     titleHint: z.string().trim().optional(),
@@ -544,8 +568,18 @@ const persistedThreadSchema = z
         z.string().nullable(),
       )
       .optional(),
+    taskId: optionalSafeIdSchema,
+    taskThreadId: optionalSafeIdSchema,
   })
-  .passthrough();
+  .passthrough()
+  .transform((thread) => {
+    const { taskId, taskThreadId, ...rest } = thread;
+    return {
+      ...rest,
+      ...(taskId ? { taskId } : {}),
+      ...(taskId && taskThreadId ? { taskThreadId } : {}),
+    };
+  });
 
 const persistedOnboardingSchema = z
   .object({

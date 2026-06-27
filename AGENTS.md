@@ -199,17 +199,20 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - After fixing locally, reply on each addressed GitHub thread and resolve it in the same pass.
 - Re-scan the latest SHA for both unresolved threads AND newer top-level review bodies before declaring PR feedback handled.
 - When the user asks for subagent verification, spawn one targeted subagent per reported issue before editing — never batch.
+- When the user explicitly stops automation or delegation, delete the automation, stop delegated work, and finish in the current primary thread without spawning or resuming agents.
 - Before claiming a comment is fixed, re-check the exact current branch path it points at.
 - Inspect the latest GitHub Actions run when babysitting a PR; flaky lanes (e.g. remote MCP smoke) can still be the real blocker after comments resolve.
 
 ### Scope & Plan Discipline
 
+- Keep Task mode explicit and separate from standard chat: never auto-promote chats into tasks, auto-wrap chats in task state, or expose task-owned sessions in ordinary chat listings.
 - When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.
 - When the user excludes an artifact type for delivery, remove it from the final output and any PR metadata instead of keeping it as optional context.
 - When the user excludes screenshots or recordings from a PR, keep the PR body text-only and summarize verification in prose.
 - When the user expands scope mid-task ("include the failures you found"), treat every surfaced error as in-scope.
 - When cleaning unrelated local diffs, never revert adjacent user-wanted changes without confirming intent.
 - Carry user-added requirements (commit trailers, contract changes) forward into the plan and the eventual commit message.
+- When the user requests commit-and-push cadence, commit each verified logical slice with a Conventional Commit and push it before starting the next slice.
 - When the user explicitly accepts a change ("delete the workflow"), execute that — don't keep refining the prior approach.
 - Confirm the active branch is rebased on current `origin/main` before stacking multi-commit work; if `main` moved mid-feature, rebase before more branch work.
 - When the user says a surface is "retired" or "archived", do the full deletion in one pass: code, tests, docs, entrypoints, now-unused deps. No dormant compatibility shells.
@@ -226,6 +229,11 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Repo-Specific Contracts
 
+- **Runtime and skill ownership**: marketplace-installed project/user skills are the authoritative skill content. The unified runtime is a separately downloaded executable/library layer and must never be registered as a plugin or skill discovery root; the application updates both layers independently.
+- **Productivity skill parity**: retiring bundled productivity skills requires migrating the complete documents, PDF, presentations, and spreadsheets set into the authoritative marketplace plugin; never drop PDF as an incidental part of a runtime cutover.
+- **Unified runtime completeness**: before deleting a legacy runtime manager, inventory and migrate every executable it owns—especially LibreOffice/`soffice` and companion files—and prove the installed unified runtime can execute the real workflow. Do not silently leave a second lazy-download cache behind.
+- **Managed soffice boundary**: ship LibreOffice inside the unified runtime, keep its private program directory off `PATH`, and expose only Cowork's headless policy launcher. The launcher must reject UI/printing modes, disable printer detection, use disposable profiles, and pass a real conversion test; never fall back to host `soffice`.
+- **Chat plans vs Task mode**: never present a standard-chat `todoWrite` checklist as durable task state or expand it into a second task system. Label it as a plan/checklist; keep durable IDs, transitions, ownership, blockers, artifacts, and user editing in `TaskCoordinator` and Task mode.
 - **Auth home**: `~/.cowork` is the only auth home. Never derive auth from a workspace `.agent` path. Pin `HOME` in tests that fabricate auth state.
 - **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.
 - **Codex app-server verification**: app-server supports multiple simultaneous instances; parallelize independent app-server checks instead of serializing model/status/title probes by default.
@@ -245,7 +253,10 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **OAuth**: never share one constant between listener bind host and advertised redirect host. Bind both `::1` and `127.0.0.1` when using `localhost`. Pin the production redirect URI to the provider-accepted host and cover the advertised URL in tests.
 - **Bun-compiled sidecars**: never read `package.json` via runtime `__dirname` paths — compiled binaries run from `/$bunfs`. Use bundled imports or build-time injection.
 - **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
-- **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
+- **Tool output overflow**: spill-to-workspace truncation is the default; the `skill` tool and every `read` result are exempt so complete `SKILL.md` instructions, references, and script source stay inline.
+- **Model tool defaults**: normalize provider-emitted `null` for optional/defaulted tool fields before validation; a recoverable tool-input mismatch must not cascade into an unrecoverable provider continuation.
+- **Chat-to-task promotion**: task mode is a one-shot harness tool and `/task` skill handoff from ordinary chat. Require a complete brief and dependency-aware initial plan before creation, lock the source chat while the task is active, and keep lifecycle/state enforcement in the coordinator rather than the desktop UI.
+- **Task review rounds**: treat `reviewRounds` as the required minimum, never as a hard stop. Let the task agent request additional fresh independent rounds when risk or uncertainty warrants them, subject only to the explicit safety cap.
 
 ### Mobile UI Patterns
 
@@ -254,6 +265,8 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Desktop UI Patterns
 
+- Treat Settings as a full-window shell: its navigation replaces the chat sidebar and its page chrome replaces the thread top bar. Never mount `SettingsShell` inside `ChatShell`.
+- For long first-run downloads, do not strand a small progress row in a large otherwise-interactive shell. Use an intentional setup state with clear hierarchy, phase context, and unavailable regions visually de-emphasized.
 - Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.
 - For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray asset correctly; dev-only checks are not enough.
 - When both an installed app and a repo-local app bundle exist, verify the exact on-disk bundle path for the running process instead of trusting the shared app name or bundle ID.

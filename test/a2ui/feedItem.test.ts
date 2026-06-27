@@ -52,3 +52,43 @@ describe("ProjectedItem uiSurface variant", () => {
     expect(projectedItemSchema.safeParse(item).success).toBe(true);
   });
 });
+
+describe("ProjectedItem error variant", () => {
+  test("parses structured error data for task locks", () => {
+    const item: ProjectedItem = {
+      id: "error-1",
+      type: "error",
+      message: "Task is locked",
+      code: "task_locked",
+      source: "session",
+      data: {
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: "task-1",
+        taskStatus: "completed",
+      },
+    };
+    expect(projectedItemSchema.safeParse(item).success).toBe(true);
+  });
+
+  test("parses structured feed error data for task locks", () => {
+    const item: SessionFeedItem = {
+      id: "error-1",
+      kind: "error",
+      ts: "2026-01-01T00:00:00.000Z",
+      message: "Task is locked",
+      code: "task_locked",
+      source: "session",
+      data: {
+        category: "task_locked",
+        source: "session",
+        lockKind: "active_source_chat",
+        taskId: "task-1",
+        taskStatus: "working",
+        taskTitle: "Focused task",
+      },
+    };
+    expect(sessionFeedItemSchema.safeParse(item).success).toBe(true);
+  });
+});

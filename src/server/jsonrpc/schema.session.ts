@@ -34,6 +34,7 @@ const steerAcceptedEventSchema = z
     turnId: nonEmptyTrimmedStringSchema,
     text: z.string(),
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
+    steerRequestId: nonEmptyTrimmedStringSchema.optional(),
   })
   .passthrough();
 

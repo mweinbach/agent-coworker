@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { SERVER_ERROR_CODES, SERVER_ERROR_SOURCES, type TodoItem } from "../types";
-import type { SessionFeedItem } from "./sessionSnapshot";
+import { type SessionFeedItem, serverErrorDataSchema } from "./sessionSnapshot";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const todoItemSchema = z
@@ -98,6 +98,7 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
       message: z.string(),
       code: z.enum(SERVER_ERROR_CODES),
       source: z.enum(SERVER_ERROR_SOURCES),
+      data: serverErrorDataSchema.optional(),
     })
     .strict(),
   z
@@ -241,6 +242,7 @@ function toFeedItem(
         message: item.message,
         code: item.code,
         source: item.source,
+        ...(item.data !== undefined ? { data: item.data } : {}),
       };
     case "uiSurface":
       return {

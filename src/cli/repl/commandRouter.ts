@@ -475,5 +475,26 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     return true;
   }
 
+  if (cmd === "task") {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
+      console.log("not connected: cannot create a task yet");
+      ctx.activateNextPrompt();
+      return true;
+    }
+    if (ctx.getBusy()) {
+      console.log("Agent is busy; wait for the current turn before starting task mode.\n");
+      ctx.activateNextPrompt();
+      return true;
+    }
+    await ctx.tryRequest("command/execute", {
+      threadId: activeThreadId,
+      name: "task",
+      arguments: arg,
+      clientMessageId: crypto.randomUUID(),
+    });
+    return true;
+  }
+
   return false;
 }

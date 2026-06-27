@@ -142,6 +142,41 @@ describe("CLI notification handler", () => {
     expect(state.selectedProvider).toBe("openai");
   });
 
+  test("task/created switches the CLI to the task thread", () => {
+    const state = createState();
+    const openTaskThread = mock(async () => {});
+    const handler = createNotificationHandler({
+      state,
+      streamState: new CliStreamState(),
+      activateNextPrompt: () => {},
+      resetModelStreamState: () => {},
+      openTaskThread,
+    });
+    const originalLog = console.log;
+    console.log = mock(() => {}) as never;
+    try {
+      handler(
+        {
+          method: "task/created",
+          params: {
+            task: {
+              id: "task-1",
+              title: "Managed delivery",
+              threads: [{ sessionId: "task-session-1" }],
+            },
+          },
+        },
+        {} as never,
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(state.threadId).toBe("task-session-1");
+    expect(state.lastKnownThreadId).toBe("task-session-1");
+    expect(openTaskThread).toHaveBeenCalledWith("task-session-1");
+  });
+
   test("applyCliJsonRpcResult logs provider auth challenges from legacy result envelopes", () => {
     const state = createState();
     const originalLog = console.log;

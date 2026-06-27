@@ -3,6 +3,66 @@ import { describe, expect, test } from "bun:test";
 import { projectThreadTurnsFromJournal } from "../src/server/jsonrpc/threadReadProjector";
 
 describe("JSON-RPC thread read projector", () => {
+  test("hydrates projected error data from journal items", () => {
+    const turns = projectThreadTurnsFromJournal([
+      {
+        threadId: "thread-1",
+        seq: 1,
+        ts: "2026-03-22T15:39:39.127Z",
+        eventType: "turn/started",
+        turnId: "turn-1",
+        itemId: null,
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 2,
+        ts: "2026-03-22T15:39:41.772Z",
+        eventType: "item/started",
+        turnId: "turn-1",
+        itemId: "error-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "error-1",
+            type: "error",
+            message: "Task is locked",
+            code: "task_locked",
+            source: "session",
+            data: {
+              category: "task_locked",
+              source: "session",
+              lockKind: "terminal_task_thread",
+              taskId: "task-1",
+              taskStatus: "failed",
+            },
+          },
+        },
+      },
+    ] as any);
+
+    expect(turns[0]?.items[0]).toEqual({
+      id: "error-1",
+      type: "error",
+      message: "Task is locked",
+      code: "task_locked",
+      source: "session",
+      data: {
+        category: "task_locked",
+        source: "session",
+        lockKind: "terminal_task_thread",
+        taskId: "task-1",
+        taskStatus: "failed",
+      },
+    });
+  });
+
   test("rebuilds streamed reasoning text from journal delta events before completion", () => {
     const turns = projectThreadTurnsFromJournal([
       {

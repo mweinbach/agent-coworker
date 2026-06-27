@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog";
-import { revealPath } from "../../lib/desktopCommands";
+import { confirmAction, revealPath } from "../../lib/desktopCommands";
 import {
   actionPending,
   normalizeDisplayContent,
@@ -218,7 +218,17 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                     size="sm"
                     className="bg-destructive/10 text-destructive hover:bg-destructive/20 border-transparent"
                     disabled={mutationBlocked || deletePending}
-                    onClick={() => {
+                    onClick={async () => {
+                      const confirmed = await confirmAction({
+                        title: "Uninstall skill",
+                        message: `Uninstall ${selectedDisplayName}? This removes the skill from this scope.`,
+                        detail: selectedInstallation.name,
+                        kind: "warning",
+                        confirmLabel: "Uninstall",
+                        cancelLabel: "Cancel",
+                        defaultAction: "cancel",
+                      });
+                      if (!confirmed) return;
                       setDismissedInstallationId(selectedInstallation.installationId);
                       void deleteSkillInstallation(selectedInstallation.installationId);
                     }}

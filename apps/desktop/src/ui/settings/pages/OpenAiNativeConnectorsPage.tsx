@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
+import { Label } from "../../../components/ui/label";
 import { Switch } from "../../../components/ui/switch";
 
 export function OpenAiNativeConnectorsPage() {
@@ -120,8 +121,11 @@ export function OpenAiNativeConnectorsPage() {
                 </CardDescription>
               </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>Enabled only</span>
+                <Label htmlFor="connectors-enabled-only" className="cursor-pointer">
+                  Enabled only
+                </Label>
                 <Switch
+                  id="connectors-enabled-only"
                   checked={showEnabledOnly}
                   aria-label="Show enabled connectors only"
                   onCheckedChange={setShowEnabledOnly}

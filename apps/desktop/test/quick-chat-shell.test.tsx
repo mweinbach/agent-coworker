@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -53,7 +53,19 @@ function setupQuickChatJsdom() {
   });
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("quick chat shell", () => {
+  beforeEach(() => {
+    resetAppStore();
+  });
+
   afterEach(() => {
     useAppStore.setState(defaultStoreState);
   });
@@ -96,7 +108,6 @@ describe("quick chat shell", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        resetAppStore();
         root.render(
           createElement(QuickChatShell, {
             init: async () => {},
@@ -104,7 +115,9 @@ describe("quick chat shell", () => {
             startupError: null,
           }),
         );
-        await Promise.resolve();
+      });
+      await act(async () => {
+        await waitForCondition(() => useAppStore.getState().workspaces.length > 0);
       });
 
       const state = useAppStore.getState();

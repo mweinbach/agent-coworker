@@ -1,8 +1,54 @@
+import { isAgentControlTaskLockError } from "../../agents/AgentControl";
+import { getSessionTaskLock } from "../../session/taskLocks";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcAgentRequestSchemas } from "../schema.agents";
-
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
+
+function assertAgentControlWritable(
+  context: JsonRpcRouteContext,
+  ws: Parameters<JsonRpcRouteContext["jsonrpc"]["send"]>[0],
+  id: Parameters<JsonRpcRouteContext["jsonrpc"]["sendError"]>[1],
+  threadId: string,
+): boolean {
+  const taskLock = getSessionTaskLock(
+    {
+      getTaskForThread: (sessionId) => context.tasks?.getForThread?.(sessionId),
+      getActiveTaskForSourceSession: (sessionId) =>
+        context.tasks?.getActiveForSourceSession?.(sessionId),
+      getSessionRecord: (sessionId) => {
+        const liveParentSessionId =
+          context.threads.getLive(sessionId)?.runtime?.read.parentSessionId ?? null;
+        if (liveParentSessionId) return { parentSessionId: liveParentSessionId };
+        const persisted = context.threads.getPersisted(sessionId);
+        return persisted ? { parentSessionId: persisted.parentSessionId } : null;
+      },
+    },
+    threadId,
+  );
+  if (!taskLock) return true;
+  context.jsonrpc.sendError(ws, id, {
+    code: JSONRPC_ERROR_CODES.invalidRequest,
+    message: taskLock.message,
+    data: taskLock.data,
+  });
+  return false;
+}
+
+function sendAgentControlError(
+  context: JsonRpcRouteContext,
+  ws: Parameters<JsonRpcRouteContext["jsonrpc"]["send"]>[0],
+  id: Parameters<JsonRpcRouteContext["jsonrpc"]["sendError"]>[1],
+  error: unknown,
+): boolean {
+  if (!isAgentControlTaskLockError(error)) return false;
+  context.jsonrpc.sendError(ws, id, {
+    code: JSONRPC_ERROR_CODES.invalidRequest,
+    message: error.message,
+    data: error.data,
+  });
+  return true;
+}
 
 export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
@@ -44,22 +90,28 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         });
         return;
       }
+      if (!assertAgentControlWritable(context, ws, message.id, threadId)) return;
 
-      await runtime.agents.create({
-        message: prompt,
-        ...(role !== undefined ? { role } : {}),
-        ...(profileRef !== undefined ? { profileRef } : {}),
-        ...(nickname !== undefined ? { nickname } : {}),
-        ...(taskType !== undefined ? { taskType } : {}),
-        ...(targetPaths !== undefined ? { targetPaths } : {}),
-        ...(model !== undefined ? { model } : {}),
-        ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
-        ...(contextMode !== undefined ? { contextMode } : {}),
-        ...(briefing !== undefined ? { briefing } : {}),
-        ...(includeParentTodos !== undefined ? { includeParentTodos } : {}),
-        ...(includeHarnessContext !== undefined ? { includeHarnessContext } : {}),
-        ...(forkContext !== undefined ? { forkContext } : {}),
-      });
+      try {
+        await runtime.agents.create({
+          message: prompt,
+          ...(role !== undefined ? { role } : {}),
+          ...(profileRef !== undefined ? { profileRef } : {}),
+          ...(nickname !== undefined ? { nickname } : {}),
+          ...(taskType !== undefined ? { taskType } : {}),
+          ...(targetPaths !== undefined ? { targetPaths } : {}),
+          ...(model !== undefined ? { model } : {}),
+          ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+          ...(contextMode !== undefined ? { contextMode } : {}),
+          ...(briefing !== undefined ? { briefing } : {}),
+          ...(includeParentTodos !== undefined ? { includeParentTodos } : {}),
+          ...(includeHarnessContext !== undefined ? { includeHarnessContext } : {}),
+          ...(forkContext !== undefined ? { forkContext } : {}),
+        });
+      } catch (error) {
+        if (sendAgentControlError(context, ws, message.id, error)) return;
+        throw error;
+      }
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 
@@ -94,12 +146,18 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         });
         return;
       }
+      if (!assertAgentControlWritable(context, ws, message.id, threadId)) return;
 
-      await runtime.agents.sendInput(
-        agentId,
-        prompt,
-        typeof params.interrupt === "boolean" ? params.interrupt : undefined,
-      );
+      try {
+        await runtime.agents.sendInput(
+          agentId,
+          prompt,
+          typeof params.interrupt === "boolean" ? params.interrupt : undefined,
+        );
+      } catch (error) {
+        if (sendAgentControlError(context, ws, message.id, error)) return;
+        throw error;
+      }
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 
@@ -173,8 +231,14 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         });
         return;
       }
+      if (!assertAgentControlWritable(context, ws, message.id, threadId)) return;
 
-      await runtime.agents.resume(agentId);
+      try {
+        await runtime.agents.resume(agentId);
+      } catch (error) {
+        if (sendAgentControlError(context, ws, message.id, error)) return;
+        throw error;
+      }
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 

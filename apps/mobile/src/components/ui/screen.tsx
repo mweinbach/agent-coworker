@@ -1,16 +1,29 @@
 import type { PropsWithChildren } from "react";
-import { ScrollView, type StyleProp, View, type ViewStyle } from "react-native";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  type StyleProp,
+  View,
+  type ViewStyle,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ScreenProps = PropsWithChildren<{
   scroll?: boolean;
+  avoidKeyboard?: boolean;
   className?: string;
   contentStyle?: StyleProp<ViewStyle>;
 }>;
 
-export function Screen({ children, scroll = false, contentStyle }: ScreenProps) {
+export function Screen({
+  children,
+  scroll = false,
+  avoidKeyboard = false,
+  contentStyle,
+}: ScreenProps) {
   const insets = useSafeAreaInsets();
   const theme = useAppTheme();
 
@@ -34,7 +47,7 @@ export function Screen({ children, scroll = false, contentStyle }: ScreenProps) 
     return <View style={{ flex: 1, backgroundColor: theme.background }}>{inner}</View>;
   }
 
-  return (
+  const scrollView = (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.background }}
       contentContainerStyle={{ flexGrow: 1, backgroundColor: theme.background }}
@@ -45,4 +58,17 @@ export function Screen({ children, scroll = false, contentStyle }: ScreenProps) 
       {inner}
     </ScrollView>
   );
+
+  if (avoidKeyboard) {
+    return (
+      <KeyboardAvoidingView
+        style={{ flex: 1, backgroundColor: theme.background }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        {scrollView}
+      </KeyboardAvoidingView>
+    );
+  }
+
+  return scrollView;
 }

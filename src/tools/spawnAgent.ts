@@ -169,6 +169,7 @@ export function createSpawnAgentTool(ctx: ToolContext) {
           includeHarnessContext: resolvedContext.includeHarnessContext,
         })}`,
       );
+      await ctx.assertCanMutate?.("spawnAgent");
       const result = await requireAgentControl(ctx).spawn({
         message: normalizedMessage,
         role: normalizedRole,

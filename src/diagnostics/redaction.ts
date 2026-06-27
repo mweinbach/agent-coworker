@@ -39,12 +39,19 @@ function normalizePathValue(value: string | null | undefined): string | null {
 }
 
 function replaceKnownPath(value: string, pathValue: string, replacement: string): string {
+  const raw = pathValue.trim();
   const normalized = normalizePathValue(pathValue);
-  if (!normalized) return value;
+  if (!raw || !normalized) return value;
 
   let next = value;
-  const variants = new Set([normalized, normalized.replaceAll("\\", "/")]);
-  if (normalized.includes("/")) variants.add(normalized.replaceAll("/", "\\"));
+  const variants = new Set([
+    raw,
+    raw.replaceAll("\\", "/"),
+    raw.replaceAll("/", "\\"),
+    normalized,
+    normalized.replaceAll("\\", "/"),
+    normalized.replaceAll("/", "\\"),
+  ]);
   for (const variant of variants) {
     if (!variant) continue;
     next = next.replace(new RegExp(escapeRegExp(variant), "g"), replacement);
@@ -103,15 +110,16 @@ export function redactDiagnosticText(
   value: string,
   context: DiagnosticsRedactionContext = {},
 ): string {
-  const homeDir = normalizePathValue(context.homeDir ?? os.homedir());
+  const homePath = context.homeDir ?? os.homedir();
+  const homeDir = normalizePathValue(homePath);
   const maxStringLength = context.maxStringLength ?? DEFAULT_MAX_STRING_LENGTH;
   let next = value;
 
   for (const workspacePath of context.workspacePaths ?? []) {
     next = replaceKnownPath(next, workspacePath, "[workspace-path]");
   }
-  if (homeDir) {
-    next = replaceKnownPath(next, homeDir, "[home]");
+  if (homePath) {
+    next = replaceKnownPath(next, homePath, "[home]");
   }
 
   next = redactPathLikeText(next);

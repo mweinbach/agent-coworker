@@ -135,6 +135,11 @@ function assertSandboxAllowsMemoryMutation(ctx: ToolContext): void {
   }
 }
 
+async function assertCanMutateMemory(ctx: ToolContext): Promise<void> {
+  assertSandboxAllowsMemoryMutation(ctx);
+  await ctx.assertCanMutate?.("manageMemory");
+}
+
 async function notifyMemoryChanged(ctx: ToolContext, folder: string): Promise<void> {
   await ctx.onAdvancedMemoryChanged?.(folder);
 }
@@ -198,7 +203,6 @@ export function createManageMemoryTool(ctx: ToolContext) {
       }
 
       if (input.action === "create") {
-        assertSandboxAllowsMemoryMutation(ctx);
         assertWritableSource(input, access.activeFolder);
         const name = requireString(input.name, "create name");
         const description = requireString(input.description, "create description");
@@ -210,6 +214,7 @@ export function createManageMemoryTool(ctx: ToolContext) {
             `Memory "${slug}" already exists in active folder "${access.activeFolder}".`,
           );
         }
+        await assertCanMutateMemory(ctx);
         const memory = await store.writeMemory(access.activeFolder, {
           slug,
           name,
@@ -228,11 +233,12 @@ export function createManageMemoryTool(ctx: ToolContext) {
       }
 
       if (input.action === "edit") {
-        assertSandboxAllowsMemoryMutation(ctx);
         assertWritableSource(input, access.activeFolder);
         const slug = requireString(input.slug, "edit slug");
+        const patch = editPatch(input);
+        await assertCanMutateMemory(ctx);
         const memory = await store.editMemory(access.activeFolder, slug, {
-          ...editPatch(input),
+          ...patch,
           originSessionId: ctx.sessionId,
         });
         if (!memory) {
@@ -253,7 +259,7 @@ export function createManageMemoryTool(ctx: ToolContext) {
         };
       }
 
-      assertSandboxAllowsMemoryMutation(ctx);
+      await assertCanMutateMemory(ctx);
       await store.regenerateIndex(access.activeFolder);
       await notifyMemoryChanged(ctx, access.activeFolder);
       return {

@@ -1,22 +1,229 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { MACOS_SEATBELT_EXECUTABLE } from "./seatbelt";
-import { WINDOWS_SANDBOX_HELPER_NAME } from "./windows";
+import {
+  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  WINDOWS_SANDBOX_HELPER_NAME,
+  WINDOWS_SANDBOX_SETUP_NAME,
+} from "./windows";
+
+export type SandboxEnforcement = {
+  filesystem: boolean;
+  network: boolean;
+  process: boolean;
+  integrity: boolean;
+};
+
+export type WindowsSandboxProbe = {
+  helperPath: string | null;
+  setupPath: string | null;
+  commandRunnerPath: string | null;
+  sandboxHome: string;
+  enforcement: SandboxEnforcement;
+  setupRequired: boolean;
+  warning?: string;
+};
+
+const NO_ENFORCEMENT: SandboxEnforcement = {
+  filesystem: false,
+  network: false,
+  process: false,
+  integrity: false,
+};
+
+function sha256FileSync(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function configuredBundlePath(
+  env: NodeJS.ProcessEnv,
+  envName: string,
+  helperPath: string,
+  fileName: string,
+): string {
+  const configured = env[envName]?.trim();
+  return configured && path.isAbsolute(configured)
+    ? configured
+    : path.join(path.dirname(helperPath), fileName);
+}
+
+function verifyConfiguredHash(
+  filePath: string,
+  expected: string | undefined,
+  requireAuthenticode = false,
+): { ok: boolean; reason?: string } {
+  const normalized = expected?.trim().toLowerCase();
+  if (!normalized || !/^[a-f0-9]{64}$/.test(normalized)) {
+    return { ok: false, reason: `trusted SHA-256 is missing for ${path.basename(filePath)}` };
+  }
+  try {
+    if (!fs.statSync(filePath).isFile()) return { ok: false, reason: `${filePath} is not a file` };
+    const actual = sha256FileSync(filePath);
+    if (actual !== normalized) {
+      return { ok: false, reason: `SHA-256 mismatch for ${path.basename(filePath)}` };
+    }
+    if (requireAuthenticode) {
+      const signature = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($signature.Status -eq 'Valid') { 'Valid'; exit 0 }; $signature.Status; exit 1",
+          filePath,
+        ],
+        { encoding: "utf8", timeout: 15_000, windowsHide: true },
+      );
+      if (signature.status !== 0 || signature.stdout.trim() !== "Valid") {
+        return {
+          ok: false,
+          reason: `Authenticode signature is not valid for ${path.basename(filePath)}`,
+        };
+      }
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `${path.basename(filePath)} is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export function probeWindowsSandboxBundle(
+  helperPath: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): WindowsSandboxProbe {
+  const sandboxHome = path.resolve(
+    env.COWORK_WIN_SANDBOX_HOME?.trim() || path.join(os.homedir(), ".cowork"),
+  );
+  if (!helperPath) {
+    return {
+      helperPath: null,
+      setupPath: null,
+      commandRunnerPath: null,
+      sandboxHome,
+      enforcement: { ...NO_ENFORCEMENT },
+      setupRequired: true,
+      warning: "Windows sandbox helper (cowork-win-sandbox.exe) not found",
+    };
+  }
+  const setupPath = configuredBundlePath(
+    env,
+    "COWORK_WIN_SANDBOX_SETUP",
+    helperPath,
+    WINDOWS_SANDBOX_SETUP_NAME,
+  );
+  const commandRunnerPath = configuredBundlePath(
+    env,
+    "COWORK_WIN_SANDBOX_COMMAND_RUNNER",
+    helperPath,
+    WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
+  );
+  const requireAuthenticode = env.COWORK_WIN_SANDBOX_REQUIRE_AUTHENTICODE === "1";
+  const checks = [
+    verifyConfiguredHash(helperPath, env.COWORK_WIN_SANDBOX_HELPER_SHA256, requireAuthenticode),
+    verifyConfiguredHash(setupPath, env.COWORK_WIN_SANDBOX_SETUP_SHA256, requireAuthenticode),
+    verifyConfiguredHash(
+      commandRunnerPath,
+      env.COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256,
+      requireAuthenticode,
+    ),
+  ];
+  const failed = checks.find((check) => !check.ok);
+  if (failed) {
+    return {
+      helperPath,
+      setupPath,
+      commandRunnerPath,
+      sandboxHome,
+      enforcement: { ...NO_ENFORCEMENT },
+      setupRequired: true,
+      warning: `Windows sandbox integrity verification failed: ${failed.reason}. Reinstall or repair Cowork.`,
+    };
+  }
+
+  const probe = spawnSync(
+    helperPath,
+    ["probe", "--sandbox-home", sandboxHome, "--cwd", process.cwd()],
+    { encoding: "utf8", timeout: 15_000, windowsHide: true },
+  );
+  try {
+    const parsed = JSON.parse(probe.stdout.trim()) as {
+      ready?: unknown;
+      filesystem?: unknown;
+      network?: unknown;
+      process?: unknown;
+      integrity?: unknown;
+      setup_required?: unknown;
+    };
+    const enforcement = {
+      filesystem: parsed.filesystem === true,
+      network: parsed.network === true,
+      process: parsed.process === true,
+      integrity: parsed.integrity === true,
+    };
+    const ready = parsed.ready === true && Object.values(enforcement).every(Boolean);
+    return {
+      helperPath,
+      setupPath,
+      commandRunnerPath,
+      sandboxHome,
+      enforcement,
+      setupRequired: !ready || parsed.setup_required === true,
+      ...(ready
+        ? {}
+        : {
+            warning:
+              "Windows sandbox setup is missing, stale, or failed its enforcement probe; run the one-time sandbox setup/repair.",
+          }),
+    };
+  } catch {
+    return {
+      helperPath,
+      setupPath,
+      commandRunnerPath,
+      sandboxHome,
+      enforcement: { ...NO_ENFORCEMENT, integrity: true },
+      setupRequired: true,
+      warning: `Windows sandbox probe failed (exit ${probe.status ?? "unknown"}): ${probe.stderr.trim() || "invalid probe output"}`,
+    };
+  }
+}
 
 /**
  * Runtime capability probes for the available sandbox backends. Kept separate
  * from the {@link SandboxManager} so they can be injected/mocked in tests.
  */
 
-/** Whether `/usr/bin/sandbox-exec` exists (macOS Seatbelt). */
+let macosSeatbeltTrusted: boolean | undefined;
+
+/** Whether the fixed macOS Seatbelt executable is owned and signed by Apple. */
 export function hasSeatbelt(): boolean {
+  if (macosSeatbeltTrusted !== undefined) return macosSeatbeltTrusted;
+  let trusted = false;
   try {
-    return fs.existsSync(MACOS_SEATBELT_EXECUTABLE);
+    const stat = fs.statSync(MACOS_SEATBELT_EXECUTABLE);
+    const signature = spawnSync(
+      "/usr/bin/codesign",
+      ["--verify", "--strict", "-R=anchor apple", MACOS_SEATBELT_EXECUTABLE],
+      { stdio: "ignore", timeout: 15_000 },
+    );
+    trusted =
+      stat.isFile() &&
+      stat.uid === 0 &&
+      (stat.mode & 0o022) === 0 &&
+      fs.realpathSync(MACOS_SEATBELT_EXECUTABLE) === MACOS_SEATBELT_EXECUTABLE &&
+      signature.status === 0;
   } catch {
-    return false;
+    trusted = false;
   }
+  macosSeatbeltTrusted = trusted;
+  return trusted;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
+import { radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ReasoningCardProps = {
@@ -21,12 +22,10 @@ export function ReasoningCard({ mode, text }: ReasoningCardProps) {
       onPress={isLong ? () => setExpanded(!expanded) : undefined}
       style={{
         gap: 8,
-        borderRadius: 22,
+        borderRadius: radius.xl,
         borderCurve: "continuous",
         borderWidth: 1,
         borderColor: theme.border,
-        borderLeftWidth: 3,
-        borderLeftColor: theme.accent,
         backgroundColor: theme.surface,
         paddingHorizontal: 16,
         paddingVertical: 14,
@@ -35,10 +34,10 @@ export function ReasoningCard({ mode, text }: ReasoningCardProps) {
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
         <Text
           style={{
-            color: theme.accent,
+            color: theme.textTertiary,
             fontSize: 11,
-            fontWeight: "700",
-            letterSpacing: 0.6,
+            fontWeight: "600",
+            letterSpacing: 0.4,
             textTransform: "uppercase",
           }}
         >
@@ -53,11 +52,9 @@ export function ReasoningCard({ mode, text }: ReasoningCardProps) {
       <Text
         selectable
         style={{
-          color: theme.text,
+          color: theme.textSecondary,
           fontSize: 14,
           lineHeight: 21,
-          fontStyle: "italic",
-          opacity: 0.85,
         }}
       >
         {expanded ? text : preview}

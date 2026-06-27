@@ -279,9 +279,11 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
     const lastOpenedAt = asTimestamp(item.lastOpenedAt);
     const rawWorkspacePath = asNonEmptyString(item.path);
     const workspaceKind: WorkspaceKind =
-      rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath)
-        ? "oneOffChat"
-        : normalizeWorkspaceKind(item.workspaceKind);
+      item.workspaceKind === "project"
+        ? "project"
+        : rawWorkspacePath && isPathInsideOneOffChatsRoot(rawWorkspacePath)
+          ? "oneOffChat"
+          : normalizeWorkspaceKind(item.workspaceKind);
     const workspacePath = await resolveWorkspacePath(item.path, workspaceKind);
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;
@@ -347,6 +349,8 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
     if (!workspaceIds.has(workspaceId)) {
       continue;
     }
+    const taskId = asSafeId(item.taskId);
+    const taskThreadId = taskId ? asSafeId(item.taskThreadId) : null;
 
     threads.push({
       id,
@@ -362,6 +366,8 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       legacyTranscriptId: asNonEmptyString(item.legacyTranscriptId) ?? null,
       archived: typeof item.archived === "boolean" ? item.archived : false,
       archivedAt: typeof item.archivedAt === "string" ? item.archivedAt : undefined,
+      ...(taskId ? { taskId } : {}),
+      ...(taskThreadId ? { taskThreadId } : {}),
     });
     seenThreadIds.add(id);
   }

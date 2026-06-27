@@ -25,6 +25,7 @@ export function ChatThreadHeader(props: {
         tabIndex={hasUsageSummary ? 0 : undefined}
       >
         <div
+          title={title}
           className={cn(
             "max-w-lg truncate rounded-[calc(var(--radius)*1.35)] border border-border/45 bg-background/86 px-3 py-1 text-[13px] font-medium text-foreground shadow-none backdrop-blur-sm",
             hasUsageSummary

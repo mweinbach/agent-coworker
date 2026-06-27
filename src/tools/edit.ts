@@ -79,6 +79,7 @@ export function createEditTool(ctx: ToolContext) {
       content = replaceAll
         ? content.replaceAll(oldString, newString)
         : content.replace(oldString, newString);
+      await ctx.assertCanMutate?.("edit");
       await fs.writeFile(abs, content, "utf-8");
 
       ctx.log(`tool< edit ${JSON.stringify({ ok: true })}`);

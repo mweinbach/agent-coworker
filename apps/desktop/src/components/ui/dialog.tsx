@@ -47,12 +47,13 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  forceMount,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
 }) {
   return (
-    <DialogPortal data-slot="dialog-portal">
+    <DialogPortal data-slot="dialog-portal" forceMount={forceMount}>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"

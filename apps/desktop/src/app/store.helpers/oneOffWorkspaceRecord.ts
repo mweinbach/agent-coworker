@@ -3,6 +3,16 @@ import * as desktopCommands from "../../lib/desktopCommands";
 import { makeId, nowIso, type StoreGet } from "../store.helpers";
 import { isOneOffChatWorkspace, type WorkspaceRecord } from "../types";
 
+type CreateOneOffChatWorkspace = typeof desktopCommands.createOneOffChatWorkspace;
+
+let createOneOffChatWorkspaceOverride: CreateOneOffChatWorkspace | null = null;
+
+export const __internalOneOffWorkspaceRecord = {
+  setCreateOneOffChatWorkspaceOverride(override: CreateOneOffChatWorkspace | null): void {
+    createOneOffChatWorkspaceOverride = override;
+  },
+};
+
 export function resolveCurrentWorkspaceDefaultsSource(get: StoreGet): WorkspaceRecord | null {
   const state = get();
   const selected = state.selectedWorkspaceId
@@ -29,7 +39,9 @@ export async function createOneOffWorkspaceRecord(
   get: StoreGet,
   titleHint?: string,
 ): Promise<WorkspaceRecord> {
-  const created = await desktopCommands.createOneOffChatWorkspace({ titleHint });
+  const createOneOffChatWorkspace =
+    createOneOffChatWorkspaceOverride ?? desktopCommands.createOneOffChatWorkspace;
+  const created = await createOneOffChatWorkspace({ titleHint });
   const source = resolveCurrentWorkspaceDefaultsSource(get);
   const defaultProvider = source?.defaultProvider ?? "google";
   const defaultModel =

@@ -6,9 +6,8 @@ import {
   useRef,
   useState,
 } from "react";
-
-import { PromptInputTextarea } from "@/components/ai-elements/prompt-input";
 import { cn } from "@/lib/utils";
+import { MessageComposerTextarea } from "@/ui/composer/MessageComposer";
 import { ComposerHighlightOverlay } from "./ComposerHighlightOverlay";
 import { ComposerMentionMenu } from "./ComposerMentionMenu";
 import {
@@ -20,7 +19,7 @@ import {
 
 /**
  * Composer text input with inline @-mention support. Wraps the plain
- * `PromptInputTextarea` with a highlight overlay (boxed mentions) and an
+ * `MessageComposerTextarea` with a highlight overlay (boxed mentions) and an
  * autocomplete menu, while preserving the textarea as the single source of
  * truth (`value`/`setValue`) and delegating non-menu keystrokes to the parent's
  * send handler (`onKeyDown`).
@@ -64,6 +63,7 @@ export function ComposerMentionInput(props: {
   const [menuOpen, setMenuOpen] = useState(false);
   const [items, setItems] = useState<MentionItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [query, setQuery] = useState("");
 
   const syncScroll = useCallback(() => {
     const textarea = textareaRef.current;
@@ -91,11 +91,8 @@ export function ComposerMentionInput(props: {
         return;
       }
       const next = filterMentionItems(catalog, active.query);
-      if (next.length === 0) {
-        setMenuOpen(false);
-        return;
-      }
       setItems(next);
+      setQuery(active.query);
       setActiveIndex(0);
       setMenuOpen(true);
     },
@@ -132,28 +129,31 @@ export function ComposerMentionInput(props: {
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      if (menuOpen && items.length > 0) {
-        switch (event.key) {
-          case "ArrowDown":
-            event.preventDefault();
-            setActiveIndex((index) => (index + 1) % items.length);
-            return;
-          case "ArrowUp":
-            event.preventDefault();
-            setActiveIndex((index) => (index - 1 + items.length) % items.length);
-            return;
-          case "Enter":
-          case "Tab":
-            event.preventDefault();
-            handleSelect(items[activeIndex] ?? items[0]);
-            return;
-          case "Escape":
-            event.preventDefault();
-            event.stopPropagation();
-            setMenuOpen(false);
-            return;
-          default:
-            break;
+      if (menuOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setMenuOpen(false);
+          return;
+        }
+        if (items.length > 0) {
+          switch (event.key) {
+            case "ArrowDown":
+              event.preventDefault();
+              setActiveIndex((index) => (index + 1) % items.length);
+              return;
+            case "ArrowUp":
+              event.preventDefault();
+              setActiveIndex((index) => (index - 1 + items.length) % items.length);
+              return;
+            case "Enter":
+            case "Tab":
+              event.preventDefault();
+              handleSelect(items[activeIndex] ?? items[0]);
+              return;
+            default:
+              break;
+          }
         }
       }
       onKeyDown(event);
@@ -169,7 +169,7 @@ export function ComposerMentionInput(props: {
         catalog={catalog}
         className={textareaClassName}
       />
-      <PromptInputTextarea
+      <MessageComposerTextarea
         ref={textareaRef}
         value={value}
         disabled={disabled}
@@ -197,6 +197,7 @@ export function ComposerMentionInput(props: {
         <ComposerMentionMenu
           items={items}
           activeIndex={activeIndex}
+          query={query}
           onSelect={handleSelect}
           onHover={setActiveIndex}
         />

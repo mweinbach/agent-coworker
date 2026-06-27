@@ -9,6 +9,7 @@ import {
   SERVER_ERROR_CODES,
   SERVER_ERROR_SOURCES,
   type ServerErrorCode,
+  type ServerErrorData,
   type ServerErrorSource,
   type TodoItem,
 } from "../types";
@@ -55,6 +56,38 @@ const approvalRiskCodeSchema = z.enum(APPROVAL_RISK_CODES);
 const serverErrorCodeSchema = z.enum(SERVER_ERROR_CODES);
 const serverErrorSourceSchema = z.enum(SERVER_ERROR_SOURCES);
 const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
+const taskStatusSchema = z.enum([
+  "draft",
+  "planning",
+  "working",
+  "blocked",
+  "awaiting_review",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+const terminalTaskStatusSchema = z.enum(["completed", "cancelled", "failed"]);
+export const serverErrorDataSchema: z.ZodType<ServerErrorData> = z.discriminatedUnion("lockKind", [
+  z
+    .object({
+      category: z.literal("task_locked"),
+      source: z.literal("session"),
+      lockKind: z.literal("terminal_task_thread"),
+      taskId: z.string(),
+      taskStatus: terminalTaskStatusSchema,
+    })
+    .strict(),
+  z
+    .object({
+      category: z.literal("task_locked"),
+      source: z.literal("session"),
+      lockKind: z.literal("active_source_chat"),
+      taskId: z.string(),
+      taskStatus: taskStatusSchema,
+      taskTitle: z.string(),
+    })
+    .strict(),
+]);
 
 export type SessionFeedItem =
   | {
@@ -96,6 +129,7 @@ export type SessionFeedItem =
       message: string;
       code: ServerErrorCode;
       source: ServerErrorSource;
+      data?: ServerErrorData;
     }
   | { id: string; kind: "system"; ts: string; line: string }
   | {
@@ -226,6 +260,7 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
       message: z.string(),
       code: serverErrorCodeSchema,
       source: serverErrorSourceSchema,
+      data: serverErrorDataSchema.optional(),
     })
     .strict(),
   z

@@ -263,18 +263,12 @@ export function createCodexTurnNotificationRouter(
   let completionSettled = false;
   let completionDisposeExtras = () => {};
   const pendingUsageByTurnId = new Map<string, RuntimeUsage>();
+  let abortSettlementTimeout: ReturnType<typeof setTimeout> | null = null;
 
   const flushPendingUsage = (id: string | undefined) => {
     if (!id) return;
     const pendingUsage = pendingUsageByTurnId.get(id);
     if (!pendingUsage) return;
-    pendingUsageByTurnId.delete(id);
-    completion.onUsage(pendingUsage);
-  };
-
-  const flushOnlyPendingUsage = () => {
-    if (pendingUsageByTurnId.size !== 1) return;
-    const [[id, pendingUsage]] = [...pendingUsageByTurnId.entries()];
     pendingUsageByTurnId.delete(id);
     completion.onUsage(pendingUsage);
   };
@@ -308,22 +302,22 @@ export function createCodexTurnNotificationRouter(
 
       const onAbort = () => {
         void completion.interrupt?.().catch(() => {});
-        settleReject(new Error("Cancelled by user"));
+        abortSettlementTimeout ??= setTimeout(() => {
+          settleReject(new Error("Timed out waiting for codex app-server turn interruption."));
+        }, 30_000);
       };
 
       if (completion.abortSignal?.aborted) {
         onAbort();
-        return;
+      } else {
+        completion.abortSignal?.addEventListener("abort", onAbort, { once: true });
       }
-      completion.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
       const disposeClose = client.onClose?.(() => {
         const expectedTurnId =
           typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
         if (expectedTurnId) {
           flushPendingUsage(expectedTurnId);
-        } else {
-          flushOnlyPendingUsage();
         }
         settleReject(
           new Error(
@@ -336,6 +330,10 @@ export function createCodexTurnNotificationRouter(
 
       completionDisposeExtras = () => {
         clearTimeout(timeout);
+        if (abortSettlementTimeout) {
+          clearTimeout(abortSettlementTimeout);
+          abortSettlementTimeout = null;
+        }
         completion.abortSignal?.removeEventListener("abort", onAbort);
         disposeClose?.();
       };
@@ -352,11 +350,11 @@ export function createCodexTurnNotificationRouter(
     const expectedTurnId =
       typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
     const payloadThreadId = codexPayloadThreadId(payload);
+    const payloadTurnId = codexPayloadTurnId(payload);
 
     if (notification.method === "thread/tokenUsage/updated") {
       if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
       flushPendingUsage(expectedTurnId);
-      const payloadTurnId = codexPayloadTurnId(payload);
       const parsedUsage = parseUsage(payload?.tokenUsage);
       if (expectedTurnId) {
         if (payloadTurnId && payloadTurnId !== expectedTurnId) return;
@@ -367,15 +365,18 @@ export function createCodexTurnNotificationRouter(
         if (parsedUsage) pendingUsageByTurnId.set(payloadTurnId, parsedUsage);
         return;
       }
-      completion.onUsage(parsedUsage);
       return;
     }
 
     if (notification.method === "turn/completed") {
-      if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
       const turn = asRecord(payload?.turn);
       const completedTurnId = asString(turn?.id);
-      if (expectedTurnId && completedTurnId !== expectedTurnId) return;
+      if (expectedTurnId) {
+        if (completedTurnId !== expectedTurnId) return;
+        if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
+      } else if (expectedThreadId && payloadThreadId !== expectedThreadId) {
+        return;
+      }
       flushPendingUsage(expectedTurnId ?? completedTurnId);
       if (turn?.status === "failed") {
         const error = asRecord(turn.error);
@@ -387,6 +388,7 @@ export function createCodexTurnNotificationRouter(
     }
 
     if (!targetsActiveCodexTurn(payload, target)) return;
+    if (completion.abortSignal?.aborted) return;
 
     let routePayload = payload;
 

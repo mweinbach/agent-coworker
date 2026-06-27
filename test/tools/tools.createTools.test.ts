@@ -34,10 +34,370 @@ import {
   withAuthHome,
   withEnv,
   writeConnectionStore,
-  z,
+  type z,
 } from "./tools.harness";
 
 describe("createTools", () => {
+  test("replaces chat todos with task directives only inside task mode", async () => {
+    const dir = await tmpDir();
+    const taskContext = {
+      id: "task-1",
+      title: "Task",
+      objective: "Do the work",
+      status: "working" as const,
+      revision: 2,
+      requirements: [],
+      workItems: [],
+      decisions: [],
+      questions: [],
+      blockers: [],
+      artifacts: [],
+      activeThreadId: "task-thread-1",
+    };
+    const tools = createTools(
+      makeCtx(dir, {
+        taskContext,
+        applyTaskDirective: async () => {
+          throw new Error("not invoked");
+        },
+      }),
+    );
+
+    expect(tools).toHaveProperty("taskUpdate");
+    expect(tools).not.toHaveProperty("todoWrite");
+    expect(tools).not.toHaveProperty("AskUserQuestion");
+
+    const chatTools = createTools(makeCtx(dir));
+    expect(chatTools).toHaveProperty("todoWrite");
+    expect(chatTools).not.toHaveProperty("taskUpdate");
+  });
+
+  test("taskUpdate treats provider nulls as omitted optional fields", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        taskContext: {
+          id: "task-1",
+          title: "Task",
+          objective: "Do the work",
+          status: "working",
+          revision: 2,
+          requirements: [],
+          workItems: [],
+          decisions: [],
+          questions: [],
+          blockers: [],
+          artifacts: [],
+          activeThreadId: "task-thread-1",
+        },
+        applyTaskDirective: async () => {
+          throw new Error("not invoked");
+        },
+      }),
+    );
+    const taskUpdate = tools.taskUpdate as { inputSchema: z.ZodType };
+
+    const parsed = taskUpdate.inputSchema.safeParse({
+      type: "update_plan",
+      idempotencyKey: "normalize-null-optionals",
+      expectedRevision: 2,
+      objective: null,
+      requirements: null,
+      workItems: [
+        {
+          id: "research",
+          title: "Research",
+          description: null,
+          status: "review",
+          dependsOn: null,
+          expectedOutputs: null,
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw parsed.error;
+    expect(parsed.data).toEqual({
+      type: "update_plan",
+      idempotencyKey: "normalize-null-optionals",
+      expectedRevision: 2,
+      workItems: [{ id: "research", title: "Research", status: "review" }],
+    });
+  });
+
+  test("offers one-shot task creation only to ordinary root chats", async () => {
+    const dir = await tmpDir();
+    const createTask = mock(async () => ({
+      workspaceDisposition: "existing_project" as const,
+      task: {
+        id: "task-created",
+        workspacePath: dir,
+        title: "Ship task mode",
+        objective: "Make task promotion dependable.",
+        context: "The user wants a work-managed mode.",
+        sourceSessionId: "chat-1",
+        creationOrigin: "chat_tool" as const,
+        status: "working" as const,
+        revision: 0,
+        reviewRequired: true,
+        createdAt: "2026-06-19T12:00:00.000Z",
+        updatedAt: "2026-06-19T12:00:00.000Z",
+        threadCount: 1,
+        completedWorkItemCount: 0,
+        totalWorkItemCount: 1,
+        activeBlockerCount: 0,
+        pendingQuestionCount: 0,
+        blockingQuestionCount: 0,
+        requirements: [],
+        threads: [
+          {
+            id: "task-thread-1",
+            taskId: "task-created",
+            sessionId: "task-session-1",
+            title: "Main",
+            createdBy: "coordinator" as const,
+            createdAt: "2026-06-19T12:00:00.000Z",
+            updatedAt: "2026-06-19T12:00:00.000Z",
+          },
+        ],
+        workItems: [],
+        decisions: [],
+        questions: [],
+        artifacts: [],
+        blockers: [],
+        activity: [],
+        latestCheckpoint: null,
+      },
+    }));
+    const tools = createTools(makeCtx(dir, { sessionId: "chat-1", createTask }));
+    const tool = tools.createTask as { execute: (input: unknown) => Promise<string> };
+
+    const output = JSON.parse(
+      await tool.execute({
+        idempotencyKey: "create-task-1",
+        title: "Ship task mode",
+        objective: "Make task promotion dependable.",
+        context: "The user wants a work-managed mode.",
+        requirements: [
+          { kind: "acceptance_criterion", text: "Source chat is locked while work is active." },
+        ],
+        workItems: [
+          {
+            key: "implement",
+            title: "Implement promotion",
+            dependsOn: null,
+            expectedOutputs: ["Working task promotion"],
+          },
+        ],
+      }),
+    );
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewRounds: 3,
+        workItems: [expect.objectContaining({ key: "implement", dependsOn: [] })],
+      }),
+    );
+    expect(output).toMatchObject({
+      taskId: "task-created",
+      taskThreadId: "task-session-1",
+      modeChanged: true,
+    });
+    expect(createTools(makeCtx(dir, { createTask, agentRole: "worker" }))).not.toHaveProperty(
+      "createTask",
+    );
+  });
+
+  test("preserves one-off chat task promotion results on the dedicated createTask tool path", async () => {
+    const dir = await tmpDir();
+    const createTask = mock(async () => ({
+      workspaceDisposition: "promote_one_off" as const,
+      task: {
+        id: "task-created",
+        workspacePath: dir,
+        title: "Promote chat task",
+        objective: "Keep one-off chat promotion on the dedicated tool path.",
+        context: "The source chat established the implementation constraints.",
+        sourceSessionId: "chat-1",
+        creationOrigin: "chat_tool" as const,
+        status: "working" as const,
+        revision: 0,
+        reviewRequired: true,
+        createdAt: "2026-06-20T12:00:00.000Z",
+        updatedAt: "2026-06-20T12:00:00.000Z",
+        threadCount: 1,
+        completedWorkItemCount: 0,
+        totalWorkItemCount: 1,
+        activeBlockerCount: 0,
+        pendingQuestionCount: 0,
+        blockingQuestionCount: 0,
+        requirements: [],
+        threads: [
+          {
+            id: "task-thread-1",
+            taskId: "task-created",
+            sessionId: "task-session-1",
+            title: "Main",
+            createdBy: "coordinator" as const,
+            createdAt: "2026-06-20T12:00:00.000Z",
+            updatedAt: "2026-06-20T12:00:00.000Z",
+          },
+        ],
+        workItems: [],
+        decisions: [],
+        questions: [],
+        artifacts: [],
+        blockers: [],
+        activity: [],
+        latestCheckpoint: null,
+      },
+    }));
+    const tool = createTools(makeCtx(dir, { sessionId: "chat-1", createTask })).createTask as {
+      execute: (input: unknown) => Promise<string>;
+    };
+
+    const output = JSON.parse(
+      await tool.execute({
+        idempotencyKey: "promote-one-off-task",
+        title: "Promote chat task",
+        objective: "Keep one-off chat promotion on the dedicated tool path.",
+        context: "The source chat established the implementation constraints.",
+        requirements: [
+          { kind: "acceptance_criterion", text: "Task mode links back to the source chat." },
+        ],
+        workItems: [
+          {
+            key: "implement",
+            title: "Implement promotion",
+            dependsOn: null,
+            expectedOutputs: ["Working task promotion"],
+          },
+        ],
+      }),
+    );
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(output).toMatchObject({
+      taskId: "task-created",
+      taskThreadId: "task-session-1",
+      workspaceDisposition: "promote_one_off",
+      modeChanged: true,
+    });
+  });
+
+  test("rejects incomplete or cyclic task creation plans", async () => {
+    const dir = await tmpDir();
+    const createTask = mock(async () => {
+      throw new Error("must not execute");
+    });
+    const tool = createTools(makeCtx(dir, { createTask })).createTask as {
+      execute: (input: unknown) => Promise<string>;
+    };
+
+    await expect(
+      tool.execute({
+        idempotencyKey: "invalid-task",
+        title: "Invalid task",
+        objective: "Missing an acceptance criterion.",
+        context: "Incomplete.",
+        requirements: [{ kind: "requirement", text: "Do the work." }],
+        workItems: [
+          { key: "a", title: "A", dependsOn: ["b"], expectedOutputs: ["A"] },
+          { key: "b", title: "B", dependsOn: ["a"] },
+        ],
+      }),
+    ).rejects.toThrow();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  test("taskUpdate submits bundled input requests and exposes pause state", async () => {
+    const dir = await tmpDir();
+    const taskContext = {
+      id: "task-1",
+      title: "Task",
+      objective: "Do the work",
+      status: "working" as const,
+      revision: 2,
+      requirements: [],
+      workItems: [],
+      decisions: [],
+      questions: [],
+      blockers: [],
+      artifacts: [],
+      activeThreadId: "task-thread-1",
+    };
+    const applyTaskDirective = mock(async () => ({
+      continuation: "pause_for_input" as const,
+      task: {
+        id: "task-1",
+        workspacePath: dir,
+        title: "Task",
+        objective: "Do the work",
+        status: "blocked" as const,
+        revision: 3,
+        reviewRequired: true,
+        createdAt: "2026-06-18T12:00:00.000Z",
+        updatedAt: "2026-06-18T12:00:00.000Z",
+        threadCount: 1,
+        completedWorkItemCount: 0,
+        totalWorkItemCount: 1,
+        activeBlockerCount: 0,
+        pendingQuestionCount: 2,
+        blockingQuestionCount: 1,
+        requirements: [],
+        threads: [],
+        workItems: [],
+        decisions: [],
+        questions: [],
+        artifacts: [],
+        blockers: [],
+        activity: [],
+        latestCheckpoint: null,
+      },
+    }));
+    const tools = createTools(makeCtx(dir, { taskContext, applyTaskDirective }));
+    const taskUpdate = tools.taskUpdate as {
+      execute: (input: unknown) => Promise<string>;
+    };
+
+    const output = JSON.parse(
+      await taskUpdate.execute({
+        type: "request_input",
+        idempotencyKey: "input-1",
+        expectedRevision: 2,
+        questions: [
+          {
+            header: "Audience",
+            question: "Who is the audience?",
+            blocking: true,
+            urgency: "now",
+          },
+          {
+            header: "Format",
+            question: "Which format should I use?",
+            blocking: false,
+            urgency: "before_delivery",
+            defaultAction: "Use the normal analyst brief.",
+          },
+        ],
+      }),
+    );
+
+    expect(applyTaskDirective).toHaveBeenCalledTimes(1);
+    expect(applyTaskDirective.mock.calls[0]?.[0]).toMatchObject({
+      type: "request_input",
+      expectedRevision: 2,
+    });
+    expect(output).toMatchObject({
+      status: "blocked",
+      revision: 3,
+      pendingQuestions: 2,
+      blockingQuestions: 1,
+      continuation: "pause_for_input",
+    });
+  });
+
   test("returns base tool names when child-agent control is unavailable", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
@@ -185,7 +545,11 @@ describe("createTools", () => {
 
     const dynamicTools = filterToolsForCodexDynamicBoundary(rawTools);
     expect(dynamicTools).toHaveProperty("webSearch");
-    expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("webSearch");
+    const dynamicToolSpecs = codexDynamicToolSpecs(dynamicTools);
+    expect(dynamicToolSpecs.map((tool) => tool.name)).toContain("webSearch");
+    expect(dynamicToolSpecs.find((tool) => tool.name === "AskUserQuestion")?.description).toContain(
+      "instead of the native request_user_input tool",
+    );
   });
 
   test("exposes manageMemory through the Codex dynamic tool boundary", async () => {

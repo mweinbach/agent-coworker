@@ -629,6 +629,22 @@ describe("subagents settings page", () => {
     ]);
   });
 
+  test("profile model picker does not preserve Antigravity on Windows", () => {
+    const harness = setupJsdom();
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "win32";
+      const result = buildProfileModelGroups(
+        [providerCatalogEntry("google", "gemini-3.5-flash", "Gemini 3.5 Flash")],
+        "antigravity:gemini-3.1-pro-preview",
+      );
+
+      expect(JSON.stringify(result)).not.toContain("antigravity");
+      expect(JSON.stringify(result)).not.toContain("Antigravity");
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("uses the selected profile workspace provider catalog for model choices", async () => {
     const project = workspaceRecord("project-1", "Project", "project");
     const refreshProviderStatus = mock(async () => {});
@@ -832,8 +848,9 @@ describe("subagents settings page", () => {
       expect(text).toContain("Profile workspace");
       expect(text).toContain("Project One");
       expect(text).toContain("/tmp/project-1");
-      expect(text).toContain("Change workspace");
-      expect(text.match(/Project One/g)?.length ?? 0).toBe(1);
+      // The select trigger renders the active workspace name (not a static
+      // "Change workspace" label), but the file path stays on the left only.
+      expect(text.match(/\/tmp\/project-1/g)?.length ?? 0).toBe(1);
     } finally {
       if (root) {
         await act(async () => {

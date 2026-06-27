@@ -40,7 +40,13 @@ export function handleLifecycleThreadEvent(
       prevRt?.draftComposerProvider != null &&
       typeof prevRt.draftComposerModel === "string" &&
       prevRt.draftComposerModel.trim()
-        ? { provider: prevRt.draftComposerProvider, model: prevRt.draftComposerModel.trim() }
+        ? {
+            provider: prevRt.draftComposerProvider,
+            model: prevRt.draftComposerModel.trim(),
+            ...(prevRt.composerReasoningEffort
+              ? { reasoningEffort: prevRt.composerReasoningEffort }
+              : {}),
+          }
         : null;
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
@@ -260,7 +266,7 @@ export function handleLifecycleThreadEvent(
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...rt, sessionConfig: evt.config },
+          [threadId]: { ...rt, sessionConfig: evt.config, composerReasoningEffort: null },
         },
       };
     });

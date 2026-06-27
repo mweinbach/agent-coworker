@@ -76,8 +76,8 @@ const CODEX_RELEASES_LATEST_URL = "https://api.github.com/repos/openai/codex/rel
 const CODEX_RELEASE_TAG_URL = "https://api.github.com/repos/openai/codex/releases/tags";
 const CODEX_USER_AGENT = "agent-coworker-codex-app-server-runtime";
 const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
-export const CODEX_APP_SERVER_MANAGED_VERSION = "0.136.0";
-const MANAGED_CODEX_APP_SERVER_ARGS = ["--session-source", "app-server"] as const;
+export const CODEX_APP_SERVER_MANAGED_VERSION = "0.142.3";
+const MANAGED_CODEX_APP_SERVER_ARGS: readonly string[] = [];
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
 
 /**
@@ -94,6 +94,20 @@ const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
  *     --jq '.assets[] | "\(.name) \(.digest)"'
  */
 const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>> = {
+  "0.142.3": {
+    "codex-app-server-aarch64-apple-darwin.tar.gz":
+      "69167dbcbfa6c2bfa6cffd9f3aab785fbf5f7ea655e1b2ac5a47fa5aec0bb6ed",
+    "codex-app-server-x86_64-apple-darwin.tar.gz":
+      "e487988361d6f8989dad27b90d3e46e1fcb166ea2829110568a46ed25e88dab9",
+    "codex-app-server-aarch64-unknown-linux-musl.tar.gz":
+      "9b740bac5a60ddef384bb1d059ed35ebfbc654b383d4d1b0efa1d8acfad53b9c",
+    "codex-app-server-x86_64-unknown-linux-musl.tar.gz":
+      "ddae454998bd40ddd76fa53a5cdf6ef29f99486596ce29fd00a8a153e73a1574",
+    "codex-app-server-aarch64-pc-windows-msvc.exe":
+      "881b27a314232586bf6d5b9ad0a2b5a914aec878f33403776eb61eae24177174",
+    "codex-app-server-x86_64-pc-windows-msvc.exe":
+      "2acff195682a52bbcccb19a1e67c8f0cdc1850e98c58b1d2bde4d52c36b13680",
+  },
   "0.136.0": {
     "codex-app-server-aarch64-apple-darwin.tar.gz":
       "408ebc00ce914f4130a831a1c3f3f06f6be635992dc37432ed25fd294446d8d1",
@@ -186,7 +200,7 @@ function normalizeCodexReleaseVersion(tagName: string): string {
 function normalizeCodexVersionInput(version: string): string {
   const normalized = normalizeCodexReleaseVersion(version.trim());
   if (!CODEX_VERSION_PATTERN.test(normalized)) {
-    throw new Error("Codex app-server version must look like 0.136.0.");
+    throw new Error("Codex app-server version must look like 0.142.3.");
   }
   return normalized;
 }

@@ -1,6 +1,7 @@
 import type { PropsWithChildren, ReactNode } from "react";
 import { Text, View } from "react-native";
 
+import { radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type SectionCardProps = PropsWithChildren<{
@@ -17,10 +18,10 @@ export function SectionCard({ title, description, action, children }: SectionCar
     <View
       style={{
         gap: 14,
-        borderRadius: 24,
+        borderRadius: radius.xl,
         borderCurve: "continuous",
         borderWidth: 1,
-        borderColor: theme.borderMuted,
+        borderColor: theme.border,
         backgroundColor: theme.surface,
         padding: 18,
         boxShadow: theme.shadow,
@@ -40,7 +41,7 @@ export function SectionCard({ title, description, action, children }: SectionCar
             style={{
               color: theme.text,
               fontSize: 17,
-              fontWeight: "700",
+              fontWeight: "600",
               letterSpacing: -0.2,
             }}
           >

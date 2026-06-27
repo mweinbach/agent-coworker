@@ -146,14 +146,17 @@ function AskPromptContent(props: {
         </div>
 
         <DialogFooter className="border-t border-border/60 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <Button
-            variant="ghost"
-            className="mr-auto px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-            type="button"
-            onClick={skip}
-          >
-            Skip for now
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              className="px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+              type="button"
+              onClick={skip}
+            >
+              Skip for now
+            </Button>
+            <span className="text-[11px] text-muted-foreground">Esc skips this question</span>
+          </div>
         </DialogFooter>
       </div>
     </>

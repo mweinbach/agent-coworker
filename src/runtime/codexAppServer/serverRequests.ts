@@ -138,7 +138,7 @@ async function handleDynamicToolCall(
 
   try {
     const input = validateDynamicToolInput(tool, requestParams?.arguments ?? {});
-    const result = await tool.execute(input);
+    const result = await tool.execute(input, { abortSignal: params.abortSignal });
     return dynamicToolResponse(true, dynamicToolResultText(result));
   } catch (error) {
     return dynamicToolResponse(
@@ -172,12 +172,36 @@ export async function handleServerRequest(
     method === "item/commandExecution/requestApproval" ||
     method === "item/fileChange/requestApproval"
   ) {
+    try {
+      await params.assertCanMutate?.(
+        method === "item/fileChange/requestApproval"
+          ? "codex:fileChange"
+          : "codex:commandExecution",
+      );
+    } catch (error) {
+      params.log?.(`[codex-app-server] Native tool approval declined: ${compactToolError(error)}`);
+      return { decision: "decline" };
+    }
     const isNoProjectWriteFileApproval =
       params.shellPolicy === "no_project_write" && method === "item/fileChange/requestApproval";
     const approved =
       !isNoProjectWriteFileApproval &&
       (params.yolo === true ||
         (await params.approveCommand?.(approvalPromptForRequest(request))) === true);
+    if (approved) {
+      try {
+        await params.assertCanMutate?.(
+          method === "item/fileChange/requestApproval"
+            ? "codex:fileChange"
+            : "codex:commandExecution",
+        );
+      } catch (error) {
+        params.log?.(
+          `[codex-app-server] Native tool approval declined after wait: ${compactToolError(error)}`,
+        );
+        return { decision: "decline" };
+      }
+    }
     return { decision: approved ? "accept" : "decline" };
   }
   return {};

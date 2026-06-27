@@ -18,6 +18,10 @@ import type {
 import { getLocalLogPath, getLogsDir, logError, logInfo, logWarn, tailLog } from "./localLogs";
 import type { PersistenceService } from "./persistence";
 import type { DesktopUpdaterService } from "./updater";
+import {
+  readWindowsSandboxReadiness,
+  type WindowsSandboxReadiness,
+} from "./windowsSandboxReadiness";
 
 const DIAGNOSTICS_DIR_NAME = "diagnostics";
 const DIAGNOSTICS_FILE_PREFIX = "cowork-diagnostics-";
@@ -60,6 +64,7 @@ type DiagnosticsBundle = {
     reason: "not_collected_by_desktop";
   };
   updateState: unknown;
+  windowsSandbox: WindowsSandboxReadiness | { state: "not-applicable" } | null;
   logs: Partial<Record<"server.log" | "desktop-main.log" | "updater.log" | "renderer.log", string>>;
 };
 
@@ -201,6 +206,10 @@ export class DiagnosticsService {
         reason: "not_collected_by_desktop",
       },
       updateState: sanitizeLogMeta(this.updater.getState(), context),
+      windowsSandbox:
+        this.platform === "win32"
+          ? await readWindowsSandboxReadiness(app.getPath("userData"))
+          : { state: "not-applicable" },
       logs,
     };
 

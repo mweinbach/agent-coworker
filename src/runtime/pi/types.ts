@@ -1,3 +1,10 @@
+import type {
+  Api as PiApi,
+  AssistantMessageEventStream as PiAssistantMessageEventStream,
+  Context as PiContext,
+  ProviderStreamOptions as PiProviderStreamOptions,
+  Model as PiSdkModel,
+} from "@earendil-works/pi-ai";
 import type { ModelMessage } from "../../types";
 import type { PiModel } from "../piRuntimeOptions";
 import type { RuntimeStepOverride } from "../types";
@@ -33,6 +40,12 @@ export type RuntimeStepState = {
   piMessages: Array<Record<string, unknown>>;
 };
 
+export type PiStreamFunction = <TApi extends PiApi>(
+  model: PiSdkModel<TApi>,
+  context: PiContext,
+  options?: PiProviderStreamOptions,
+) => PiAssistantMessageEventStream;
+
 export type PiRuntimeOverrides = {
-  piStreamImpl?: typeof import("@earendil-works/pi-ai").stream;
+  piStreamImpl?: PiStreamFunction;
 };

@@ -1,6 +1,7 @@
 import { Pressable, Text, TextInput, View } from "react-native";
 
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
+import { alpha, radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type PendingRequestCardProps = {
@@ -23,28 +24,35 @@ export function PendingRequestCard({
   onReject,
 }: PendingRequestCardProps) {
   const theme = useAppTheme();
-  const isDangerous = request.kind === "approval" && request.dangerous;
+  const isApproval = request.kind === "approval";
+  const isDangerous = isApproval && request.dangerous;
+  // Desktop SandboxApprovalCard: quiet tinted wash (border-destructive/40 + bg-destructive/5),
+  // no heavy shadow — not a loud solid border.
+  const toneAccent = isDangerous ? theme.danger : theme.warning;
 
   return (
     <View
       style={{
         gap: 12,
-        borderRadius: 24,
+        borderRadius: radius.lg,
         borderCurve: "continuous",
-        borderWidth: isDangerous ? 2 : 1,
-        borderColor: isDangerous ? theme.danger : theme.warning,
-        backgroundColor: theme.surface,
+        borderWidth: 1,
+        borderColor: isApproval ? alpha(toneAccent, 0.4) : theme.border,
+        backgroundColor: isApproval
+          ? isDangerous
+            ? theme.dangerMuted
+            : theme.warningMuted
+          : theme.surface,
         paddingHorizontal: 16,
         paddingVertical: 16,
-        boxShadow: theme.shadow,
       }}
     >
       <Text
         selectable
         style={{
-          color: isDangerous ? theme.danger : theme.warning,
+          color: isApproval ? toneAccent : theme.textSecondary,
           fontSize: 12,
-          fontWeight: "800",
+          fontWeight: "700",
           letterSpacing: 0.6,
           textTransform: "uppercase",
         }}
@@ -98,7 +106,7 @@ export function PendingRequestCard({
             placeholderTextColor={theme.textTertiary}
             style={{
               minHeight: 48,
-              borderRadius: 16,
+              borderRadius: radius.md,
               borderCurve: "continuous",
               borderWidth: 1,
               borderColor: theme.border,
@@ -129,14 +137,14 @@ export function PendingRequestCard({
             <Pressable
               onPress={onAnswerText}
               style={({ pressed }) => ({
-                borderRadius: 999,
+                borderRadius: radius.md,
                 borderCurve: "continuous",
-                backgroundColor: pressed ? theme.accent : theme.primary,
-                paddingHorizontal: 14,
-                paddingVertical: 9,
+                backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
               })}
             >
-              <Text style={{ color: theme.primaryText, fontWeight: "700" }}>Send answer</Text>
+              <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Send answer</Text>
             </Pressable>
           </View>
         </>
@@ -145,28 +153,28 @@ export function PendingRequestCard({
           <Pressable
             onPress={onApprove}
             style={({ pressed }) => ({
-              borderRadius: 999,
+              borderRadius: radius.md,
               borderCurve: "continuous",
-              backgroundColor: pressed ? theme.success : theme.primary,
-              paddingHorizontal: 14,
-              paddingVertical: 9,
+              backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+              paddingHorizontal: 16,
+              paddingVertical: 10,
             })}
           >
-            <Text style={{ color: theme.primaryText, fontWeight: "700" }}>Approve</Text>
+            <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Approve</Text>
           </Pressable>
           <Pressable
             onPress={onReject}
             style={({ pressed }) => ({
-              borderRadius: 999,
+              borderRadius: radius.md,
               borderCurve: "continuous",
               borderWidth: 1,
-              borderColor: theme.danger,
-              backgroundColor: pressed ? theme.dangerMuted : "transparent",
-              paddingHorizontal: 14,
-              paddingVertical: 9,
+              borderColor: theme.border,
+              backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+              paddingHorizontal: 16,
+              paddingVertical: 10,
             })}
           >
-            <Text style={{ color: theme.danger, fontWeight: "700" }}>Decline</Text>
+            <Text style={{ color: theme.danger, fontWeight: "600" }}>Decline</Text>
           </Pressable>
         </View>
       )}

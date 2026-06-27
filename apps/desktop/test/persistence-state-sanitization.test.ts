@@ -126,6 +126,72 @@ describe("desktop persistence state validation", () => {
     expect(loaded.threads[0]?.id).toBe("thread_valid");
   });
 
+  test("saveState preserves task-owned thread metadata and drops malformed ownership", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-valid");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_valid",
+          name: "Valid workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "task_thread_valid",
+          workspaceId: "ws_valid",
+          title: "Task thread",
+          titleSource: "manual",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "task_session_valid",
+          messageCount: 4,
+          lastEventSeq: 9,
+          taskId: "task_valid",
+          taskThreadId: "task_thread_owner",
+        },
+        {
+          id: "task_thread_malformed",
+          workspaceId: "ws_valid",
+          title: "Malformed task thread",
+          titleSource: "manual",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "task_session_malformed",
+          messageCount: 1,
+          lastEventSeq: 1,
+          taskId: "../task",
+          taskThreadId: "",
+        },
+      ],
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.threads).toEqual([
+      expect.objectContaining({
+        id: "task_thread_valid",
+        sessionId: "task_session_valid",
+        taskId: "task_valid",
+        taskThreadId: "task_thread_owner",
+      }),
+      expect.not.objectContaining({
+        taskId: expect.any(String),
+        taskThreadId: expect.any(String),
+      }),
+    ]);
+  });
+
   test("saveState preserves yolo configuration", async () => {
     const persistence = new PersistenceService();
     const workspaceYoloTrue = path.join(userDataDir, "workspace-yolo-true");
@@ -234,7 +300,7 @@ describe("desktop persistence state validation", () => {
     }
   });
 
-  test("infers one-off chat kind from chat workspace paths", async () => {
+  test("preserves an explicitly promoted project inside the chat workspace root", async () => {
     const persistence = new PersistenceService();
     const oneOffChat = path.join(
       os.homedir(),
@@ -243,7 +309,7 @@ describe("desktop persistence state validation", () => {
       `persistence-kind-test-${crypto.randomUUID()}`,
     );
     oneOffTestDirs.push(oneOffChat);
-    await fs.rm(oneOffChat, { recursive: true, force: true });
+    await fs.mkdir(oneOffChat, { recursive: true });
 
     await persistence.saveState({
       version: 2,
@@ -265,7 +331,7 @@ describe("desktop persistence state validation", () => {
 
     const loaded = await persistence.loadState();
     expect(loaded.workspaces).toHaveLength(1);
-    expect(loaded.workspaces[0]?.workspaceKind).toBe("oneOffChat");
+    expect(loaded.workspaces[0]?.workspaceKind).toBe("project");
     expect(loaded.workspaces[0]?.path).toBe(await fs.realpath(oneOffChat));
   });
 

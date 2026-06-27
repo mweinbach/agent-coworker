@@ -21,6 +21,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
+import { Marker, MarkerContent } from "../../components/ui/marker";
 import { cn } from "../../lib/utils";
 import { DesktopMarkdown } from "../markdown";
 import type { ActivityFeedItem, ActivityGroupSummary } from "./activityGroups";
@@ -381,18 +382,22 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   if (useCompactElapsedHeader) {
     return (
       <Collapsible open={expanded} onOpenChange={handleOpenChange}>
-        <CollapsibleTrigger className="group flex w-full max-w-3xl items-center gap-1.5 border-b border-border/25 pb-2.5 pt-1.5 text-left outline-none">
-          <span className="text-sm font-mono tracking-tight text-muted-foreground/80 transition-colors group-hover:text-foreground">
-            {props.live
-              ? displayElapsedLabel
-                ? `Working for ${displayElapsedLabel}`
-                : "Working"
-              : displayElapsedLabel
-                ? `Worked for ${displayElapsedLabel}`
-                : "Worked"}
-          </span>
-          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-all duration-200 group-data-[state=open]:rotate-90 group-hover:text-foreground" />
-        </CollapsibleTrigger>
+        <Marker asChild variant={props.live ? "border" : "separator"}>
+          <CollapsibleTrigger className="group w-full max-w-3xl pb-2.5 pt-1.5 outline-none">
+            <MarkerContent className="font-mono tracking-tight transition-colors group-hover:text-foreground">
+              <span role={props.live ? "status" : undefined}>
+                {props.live
+                  ? displayElapsedLabel
+                    ? `Working for ${displayElapsedLabel}`
+                    : "Working"
+                  : displayElapsedLabel
+                    ? `Worked for ${displayElapsedLabel}`
+                    : "Worked"}
+              </span>
+            </MarkerContent>
+            <ChevronRightIcon className="size-3.5 shrink-0 opacity-0 transition-all duration-200 group-hover:opacity-100 group-data-[state=open]:rotate-90" />
+          </CollapsibleTrigger>
+        </Marker>
 
         <CollapsibleContent className="max-w-3xl overflow-hidden">
           <div className="border-b border-border/25 px-1 pb-2.5 pt-3">

@@ -1,0 +1,445 @@
+import { describe, expect, mock, test } from "bun:test";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+
+import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
+import type { ChatRenderItem } from "../src/ui/chat/activityGroups";
+import { ChatViewContext } from "../src/ui/chat/ChatViewContext";
+import type { MentionCatalog } from "../src/ui/chat/composerMentions";
+import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
+
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
+
+const { ChatFeed } = await import("../src/ui/chat/ChatFeed");
+
+const EMPTY_MENTION_CATALOG: MentionCatalog = {
+  items: [],
+  names: [],
+  kindByName: new Map(),
+};
+
+class ControlledResizeObserver {
+  static callbacks = new Set<ResizeObserverCallback>();
+  readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    ControlledResizeObserver.callbacks.add(callback);
+  }
+
+  observe() {}
+  unobserve() {}
+  disconnect() {
+    ControlledResizeObserver.callbacks.delete(this.callback);
+  }
+
+  static trigger() {
+    for (const callback of ControlledResizeObserver.callbacks) {
+      callback([], {} as ResizeObserver);
+    }
+  }
+}
+
+function rect(top: number, height: number): DOMRect {
+  return {
+    bottom: top + height,
+    height,
+    left: 0,
+    right: 600,
+    toJSON: () => ({}),
+    top,
+    width: 600,
+    x: 0,
+    y: top,
+  } as DOMRect;
+}
+
+function itemHeight(item: Element, heights: ReadonlyMap<string, number>): number {
+  const messageId = (item as HTMLElement).dataset.messageId;
+  return messageId ? (heights.get(messageId) ?? 0) : 200;
+}
+
+function installScrollerGeometry(
+  harness: JsdomHarness,
+  heights: ReadonlyMap<string, number>,
+  viewportHeight = 400,
+) {
+  const { HTMLElement } = harness.dom.window;
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  const originalClientHeight = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientHeight",
+  );
+  const originalScrollHeight = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollHeight",
+  );
+
+  HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    if (this.getAttribute("data-slot") === "message-scroller-viewport") {
+      return rect(0, viewportHeight);
+    }
+    if (this.getAttribute("data-slot") === "message-scroller-item") {
+      const viewport = this.closest('[data-slot="message-scroller-viewport"]') as HTMLElement;
+      const content = this.parentElement;
+      const transcriptItems = Array.from(
+        content?.querySelectorAll(':scope > [data-slot="message-scroller-item"].order-1') ?? [],
+      );
+      const isClearance = this.classList.contains("order-3");
+      const visualItems = isClearance
+        ? transcriptItems
+        : transcriptItems.slice(0, transcriptItems.indexOf(this));
+      const top =
+        visualItems.reduce((sum, item) => sum + itemHeight(item, heights), 0) -
+        (viewport?.scrollTop ?? 0);
+      return rect(top, itemHeight(this, heights));
+    }
+    return originalRect.call(this);
+  };
+
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get() {
+      if (this.getAttribute("data-slot") === "message-scroller-viewport") {
+        return viewportHeight;
+      }
+      return originalClientHeight?.get?.call(this) ?? 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get() {
+      if (this.getAttribute("data-slot") === "message-scroller-viewport") {
+        const content = this.querySelector('[data-slot="message-scroller-content"]');
+        const items = Array.from(
+          content?.querySelectorAll(':scope > [data-slot="message-scroller-item"]') ?? [],
+        );
+        return items.reduce((sum, item) => sum + itemHeight(item, heights), 0);
+      }
+      return originalScrollHeight?.get?.call(this) ?? 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value(this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? this.scrollTop;
+    },
+  });
+}
+
+function message(id: string, role: "assistant" | "user", text: string): ChatRenderItem {
+  const item: SessionFeedItem = {
+    id,
+    kind: "message",
+    role,
+    text,
+    ts: "2026-06-26T12:00:00.000Z",
+  };
+  return { kind: "feed-item", item };
+}
+
+function renderFeed(renderItems: ChatRenderItem[], selectedThreadId: string, hydrating = false) {
+  return createElement(
+    ChatViewContext.Provider,
+    {
+      value: {
+        developerMode: false,
+        mentionCatalog: EMPTY_MENTION_CATALOG,
+      },
+    },
+    createElement(ChatFeed, {
+      transcriptOnly: false,
+      disconnected: false,
+      onReconnect: () => {},
+      visibleFeedLength: renderItems.length,
+      hydrating,
+      renderItems,
+      liveActivityGroupId: null,
+      liveStartedAt: null,
+      citationUrlsByMessageId: new Map(),
+      citationSourcesByMessageId: new Map(),
+      desktopBasePath: null,
+      latestUiSurfaceItemId: null,
+      a2uiEnabled: false,
+      composerOverlayHeight: 200,
+      sandboxApprovals: [],
+      onAnswerApproval: () => {},
+      selectedThreadId,
+    }),
+  );
+}
+
+function setupScroller(heights: Map<string, number>) {
+  ControlledResizeObserver.callbacks.clear();
+  const harness = setupJsdom({
+    includeAnimationFrame: true,
+    extraGlobals: { ResizeObserver: ControlledResizeObserver },
+  });
+  installScrollerGeometry(harness, heights);
+  return harness;
+}
+
+describe("desktop chat message scroller", () => {
+  test("opens at the last visible user turn with a 64px previous-message peek", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 500],
+      ["user-2", 100],
+      ["assistant-2", 500],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("user-1", "user", "First question"),
+              message("assistant-1", "assistant", "First answer"),
+              message("user-2", "user", "Second question"),
+              message("assistant-2", "assistant", "Second answer"),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(viewport?.scrollTop).toBe(536);
+      expect(container.querySelector('[data-message-id="user-1"]')?.dataset.scrollAnchor).toBe(
+        "true",
+      );
+      expect(container.querySelector('[data-message-id="user-2"]')?.dataset.scrollAnchor).toBe(
+        "true",
+      );
+      expect(container.querySelector('[data-message-id="assistant-2"]')?.dataset.scrollAnchor).toBe(
+        "false",
+      );
+      expect(container.querySelector('[data-slot="message-scroller-button"]')?.style.bottom).toBe(
+        "214px",
+      );
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("reapplies last-anchor after an empty thread finishes hydrating", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 500],
+      ["user-2", 100],
+      ["assistant-2", 500],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const hydratedItems = [
+        message("user-1", "user", "First question"),
+        message("assistant-1", "assistant", "First answer"),
+        message("user-2", "user", "Second question"),
+        message("assistant-2", "assistant", "Second answer"),
+      ];
+
+      await act(async () => {
+        root.render(renderFeed([], "thread-a", true));
+      });
+      await act(async () => {
+        root.render(renderFeed(hydratedItems, "thread-a"));
+      });
+
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(viewport?.scrollTop).toBe(536);
+      expect(container.querySelector('[data-message-id="user-2"]')?.dataset.scrollAnchor).toBe(
+        "true",
+      );
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("anchors a newly appended user turn even with approvals and clearance rendered below it", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 500],
+      ["user-2", 100],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const initialItems = [
+        message("user-1", "user", "First question"),
+        message("assistant-1", "assistant", "First answer"),
+      ];
+
+      await act(async () => {
+        root.render(renderFeed(initialItems, "thread-a"));
+      });
+
+      await act(async () => {
+        root.render(
+          renderFeed([...initialItems, message("user-2", "user", "Follow-up")], "thread-a"),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(viewport?.scrollTop).toBe(536);
+      const children = Array.from(
+        container.querySelector('[data-slot="message-scroller-content"]')?.children ?? [],
+      ).filter((element) => element.getAttribute("data-slot") === "message-scroller-item");
+      expect(children.at(-1)?.getAttribute("data-message-id")).toBe("user-2");
+      expect(children.at(-1)?.getAttribute("data-scroll-anchor")).toBe("true");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("follows streaming at the live edge, stops after user scroll, and resumes after scroll-to-end", async () => {
+    const heights = new Map([
+      ["user-1", 60],
+      ["assistant-1", 60],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("user-1", "user", "Question"),
+              message("assistant-1", "assistant", "Streaming"),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewport) throw new Error("missing viewport");
+      expect(viewport.scrollTop).toBe(0);
+
+      heights.set("assistant-1", 500);
+      await act(async () => {
+        ControlledResizeObserver.trigger();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(viewport.scrollTop).toBe(360);
+
+      viewport.scrollTop = 100;
+      await act(async () => {
+        viewport.dispatchEvent(new harness.dom.window.Event("wheel", { bubbles: true }));
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      heights.set("assistant-1", 600);
+      await act(async () => {
+        ControlledResizeObserver.trigger();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(viewport.scrollTop).toBe(100);
+
+      const scrollToEnd = container.querySelector(
+        '[aria-label="Scroll to end"]',
+      ) as HTMLButtonElement | null;
+      expect(scrollToEnd?.dataset.active).toBe("true");
+      await act(async () => {
+        scrollToEnd?.click();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(viewport.scrollTop).toBe(460);
+
+      heights.set("assistant-1", 700);
+      await act(async () => {
+        ControlledResizeObserver.trigger();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(viewport.scrollTop).toBe(560);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("reapplies last-user-turn restoration when switching threads", async () => {
+    const heights = new Map([
+      ["user-a", 100],
+      ["assistant-a", 700],
+      ["assistant-b-intro", 200],
+      ["user-b", 100],
+      ["assistant-b", 500],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [message("user-a", "user", "A"), message("assistant-a", "assistant", "Answer A")],
+            "thread-a",
+          ),
+        );
+      });
+      const viewportA = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(viewportA?.scrollTop).toBe(0);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("assistant-b-intro", "assistant", "Intro"),
+              message("user-b", "user", "B"),
+              message("assistant-b", "assistant", "Answer B"),
+            ],
+            "thread-b",
+          ),
+        );
+      });
+
+      const viewportB = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(viewportB).not.toBe(viewportA);
+      expect(viewportB?.scrollTop).toBe(136);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+});

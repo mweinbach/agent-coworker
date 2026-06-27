@@ -8,28 +8,43 @@ import {
 } from "lucide-react";
 import type { ComponentProps, DragEvent } from "react";
 import { forwardRef, useCallback, useState } from "react";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "../../components/ui/attachment";
+import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import { Button } from "../ui/button";
 
-type PromptInputStatus = "ready" | "pending" | "submitted" | "streaming" | "error";
-type PromptInputMode = "send" | "steer-ready" | "steer-pending";
+type MessageComposerSubmissionStatus = "ready" | "pending" | "submitted" | "streaming" | "error";
+type MessageComposerMode = "send" | "steer-ready" | "steer-pending";
 
-type PromptInputFileDropOptions = {
+type MessageComposerFileDropOptions = {
   onFiles: (files: File[]) => void | Promise<void>;
   disabled?: boolean;
 };
 
-export type PromptInputAttachmentPreviewItem = {
+export type MessageComposerAttachmentItem = {
   filename: string;
   mimeType: string;
   previewUrl?: string;
 };
 
-type PromptInputRootProps = ComponentProps<"fieldset"> & {
-  fileDrop?: PromptInputFileDropOptions;
+type MessageComposerRootProps = ComponentProps<"fieldset"> & {
+  fileDrop?: MessageComposerFileDropOptions;
 };
 
-export function PromptInputRoot({ className, fileDrop, children, ...props }: PromptInputRootProps) {
+export function MessageComposerRoot({
+  className,
+  fileDrop,
+  children,
+  ...props
+}: MessageComposerRootProps) {
   const [dragActive, setDragActive] = useState(false);
   const dropEnabled = Boolean(fileDrop) && !fileDrop?.disabled;
 
@@ -85,8 +100,8 @@ export function PromptInputRoot({ className, fileDrop, children, ...props }: Pro
   return (
     <fieldset
       {...props}
-      aria-label="Prompt input"
-      data-slot="prompt-input"
+      aria-label="Message composer"
+      data-slot="message-composer"
       data-file-drag-active={dragActive ? "" : undefined}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
@@ -104,7 +119,7 @@ export function PromptInputRoot({ className, fileDrop, children, ...props }: Pro
   );
 }
 
-function attachmentPreviewSrc(item: PromptInputAttachmentPreviewItem): string | null {
+function attachmentPreviewSrc(item: MessageComposerAttachmentItem): string | null {
   if (!item.mimeType.startsWith("image/")) return null;
   return item.previewUrl ?? null;
 }
@@ -116,7 +131,7 @@ function attachmentExtension(filename: string): string | null {
   return extension ? extension.toUpperCase() : null;
 }
 
-function attachmentTypeLabel(item: PromptInputAttachmentPreviewItem): string {
+function attachmentTypeLabel(item: MessageComposerAttachmentItem): string {
   if (item.mimeType.startsWith("audio/")) {
     return attachmentExtension(item.filename) ?? "AUDIO";
   }
@@ -126,24 +141,34 @@ function attachmentTypeLabel(item: PromptInputAttachmentPreviewItem): string {
   return item.mimeType.split("/", 1)[0]?.toUpperCase() || "File";
 }
 
-function attachmentPreviewIcon(item: PromptInputAttachmentPreviewItem) {
+function attachmentPreviewIcon(item: MessageComposerAttachmentItem) {
   if (item.mimeType.startsWith("audio/")) {
     return <FileAudioIcon className="size-3.5 text-muted-foreground" aria-hidden />;
   }
   return <FileTextIcon className="size-3.5 text-muted-foreground" aria-hidden />;
 }
 
-export type PromptInputAttachmentPreviewsProps = {
-  attachments: readonly PromptInputAttachmentPreviewItem[];
+function keyedComposerAttachments(attachments: readonly MessageComposerAttachmentItem[]) {
+  const occurrences = new Map<string, number>();
+  return attachments.map((item) => {
+    const signature = `${item.filename}:${item.mimeType}:${item.previewUrl ?? ""}`;
+    const occurrence = occurrences.get(signature) ?? 0;
+    occurrences.set(signature, occurrence + 1);
+    return { item, key: `${signature}:${occurrence}` };
+  });
+}
+
+export type MessageComposerAttachmentsProps = {
+  attachments: readonly MessageComposerAttachmentItem[];
   onRemove: (index: number) => void;
   className?: string;
 };
 
-export function PromptInputAttachmentPreviews({
+export function MessageComposerAttachments({
   attachments,
   onRemove,
   className,
-}: PromptInputAttachmentPreviewsProps) {
+}: MessageComposerAttachmentsProps) {
   if (attachments.length === 0) return null;
 
   return (
@@ -151,50 +176,41 @@ export function PromptInputAttachmentPreviews({
       aria-label="Attached files"
       className={cn("flex w-full min-w-0 flex-col gap-2 px-0.5 pb-1", className)}
     >
-      <div className="flex max-w-full flex-wrap gap-1.5">
-        {attachments.map((item, index) => {
+      <AttachmentGroup className="flex-wrap overflow-visible py-0">
+        {keyedComposerAttachments(attachments).map(({ item, key }, index) => {
           const src = attachmentPreviewSrc(item);
           return (
-            <div
-              key={`${item.filename}:${item.mimeType}:${item.previewUrl ?? ""}`}
-              className="group inline-flex min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-full border border-border/55 bg-background/70 py-1 pl-1.5 pr-1 text-sm shadow-[inset_0_1px_0_var(--border-glass)]"
-            >
-              <div className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/45 ring-1 ring-border/40">
+            <Attachment key={key} size="sm" className="min-w-0 max-w-full bg-background/70">
+              <AttachmentMedia variant={src ? "image" : "icon"}>
                 {src ? (
                   <img src={src} alt="" className="size-full object-cover" draggable={false} />
                 ) : (
                   attachmentPreviewIcon(item)
                 )}
-              </div>
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                <p
-                  className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-foreground/88"
-                  title={item.filename}
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle title={item.filename}>{item.filename}</AttachmentTitle>
+                <AttachmentDescription>{attachmentTypeLabel(item)}</AttachmentDescription>
+              </AttachmentContent>
+              <AttachmentActions>
+                <AttachmentAction
+                  type="button"
+                  onClick={() => onRemove(index)}
+                  aria-label={`Remove ${item.filename}`}
                 >
-                  {item.filename}
-                </p>
-                <span className="shrink-0 rounded-full bg-muted/70 px-1.5 py-0.5 text-[10px] font-semibold leading-none tracking-wide text-muted-foreground/80 ring-1 ring-border/35">
-                  {attachmentTypeLabel(item)}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => onRemove(index)}
-                className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground/75 transition-colors hover:bg-muted/55 hover:text-foreground"
-                aria-label={`Remove ${item.filename}`}
-              >
-                <XIcon className="size-3" />
-              </button>
-            </div>
+                  <XIcon />
+                </AttachmentAction>
+              </AttachmentActions>
+            </Attachment>
           );
         })}
-      </div>
+      </AttachmentGroup>
     </section>
   );
 }
 
-export const PromptInputForm = forwardRef<HTMLFormElement, ComponentProps<"form">>(
-  function PromptInputForm({ className, ...props }, ref) {
+export const MessageComposerForm = forwardRef<HTMLFormElement, ComponentProps<"form">>(
+  function MessageComposerForm({ className, ...props }, ref) {
     return (
       <form
         ref={ref}
@@ -205,16 +221,16 @@ export const PromptInputForm = forwardRef<HTMLFormElement, ComponentProps<"form"
   },
 );
 
-export const PromptInputBody = forwardRef<HTMLDivElement, ComponentProps<"div">>(
-  function PromptInputBody({ className, ...props }, ref) {
+export const MessageComposerBody = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function MessageComposerBody({ className, ...props }, ref) {
     return (
       <div ref={ref} className={cn("flex min-h-0 flex-1 flex-col px-0.5", className)} {...props} />
     );
   },
 );
 
-export const PromptInputFooter = forwardRef<HTMLDivElement, ComponentProps<"div">>(
-  function PromptInputFooter({ className, ...props }, ref) {
+export const MessageComposerFooter = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function MessageComposerFooter({ className, ...props }, ref) {
     return (
       <div
         ref={ref}
@@ -228,13 +244,13 @@ export const PromptInputFooter = forwardRef<HTMLDivElement, ComponentProps<"div"
   },
 );
 
-export const PromptInputStatusRow = forwardRef<HTMLDivElement, ComponentProps<"div">>(
-  function PromptInputStatusRow({ className, children, ...props }, ref) {
+export const MessageComposerStatus = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function MessageComposerStatus({ className, children, ...props }, ref) {
     if (!children) return null;
     return (
       <div
         ref={ref}
-        data-slot="prompt-input-status-row"
+        data-slot="message-composer-status"
         className={cn(
           "flex h-6 min-w-0 shrink-0 items-center px-1 text-[11px] leading-none text-muted-foreground",
           className,
@@ -247,8 +263,8 @@ export const PromptInputStatusRow = forwardRef<HTMLDivElement, ComponentProps<"d
   },
 );
 
-export const PromptInputTools = forwardRef<HTMLDivElement, ComponentProps<"div">>(
-  function PromptInputTools({ className, ...props }, ref) {
+export const MessageComposerTools = forwardRef<HTMLDivElement, ComponentProps<"div">>(
+  function MessageComposerTools({ className, ...props }, ref) {
     return (
       <div
         ref={ref}
@@ -259,8 +275,8 @@ export const PromptInputTools = forwardRef<HTMLDivElement, ComponentProps<"div">
   },
 );
 
-export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProps<"textarea">>(
-  function PromptInputTextarea({ className, rows = 1, ...props }, ref) {
+export const MessageComposerTextarea = forwardRef<HTMLTextAreaElement, ComponentProps<"textarea">>(
+  function MessageComposerTextarea({ className, rows = 1, ...props }, ref) {
     return (
       <textarea
         ref={ref}
@@ -275,20 +291,20 @@ export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProp
   },
 );
 
-type PromptInputSubmitProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
-  mode?: PromptInputMode;
+type MessageComposerSubmitProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
+  mode?: MessageComposerMode;
   onStop?: () => void;
-  status: PromptInputStatus;
+  status: MessageComposerSubmissionStatus;
 };
 
-export function PromptInputSubmit({
+export function MessageComposerSubmit({
   className,
   disabled,
   mode = "send",
   onStop,
   status,
   ...props
-}: PromptInputSubmitProps) {
+}: MessageComposerSubmitProps) {
   if (status === "submitted" || status === "streaming") {
     return (
       <Button

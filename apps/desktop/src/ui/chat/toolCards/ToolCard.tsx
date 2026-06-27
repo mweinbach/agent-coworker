@@ -1,8 +1,27 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import {
+  CheckCircleIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CircleIcon,
+  ClockIcon,
+  CopyIcon,
+  GlobeIcon,
+  ListTodoIcon,
+  SearchIcon,
+  TerminalIcon,
+  WrenchIcon,
+  XCircleIcon,
+} from "lucide-react";
+import { type ComponentProps, memo, useEffect, useMemo, useState } from "react";
 
 import type { ToolApprovalMetadata, ToolFeedState } from "../../../app/types";
-
-import { Tool, ToolCodeBlock, ToolContent, ToolHeader } from "../../../components/ai-elements/tool";
+import { Badge } from "../../../components/ui/badge";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../../components/ui/collapsible";
+import { cn } from "../../../lib/utils";
 
 import { formatToolCard } from "./toolCardFormatting";
 
@@ -14,6 +33,273 @@ type ToolCardProps = {
   state: ToolFeedState;
   variant?: "default" | "trace";
 };
+
+type ToolVariant = "default" | "trace";
+
+const stateLabel: Record<ToolFeedState, string> = {
+  "input-streaming": "Capturing Input",
+  "input-available": "Running",
+  "approval-requested": "Awaiting Approval",
+  "output-available": "Done",
+  "output-error": "Error",
+  "output-denied": "Denied",
+};
+
+function ToolStatusIcon({ state }: { state: ToolFeedState }) {
+  if (state === "output-available") {
+    return <CheckCircleIcon className="size-3.5 text-success/90" />;
+  }
+  if (state === "output-error" || state === "output-denied") {
+    return <XCircleIcon className="size-3.5 text-destructive" />;
+  }
+  if (state === "approval-requested") {
+    return <CircleIcon className="size-3.5 text-primary" />;
+  }
+  return (
+    <ClockIcon
+      className={cn("size-3.5 text-primary", state === "input-streaming" && "animate-pulse")}
+    />
+  );
+}
+
+function Tool({
+  className,
+  variant = "default",
+  ...props
+}: ComponentProps<typeof Collapsible> & { variant?: ToolVariant }) {
+  return (
+    <Collapsible
+      className={cn(
+        variant === "trace"
+          ? "app-shadow-surface w-full overflow-hidden rounded-xl border border-border/50 bg-background/50"
+          : "app-shadow-surface w-full max-w-3xl overflow-hidden rounded-lg border border-border/60 bg-background/55 transition-colors hover:bg-muted/15",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function ToolIcon({ title, className }: { title: string; className?: string }) {
+  const normalizedTitle = title.toLowerCase();
+  if (normalizedTitle.includes("todo") || normalizedTitle.includes("task")) {
+    return <ListTodoIcon className={className} />;
+  }
+  if (
+    normalizedTitle.includes("search") ||
+    normalizedTitle.includes("grep") ||
+    normalizedTitle.includes("glob")
+  ) {
+    return <SearchIcon className={className} />;
+  }
+  if (
+    normalizedTitle.includes("fetch") ||
+    normalizedTitle.includes("web") ||
+    normalizedTitle.includes("browser")
+  ) {
+    return <GlobeIcon className={className} />;
+  }
+  if (
+    normalizedTitle.includes("bash") ||
+    normalizedTitle.includes("shell") ||
+    normalizedTitle.includes("run")
+  ) {
+    return <TerminalIcon className={className} />;
+  }
+  return <WrenchIcon className={className} />;
+}
+
+type ToolHeaderProps = ComponentProps<typeof CollapsibleTrigger> & {
+  title: string;
+  subtitle?: string;
+  state: ToolFeedState;
+  showChevron?: boolean;
+  variant?: ToolVariant;
+};
+
+function ToolHeader({
+  className,
+  title,
+  subtitle,
+  state,
+  showChevron = true,
+  variant = "default",
+  ...props
+}: ToolHeaderProps) {
+  if (variant === "trace") {
+    return (
+      <CollapsibleTrigger
+        className={cn(
+          "group flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left outline-none transition-colors hover:bg-muted/10",
+          className,
+        )}
+        {...props}
+      >
+        <div className="flex min-w-0 items-start gap-2.5">
+          <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/30 ring-1 ring-border/40 transition-colors group-hover:bg-muted/45">
+            <ToolIcon title={title} className="size-3 text-muted-foreground/80" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold leading-5 text-foreground">{title}</div>
+            {subtitle ? (
+              <div className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground/85">
+                {subtitle}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-start gap-2">
+          <Badge
+            variant={
+              state === "output-error" || state === "output-denied"
+                ? "destructive"
+                : state === "output-available"
+                  ? "outline"
+                  : "secondary"
+            }
+            className="mt-0.5 gap-1 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.14em]"
+          >
+            <ToolStatusIcon state={state} />
+            <span>{stateLabel[state]}</span>
+          </Badge>
+          {showChevron ? (
+            <ChevronDownIcon className="mt-0.5 size-4 text-muted-foreground/40 transition-transform group-data-[state=open]:rotate-180" />
+          ) : null}
+        </div>
+      </CollapsibleTrigger>
+    );
+  }
+
+  return (
+    <CollapsibleTrigger
+      className={cn(
+        "group flex w-full select-none items-center justify-between gap-3 px-2.5 py-2 text-left outline-none",
+        className,
+      )}
+      {...props}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-muted/30 ring-1 ring-border/40 transition-colors group-hover:bg-muted/50">
+          <ToolIcon title={title} className="size-3.5 text-muted-foreground/80" />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate font-semibold leading-tight text-[12px] text-foreground">
+            {title}
+          </div>
+          {subtitle ? (
+            <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">{subtitle}</div>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Badge
+          variant={
+            state === "output-error" || state === "output-denied"
+              ? "destructive"
+              : state === "output-available"
+                ? "outline"
+                : "secondary"
+          }
+          className="gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+        >
+          <ToolStatusIcon state={state} />
+          <span>{stateLabel[state]}</span>
+        </Badge>
+        {showChevron ? (
+          <ChevronDownIcon className="size-4 text-muted-foreground/40 transition-transform group-data-[state=open]:rotate-180" />
+        ) : null}
+      </div>
+    </CollapsibleTrigger>
+  );
+}
+
+function ToolContent({
+  className,
+  variant = "default",
+  ...props
+}: ComponentProps<typeof CollapsibleContent> & { variant?: ToolVariant }) {
+  return (
+    <CollapsibleContent
+      className={cn(
+        variant === "trace"
+          ? "flex flex-col gap-2 border-t border-border/50 px-3 pb-3 pt-2 select-text"
+          : "flex flex-col gap-3 px-2.5 pb-2.5 pt-1 select-text",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function ToolCodeBlock({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "error";
+}) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard unavailable — fail silently.
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+          {label}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={handleCopy}
+            aria-label={copied ? "Copied" : "Copy"}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            {copied ? (
+              <CheckIcon className="size-3 text-success" />
+            ) : (
+              <CopyIcon className="size-3" />
+            )}
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            aria-label={expanded ? "Collapse" : "Expand"}
+            aria-expanded={expanded}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            <ChevronDownIcon
+              className={cn("size-3 transition-transform", expanded && "rotate-180")}
+            />
+            {expanded ? "Less" : "More"}
+          </button>
+        </div>
+      </div>
+      <pre
+        className={cn(
+          "app-shadow-surface overflow-auto rounded-lg bg-background/40 p-3 text-[11px] leading-relaxed ring-1 ring-border/20",
+          expanded ? "max-h-none" : "max-h-72",
+          tone === "error"
+            ? "bg-destructive/5 text-destructive ring-destructive/20"
+            : "text-foreground/80",
+        )}
+      >
+        {value}
+      </pre>
+    </div>
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

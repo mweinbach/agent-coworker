@@ -376,7 +376,7 @@ describe("desktop chat view stability", () => {
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(
         false,
       );
-      expect(container.querySelector('[data-slot="prompt-input-status-row"]')).toBeNull();
+      expect(container.querySelector('[data-slot="message-composer-status"]')).toBeNull();
       expect(container.textContent).not.toContain("Press Enter to send");
     } finally {
       if (root) {
@@ -764,6 +764,36 @@ describe("desktop chat view stability", () => {
           y: 0,
         } as DOMRect;
       }
+      if (this.getAttribute("data-slot") === "message-scroller-viewport") {
+        return {
+          bottom: 400,
+          height: 400,
+          left: 0,
+          right: 600,
+          toJSON: () => ({}),
+          top: 0,
+          width: 600,
+          x: 0,
+          y: 0,
+        } as DOMRect;
+      }
+      if (this.getAttribute("data-slot") === "message-scroller-item") {
+        const viewport = this.closest('[data-slot="message-scroller-viewport"]') as HTMLElement;
+        const isComposerClearance = this.querySelector('[data-slot="message-bar-reserved-space"]');
+        const height = isComposerClearance ? 220 : 800;
+        const top = (isComposerClearance ? 800 : 0) - (viewport?.scrollTop ?? 0);
+        return {
+          bottom: top + height,
+          height,
+          left: 0,
+          right: 600,
+          toJSON: () => ({}),
+          top,
+          width: 600,
+          x: 0,
+          y: top,
+        } as DOMRect;
+      }
       return originalGetBoundingClientRect.call(this);
     };
     let root: ReturnType<typeof createRoot> | null = null;
@@ -778,7 +808,9 @@ describe("desktop chat view stability", () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
 
-      const feed = container.querySelector('[role="log"]') as HTMLElement | null;
+      const feed = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
       const reservedSpace = container.querySelector(
         '[data-slot="message-bar-reserved-space"]',
       ) as HTMLElement | null;
@@ -791,30 +823,41 @@ describe("desktop chat view stability", () => {
       });
       Object.defineProperty(feed, "scrollHeight", {
         configurable: true,
-        value: 1000,
+        value: 1020,
       });
       Object.defineProperty(feed, "scrollTop", {
         configurable: true,
         value: 100,
         writable: true,
       });
+      Object.defineProperty(feed, "scrollTo", {
+        configurable: true,
+        value: ({ top }: ScrollToOptions) => {
+          feed.scrollTop = top ?? feed.scrollTop;
+        },
+      });
 
       await act(async () => {
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 10));
       });
 
       const scrollButton = container.querySelector(
-        '[aria-label="Scroll to bottom"]',
+        '[aria-label="Scroll to end"]',
       ) as HTMLButtonElement | null;
       expect(scrollButton).not.toBeNull();
+      expect(scrollButton?.dataset.active).toBe("true");
       expect(scrollButton?.style.bottom).toBe("234px");
 
       await act(async () => {
         scrollButton?.click();
+        await new Promise((resolve) => setTimeout(resolve, 10));
       });
 
-      expect(feed.scrollTop).toBe(1000);
-      expect(container.querySelector('[aria-label="Scroll to bottom"]')).toBeNull();
+      expect(feed.scrollTop).toBe(620);
+      expect(
+        container.querySelector('[aria-label="Scroll to end"]')?.getAttribute("data-active"),
+      ).toBe("false");
     } finally {
       if (root) {
         await act(async () => {
@@ -894,7 +937,9 @@ describe("desktop chat view stability", () => {
         root.render(createElement(StrictMode, null, createElement(ChatView)));
       });
 
-      const feed = container.querySelector('[role="log"]') as HTMLElement | null;
+      const feed = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
       if (!feed) throw new Error("missing feed");
 
       Object.defineProperty(feed, "clientHeight", {
@@ -917,6 +962,7 @@ describe("desktop chat view stability", () => {
       feed.scrollTop = 500;
 
       await act(async () => {
+        feed.dispatchEvent(new harness.dom.window.Event("wheel", { bubbles: true }));
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
       });
 
@@ -1291,7 +1337,7 @@ describe("desktop chat view stability", () => {
       const stopButton = container.querySelector('[aria-label="Stop generating response"]');
       expect(stopButton).not.toBeNull();
       expect(stopButton?.className).toContain("bg-destructive");
-      const statusRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      const statusRow = container.querySelector('[data-slot="message-composer-status"]');
       expect(statusRow).not.toBeNull();
       expect(statusRow?.textContent).toContain("Type to steer, or use stop to cancel.");
 
@@ -1303,7 +1349,7 @@ describe("desktop chat view stability", () => {
       const steerButton = container.querySelector('[aria-label="Steer current response"]');
       expect(steerButton).not.toBeNull();
       expect(steerButton?.className).toContain("bg-warning");
-      const steerRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      const steerRow = container.querySelector('[data-slot="message-composer-status"]');
       expect(steerRow?.textContent).toContain(
         "Steer ready. Press Enter to inject it into the current run.",
       );
@@ -1325,7 +1371,7 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
-      const pendingRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      const pendingRow = container.querySelector('[data-slot="message-composer-status"]');
       expect(pendingRow?.textContent).toContain(
         "Steer sent. Waiting for the running turn to accept it.",
       );
@@ -1446,7 +1492,7 @@ describe("desktop chat view stability", () => {
 
       expect(container.textContent).toContain("diagram.png");
       expect(
-        container.querySelector('[data-slot="prompt-input-status-row"]')?.textContent,
+        container.querySelector('[data-slot="message-composer-status"]')?.textContent,
       ).toContain("Steer ready. Press Enter to inject it into the current run.");
       const steerButton = container.querySelector('[aria-label="Steer current response"]');
       expect(steerButton).not.toBeNull();

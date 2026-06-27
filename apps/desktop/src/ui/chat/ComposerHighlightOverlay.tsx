@@ -10,7 +10,7 @@ import { MENTION_CHIP_CLASS, type MentionCatalog, parseComposerSegments } from "
  * text (plain text in the normal color, mentions accent-colored and boxed) while
  * typing/selecting natively.
  *
- * Typography, padding, and wrapping MUST stay identical to `PromptInputTextarea`
+ * Typography, padding, and wrapping MUST stay identical to `MessageComposerTextarea`
  * so glyph positions (and therefore the caret) line up. Scroll is synced by the
  * owner via this element's ref.
  */

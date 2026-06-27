@@ -8,7 +8,12 @@ import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { createPortal } from "react-dom";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import { defaultRehypePlugins, defaultRemarkPlugins, type StreamdownProps } from "streamdown";
+import {
+  defaultRehypePlugins,
+  defaultRemarkPlugins,
+  Streamdown,
+  type StreamdownProps,
+} from "streamdown";
 import type { PluggableList } from "unified";
 
 import {
@@ -17,7 +22,6 @@ import {
   normalizeDisplayCitationMarkers,
 } from "../../../../../src/shared/displayCitationMarkers";
 import { useAppStore } from "../../app/store";
-import { MessageResponse } from "../../components/ai-elements/message";
 import { Button } from "../../components/ui/button";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
@@ -1148,7 +1152,7 @@ function PreWithCopy({
   );
 }
 
-function normalizeMessageResponseChildren(
+function normalizeDesktopMarkdownChildren(
   children: StreamdownProps["children"],
   normalizeDisplayCitations: boolean,
   citationUrlsByIndex?: ReadonlyMap<number, string>,
@@ -1203,9 +1207,9 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
 
   return (
-    <MessageResponse
+    <Streamdown
       {...restProps}
-      children={normalizeMessageResponseChildren(
+      children={normalizeDesktopMarkdownChildren(
         children,
         normalizeDisplayCitations,
         citationUrlsByIndex,
@@ -1214,6 +1218,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
         fallbackToSourcesFooter,
       )}
       className={cn(
+        "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
         // Keep wide GFM tables from overflowing the message bubble: render the
         // table as a block-level horizontal scroll container.
         "[&_table]:block [&_table]:w-max [&_table]:overflow-x-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1",

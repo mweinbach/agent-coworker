@@ -18,7 +18,6 @@ import {
 } from "../app/sandboxApprovalVisibility";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
-import { ConversationScrollButton } from "../components/ai-elements/conversation";
 import { Button } from "../components/ui/button";
 import {
   buildComposerAttachmentSignature,
@@ -55,9 +54,6 @@ import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 // cap (messageBarHeight), or raising the cap would over-reserve empty feed space
 // above a short bar.
 const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
-const SCROLL_BUTTON_BOTTOM_GAP_PX = 14;
-const FEED_BOTTOM_STICKY_THRESHOLD_PX = 220;
-const FEED_AUTO_SCROLL_THRESHOLD_PX = 24;
 // Stable empty reference so the sandbox-approvals selector doesn't allocate a new
 // array each render (which would defeat zustand's reference equality check).
 const EMPTY_SANDBOX_APPROVALS: VisibleSandboxApproval[] = [];
@@ -211,7 +207,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachmentFile[]>([]);
   const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null);
   const [preparingAttachments, setPreparingAttachments] = useState(false);
-  const [showScrollButton, setShowScrollButton] = useState(false);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(composerOverlayMinHeight);
   const [submittedAttachmentSignature, setSubmittedAttachmentSignature] = useState<string | null>(
     null,
@@ -241,7 +236,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     return null;
   }, [selectedThreadId, taskSummariesByWorkspaceId, tasksById]);
 
-  const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
@@ -250,33 +244,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const messageBarOverlayRef = useCallback((element: HTMLDivElement | null) => {
     setMessageBarOverlayElement(element);
   }, []);
-  const lastCountRef = useRef<number>(0);
-  const autoScrolledThreadIdRef = useRef<string | null>(null);
-  const userScrolledAwayRef = useRef(false);
   const pendingAttachmentsRef = useRef<ComposerAttachmentFile[]>([]);
-  const scrollButtonBottomOffset = composerOverlayHeight + SCROLL_BUTTON_BOTTOM_GAP_PX;
-
-  const updateScrollState = useCallback(() => {
-    const el = feedRef.current;
-    if (!el) {
-      setShowScrollButton(false);
-      userScrolledAwayRef.current = false;
-      return;
-    }
-
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    userScrolledAwayRef.current = distanceFromBottom > FEED_AUTO_SCROLL_THRESHOLD_PX;
-    const nextVisible = distanceFromBottom > FEED_BOTTOM_STICKY_THRESHOLD_PX;
-    setShowScrollButton((current) => (current === nextVisible ? current : nextVisible));
-  }, []);
-
-  const scrollFeedToBottom = useCallback(() => {
-    const el = feedRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    userScrolledAwayRef.current = false;
-    setShowScrollButton(false);
-  }, []);
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
@@ -530,87 +498,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [cancelThread, selectedThreadId],
   );
 
-  useLayoutEffect(() => {
-    const el = feedRef.current;
-    if (!el) return;
-
-    const isThreadChange = autoScrolledThreadIdRef.current !== selectedThreadId;
-    if (isThreadChange) {
-      // Capture the outgoing thread's scroll offset before its DOM is replaced.
-      const previousThreadId = autoScrolledThreadIdRef.current;
-      if (previousThreadId) {
-        useAppStore.setState((state) => {
-          const prev = state.scrollPositionsByThreadId[previousThreadId];
-          if (prev === el.scrollTop) return state; // no change -> skip update
-          return {
-            scrollPositionsByThreadId: {
-              ...state.scrollPositionsByThreadId,
-              [previousThreadId]: el.scrollTop,
-            },
-          };
-        });
-      }
-      autoScrolledThreadIdRef.current = selectedThreadId;
-      lastCountRef.current = visibleFeed.length;
-      userScrolledAwayRef.current = false;
-      // Restore the incoming thread's last scroll offset instead of always
-      // jumping to the bottom. We only look up a saved offset on a real thread
-      // switch (previousThreadId set); on first mount we keep the original
-      // bottom-pin behavior so we don't clobber callers that set scroll after
-      // mount. This runs in a layout effect and sets scrollTop synchronously so
-      // the new thread doesn't flash at the top before the offset is applied.
-      const savedOffset =
-        previousThreadId && selectedThreadId != null
-          ? useAppStore.getState().scrollPositionsByThreadId[selectedThreadId]
-          : undefined;
-      if (typeof savedOffset !== "number") {
-        el.scrollTop = el.scrollHeight;
-        setShowScrollButton(false);
-        return;
-      }
-      if (savedOffset <= el.scrollHeight) {
-        el.scrollTop = savedOffset;
-        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        setShowScrollButton(distanceFromBottom > FEED_BOTTOM_STICKY_THRESHOLD_PX);
-      } else {
-        el.scrollTop = el.scrollHeight;
-        setShowScrollButton(false);
-      }
-      return;
-    }
-
-    const previousCount = lastCountRef.current;
-    lastCountRef.current = visibleFeed.length;
-
-    if (previousCount === 0 && visibleFeed.length > 0) {
-      window.requestAnimationFrame(() => {
-        const nextEl = feedRef.current;
-        if (nextEl) {
-          nextEl.scrollTop = nextEl.scrollHeight;
-        }
-      });
-      setShowScrollButton(false);
-      return;
-    }
-
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (!userScrolledAwayRef.current && distFromBottom <= FEED_AUTO_SCROLL_THRESHOLD_PX) {
-      window.requestAnimationFrame(() => {
-        const nextEl = feedRef.current;
-        if (nextEl && !userScrolledAwayRef.current) {
-          nextEl.scrollTop = nextEl.scrollHeight;
-        }
-      });
-      setShowScrollButton(false);
-    } else {
-      setShowScrollButton(true);
-    }
-  }, [selectedThreadId, visibleFeed]);
-
-  useEffect(() => {
-    updateScrollState();
-  }, [composerOverlayHeight, updateScrollState]);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -832,8 +719,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     <ChatViewContext.Provider value={contextValue}>
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
         <ChatFeed
-          feedRef={feedRef}
-          onScroll={updateScrollState}
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
           onReconnect={() => void reconnectThread(selectedThreadId)}
@@ -853,11 +738,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           selectedThreadId={selectedThreadId}
           threadTitleById={threadTitleById}
           onSelectThread={selectApprovalThread}
-        />
-        <ConversationScrollButton
-          bottomOffset={scrollButtonBottomOffset}
-          visible={showScrollButton}
-          onClick={scrollFeedToBottom}
         />
 
         {selectedThreadId && a2uiEnabled ? (

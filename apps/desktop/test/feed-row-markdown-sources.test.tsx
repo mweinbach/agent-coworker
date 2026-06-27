@@ -92,6 +92,13 @@ describe("FeedRow assistant markdown and sources integration", () => {
       expect(fileButton).toBeTruthy();
       expect(container.querySelector('a[href="Portfolio_Report.docx"]')).toBeNull();
       expect(container.textContent).toContain("Sources");
+      expect(container.querySelector('[data-slot="message"]')?.getAttribute("data-align")).toBe(
+        "start",
+      );
+      expect(container.querySelector('[data-slot="bubble"]')?.getAttribute("data-variant")).toBe(
+        "ghost",
+      );
+      expect(container.querySelector('[data-slot="message-footer"]')).not.toBeNull();
 
       const sourceButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Portfolio Methodology"),
@@ -160,5 +167,26 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain("Policy Filing");
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).not.toContain(">Sources<");
+  });
+
+  test("renders user turns as end-aligned tinted bubbles with shadcn attachments", () => {
+    const html = renderToStaticMarkup(
+      renderFeedRow({
+        id: "user-with-attachments",
+        kind: "message",
+        role: "user",
+        ts: "2026-06-18T10:02:00.000Z",
+        text: "Please review these.\n\nAttached: [diagram.png, findings.pdf]",
+      }),
+    );
+
+    expect(html).toContain('data-slot="message" data-align="end"');
+    expect(html).toContain('data-slot="bubble" data-variant="tinted" data-align="end"');
+    expect(html).toContain('data-slot="attachment-group"');
+    expect(html.match(/data-slot="attachment"/g)).toHaveLength(2);
+    expect(html).toContain("diagram.png");
+    expect(html).toContain("findings.pdf");
+    expect(html).toContain('data-slot="message-footer"');
+    expect(html).toContain('aria-label="Copy message"');
   });
 });

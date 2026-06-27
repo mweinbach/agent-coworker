@@ -110,7 +110,7 @@ describe("research view layout", () => {
         root.render(createElement(ResearchView));
       });
 
-      expect(container.querySelector('[data-slot="prompt-input-status-row"]')).toBeNull();
+      expect(container.querySelector('[data-slot="message-composer-status"]')).toBeNull();
       expect(container.textContent).not.toContain(
         "Deep Research runs in the background and streams cited markdown as it arrives.",
       );

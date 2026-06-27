@@ -349,7 +349,6 @@ export type CachedDesktopUiState = {
   contextSidebarWidth?: number;
   canvasSidebarWidth?: number;
   messageBarHeight?: number;
-  scrollPositionsByThreadId?: Record<string, number>;
 };
 
 export type DesktopStateCache = {

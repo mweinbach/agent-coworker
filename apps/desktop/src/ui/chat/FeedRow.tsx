@@ -14,15 +14,26 @@ import { memo, useState } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import { extractCitationUrlsFromAnnotations } from "../../../../../src/shared/displayCitationMarkers";
 import type { FeedItem } from "../../app/types";
-import { Message, MessageContent } from "../../components/ai-elements/message";
-import { SourcesCarousel } from "../../components/ai-elements/sources-carousel";
+import {
+  Attachment,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "../../components/ui/attachment";
+import { Bubble, BubbleContent } from "../../components/ui/bubble";
+import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
+import { Marker, MarkerContent } from "../../components/ui/marker";
+import { Message, MessageContent, MessageFooter } from "../../components/ui/message";
 import { openExternalSource } from "../../lib/openExternalSource";
 import { cn } from "../../lib/utils";
 import { DesktopMarkdown } from "../markdown";
 import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
 import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
 import { useChatViewContext } from "./ChatViewContext";
+import { CitationSourcesCarousel } from "./CitationSourcesCarousel";
 import { parseA2uiActionMessage, summarizeA2uiActionMessage } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
 import {
@@ -33,7 +44,7 @@ import {
 import { MentionText } from "./MentionText";
 import { ToolCard } from "./toolCards/ToolCard";
 
-function MessageCopyAction(props: { text: string; align: "start" | "end" }) {
+function MessageCopyAction(props: { text: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     try {
@@ -45,17 +56,21 @@ function MessageCopyAction(props: { text: string; align: "start" | "end" }) {
     }
   };
   return (
-    <div className={props.align === "end" ? "flex justify-end" : "flex justify-start"}>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? "Copied" : "Copy message"}
-        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 group-hover:opacity-100 group-focus-within:opacity-100"
-      >
-        {copied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      onClick={handleCopy}
+      aria-label={copied ? "Copied" : "Copy message"}
+      className="opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100"
+    >
+      {copied ? (
+        <CheckIcon data-icon="inline-start" className="text-success" />
+      ) : (
+        <CopyIcon data-icon="inline-start" />
+      )}
+      {copied ? "Copied" : "Copy"}
+    </Button>
   );
 }
 
@@ -157,6 +172,28 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
   );
 }
 
+function attachmentIconForFilename(fileName: string) {
+  if (/\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(fileName)) return FileAudioIcon;
+  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(fileName)) return FileImageIcon;
+  if (/\.(mp4|mov|avi|mkv|webm)$/i.test(fileName)) return FileVideoIcon;
+  if (/\.pdf$/i.test(fileName)) return FileTextIcon;
+  return FileIcon;
+}
+
+function attachmentTypeForFilename(fileName: string): string {
+  const extension = fileName.trim().split(".").at(-1);
+  return extension && extension !== fileName ? extension.toUpperCase() : "FILE";
+}
+
+function keyedAttachmentFileNames(fileNames: readonly string[]) {
+  const occurrences = new Map<string, number>();
+  return fileNames.map((fileName) => {
+    const occurrence = occurrences.get(fileName) ?? 0;
+    occurrences.set(fileName, occurrence + 1);
+    return { fileName, key: `${fileName}:${occurrence}` };
+  });
+}
+
 export const FeedRow = memo(function FeedRow(props: {
   item: FeedItem;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
@@ -202,82 +239,71 @@ export const FeedRow = memo(function FeedRow(props: {
       }
     }
 
+    const userMessage = item.role === "user" ? parseUserMessageAttachments(item.text) : null;
+    const canvasRequest = userMessage ? parseCanvasRequest(userMessage.cleanText) : null;
+
     return (
-      <Message from={item.role}>
+      <Message align={item.role === "user" ? "end" : "start"}>
         <MessageContent>
           {item.role === "assistant" ? (
-            <DesktopMarkdown
-              citationAnnotations={item.annotations}
-              citationSources={props.citationSources}
-              citationUrlsByIndex={props.citationUrlsByIndex}
-              desktopBasePath={props.desktopBasePath}
-              normalizeDisplayCitations
-              fallbackToSourcesFooter={!hasSources}
-            >
-              {item.text}
-            </DesktopMarkdown>
-          ) : (
-            <div className="whitespace-pre-wrap">
-              {(() => {
-                const { cleanText, fileNames } = parseUserMessageAttachments(item.text);
-                const canvasRequest = parseCanvasRequest(cleanText);
+            <Bubble variant="ghost" align="start">
+              <BubbleContent>
+                <DesktopMarkdown
+                  citationAnnotations={item.annotations}
+                  citationSources={props.citationSources}
+                  citationUrlsByIndex={props.citationUrlsByIndex}
+                  desktopBasePath={props.desktopBasePath}
+                  normalizeDisplayCitations
+                  fallbackToSourcesFooter={!hasSources}
+                >
+                  {item.text}
+                </DesktopMarkdown>
+              </BubbleContent>
+            </Bubble>
+          ) : userMessage?.cleanText ? (
+            <Bubble variant="tinted" align="end">
+              <BubbleContent className="whitespace-pre-wrap">
+                {canvasRequest ? (
+                  <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />
+                ) : (
+                  <MentionText text={userMessage.cleanText} catalog={mentionCatalog} />
+                )}
+              </BubbleContent>
+            </Bubble>
+          ) : null}
 
+          {userMessage && userMessage.fileNames.length > 0 ? (
+            <AttachmentGroup className="max-w-full">
+              {keyedAttachmentFileNames(userMessage.fileNames).map(({ fileName, key }) => {
+                const IconComponent = attachmentIconForFilename(fileName);
                 return (
-                  <div className="flex flex-col gap-3">
-                    {cleanText ? (
-                      <div>
-                        {canvasRequest ? (
-                          <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />
-                        ) : (
-                          <MentionText text={cleanText} catalog={mentionCatalog} />
-                        )}
-                      </div>
-                    ) : null}
-                    {fileNames.length > 0 && (
-                      <div className="flex min-w-0 flex-wrap gap-2 mt-1">
-                        {fileNames.map((fileName) => {
-                          const isAudio = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(fileName);
-                          const isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(fileName);
-                          const isPdf = /\.pdf$/i.test(fileName);
-                          const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(fileName);
-
-                          let IconComponent = FileIcon;
-                          if (isAudio) IconComponent = FileAudioIcon;
-                          else if (isImage) IconComponent = FileImageIcon;
-                          else if (isVideo) IconComponent = FileVideoIcon;
-                          else if (isPdf) IconComponent = FileTextIcon;
-
-                          return (
-                            <div
-                              key={fileName}
-                              className="inline-flex min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-lg border border-border/40 bg-muted/40 px-2.5 py-1.5 text-xs shadow-sm"
-                            >
-                              <IconComponent className="size-4 text-muted-foreground shrink-0" />
-                              <span
-                                className="min-w-0 truncate font-medium text-foreground"
-                                title={fileName}
-                              >
-                                {fileName}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                  <Attachment key={key} size="sm">
+                    <AttachmentMedia>
+                      <IconComponent />
+                    </AttachmentMedia>
+                    <AttachmentContent>
+                      <AttachmentTitle title={fileName}>{fileName}</AttachmentTitle>
+                      <AttachmentDescription>
+                        {attachmentTypeForFilename(fileName)}
+                      </AttachmentDescription>
+                    </AttachmentContent>
+                  </Attachment>
                 );
-              })()}
-            </div>
-          )}
+              })}
+            </AttachmentGroup>
+          ) : null}
+
+          {hasSources && !hasInlineCitationChip && props.citationSources ? (
+            <CitationSourcesCarousel
+              sources={props.citationSources}
+              onOpenSource={openExternalSource}
+            />
+          ) : null}
+
+          <MessageFooter>
+            <MessageCopyAction text={item.text} />
+          </MessageFooter>
         </MessageContent>
-        <MessageCopyAction text={item.text} align={item.role === "user" ? "end" : "start"} />
-        {hasSources && !hasInlineCitationChip && props.citationSources ? (
-          <SourcesCarousel
-            sources={props.citationSources}
-            onOpenSource={openExternalSource}
-            className="mt-1"
-          />
-        ) : null}
       </Message>
     );
   }
@@ -316,12 +342,12 @@ export const FeedRow = memo(function FeedRow(props: {
   if (item.kind === "log") {
     if (!developerMode) return null;
     return (
-      <Card className="max-w-3xl border-border/70 bg-muted/30">
-        <CardContent className="select-text p-3 text-xs text-muted-foreground">
-          <div className="mb-1 font-semibold uppercase tracking-wide text-primary">Log</div>
-          <div className="whitespace-pre-wrap">{item.line}</div>
-        </CardContent>
-      </Card>
+      <Marker variant="border" className="max-w-3xl select-text items-start">
+        <MarkerContent className="flex flex-col gap-1 text-xs">
+          <span className="font-semibold uppercase tracking-wide text-primary">Log</span>
+          <span className="whitespace-pre-wrap">{item.line}</span>
+        </MarkerContent>
+      </Marker>
     );
   }
 
@@ -331,12 +357,12 @@ export const FeedRow = memo(function FeedRow(props: {
 
   if (item.kind === "system") {
     return (
-      <Card className="max-w-3xl border-border/70 bg-muted/30">
-        <CardContent className="select-text p-3 text-xs text-muted-foreground">
-          <div className="mb-1 font-semibold uppercase tracking-wide text-primary">System</div>
-          <div className="whitespace-pre-wrap">{item.line}</div>
-        </CardContent>
-      </Card>
+      <Marker variant="border" className="max-w-3xl select-text items-start">
+        <MarkerContent className="flex flex-col gap-1 text-xs">
+          <span className="font-semibold uppercase tracking-wide text-primary">System</span>
+          <span className="whitespace-pre-wrap">{item.line}</span>
+        </MarkerContent>
+      </Marker>
     );
   }
 

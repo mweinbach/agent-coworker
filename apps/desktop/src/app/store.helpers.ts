@@ -275,13 +275,6 @@ export type AppStoreState = {
   contextSidebarWidth: number;
   canvasSidebarWidth: number;
   messageBarHeight: number;
-  /**
-   * Most-recent scroll offset per thread, for view-state restore when
-   * switching back to a thread. Capped to a small number of entries (LRU-ish)
-   * so it stays cheap to persist in the UI cache.
-   */
-  scrollPositionsByThreadId: Record<string, number>;
-
   init: () => Promise<void>;
 
   openSettings: (page?: SettingsPageId) => void;

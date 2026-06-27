@@ -88,30 +88,8 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
     contextSidebarWidth: state.contextSidebarWidth,
     canvasSidebarWidth: state.canvasSidebarWidth,
     messageBarHeight: state.messageBarHeight,
-    scrollPositionsByThreadId: capScrollPositions(
-      state.scrollPositionsByThreadId,
-      persistedThreadIds,
-    ),
   };
 }
-
-/** Cap the persisted scroll map to recent, still-persisted threads. */
-function capScrollPositions(
-  positions: Record<string, number> | null | undefined,
-  persistedThreadIds: Set<string>,
-): Record<string, number> {
-  const entries = Object.entries(positions ?? {}).filter(
-    ([threadId, offset]) => typeof offset === "number" && persistedThreadIds.has(threadId),
-  );
-  if (entries.length <= MAX_PERSISTED_SCROLL_POSITIONS) {
-    return Object.fromEntries(entries);
-  }
-  // Keep the most-recently-updated entries (insertion order is update order in
-  // our capture path, which reassigns keys).
-  return Object.fromEntries(entries.slice(-MAX_PERSISTED_SCROLL_POSITIONS));
-}
-
-const MAX_PERSISTED_SCROLL_POSITIONS = 24;
 
 function syncDesktopStateCacheState(state: AppStoreState): PersistedState {
   const persistedState = buildPersistedState(state);

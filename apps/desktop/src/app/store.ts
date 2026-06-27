@@ -110,7 +110,6 @@ const initialState: AppStoreDataState = {
   canvasSidebarWidth: 500,
   messageBarHeight: 96,
   sidebarWidth: 248,
-  scrollPositionsByThreadId: {},
 };
 
 const cachedStateSeed = buildCachedDesktopStateSeed(loadDesktopStateCacheRaw());

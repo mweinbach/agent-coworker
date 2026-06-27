@@ -3,7 +3,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { extname, join, relative, resolve } from "node:path";
 
 const desktopSrcDir = resolve(import.meta.dir, "../src");
+const stockRegistryColorFormulaFiles = [
+  // Registry-owned shadcn source derives tinted variants from semantic CSS variables.
+  resolve(desktopSrcDir, "components/ui/bubble.tsx"),
+];
 const allowedLiteralColorFiles = new Set([
+  ...stockRegistryColorFormulaFiles,
   resolve(desktopSrcDir, "components/ui/chart.tsx"),
   resolve(desktopSrcDir, "styles/theme-bridge.css"),
   resolve(desktopSrcDir, "styles/tokens/base.css"),

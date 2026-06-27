@@ -208,6 +208,8 @@ describe("desktop activity group card", () => {
     );
 
     expect(html).toContain("Worked for 2m 49s");
+    expect(html).toContain('data-slot="marker"');
+    expect(html).toContain('data-variant="separator"');
     expect(html).not.toContain("rounded-xl border border-border/32");
     expect(html).not.toContain("Checking the current leadership context.");
   });
@@ -259,6 +261,8 @@ describe("desktop activity group card", () => {
     );
 
     expect(html).toContain("Working for 56s");
+    expect(html).toContain('data-slot="marker"');
+    expect(html).toContain('data-variant="border"');
     expect(html).not.toContain("Worked for");
     expect(html).not.toContain("rounded-xl border border-border/32");
   });

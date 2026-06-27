@@ -6,9 +6,8 @@ import {
   useRef,
   useState,
 } from "react";
-
-import { PromptInputTextarea } from "@/components/ai-elements/prompt-input";
 import { cn } from "@/lib/utils";
+import { MessageComposerTextarea } from "@/ui/composer/MessageComposer";
 import { ComposerHighlightOverlay } from "./ComposerHighlightOverlay";
 import { ComposerMentionMenu } from "./ComposerMentionMenu";
 import {
@@ -20,7 +19,7 @@ import {
 
 /**
  * Composer text input with inline @-mention support. Wraps the plain
- * `PromptInputTextarea` with a highlight overlay (boxed mentions) and an
+ * `MessageComposerTextarea` with a highlight overlay (boxed mentions) and an
  * autocomplete menu, while preserving the textarea as the single source of
  * truth (`value`/`setValue`) and delegating non-menu keystrokes to the parent's
  * send handler (`onKeyDown`).
@@ -170,7 +169,7 @@ export function ComposerMentionInput(props: {
         catalog={catalog}
         className={textareaClassName}
       />
-      <PromptInputTextarea
+      <MessageComposerTextarea
         ref={textareaRef}
         value={value}
         disabled={disabled}

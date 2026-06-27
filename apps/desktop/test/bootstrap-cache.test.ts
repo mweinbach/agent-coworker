@@ -95,7 +95,6 @@ const cachedState = {
     contextSidebarCollapsed: true,
     contextSidebarWidth: 420,
     messageBarHeight: 180,
-    scrollPositionsByThreadId: { "thread-cached": 1234 },
   },
 };
 
@@ -638,7 +637,6 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.contextSidebarCollapsed).toBe(true);
     expect(seed?.contextSidebarWidth).toBe(420);
     expect(seed?.messageBarHeight).toBe(180);
-    expect(seed?.scrollPositionsByThreadId).toEqual({ "thread-cached": 1234 });
     expect(seed?.privacyTelemetrySettings).toEqual({
       crashReportsEnabled: false,
       productAnalyticsEnabled: false,

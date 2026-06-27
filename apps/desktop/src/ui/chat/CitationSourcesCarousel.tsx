@@ -1,6 +1,6 @@
 import { memo, useCallback, useRef, useState } from "react";
+import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import { Button } from "../ui/button";
 
 export type SourceItem = {
   url: string;
@@ -108,18 +108,18 @@ function SourceCard({
   );
 }
 
-export type SourcesCarouselProps = {
+export type CitationSourcesCarouselProps = {
   sources: SourceItem[];
   /** Invoked with the source URL when a card is activated. The caller owns the open flow. */
   onOpenSource?: (url: string) => void;
   className?: string;
 };
 
-export const SourcesCarousel = memo(function SourcesCarousel({
+export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
   sources,
   onOpenSource,
   className,
-}: SourcesCarouselProps) {
+}: CitationSourcesCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);

@@ -7,6 +7,8 @@
 @import "./styles/platform/darwin.css";
 @import "./styles/platform/win32.css";
 @import "./styles/platform/linux.css";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -160,12 +162,12 @@ samp {
 }
 
 /* Composer textarea: no field frame — global focus ring reads as a heavy “inner border”. */
-[data-slot="prompt-input"] textarea {
+[data-slot="message-composer"] textarea {
   border: none;
   box-shadow: none;
 }
 
-[data-slot="prompt-input"] textarea:focus-visible {
+[data-slot="message-composer"] textarea:focus-visible {
   outline: none;
   box-shadow: none;
 }

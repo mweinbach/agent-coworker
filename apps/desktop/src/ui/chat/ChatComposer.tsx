@@ -7,20 +7,20 @@ import type {
   Ref,
   RefObject,
 } from "react";
-import {
-  PromptInputAttachmentPreviews,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputForm,
-  PromptInputRoot,
-  PromptInputStatusRow,
-  PromptInputSubmit,
-  PromptInputTools,
-} from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import type { ProviderName } from "../../lib/wsProtocol";
+import {
+  MessageComposerAttachments,
+  MessageComposerBody,
+  MessageComposerFooter,
+  MessageComposerForm,
+  MessageComposerRoot,
+  MessageComposerStatus,
+  MessageComposerSubmit,
+  MessageComposerTools,
+} from "../composer/MessageComposer";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
 import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
@@ -101,7 +101,7 @@ export function ChatComposer(props: {
     >
       <div className="relative mx-auto w-full max-w-[56rem] pointer-events-auto">
         <MessageBarResizer />
-        <PromptInputRoot
+        <MessageComposerRoot
           className="w-full max-w-full rounded-[28px] border border-border/55 bg-background/95 app-shadow-overlay backdrop-blur-md"
           style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
           fileDrop={
@@ -126,19 +126,19 @@ export function ChatComposer(props: {
               </div>
             </div>
           )}
-          <PromptInputAttachmentPreviews
+          <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
             className="px-0"
           />
-          <PromptInputForm
+          <MessageComposerForm
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
               submitComposer(resolveComposerBusyPolicy(busy));
             }}
           >
-            <PromptInputStatusRow>{composerHint}</PromptInputStatusRow>
-            <PromptInputBody>
+            <MessageComposerStatus>{composerHint}</MessageComposerStatus>
+            <MessageComposerBody>
               {attachmentPickerError ? (
                 <div className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive">
                   <AlertTriangleIcon className="size-3.5 shrink-0" />
@@ -158,9 +158,9 @@ export function ChatComposer(props: {
                 ariaLabel="Message input"
                 textareaScrollClassName="min-h-14 max-h-[var(--composer-cap)] overflow-y-auto"
               />
-            </PromptInputBody>
-            <PromptInputFooter className="gap-3 pt-1">
-              <PromptInputTools className="gap-2">
+            </MessageComposerBody>
+            <MessageComposerFooter className="gap-3 pt-1">
+              <MessageComposerTools className="gap-2">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -197,18 +197,18 @@ export function ChatComposer(props: {
                     />
                   )
                 ) : null}
-              </PromptInputTools>
+              </MessageComposerTools>
               <div className="flex shrink-0 items-center gap-2">
-                <PromptInputSubmit
+                <MessageComposerSubmit
                   mode={composerSubmitState.mode}
                   status={composerSubmitState.status}
                   disabled={composerSubmitState.disabled || preparingAttachments}
                   onStop={onStop}
                 />
               </div>
-            </PromptInputFooter>
-          </PromptInputForm>
-        </PromptInputRoot>
+            </MessageComposerFooter>
+          </MessageComposerForm>
+        </MessageComposerRoot>
       </div>
     </div>
   );

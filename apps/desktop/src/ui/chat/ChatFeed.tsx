@@ -28,7 +28,7 @@ import {
 } from "../../components/ui/message-scroller";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { ActivityGroupCard } from "./ActivityGroupCard";
-import { type ChatRenderItem, summarizeActivityGroup } from "./activityGroups";
+import { type ChatRenderItem, latestRetryableActivityGroupId } from "./activityGroups";
 import { parseA2uiActionMessage } from "./chatLogic";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
@@ -53,18 +53,6 @@ function lastVisibleUserTurnId(renderItems: ChatRenderItem[], a2uiEnabled: boole
     if (item && isVisibleUserTurn(item, a2uiEnabled)) {
       return item.kind === "feed-item" ? item.item.id : null;
     }
-  }
-  return null;
-}
-
-function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string | null {
-  for (let index = renderItems.length - 1; index >= 0; index -= 1) {
-    const item = renderItems[index];
-    if (!item) continue;
-    if (item.kind === "activity-group") {
-      return summarizeActivityGroup(item.items).status === "issue" ? item.id : null;
-    }
-    if (item.item.kind === "message") return null;
   }
   return null;
 }

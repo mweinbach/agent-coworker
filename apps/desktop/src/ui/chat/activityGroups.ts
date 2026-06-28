@@ -1,3 +1,4 @@
+import { isTerminalToolState } from "../../app/toolFeedState";
 import type { FeedItem, ToolFeedState } from "../../app/types";
 
 import { buildMarkdownPreviewText } from "./markdownPreview";
@@ -55,8 +56,6 @@ function getRecordValue(record: Record<string, unknown>, keys: string[]): unknow
   }
   return undefined;
 }
-
-import { isTerminalToolState } from "../../app/toolFeedState";
 
 function effectiveToolState(item: Extract<FeedItem, { kind: "tool" }>): ToolFeedState {
   if (item.result !== undefined && isRecord(item.result)) {
@@ -407,6 +406,18 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
 
   flushGroup();
   return items;
+}
+
+export function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string | null {
+  for (let index = renderItems.length - 1; index >= 0; index -= 1) {
+    const item = renderItems[index];
+    if (!item) continue;
+    if (item.kind === "activity-group") {
+      return summarizeActivityGroup(item.items).status === "issue" ? item.id : null;
+    }
+    if (item.item.kind === "message") return null;
+  }
+  return null;
 }
 
 export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroupSummary {

@@ -1,7 +1,35 @@
 import { describe, expect, test } from "bun:test";
 
 import type { FeedItem } from "../src/app/types";
-import { buildChatRenderItems, summarizeActivityGroup } from "../src/ui/chat/activityGroups";
+import {
+  buildChatRenderItems,
+  latestRetryableActivityGroupId,
+  summarizeActivityGroup,
+} from "../src/ui/chat/activityGroups";
+
+type MessageFeedItem = Extract<FeedItem, { kind: "message" }>;
+type ToolFeedItem = Extract<FeedItem, { kind: "tool" }>;
+
+function messageItem(id: string, role: MessageFeedItem["role"] = "assistant"): MessageFeedItem {
+  return {
+    id,
+    kind: "message",
+    role,
+    ts: "2024-01-01T00:00:00.000Z",
+    text: `${role} message`,
+  };
+}
+
+function toolItem(id: string, state: ToolFeedItem["state"], result: unknown): ToolFeedItem {
+  return {
+    id,
+    kind: "tool",
+    ts: "2024-01-01T00:00:01.000Z",
+    name: "bash",
+    state,
+    result,
+  };
+}
 
 describe("desktop chat activity groups", () => {
   test("groups consecutive reasoning and tool items into one activity block", () => {
@@ -108,6 +136,41 @@ describe("desktop chat activity groups", () => {
       { kind: "feed-item", item: feed[0] },
       { kind: "activity-group", id: "activity-r-pending", items: [feed[1]] },
     ]);
+  });
+
+  test("latestRetryableActivityGroupId returns only the trailing failed activity group", () => {
+    const olderFailure = toolItem("t-older", "output-error", { error: "older failure" });
+    const newerFailure = toolItem("t-newer", "output-error", { error: "newer failure" });
+
+    expect(
+      latestRetryableActivityGroupId([
+        { kind: "activity-group", id: "activity-older", items: [olderFailure] },
+        { kind: "activity-group", id: "activity-newer", items: [newerFailure] },
+      ]),
+    ).toBe("activity-newer");
+  });
+
+  test("latestRetryableActivityGroupId does not expose retry for failures before a message", () => {
+    const failedTool = toolItem("t-failed", "output-error", { error: "permission denied" });
+
+    expect(
+      latestRetryableActivityGroupId([
+        { kind: "activity-group", id: "activity-failed", items: [failedTool] },
+        { kind: "feed-item", item: messageItem("m-assistant") },
+      ]),
+    ).toBeNull();
+  });
+
+  test("latestRetryableActivityGroupId ignores older failures when the latest group completed", () => {
+    const failedTool = toolItem("t-failed", "output-error", { error: "permission denied" });
+    const completedTool = toolItem("t-complete", "output-available", { exitCode: 0 });
+
+    expect(
+      latestRetryableActivityGroupId([
+        { kind: "activity-group", id: "activity-failed", items: [failedTool] },
+        { kind: "activity-group", id: "activity-complete", items: [completedTool] },
+      ]),
+    ).toBeNull();
   });
 
   test("pending reasoning placeholders do not add trace rows once real activity arrives", () => {

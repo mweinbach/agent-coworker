@@ -29,6 +29,7 @@ import { SessionRuntime } from "../session/SessionRuntime";
 import { getSessionTaskLock } from "../session/taskLocks";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
+import { resolveTasksFeatureEnabled } from "../tasks/flags";
 import type { TaskCoordinator } from "../tasks/TaskCoordinator";
 import type { WorkspaceBackupService } from "../workspaceBackups";
 import {
@@ -274,6 +275,11 @@ export class SessionRegistry {
     sourceSessionId: string,
     rawInput: TaskCreationInput,
   ): Promise<TaskCreationResult> {
+    // Defense-in-depth: reject task creation when the Tasks feature is disabled,
+    // even if a tool somehow reached this handler.
+    if (!resolveTasksFeatureEnabled(this.getConfig())) {
+      throw new Error("Tasks feature is disabled");
+    }
     const creation = taskCreationInputSchema.parse(rawInput);
     const sourceBinding = this.loadThreadBinding(sourceSessionId);
     const sourceRuntime = sourceBinding?.runtime;

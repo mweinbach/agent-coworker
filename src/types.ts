@@ -279,6 +279,14 @@ export interface AgentConfig {
    */
   includeRawChunks?: boolean;
 
+  /**
+   * Whether the durable Tasks feature is enabled for this session/run. Gates
+   * the `createTask` agent tool and the `task/*` JSON-RPC routes. Resolved from
+   * the `tasks` feature flag (env `COWORK_ENABLE_TASKS`, default false). Packaged
+   * builds ignore local config overrides — see `resolveFeatureFlags`.
+   */
+  tasksEnabled?: boolean;
+
   /** Internal experiment gates resolved from environment. Not persisted. */
   experimentalFeatures?: {
     a2ui?: boolean;

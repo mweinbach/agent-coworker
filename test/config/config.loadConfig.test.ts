@@ -1311,6 +1311,28 @@ describe("loadConfig", () => {
     expect(cfg.observability?.publicKey).toBeUndefined();
     expect(cfg.observability?.secretKey).toBeUndefined();
   });
+
+  test("tasksEnabled resolves from COWORK_ENABLE_TASKS, defaults off, env survives packaged", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    const base = { cwd, homedir: home, builtInDir: repoRoot() };
+
+    const off = await loadConfig({ ...base, env: {} });
+    expect(off.tasksEnabled).toBe(false);
+
+    const on = await loadConfig({ ...base, env: { COWORK_ENABLE_TASKS: "1" } });
+    expect(on.tasksEnabled).toBe(true);
+
+    // Packaged build with no env override resolves to the build-time default (off).
+    const packagedDefault = await loadConfig({ ...base, env: { COWORK_IS_PACKAGED: "true" } });
+    expect(packagedDefault.tasksEnabled).toBe(false);
+
+    // The env override is a deliberate escape hatch and still applies in packaged builds.
+    const packagedEnv = await loadConfig({
+      ...base,
+      env: { COWORK_IS_PACKAGED: "true", COWORK_ENABLE_TASKS: "1" },
+    });
+    expect(packagedEnv.tasksEnabled).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

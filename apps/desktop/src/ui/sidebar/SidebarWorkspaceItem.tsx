@@ -27,6 +27,7 @@ import { formatSidebarRelativeAge } from "../sidebarHelpers";
 import { ThreadOverflowMenu } from "./ThreadOverflowMenu";
 
 export const MAX_VISIBLE_THREADS = 5;
+const EMPTY_TASK_SUMMARIES: TaskSummary[] = [];
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item min-w-0 [&:not(:last-child)]:mb-3";
 /** Matches `.sidebar-thread-region` transition duration in styles.css (fallback when transitionend does not fire). */
 const SIDEBAR_THREAD_REGION_DURATION_MS = 240;
@@ -125,6 +126,8 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   const [renderThreadRegion, setRenderThreadRegion] = useState(expanded);
   const [threadRegionOpen, setThreadRegionOpen] = useState(expanded);
   const archiveThread = useAppStore((s) => s.archiveThread);
+  const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags?.tasks === true);
+  const visibleTasks = tasksEnabled ? tasks : EMPTY_TASK_SUMMARIES;
 
   useLayoutEffect(() => {
     const wasExpanded = prevExpandedRef.current;
@@ -292,21 +295,23 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
         >
           <PlusIcon className="h-4 w-4" />
         </Button>
-        <Button
-          aria-label={`New task in ${workspace.name}`}
-          className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:bg-foreground/[0.045] hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onNewWorkspaceTask(workspace.id);
-          }}
-          size="icon-sm"
-          title={`New task in ${workspace.name}`}
-          type="button"
-          variant="ghost"
-        >
-          <ClipboardPlusIcon className="h-4 w-4" />
-        </Button>
+        {tasksEnabled ? (
+          <Button
+            aria-label={`New task in ${workspace.name}`}
+            className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:bg-foreground/[0.045] hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onNewWorkspaceTask(workspace.id);
+            }}
+            size="icon-sm"
+            title={`New task in ${workspace.name}`}
+            type="button"
+            variant="ghost"
+          >
+            <ClipboardPlusIcon className="h-4 w-4" />
+          </Button>
+        ) : null}
       </div>
 
       {renderThreadRegion ? (
@@ -317,13 +322,13 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
         >
           <div className="min-h-0 overflow-hidden">
             <div className="ml-3 min-w-0 space-y-1 border-l border-border/45 pl-3 pt-1">
-              {workspaceThreads.length === 0 && tasks.length === 0 ? (
+              {workspaceThreads.length === 0 && visibleTasks.length === 0 ? (
                 <div className="px-3 py-2 text-[12px] text-muted-foreground">
                   No chats or tasks yet
                 </div>
               ) : (
                 <>
-                  {workspaceThreads.length > 0 && tasks.length > 0 ? (
+                  {workspaceThreads.length > 0 && visibleTasks.length > 0 ? (
                     <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
                       Chats
                     </div>
@@ -426,14 +431,14 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       {showAllThreads ? "Show less" : `Show ${hiddenThreadCount} more`}
                     </Button>
                   ) : null}
-                  {tasks.length > 0 ? (
+                  {visibleTasks.length > 0 ? (
                     <div
                       className={cn("flex flex-col gap-1", workspaceThreads.length > 0 && "mt-2")}
                     >
                       <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
                         Tasks
                       </div>
-                      {tasks.slice(0, MAX_VISIBLE_THREADS).map((task) => (
+                      {visibleTasks.slice(0, MAX_VISIBLE_THREADS).map((task) => (
                         <Button
                           key={task.id}
                           type="button"

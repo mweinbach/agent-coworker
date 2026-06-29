@@ -202,6 +202,7 @@ async function createTaskTestRuntime(opts: {
       AGENT_PROVIDER: "google",
       AGENT_OBSERVABILITY_ENABLED: "false",
       COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+      COWORK_ENABLE_TASKS: "1",
     },
     ...(opts.desktopService ? { desktopService: opts.desktopService } : {}),
     runTurnImpl: createTestRunTurnImpl(),
@@ -322,6 +323,7 @@ describe("task workspace subscription routing", () => {
           AGENT_PROVIDER: "google",
           AGENT_OBSERVABILITY_ENABLED: "false",
           COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_ENABLE_TASKS: "1",
         },
         desktopService,
         runTurnImpl,
@@ -1501,6 +1503,7 @@ describe("task workspace subscription routing", () => {
           AGENT_PROVIDER: "google",
           AGENT_OBSERVABILITY_ENABLED: "false",
           COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_ENABLE_TASKS: "1",
         },
         desktopService,
         runTurnImpl,
@@ -1597,6 +1600,7 @@ describe("task workspace subscription routing", () => {
           AGENT_PROVIDER: "google",
           AGENT_OBSERVABILITY_ENABLED: "false",
           COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_ENABLE_TASKS: "1",
         },
         runTurnImpl,
       });
@@ -1684,6 +1688,7 @@ describe("task workspace subscription routing", () => {
           AGENT_PROVIDER: "google",
           AGENT_OBSERVABILITY_ENABLED: "false",
           COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_ENABLE_TASKS: "1",
         },
         runTurnImpl: createTaskToolRunTurnImpl(),
       });
@@ -1795,6 +1800,7 @@ describe("task workspace subscription routing", () => {
           AGENT_PROVIDER: "google",
           AGENT_OBSERVABILITY_ENABLED: "false",
           COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_ENABLE_TASKS: "1",
         },
         runTurnImpl,
       });

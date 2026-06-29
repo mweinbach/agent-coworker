@@ -86,6 +86,7 @@ const initialState: AppStoreDataState = {
     a2ui: false,
     openAiNativeConnectors: false,
     canvas: false,
+    tasks: false,
   },
   desktopFeatureFlagOverrides: {},
   updateState: createDefaultUpdaterState(),

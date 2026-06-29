@@ -125,6 +125,7 @@ export const Sidebar = memo(function Sidebar() {
   );
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
+  const tasksEnabled = desktopFeatures.tasks === true;
   const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
   const isOnNewChatLanding = effectiveView === "chat" && selectedThreadId === null;
   const landingProjectWorkspaceId = useMemo(
@@ -357,7 +358,7 @@ export const Sidebar = memo(function Sidebar() {
 
     const result = await showContextMenu([
       { id: "new_project_chat", label: "New chat in project" },
-      { id: "new_project_task", label: "New task in project" },
+      ...(tasksEnabled ? [{ id: "new_project_task", label: "New task in project" }] : []),
       { id: "select", label: "Select project" },
       ...(workspaceLifecycleEnabled ? [{ id: "remove", label: "Remove project" }] : []),
     ]);
@@ -733,22 +734,24 @@ export const Sidebar = memo(function Sidebar() {
           New Chat
         </Button>
       ) : null}
-      <Button
-        variant="ghost"
-        size="sm"
-        aria-current={effectiveView === "task" && selectedTaskId === null ? "page" : undefined}
-        className={cn(
-          "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
-          "hover:bg-foreground/[0.045] hover:text-foreground",
-          effectiveView === "task" &&
-            selectedTaskId === null &&
-            "bg-foreground/[0.055] text-foreground",
-        )}
-        onClick={() => void openNewTask()}
-      >
-        <ClipboardPlusIcon className="h-4 w-4 text-muted-foreground" />
-        New Task
-      </Button>
+      {tasksEnabled ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-current={effectiveView === "task" && selectedTaskId === null ? "page" : undefined}
+          className={cn(
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "hover:bg-foreground/[0.045] hover:text-foreground",
+            effectiveView === "task" &&
+              selectedTaskId === null &&
+              "bg-foreground/[0.055] text-foreground",
+          )}
+          onClick={() => void openNewTask()}
+        >
+          <ClipboardPlusIcon className="h-4 w-4 text-muted-foreground" />
+          New Task
+        </Button>
+      ) : null}
       <nav aria-label="Primary" className="grid w-full min-w-0 gap-1.5">
         {googleResearchAvailable ? (
           <Button

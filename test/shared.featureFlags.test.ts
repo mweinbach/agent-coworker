@@ -20,7 +20,7 @@ describe("resolveFeatureFlags", () => {
     expect(flags.a2ui).toBe(true);
   });
 
-  test("preserves supported persisted overrides in packaged (production) builds", () => {
+  test("ignores persisted overrides in packaged (production) builds, using build-time defaults", () => {
     const flags = resolveFeatureFlags({
       isPackaged: true,
       env: { COWORK_EXPERIMENTAL_A2UI: "1" },
@@ -29,12 +29,29 @@ describe("resolveFeatureFlags", () => {
         workspacePicker: false,
         workspaceLifecycle: false,
         a2ui: true,
+        tasks: true,
       },
     });
+    // Packaged builds intentionally drop locally flipped overrides and resolve to
+    // each flag's compiled build-time default; a dev flip never leaks to production.
     expect(flags.remoteAccess).toBe(false);
-    expect(flags.workspacePicker).toBe(false);
-    expect(flags.workspaceLifecycle).toBe(false);
-    expect(flags.a2ui).toBe(true);
+    expect(flags.workspacePicker).toBe(true);
+    expect(flags.workspaceLifecycle).toBe(true);
+    expect(flags.a2ui).toBe(false);
+    expect(flags.tasks).toBe(false);
+  });
+
+  test("tasks flag: defaults off, dev override/env enable it, packaged ignores override", () => {
+    expect(resolveFeatureFlags({ isPackaged: false }).tasks).toBe(false);
+    expect(resolveFeatureFlags({ isPackaged: false, overrides: { tasks: true } }).tasks).toBe(true);
+    expect(
+      resolveFeatureFlags({ isPackaged: false, env: { COWORK_ENABLE_TASKS: "1" } }).tasks,
+    ).toBe(true);
+    // Packaged: persisted dev override ignored (build-time default), env still honored.
+    expect(resolveFeatureFlags({ isPackaged: true, overrides: { tasks: true } }).tasks).toBe(false);
+    expect(resolveFeatureFlags({ isPackaged: true, env: { COWORK_ENABLE_TASKS: "1" } }).tasks).toBe(
+      true,
+    );
   });
 
   test("unpackaged: persisted override wins over env for remote access (last write)", () => {

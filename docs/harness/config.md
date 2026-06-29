@@ -95,3 +95,10 @@ The session runtime path does not currently enforce raw-loop strict validation s
   - Overrides the built-in resource root used to find prompts, config, and bundled skills
 - `COWORK_DISABLE_BUILTIN_SKILLS`
   - Removes the built-in `skills/` directory from the resolved skill search path
+
+## Feature Flags
+
+Feature flags are defined in `src/shared/featureFlags.ts` and resolved by `resolveFeatureFlags({ isPackaged, env, overrides })`. Resolution order is: build-time default (`defaultEnabled`) → env override → experimental-env gate → locally persisted override → packaged `forced-off`.
+
+- **Production builds ignore locally flipped overrides.** When `isPackaged` is true (packaged Electron app; surfaced to the server as `COWORK_IS_PACKAGED=true`), the persisted/config override layer is skipped entirely. Every flag resolves to its build-time default plus any env override. A flag flipped in development (via the dev-only Feature Flags settings page) therefore never leaks into a production build on the same machine. To change a flag's production value, change its compiled `defaultEnabled`.
+- `tasks` / `COWORK_ENABLE_TASKS` — gates the durable Tasks feature: the desktop Tasks UI, the model's `createTask` tool, and the `task/*` JSON-RPC routes. Defaults **off**; `restartRequired` (the desktop passes the resolved value to its sidecar server via env at spawn). `config.tasksEnabled` is the resolved boolean read by `resolveTasksFeatureEnabled` (`src/server/tasks/flags.ts`). Enable in development with `COWORK_ENABLE_TASKS=1` or the desktop toggle.

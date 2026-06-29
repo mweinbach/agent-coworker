@@ -1,3 +1,4 @@
+import { resolveTasksFeatureEnabled } from "../server/tasks/flags";
 import { parseTaskCreationToolInput, taskCreationToolInputSchema } from "../shared/tasks";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
@@ -9,7 +10,13 @@ This is a one-shot mode change. Use it only after the conversation contains enou
 After this succeeds, the current chat is locked until the task completes, fails, or is cancelled. Do not call another tool or produce a follow-up response after this call.`;
 
 export function createTaskCreationTool(ctx: ToolContext) {
-  if (!ctx.createTask || ctx.taskContext || ctx.agentRole) return null;
+  if (
+    !resolveTasksFeatureEnabled(ctx.config) ||
+    !ctx.createTask ||
+    ctx.taskContext ||
+    ctx.agentRole
+  )
+    return null;
   return defineTool({
     description: CREATE_TASK_DESCRIPTION,
     inputSchema: taskCreationToolInputSchema,

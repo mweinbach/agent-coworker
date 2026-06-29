@@ -138,7 +138,7 @@ type StartWorkspaceServerOptions = {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
-  featureFlags?: { openAiNativeConnectors?: boolean };
+  featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean };
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
   productAnalyticsState?: PersistedProductAnalyticsState | null;
   mobileH3?: boolean;
@@ -814,7 +814,7 @@ function resolveSourceStartup(
 }
 
 function buildServerEnv(
-  featureFlags?: { openAiNativeConnectors?: boolean },
+  featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean },
   opts: {
     includeBundledFoundationModelsSdk?: boolean;
     includeBundledWindowsAiElectron?: boolean;
@@ -875,6 +875,7 @@ function buildServerEnv(
     ...(featureFlags?.openAiNativeConnectors
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
+    ...(featureFlags?.tasks ? { COWORK_ENABLE_TASKS: "1" } : {}),
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
     ...buildHarnessTerminalLogsEnv(processEnv),
     ...buildDesktopObservabilityEnv(privacyTelemetrySettings),

@@ -589,11 +589,18 @@ function buildResolvedDesktopUiState(
   const selectedWorkspaceId = selection.selectedWorkspaceId;
   const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
   const pluginManagementMode = selection.pluginManagementMode;
-  const threadSelectionIntent = getThreadSelectionIntent(
-    normalizedUi.view,
-    normalizedUi.lastNonSettingsView,
-    normalizedUi.selectedTaskId,
-  );
+  // When the Tasks feature is disabled — including packaged builds that ignore a
+  // stale dev override — never resolve into task context. This is the single
+  // invariant that keeps `view` out of "task" so the App/PrimaryContent task
+  // branches stay unreachable.
+  const tasksEnabled = desktopFeatures.tasks === true;
+  const threadSelectionIntent = tasksEnabled
+    ? getThreadSelectionIntent(
+        normalizedUi.view,
+        normalizedUi.lastNonSettingsView,
+        normalizedUi.selectedTaskId,
+      )
+    : ({ context: "chat", selectedTaskId: null } as const);
   const workspaceThreads = selectedWorkspaceId
     ? threads
         .filter((thread) => {
@@ -623,10 +630,14 @@ function buildResolvedDesktopUiState(
     : fallbackSelectedThreadId;
   const fallbackLastNonSettingsView =
     normalizedUi.view === "settings" ? "chat" : (normalizedUi.view ?? "chat");
-  const lastNonSettingsView =
+  const rawLastNonSettingsView =
     normalizedUi.lastNonSettingsView && normalizedUi.lastNonSettingsView !== "settings"
       ? normalizedUi.lastNonSettingsView
       : fallbackLastNonSettingsView;
+  const lastNonSettingsView =
+    !tasksEnabled && rawLastNonSettingsView === "task" ? "chat" : rawLastNonSettingsView;
+  const normalizedView = normalizedUi.view ?? "chat";
+  const view = !tasksEnabled && normalizedView === "task" ? "chat" : normalizedView;
 
   return {
     selectedWorkspaceId,
@@ -634,7 +645,7 @@ function buildResolvedDesktopUiState(
     selectedTaskId: threadSelectionIntent.selectedTaskId,
     pluginManagementWorkspaceId,
     pluginManagementMode,
-    view: normalizedUi.view ?? "chat",
+    view,
     settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage, desktopFeatures),
     lastNonSettingsView,
     sidebarCollapsed: normalizedUi.sidebarCollapsed ?? false,
@@ -1254,15 +1265,30 @@ export function createBootstrapActions(
         [flagId]: enabled,
       };
       const nextFeatureFlags = getDesktopFeatureFlags(nextOverrides);
-      set((state) => ({
-        desktopFeatureFlagOverrides: nextOverrides,
-        desktopFeatureFlags: nextFeatureFlags,
-        settingsPage: normalizeSettingsPageId(
-          state.settingsPage,
-          nextFeatureFlags,
-          state.updateState.packaged || isPackagedDesktopApp(),
-        ),
-      }));
+      set((state) => {
+        // If Tasks was just turned off while a task is in view, eject back to
+        // chat and drop the task selection so no TaskView can render.
+        const clearTask =
+          nextFeatureFlags.tasks !== true &&
+          getThreadSelectionContext(state.view, state.lastNonSettingsView) === "task";
+        return {
+          desktopFeatureFlagOverrides: nextOverrides,
+          desktopFeatureFlags: nextFeatureFlags,
+          settingsPage: normalizeSettingsPageId(
+            state.settingsPage,
+            nextFeatureFlags,
+            state.updateState.packaged || isPackagedDesktopApp(),
+          ),
+          ...(clearTask
+            ? {
+                view: state.view === "settings" ? state.view : "chat",
+                lastNonSettingsView:
+                  state.lastNonSettingsView === "task" ? "chat" : state.lastNonSettingsView,
+                selectedTaskId: null,
+              }
+            : {}),
+        };
+      });
       await persistNow(get);
       if (flagId === "a2ui") {
         const state = get();

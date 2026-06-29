@@ -378,6 +378,10 @@ mock.module("../src/lib/desktopCommands", () =>
           ? featureOverrides.workspaceLifecycle
           : true,
       a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+      // Default the durable Tasks flag ON in this harness so existing task
+      // hydration assertions keep exercising task view; OFF cases pass an
+      // explicit `{ tasks: false }` override.
+      tasks: typeof featureOverrides?.tasks === "boolean" ? featureOverrides.tasks : true,
     }),
     isPackagedDesktopApp: () => packagedApp,
     checkForUpdates: async () => {},
@@ -662,6 +666,45 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.view).toBe("task");
     expect(seed?.selectedTaskId).toBe("task-1");
     expect(seed?.selectedThreadId).not.toBe("task-1");
+  });
+
+  test("buildCachedDesktopStateSeed normalizes task view to chat when the tasks flag is disabled", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        desktopFeatureFlagOverrides: { tasks: false },
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "task",
+        selectedThreadId: null,
+        selectedTaskId: "task-1",
+      },
+    });
+
+    expect(seed?.view).toBe("chat");
+    expect(seed?.selectedTaskId).toBeNull();
+  });
+
+  test("buildCachedDesktopStateSeed clears a task lastNonSettingsView when the tasks flag is disabled", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        desktopFeatureFlagOverrides: { tasks: false },
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        settingsPage: "models",
+        lastNonSettingsView: "task",
+        selectedTaskId: "task-1",
+      },
+    });
+
+    expect(seed?.lastNonSettingsView).toBe("chat");
+    expect(seed?.selectedTaskId).toBeNull();
   });
 
   test("buildCachedDesktopStateSeed does not select chat fallback for task view without a selected task", () => {

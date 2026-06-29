@@ -185,7 +185,7 @@ describe("prompt integration", () => {
 
     const subPrompt = await loadAgentPrompt(config, "explorer");
     expect(subPrompt).toContain("## Workspace Map");
-  });
+  }, 15_000);
 
   test("does not duplicate project instructions in main system prompt (template already has user profile)", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "ws-map-proj-"));

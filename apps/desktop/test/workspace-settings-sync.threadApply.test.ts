@@ -183,6 +183,48 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("applyWorkspaceDefaultsToThread overlays draft reasoning effort onto provider options", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              providerOptions: {
+                openai: {
+                  reasoningSummary: "concise",
+                  textVerbosity: "high",
+                },
+              },
+            }
+          : workspace,
+      ),
+    }));
+    const { threadId } = seedConnectedThread();
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId, "auto", {
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningEffort: "none",
+    });
+
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      config: {
+        providerOptions: {
+          openai: {
+            reasoningEffort: "none",
+            reasoningSummary: "concise",
+            textVerbosity: "high",
+          },
+        },
+      },
+    });
+  });
+
   test("updateWorkspaceDefaults clears the persisted overflow override on the control session", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({

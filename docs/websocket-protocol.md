@@ -446,6 +446,14 @@ Cowork no longer injects a direct streamable HTTP MCP server at the ChatGPT Code
 
 ### Task mode JSON-RPC methods
 
+> **Feature flag.** The entire durable Tasks surface — every `task/*` method below and the model's
+> `createTask` tool — is gated behind the `tasks` feature flag, which defaults **off**. When disabled,
+> `task/*` methods are not registered and the router returns `methodNotFound` (`-32601`), and `createTask`
+> is absent from the tool set. Enable it in development via the `COWORK_ENABLE_TASKS=1` env var (the
+> desktop app passes this to its sidecar server when the dev-only `tasks` flag is toggled on). Packaged
+> production builds ignore locally flipped flag overrides and resolve every flag to its build-time
+> default, so a flag flipped in development never leaks into a production build.
+
 Task mode is an explicit, project-scoped work mode alongside standard chat. Creating a task creates a dedicated root session, but task-owned sessions are omitted from `thread/list` and workspace chat bootstrap results. Clients discover and open them through `task/*`; they may still use `thread/read`, `thread/resume`, and `turn/*` after obtaining a task thread's `sessionId` from the task record. Task-owned sessions must be preserved by clients outside ordinary chat-list reconciliation. Once a task reaches `completed`, `failed`, or `cancelled`, its task threads reject `turn/start` and `turn/steer` with `task_locked` until an explicit lifecycle operation (`task/reopen` or `task/retry`) moves it back into active work. That terminal rejection is server-authoritative and returned as a JSON-RPC error with code `-32600` plus `error.data: { "category": "task_locked", "source": "session", "lockKind": "terminal_task_thread", "taskId": string, "taskStatus": "completed" | "cancelled" | "failed" }`; clients should render the task read-only and offer only the matching lifecycle action. The model can create the same object with its one-shot `createTask` tool after collecting a complete brief. Successful chat promotion links the source session, locks that source chat until the task reaches `completed`, `failed`, or `cancelled`, and emits `task/created` so clients can switch to the task workspace. Active source-chat lock rejections use `error.data: { "category": "task_locked", "source": "session", "lockKind": "active_source_chat", "taskId": string, "taskStatus": TaskStatus, "taskTitle": string }`; clients should navigate to/open the active task instead of offering terminal Reopen/Retry actions.
 
 Task terminalization is visible only after the coordinator has closed new write admissions and the

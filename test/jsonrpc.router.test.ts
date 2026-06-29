@@ -35,6 +35,7 @@ function createRouterHarness(
   opts: {
     workingDirectory?: string;
     homedir?: string;
+    tasksEnabled?: boolean;
     desktopService?: JsonRpcRouteContext["desktopService"];
     resolveWorkspacePath?: JsonRpcRouteContext["utils"]["resolveWorkspacePath"];
     persistedRecords?: Array<{
@@ -79,7 +80,7 @@ function createRouterHarness(
   const workingDirectory = opts.workingDirectory ?? "C:/default";
 
   const context: JsonRpcRouteContext = {
-    getConfig: () => ({ workingDirectory }) as any,
+    getConfig: () => ({ workingDirectory, tasksEnabled: opts.tasksEnabled === true }) as any,
     homedir: opts.homedir,
     threads: {
       create: ({ cwd, provider, model }) => {
@@ -513,6 +514,42 @@ describe("JSON-RPC request router", () => {
         },
       },
     ]);
+  });
+
+  test("task routes are unregistered (methodNotFound) when the tasks feature flag is off", async () => {
+    const harness = createRouterHarness();
+
+    await harness.router({} as any, {
+      id: 8,
+      method: "task/list",
+      params: { cwd: "C:/default" },
+    });
+
+    expect(harness.sent).toEqual([
+      {
+        id: 8,
+        error: {
+          code: JSONRPC_ERROR_CODES.methodNotFound,
+          message: "Unknown method: task/list",
+        },
+      },
+    ]);
+  });
+
+  test("task routes are registered when the tasks feature flag is on", async () => {
+    const harness = createRouterHarness({ tasksEnabled: true });
+
+    await harness.router({} as any, {
+      id: 9,
+      method: "task/list",
+      params: { cwd: "C:/default" },
+    });
+
+    // Registered: the request reaches the handler (its permission/coordinator
+    // behavior may still error), so it must NOT be reported as methodNotFound.
+    const responses = harness.sent as Array<{ id: number; error?: { code: number } }>;
+    const taskResponse = responses.find((entry) => entry.id === 9);
+    expect(taskResponse?.error?.code).not.toBe(JSONRPC_ERROR_CODES.methodNotFound);
   });
 
   test("thread/resume resets the disconnected replay buffer before replaying journal events", async () => {

@@ -27,6 +27,7 @@ import {
   type SandboxMode,
 } from "./platform/sandbox/policy";
 import { getModelForProvider, getProviderKeyCandidates } from "./providers";
+import { resolveFeatureFlags } from "./shared/featureFlags";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
 import { isNetworkTelemetryGloballyDisabled } from "./telemetry/config";
@@ -675,6 +676,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.includeRawChunks) ??
     true;
 
+  // Durable Tasks feature gate. Resolved through the shared feature-flag system
+  // (env `COWORK_ENABLE_TASKS`, default off) so packaged builds ignore locally
+  // flipped overrides and use the build-time default. The desktop app passes
+  // `COWORK_ENABLE_TASKS=1` to the sidecar server when its resolved `tasks` flag
+  // is on; CLI/standalone enable it via the env var directly.
+  const tasksEnabled = resolveFeatureFlags({
+    isPackaged: env.COWORK_IS_PACKAGED === "true",
+    env,
+  }).tasks;
+
   const a2uiExperimentEnabled = isA2uiExperimentEnabled(env);
   const enableA2ui = a2uiExperimentEnabled ? (resolvedWorkspaceA2ui ?? false) : undefined;
   const openAiNativeConnectorsExperimentEnabled = isOpenAiNativeConnectorsExperimentEnabled(env);
@@ -815,6 +826,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     advancedMemory,
     ...(memoryGenerationModel ? { memoryGenerationModel } : {}),
     includeRawChunks,
+    tasksEnabled,
     experimentalFeatures: {
       a2ui: a2uiExperimentEnabled,
       openAiNativeConnectors: openAiNativeConnectorsExperimentEnabled,

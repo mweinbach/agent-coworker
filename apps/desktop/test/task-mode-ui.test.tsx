@@ -203,6 +203,7 @@ function resetStore(task: TaskRecord | null) {
   const current = useAppStore.getState();
   useAppStore.setState({
     ...current,
+    desktopFeatureFlags: { ...current.desktopFeatureFlags, tasks: true },
     view: "task",
     workspaces: [
       {

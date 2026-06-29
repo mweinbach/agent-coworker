@@ -19,6 +19,9 @@ export function serverOpts(
     AGENT_PROVIDER: "google",
     AGENT_OBSERVABILITY_ENABLED: "false",
     COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+    // Durable Tasks default off; enable it for the integration harness so
+    // task/* route flows are exercised. No ws-harness test asserts tool lists.
+    COWORK_ENABLE_TASKS: "1",
   };
 
   return {

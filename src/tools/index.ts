@@ -1,6 +1,7 @@
 import { resolveExperimentalA2uiConfig } from "../experimental/a2ui/flags";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import { filterToolsForRole } from "../server/agents/toolPolicy";
+import { resolveTasksFeatureEnabled } from "../server/tasks/flags";
 import {
   getCodexWebSearchBackendFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
@@ -67,7 +68,9 @@ type ListSessionToolNameOptions = {
 
 export function listSessionToolNames(
   config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory" | "advancedMemory"> &
-    Partial<Pick<AgentConfig, "enableA2ui" | "featureFlags" | "experimentalFeatures">>,
+    Partial<
+      Pick<AgentConfig, "enableA2ui" | "featureFlags" | "experimentalFeatures" | "tasksEnabled">
+    >,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const providerIsCodex = config.provider === "codex-cli";
@@ -89,7 +92,7 @@ export function listSessionToolNames(
   const coworkToolNames = [
     "AskUserQuestion",
     "todoWrite",
-    "createTask",
+    ...(resolveTasksFeatureEnabled(config) ? ["createTask"] : []),
     "skill",
     ...(config.advancedMemory
       ? ["recallMemory", "readPastConversation", "manageMemory"]

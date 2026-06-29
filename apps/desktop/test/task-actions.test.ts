@@ -464,26 +464,28 @@ describe("desktop task actions", () => {
   });
 
   test("accepts current-drive-rooted and mixed-case Windows task notifications", async () => {
-    setRendererPlatform("win32");
-    const harness = createHarness({ workspacePath: "C:\\Repo" });
-    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
-    Object.assign(harness.state, actions);
-    await actions.refreshTasks("ws-1");
+    await withWindowsCwd("D:\\a\\agent-coworker\\agent-coworker", async () => {
+      setRendererPlatform("win32");
+      const harness = createHarness({ workspacePath: "C:\\Repo" });
+      const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+      Object.assign(harness.state, actions);
+      await actions.refreshTasks("ws-1");
 
-    notificationRouter?.({
-      kind: "notification",
-      method: "task/updated",
-      params: {
-        cwd: "\\repo\\.\\",
-        task: taskRecord({
-          workspacePath: "c:/REPO",
-          title: "Current drive task",
-          revision: 3,
-        }),
-      },
+      notificationRouter?.({
+        kind: "notification",
+        method: "task/updated",
+        params: {
+          cwd: "\\repo\\.\\",
+          task: taskRecord({
+            workspacePath: "c:/REPO",
+            title: "Current drive task",
+            revision: 3,
+          }),
+        },
+      });
+
+      expect(harness.state.tasksById["task-1"]?.title).toBe("Current drive task");
     });
-
-    expect(harness.state.tasksById["task-1"]?.title).toBe("Current drive task");
   });
 
   test("keeps POSIX task notification workspace matching case-sensitive", async () => {

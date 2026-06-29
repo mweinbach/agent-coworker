@@ -1,4 +1,4 @@
-import { sameWorkspacePath } from "@cowork/utils/workspacePath";
+import { canonicalWorkspacePath, sameWorkspacePath } from "@cowork/utils/workspacePath";
 import {
   type ArtifactDiff,
   type ArtifactPreview,
@@ -74,7 +74,35 @@ function workspacePlatform(): NodeJS.Platform {
 }
 
 function workspacePathsMatch(a: string, b: string): boolean {
-  return sameWorkspacePath(a, b, workspacePlatform());
+  const platform = workspacePlatform();
+  if (sameWorkspacePath(a, b, platform)) return true;
+  if (platform !== "win32") return false;
+
+  const aCurrentDriveRooted = isCurrentDriveRootedWindowsPath(a);
+  const bCurrentDriveRooted = isCurrentDriveRootedWindowsPath(b);
+  if (aCurrentDriveRooted === bCurrentDriveRooted) return false;
+
+  if (aCurrentDriveRooted) {
+    const drive = windowsDrivePrefix(b);
+    return drive
+      ? sameWorkspacePath(`${drive}${normalizeWindowsSeparators(a)}`, b, platform)
+      : false;
+  }
+
+  const drive = windowsDrivePrefix(a);
+  return drive ? sameWorkspacePath(a, `${drive}${normalizeWindowsSeparators(b)}`, platform) : false;
+}
+
+function normalizeWindowsSeparators(value: string): string {
+  return value.trim().replaceAll("/", "\\");
+}
+
+function isCurrentDriveRootedWindowsPath(value: string): boolean {
+  return /^\\(?!\\)/.test(normalizeWindowsSeparators(value));
+}
+
+function windowsDrivePrefix(value: string): string | null {
+  return /^([a-z]:)\\/.exec(canonicalWorkspacePath(value, "win32"))?.[1] ?? null;
 }
 
 function taskSummary(task: TaskRecord): TaskSummary {

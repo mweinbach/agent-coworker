@@ -171,11 +171,13 @@ describe("createTools", () => {
         latestCheckpoint: null,
       },
     }));
-    const tools = createTools(makeCtx(dir, {
-      config: makeConfig(dir, { tasksEnabled: true }),
-      sessionId: "chat-1",
-      createTask,
-    }));
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, { tasksEnabled: true }),
+        sessionId: "chat-1",
+        createTask,
+      }),
+    );
     const tool = tools.createTask as { execute: (input: unknown) => Promise<string> };
 
     const output = JSON.parse(
@@ -265,11 +267,13 @@ describe("createTools", () => {
         latestCheckpoint: null,
       },
     }));
-    const tool = createTools(makeCtx(dir, {
-      config: makeConfig(dir, { tasksEnabled: true }),
-      sessionId: "chat-1",
-      createTask,
-    })).createTask as {
+    const tool = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, { tasksEnabled: true }),
+        sessionId: "chat-1",
+        createTask,
+      }),
+    ).createTask as {
       execute: (input: unknown) => Promise<string>;
     };
 

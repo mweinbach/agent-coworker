@@ -6,6 +6,7 @@ export const FEATURE_FLAG_IDS = [
   "a2ui",
   "openAiNativeConnectors",
   "canvas",
+  "tasks",
 ] as const;
 
 export type FeatureFlagId = (typeof FEATURE_FLAG_IDS)[number];
@@ -76,6 +77,15 @@ export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefiniti
       "Work alongside the agent on documents in the right sidebar. Allows real-time edits, commenting, and collaborative writing.",
     defaultEnabled: false,
   },
+  tasks: {
+    id: "tasks",
+    label: "Tasks",
+    description:
+      "Enable the durable Tasks workspace surfaces (task list, task view, new task), the createTask agent tool, and the task/* routes.",
+    defaultEnabled: false,
+    envOverride: "COWORK_ENABLE_TASKS",
+    restartRequired: true,
+  },
 };
 
 function parseBooleanFlag(value: string | undefined): boolean | null {
@@ -114,6 +124,7 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
     a2ui: FEATURE_FLAG_DEFINITIONS.a2ui.defaultEnabled,
     openAiNativeConnectors: FEATURE_FLAG_DEFINITIONS.openAiNativeConnectors.defaultEnabled,
     canvas: FEATURE_FLAG_DEFINITIONS.canvas.defaultEnabled,
+    tasks: FEATURE_FLAG_DEFINITIONS.tasks.defaultEnabled,
   };
 
   for (const flagId of FEATURE_FLAG_IDS) {
@@ -129,7 +140,14 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
     }
   }
 
-  const overrides = normalizeFeatureFlagOverrides(options.overrides);
+  // Locally persisted/config flag overrides (e.g. flips made in the dev-only
+  // Feature Flags settings page) only apply in development. Packaged
+  // (production) builds intentionally ignore them so a flag flipped on a dev
+  // machine never leaks into a production build; production resolves to the
+  // build-time default (plus env overrides and forced-off constraints below).
+  const overrides = options.isPackaged
+    ? undefined
+    : normalizeFeatureFlagOverrides(options.overrides);
   if (overrides) {
     for (const flagId of FEATURE_FLAG_IDS) {
       const override = normalizeBooleanOverride(overrides[flagId]);

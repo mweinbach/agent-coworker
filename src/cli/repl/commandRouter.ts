@@ -1,5 +1,6 @@
 import type readline from "node:readline";
 import { defaultModelForProvider } from "../../config";
+import { resolveFeatureFlags } from "../../shared/featureFlags";
 import {
   isOpenAiCompatibleProviderName,
   isOpenAiReasoningEffort,
@@ -432,11 +433,16 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       }
 
       const sessionConfig = ctx.getSessionConfig();
+      const tasksEnabled = resolveFeatureFlags({
+        isPackaged: process.env.COWORK_IS_PACKAGED === "true",
+        env: process.env,
+      }).tasks;
       const toolNames = listSessionToolNames(
         {
           provider: config.provider,
           providerOptions: sessionConfig?.providerOptions,
           enableMemory: sessionConfig?.enableMemory,
+          tasksEnabled,
         },
         { includeAgentControl: true },
       );

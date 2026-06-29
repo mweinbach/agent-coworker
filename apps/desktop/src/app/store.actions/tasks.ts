@@ -244,6 +244,7 @@ function ensureTaskRouter(
       return;
     }
     if (message.method === "task/created") {
+      if (get().desktopFeatureFlags.tasks !== true) return;
       const parsed = taskRecordSchema.safeParse(params.task);
       if (!parsed.success || params.takeover !== true) return;
       const task = parsed.data;
@@ -480,6 +481,7 @@ export function createTaskActions(
 
   return {
     openNewTask: async (workspaceId) => {
+      if (get().desktopFeatureFlags.tasks !== true) return;
       const project =
         (workspaceId
           ? get().workspaces.find((item) => item.id === workspaceId)
@@ -550,6 +552,7 @@ export function createTaskActions(
     },
 
     startTask: async ({ workspaceId, task: rawTask }) => {
+      if (get().desktopFeatureFlags.tasks !== true) return null;
       const workspace = get().workspaces.find((item) => item.id === workspaceId);
       if (!workspace || isOneOffChatWorkspace(workspace)) return null;
       const task: TaskCreationInput = rawTask;
@@ -586,6 +589,7 @@ export function createTaskActions(
     },
 
     selectTask: async (taskId, options) => {
+      if (get().desktopFeatureFlags.tasks !== true) return;
       const summaryEntry = Object.entries(get().taskSummariesByWorkspaceId).find(([, tasks]) =>
         tasks.some((task) => task.id === taskId),
       );
@@ -626,6 +630,7 @@ export function createTaskActions(
     },
 
     selectTaskThread: async (taskId, taskThreadId) => {
+      if (get().desktopFeatureFlags.tasks !== true) return;
       const task = get().tasksById[taskId];
       const thread = task?.threads.find((item) => item.id === taskThreadId);
       if (!task || !thread) return;
@@ -637,6 +642,7 @@ export function createTaskActions(
     },
 
     createTaskThread: async (taskId, title, workItemId) => {
+      if (get().desktopFeatureFlags.tasks !== true) return;
       const task = get().tasksById[taskId];
       if (!task) return;
       const workspaceId = workspaceIdForTask(get, task);
@@ -825,6 +831,7 @@ export function createTaskActions(
       }),
 
     startTaskArtifactRevision: async (taskId, artifactId, baseVersionId, instruction) => {
+      if (get().desktopFeatureFlags.tasks !== true) return null;
       const context = taskRequestContext(taskId);
       const normalizedInstruction = instruction.trim();
       if (!context || !normalizedInstruction) return null;

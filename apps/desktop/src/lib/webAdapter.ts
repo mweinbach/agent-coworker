@@ -481,6 +481,7 @@ export function createWebAdapter(): DesktopApi {
       a2ui: false,
       openAiNativeConnectors: false,
       canvas: overrides?.canvas ?? false,
+      tasks: overrides?.tasks ?? false,
     };
   };
   const features = resolveWebDesktopFeatureFlags();

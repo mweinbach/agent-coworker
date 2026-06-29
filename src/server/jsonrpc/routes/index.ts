@@ -1,3 +1,4 @@
+import { resolveTasksFeatureEnabled } from "../../tasks/flags";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
 import { createAgentProfilesRouteHandlers } from "./agentProfiles";
@@ -44,7 +45,9 @@ export function createJsonRpcRequestRouter(
     ...createMemoryRouteHandlers(context),
     ...createWorkspaceBackupRouteHandlers(context),
     ...createWorkspaceRouteHandlers(context),
-    ...createTaskRouteHandlers(context),
+    // Gate the durable Tasks routes behind the `tasks` feature flag. When off,
+    // task/* methods are unregistered and resolve to methodNotFound below.
+    ...(resolveTasksFeatureEnabled(context.getConfig()) ? createTaskRouteHandlers(context) : {}),
     ...(opts.experimentalHandlers ?? {}),
   };
 

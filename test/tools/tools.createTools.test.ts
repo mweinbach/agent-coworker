@@ -56,6 +56,7 @@ describe("createTools", () => {
     };
     const tools = createTools(
       makeCtx(dir, {
+        config: makeConfig(dir, { tasksEnabled: true }),
         taskContext,
         applyTaskDirective: async () => {
           throw new Error("not invoked");
@@ -76,6 +77,7 @@ describe("createTools", () => {
     const dir = await tmpDir();
     const tools = createTools(
       makeCtx(dir, {
+        config: makeConfig(dir, { tasksEnabled: true }),
         taskContext: {
           id: "task-1",
           title: "Task",
@@ -169,7 +171,11 @@ describe("createTools", () => {
         latestCheckpoint: null,
       },
     }));
-    const tools = createTools(makeCtx(dir, { sessionId: "chat-1", createTask }));
+    const tools = createTools(makeCtx(dir, {
+      config: makeConfig(dir, { tasksEnabled: true }),
+      sessionId: "chat-1",
+      createTask,
+    }));
     const tool = tools.createTask as { execute: (input: unknown) => Promise<string> };
 
     const output = JSON.parse(
@@ -204,9 +210,15 @@ describe("createTools", () => {
       taskThreadId: "task-session-1",
       modeChanged: true,
     });
-    expect(createTools(makeCtx(dir, { createTask, agentRole: "worker" }))).not.toHaveProperty(
-      "createTask",
-    );
+    expect(
+      createTools(
+        makeCtx(dir, {
+          config: makeConfig(dir, { tasksEnabled: true }),
+          createTask,
+          agentRole: "worker",
+        }),
+      ),
+    ).not.toHaveProperty("createTask");
   });
 
   test("preserves one-off chat task promotion results on the dedicated createTask tool path", async () => {
@@ -253,7 +265,11 @@ describe("createTools", () => {
         latestCheckpoint: null,
       },
     }));
-    const tool = createTools(makeCtx(dir, { sessionId: "chat-1", createTask })).createTask as {
+    const tool = createTools(makeCtx(dir, {
+      config: makeConfig(dir, { tasksEnabled: true }),
+      sessionId: "chat-1",
+      createTask,
+    })).createTask as {
       execute: (input: unknown) => Promise<string>;
     };
 
@@ -291,7 +307,9 @@ describe("createTools", () => {
     const createTask = mock(async () => {
       throw new Error("must not execute");
     });
-    const tool = createTools(makeCtx(dir, { createTask })).createTask as {
+    const tool = createTools(
+      makeCtx(dir, { config: makeConfig(dir, { tasksEnabled: true }), createTask }),
+    ).createTask as {
       execute: (input: unknown) => Promise<string>;
     };
 
@@ -309,6 +327,25 @@ describe("createTools", () => {
       }),
     ).rejects.toThrow();
     expect(createTask).not.toHaveBeenCalled();
+  });
+
+  test("gates the createTask tool behind the tasks feature flag", async () => {
+    const dir = await tmpDir();
+    const createTask = mock(async () => {
+      throw new Error("must not execute");
+    });
+    // Default (flag off): no createTask tool even when a handler is provided.
+    expect(createTools(makeCtx(dir, { createTask }))).not.toHaveProperty("createTask");
+    // Flag on: the tool is registered.
+    expect(
+      createTools(makeCtx(dir, { config: makeConfig(dir, { tasksEnabled: true }), createTask })),
+    ).toHaveProperty("createTask");
+  });
+
+  test("listSessionToolNames includes createTask only when the tasks flag is enabled", () => {
+    const base = { provider: "google" as const };
+    expect(listSessionToolNames(base)).not.toContain("createTask");
+    expect(listSessionToolNames({ ...base, tasksEnabled: true })).toContain("createTask");
   });
 
   test("taskUpdate submits bundled input requests and exposes pause state", async () => {
@@ -356,7 +393,13 @@ describe("createTools", () => {
         latestCheckpoint: null,
       },
     }));
-    const tools = createTools(makeCtx(dir, { taskContext, applyTaskDirective }));
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, { tasksEnabled: true }),
+        taskContext,
+        applyTaskDirective,
+      }),
+    );
     const taskUpdate = tools.taskUpdate as {
       execute: (input: unknown) => Promise<string>;
     };

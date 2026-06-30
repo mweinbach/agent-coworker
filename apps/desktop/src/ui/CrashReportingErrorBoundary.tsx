@@ -52,7 +52,7 @@ export class CrashReportingErrorBoundary extends Component<
 
 /**
  * Default inline fallback rendered by {@link InlineErrorBoundary}. Mirrors the
- * destructive-toned tile already used in `FeedRow` (error rows) and the a2ui
+ * destructive-toned tile already used in `FeedRow` (error rows) and the
  * `UnknownComponent` fallback so a localized crash reads as part of the UI
  * rather than a window-level fault.
  */
@@ -97,7 +97,7 @@ type InlineErrorBoundaryState = { hasError: boolean };
 
 /**
  * A localized, non-fullscreen error boundary. Use it to wrap a single feed
- * item, a2ui surface, canvas, or settings panel so one bad subtree degrades
+ * item, surface, canvas, or settings panel so one bad subtree degrades
  * to a small inline tile instead of taking down the whole window. Errors are
  * still forwarded to `captureRendererError` for telemetry.
  *

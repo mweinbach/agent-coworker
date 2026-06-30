@@ -29,7 +29,6 @@ import {
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { ActivityGroupCard } from "./ActivityGroupCard";
 import { type ChatRenderItem, summarizeActivityGroup } from "./activityGroups";
-import { parseA2uiActionMessage } from "./chatLogic";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
@@ -40,17 +39,14 @@ export type VisibleSandboxApproval = {
   prompt: SandboxApprovalPrompt;
 };
 
-function isVisibleUserTurn(item: ChatRenderItem, a2uiEnabled: boolean): boolean {
-  if (item.kind !== "feed-item" || item.item.kind !== "message" || item.item.role !== "user") {
-    return false;
-  }
-  return a2uiEnabled || parseA2uiActionMessage(item.item.text) === null;
+function isVisibleUserTurn(item: ChatRenderItem): boolean {
+  return item.kind === "feed-item" && item.item.kind === "message" && item.item.role === "user";
 }
 
-function lastVisibleUserTurnId(renderItems: ChatRenderItem[], a2uiEnabled: boolean): string | null {
+function lastVisibleUserTurnId(renderItems: ChatRenderItem[]): string | null {
   for (let index = renderItems.length - 1; index >= 0; index -= 1) {
     const item = renderItems[index];
-    if (item && isVisibleUserTurn(item, a2uiEnabled)) {
+    if (item && isVisibleUserTurn(item)) {
       return item.kind === "feed-item" ? item.item.id : null;
     }
   }
@@ -126,8 +122,7 @@ export function ChatFeed(props: {
   citationUrlsByMessageId: Map<string, Map<number, string>>;
   citationSourcesByMessageId: Map<string, CitationSource[]>;
   desktopBasePath: string | null;
-  latestUiSurfaceItemId: string | null;
-  a2uiEnabled: boolean;
+
   composerOverlayHeight: number;
   sandboxApprovals: VisibleSandboxApproval[];
   onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => void;
@@ -149,8 +144,6 @@ export function ChatFeed(props: {
     citationUrlsByMessageId,
     citationSourcesByMessageId,
     desktopBasePath,
-    latestUiSurfaceItemId,
-    a2uiEnabled,
     composerOverlayHeight,
     sandboxApprovals,
     onAnswerApproval,
@@ -160,7 +153,7 @@ export function ChatFeed(props: {
     onRetryFailedTurn,
     retryFailedTurnDisabled,
   } = props;
-  const lastUserTurnId = lastVisibleUserTurnId(renderItems, a2uiEnabled);
+  const lastUserTurnId = lastVisibleUserTurnId(renderItems);
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
 
   return (
@@ -236,7 +229,7 @@ export function ChatFeed(props: {
                   <MessageScrollerItem
                     key={messageId}
                     messageId={messageId}
-                    scrollAnchor={isVisibleUserTurn(item, a2uiEnabled)}
+                    scrollAnchor={isVisibleUserTurn(item)}
                   >
                     {item.kind === "activity-group" ? (
                       <ActivityGroupCard
@@ -257,8 +250,6 @@ export function ChatFeed(props: {
                           citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
                           citationSources={citationSourcesByMessageId.get(item.item.id)}
                           desktopBasePath={desktopBasePath}
-                          isLatestUiSurface={item.item.id === latestUiSurfaceItemId}
-                          a2uiEnabled={a2uiEnabled}
                         />
                       </InlineErrorBoundary>
                     )}

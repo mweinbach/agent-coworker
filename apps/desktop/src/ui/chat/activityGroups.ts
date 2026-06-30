@@ -347,29 +347,6 @@ export function firstActivityTimestampMs(items: ActivityFeedItem[]): number | nu
   return Math.min(...timestamps);
 }
 
-type UiSurfaceFeed = Extract<FeedItem, { kind: "ui_surface" }>;
-
-/**
- * Successive ui_surface revisions from the same tool call produce separate
- * feed items on the wire, but displaying all of them would spam the chat with
- * near-identical entries. We coalesce them at render time by keeping only the
- * latest entry per (surfaceId, toolCallId) pair. Entries without a toolCallId
- * fall through unchanged so each one still gets its own row.
- */
-function shouldDropA2uiRevision(item: UiSurfaceFeed, followers: FeedItem[]): boolean {
-  if (!item.toolCallId) return false;
-  for (let i = 0; i < followers.length; i++) {
-    const next = followers[i];
-    if (!next) continue;
-    if (next.kind !== "ui_surface") continue;
-    if (next.surfaceId !== item.surfaceId) continue;
-    if (next.toolCallId === item.toolCallId && next.revision > item.revision) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   const items: ChatRenderItem[] = [];
   let currentGroup: ActivityFeedItem[] = [];
@@ -396,9 +373,6 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
     }
     if (item.kind === "tool") {
       currentGroup.push(item);
-      continue;
-    }
-    if (item.kind === "ui_surface" && shouldDropA2uiRevision(item, feed.slice(i + 1))) {
       continue;
     }
     flushGroup();

@@ -123,20 +123,4 @@ export interface ToolContext {
    * call this immediately before filesystem/process side effects.
    */
   assertCanMutate?: (toolName: string) => void | Promise<void>;
-
-  /**
-   * Apply an A2UI v0.9 envelope to the session's surface state. Returns a
-   * per-envelope result (ok/error plus surfaceId/change metadata). Only
-   * populated when the harness enables the A2UI feature.
-   */
-  applyA2uiEnvelope?: (
-    envelope: unknown,
-    meta?: { reason?: string; toolCallId?: string },
-  ) => {
-    ok: boolean;
-    surfaceId?: string;
-    change?: "created" | "updated" | "deleted" | "noop";
-    error?: string;
-    warning?: string;
-  };
 }

@@ -37,51 +37,51 @@ mock.module("../apps/mobile/src/components/thread/todo-card", () => ({
   TodoCard: () => createElement("todo-card"),
 }));
 
-mock.module("../apps/mobile/src/components/thread/a2ui-surface-card", () => ({
-  A2uiSurfaceCard: ({ item }: { item: { surfaceId: string } }) =>
-    createElement("a2ui-surface-card", { "data-surface-id": item.surfaceId }),
+mock.module("../apps/mobile/src/components/thread/REMOVEDUI-surface-card", () => ({
+  REMOVEDRemovedSurfaceCard: ({ item }: { item: { surfaceId: string } }) =>
+    createElement("REMOVEDUI-surface-card", { "data-surface-id": item.surfaceId }),
 }));
 
 const { ThreadFeedItem } = await import("../apps/mobile/src/components/thread/thread-feed-item");
 
 describe("mobile ThreadFeedItem", () => {
-  test("renders ui_surface items with A2uiSurfaceCard instead of chrome fallback", () => {
+  test("renders REMOVED_SURFACE items with REMOVEDRemovedSurfaceCard instead of chrome fallback", () => {
     const rendered = ThreadFeedItem({
       item: {
-        id: "uiSurface:s1",
-        kind: "ui_surface",
+        id: "RemovedSurface:s1",
+        kind: "REMOVED_SURFACE",
         ts: "2026-04-19T00:00:00.000Z",
         surfaceId: "s1",
-        catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+        catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
         version: "v0.9",
         revision: 1,
         deleted: false,
         root: { id: "root", type: "Column" },
       },
-      a2uiEnabled: true,
+      REMOVEDUIEnabled: true,
       showDebugMessages: false,
     });
 
     expect(rendered.type).toBeDefined();
     expect(typeof rendered.type).toBe("function");
-    expect((rendered.type as { name?: string }).name).toBe("A2uiSurfaceCard");
+    expect((rendered.type as { name?: string }).name).toBe("REMOVEDRemovedSurfaceCard");
     expect(rendered.props.item.surfaceId).toBe("s1");
   });
 
-  test("hides ui_surface items when a2ui is disabled", () => {
+  test("hides REMOVED_SURFACE items when REMOVEDUI is disabled", () => {
     const rendered = ThreadFeedItem({
       item: {
-        id: "uiSurface:s1",
-        kind: "ui_surface",
+        id: "RemovedSurface:s1",
+        kind: "REMOVED_SURFACE",
         ts: "2026-04-19T00:00:00.000Z",
         surfaceId: "s1",
-        catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+        catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
         version: "v0.9",
         revision: 1,
         deleted: false,
         root: { id: "root", type: "Column" },
       },
-      a2uiEnabled: false,
+      REMOVEDUIEnabled: false,
     });
 
     expect(rendered).toBeNull();
@@ -97,7 +97,7 @@ describe("mobile ThreadFeedItem", () => {
           ts: "2026-04-19T00:00:00.000Z",
           text: "Thinking",
         },
-        a2uiEnabled: true,
+        REMOVEDUIEnabled: true,
         showDebugMessages: false,
       }),
     ).toBeNull();
@@ -111,7 +111,7 @@ describe("mobile ThreadFeedItem", () => {
           name: "bash",
           state: "output-available",
         },
-        a2uiEnabled: true,
+        REMOVEDUIEnabled: true,
         showDebugMessages: false,
       }),
     ).toBeNull();
@@ -125,7 +125,7 @@ describe("mobile ThreadFeedItem", () => {
         ts: "2026-04-19T00:00:00.000Z",
         line: "Observability: enabled=yes",
       },
-      a2uiEnabled: true,
+      REMOVEDUIEnabled: true,
       showDebugMessages: false,
     });
     expect(hidden).toBeNull();
@@ -137,7 +137,7 @@ describe("mobile ThreadFeedItem", () => {
         ts: "2026-04-19T00:00:00.000Z",
         line: "Observability: enabled=yes",
       },
-      a2uiEnabled: true,
+      REMOVEDUIEnabled: true,
       showDebugMessages: true,
     });
     expect(visible).not.toBeNull();

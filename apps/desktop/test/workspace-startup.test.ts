@@ -294,7 +294,7 @@ describe("workspace startup flow", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
       },
       desktopFeatureFlagOverrides: {},
       privacyTelemetrySettings: {

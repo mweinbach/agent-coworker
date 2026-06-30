@@ -1,4 +1,3 @@
-import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
 import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 import { getObservabilityHealth } from "../../observability/runtime";
 import {
@@ -44,18 +43,6 @@ function userProfileEqual(
     (left?.work ?? "") === (right?.work ?? "") &&
     (left?.details ?? "") === (right?.details ?? "")
   );
-}
-
-function resolveWorkspaceA2ui(
-  config: Pick<AgentConfig, "featureFlags" | "enableA2ui" | "experimentalFeatures">,
-): boolean {
-  if (!isA2uiExperimentEnabled() && config.experimentalFeatures?.a2ui !== true) return false;
-  const workspaceFlag = config.featureFlags?.workspace?.a2ui;
-  return typeof workspaceFlag === "boolean" ? workspaceFlag : (config.enableA2ui ?? false);
-}
-
-function isA2uiExperimentActive(config: Pick<AgentConfig, "experimentalFeatures">): boolean {
-  return config.experimentalFeatures?.a2ui === true || isA2uiExperimentEnabled();
 }
 
 export class SessionMetadataManager {
@@ -155,25 +142,6 @@ export class SessionMetadataManager {
         },
       };
     }
-    if (
-      isA2uiExperimentActive(nextConfig) &&
-      (patch.featureFlags?.workspace !== undefined || patch.enableA2ui !== undefined)
-    ) {
-      const nextWorkspaceA2ui =
-        patch.enableA2ui ??
-        (typeof patch.featureFlags?.workspace?.a2ui === "boolean"
-          ? patch.featureFlags.workspace.a2ui
-          : undefined) ??
-        resolveWorkspaceA2ui(nextConfig);
-      nextConfig = {
-        ...nextConfig,
-        enableA2ui: nextWorkspaceA2ui,
-        featureFlags: {
-          ...nextConfig.featureFlags,
-          workspace: { a2ui: nextWorkspaceA2ui },
-        },
-      };
-    }
     return nextConfig;
   }
 
@@ -224,19 +192,6 @@ export class SessionMetadataManager {
     if (patch.userProfile !== undefined) {
       persistPatch.userProfile = patch.userProfile;
     }
-    const patchWorkspaceA2ui = isA2uiExperimentActive(this.context.state.config)
-      ? (patch.enableA2ui ??
-        (typeof patch.featureFlags?.workspace?.a2ui === "boolean"
-          ? patch.featureFlags.workspace.a2ui
-          : undefined))
-      : undefined;
-    if (patchWorkspaceA2ui !== undefined) {
-      persistPatch.featureFlags = {
-        workspace: {
-          a2ui: patchWorkspaceA2ui,
-        },
-      };
-    }
     return persistPatch;
   }
 
@@ -253,8 +208,6 @@ export class SessionMetadataManager {
       baseMaxSteps !== nextMaxSteps ||
       (baseConfig.observabilityEnabled ?? false) !== (nextConfig.observabilityEnabled ?? false) ||
       (baseConfig.backupsEnabled ?? false) !== (nextConfig.backupsEnabled ?? false) ||
-      (isA2uiExperimentActive(baseConfig) &&
-        (baseConfig.enableA2ui ?? false) !== (nextConfig.enableA2ui ?? false)) ||
       (baseConfig.enableMemory ?? true) !== (nextConfig.enableMemory ?? true) ||
       (baseConfig.memoryRequireApproval ?? false) !== (nextConfig.memoryRequireApproval ?? false) ||
       (baseConfig.advancedMemory ?? false) !== (nextConfig.advancedMemory ?? false) ||
@@ -314,8 +267,6 @@ export class SessionMetadataManager {
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(
       this.context.state.config.toolOutputOverflowChars,
     );
-    const a2uiExperimentEnabled = isA2uiExperimentActive(this.context.state.config);
-    const workspaceA2ui = resolveWorkspaceA2ui(this.context.state.config);
     return {
       type: "session_config",
       sessionId: this.context.id,
@@ -323,7 +274,6 @@ export class SessionMetadataManager {
         yolo: this.context.state.yolo,
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         backupsEnabled,
-        ...(a2uiExperimentEnabled ? { enableA2ui: workspaceA2ui } : {}),
         enableMemory: this.context.state.config.enableMemory ?? true,
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
         advancedMemory: this.context.state.config.advancedMemory ?? false,
@@ -343,15 +293,6 @@ export class SessionMetadataManager {
         ...(providerOptions ? { providerOptions } : {}),
         userName: this.context.state.config.userName,
         userProfile: this.effectiveUserProfile(),
-        ...(a2uiExperimentEnabled
-          ? {
-              featureFlags: {
-                workspace: {
-                  a2ui: workspaceA2ui,
-                },
-              },
-            }
-          : {}),
       },
     };
   }
@@ -571,8 +512,6 @@ export class SessionMetadataManager {
     if (
       patch.userName !== undefined ||
       patch.userProfile !== undefined ||
-      (isA2uiExperimentActive(nextConfig) &&
-        (patch.enableA2ui !== undefined || patch.featureFlags?.workspace !== undefined)) ||
       patch.enableMemory !== undefined ||
       patch.advancedMemory !== undefined ||
       patch.providerOptions !== undefined

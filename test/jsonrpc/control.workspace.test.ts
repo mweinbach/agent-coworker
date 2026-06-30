@@ -53,7 +53,7 @@ describe("server JSON-RPC control methods", () => {
           model: "gpt-5.4",
           preferredChildModel: "gpt-5.4",
           enableMcp: false,
-          enableA2ui: false,
+          enableREMOVEDUI: false,
           enableMemory: false,
         },
         null,
@@ -79,7 +79,7 @@ describe("server JSON-RPC control methods", () => {
       expect(stateResponse.result.events[0]?.config?.model).toBe("gpt-5.4");
       expect(stateResponse.result.events[0]?.config?.workingDirectory).toBe(realTargetWorkspace);
       expect(stateResponse.result.events[1]?.enableMcp).toBe(false);
-      expect(stateResponse.result.events[2]?.config?.enableA2ui).toBeUndefined();
+      expect(stateResponse.result.events[2]?.config?.enableREMOVEDUI).toBeUndefined();
       expect(stateResponse.result.events[2]?.config?.enableMemory).toBe(false);
 
       const defaultsResponse = await rpc.request("cowork/session/defaults/apply", {
@@ -87,7 +87,7 @@ describe("server JSON-RPC control methods", () => {
         config: {
           featureFlags: {
             workspace: {
-              a2ui: true,
+              REMOVEDUI: true,
             },
           },
           enableMemory: true,
@@ -98,7 +98,7 @@ describe("server JSON-RPC control methods", () => {
       const targetConfig = JSON.parse(
         await fs.readFile(`${targetWorkspace}/.cowork/config.json`, "utf-8"),
       );
-      expect(targetConfig.featureFlags?.workspace?.a2ui).toBeUndefined();
+      expect(targetConfig.featureFlags?.workspace?.REMOVEDUI).toBeUndefined();
       expect(targetConfig.enableMemory).toBe(true);
       await expect(fs.readFile(`${serverRoot}/.cowork/config.json`, "utf-8")).rejects.toBeDefined();
 
@@ -116,7 +116,7 @@ describe("server JSON-RPC control methods", () => {
         {
           featureFlags: {
             workspace: {
-              a2ui: false,
+              REMOVEDUI: false,
             },
           },
         },
@@ -126,36 +126,36 @@ describe("server JSON-RPC control methods", () => {
     );
 
     const { server, url } = await startAgentServer(
-      serverOpts(workspace, { env: { COWORK_EXPERIMENTAL_A2UI: "1" } }),
+      serverOpts(workspace, { env: { COWORK_EXPERIMENTAL_REMOVEDUI: "1" } }),
     );
 
     try {
       const rpc = await connectJsonRpc(url);
       const before = await rpc.request("cowork/session/state/read", { cwd: workspace });
       expect(before.result.events[2]?.type).toBe("session_config");
-      expect(before.result.events[2]?.config?.featureFlags?.workspace?.a2ui).toBe(false);
-      expect(before.result.events[2]?.config?.enableA2ui).toBe(false);
+      expect(before.result.events[2]?.config?.featureFlags?.workspace?.REMOVEDUI).toBe(false);
+      expect(before.result.events[2]?.config?.enableREMOVEDUI).toBe(false);
 
       const apply = await rpc.request("cowork/session/defaults/apply", {
         cwd: workspace,
         config: {
           featureFlags: {
             workspace: {
-              a2ui: true,
+              REMOVEDUI: true,
             },
           },
         },
       });
       expect(apply.result.event.type).toBe("session_config");
-      expect(apply.result.event.config.featureFlags.workspace.a2ui).toBe(true);
-      expect(apply.result.event.config.enableA2ui).toBe(true);
+      expect(apply.result.event.config.featureFlags.workspace.REMOVEDUI).toBe(true);
+      expect(apply.result.event.config.enableREMOVEDUI).toBe(true);
 
       const persisted = JSON.parse(await fs.readFile(`${workspace}/.cowork/config.json`, "utf-8"));
-      expect(persisted.featureFlags.workspace.a2ui).toBe(true);
+      expect(persisted.featureFlags.workspace.REMOVEDUI).toBe(true);
 
       const after = await rpc.request("cowork/session/state/read", { cwd: workspace });
-      expect(after.result.events[2]?.config?.featureFlags?.workspace?.a2ui).toBe(true);
-      expect(after.result.events[2]?.config?.enableA2ui).toBe(true);
+      expect(after.result.events[2]?.config?.featureFlags?.workspace?.REMOVEDUI).toBe(true);
+      expect(after.result.events[2]?.config?.enableREMOVEDUI).toBe(true);
 
       rpc.close();
     } finally {

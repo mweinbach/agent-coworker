@@ -76,7 +76,7 @@ function safePersistedState() {
       sidebarSectionOrder: ["chats", "projects"],
     },
     desktopFeatureFlagOverrides: {
-      a2ui: true,
+      REMOVEDUI: true,
       workspaceLifecycle: true,
       notARealFlag: true,
     },
@@ -142,7 +142,7 @@ describe("cloud sync redaction", () => {
 
     expect(snapshot.privacyTelemetrySettings.cloudSyncEnabled).toBe(false);
     expect(snapshot.desktopFeatureFlagOverrides).toEqual({
-      a2ui: true,
+      REMOVEDUI: true,
       workspaceLifecycle: true,
     });
     expect(snapshot.appPreferences.perWorkspaceSettings).toBe(true);

@@ -478,7 +478,7 @@ export function createWebAdapter(): DesktopApi {
       remoteAccess: false,
       workspacePicker: normalizedPicker,
       workspaceLifecycle: normalizedLifecycle,
-      a2ui: false,
+
       openAiNativeConnectors: false,
       canvas: overrides?.canvas ?? false,
       tasks: overrides?.tasks ?? false,

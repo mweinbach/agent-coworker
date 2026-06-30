@@ -377,7 +377,8 @@ mock.module("../src/lib/desktopCommands", () =>
         typeof featureOverrides?.workspaceLifecycle === "boolean"
           ? featureOverrides.workspaceLifecycle
           : true,
-      a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+      REMOVEDUI:
+        typeof featureOverrides?.REMOVEDUI === "boolean" ? featureOverrides.REMOVEDUI : false,
       // Default the durable Tasks flag ON in this harness so existing task
       // hydration assertions keep exercising task view; OFF cases pass an
       // explicit `{ tasks: false }` override.
@@ -962,24 +963,24 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.workspaces?.[0]?.wsProtocol).toBe("jsonrpc");
   });
 
-  test("buildCachedDesktopStateSeed migrates legacy flat defaultFeatureFlags.a2ui=true to override", () => {
-    const legacyFlatA2uiState = {
+  test("buildCachedDesktopStateSeed migrates legacy flat defaultFeatureFlags.REMOVEDUI=true to override", () => {
+    const legacyFlatREMOVEDUIState = {
       ...cachedState,
       persistedState: {
         ...cachedState.persistedState,
         workspaces: [
           {
             ...cachedState.persistedState.workspaces[0],
-            defaultFeatureFlags: { a2ui: true },
+            defaultFeatureFlags: { REMOVEDUI: true },
           },
         ],
       },
     };
-    const seed = buildCachedDesktopStateSeed(legacyFlatA2uiState);
-    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBe(true);
+    const seed = buildCachedDesktopStateSeed(legacyFlatREMOVEDUIState);
+    expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBe(true);
   });
 
-  test("buildCachedDesktopStateSeed migrates legacy defaultEnableA2ui=true to override", () => {
+  test("buildCachedDesktopStateSeed migrates legacy defaultEnableREMOVEDUI=true to override", () => {
     const legacyEnableState = {
       ...cachedState,
       persistedState: {
@@ -987,16 +988,16 @@ describe("desktop bootstrap cache", () => {
         workspaces: [
           {
             ...cachedState.persistedState.workspaces[0],
-            defaultEnableA2ui: true,
+            defaultEnableREMOVEDUI: true,
           },
         ],
       },
     };
     const seed = buildCachedDesktopStateSeed(legacyEnableState);
-    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBe(true);
+    expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBe(true);
   });
 
-  test("buildCachedDesktopStateSeed migrates nested defaultFeatureFlags.workspace.a2ui=true to override", () => {
+  test("buildCachedDesktopStateSeed migrates nested defaultFeatureFlags.workspace.REMOVEDUI=true to override", () => {
     const nestedState = {
       ...cachedState,
       persistedState: {
@@ -1004,18 +1005,18 @@ describe("desktop bootstrap cache", () => {
         workspaces: [
           {
             ...cachedState.persistedState.workspaces[0],
-            defaultFeatureFlags: { workspace: { a2ui: true } },
+            defaultFeatureFlags: { workspace: { REMOVEDUI: true } },
           },
         ],
       },
     };
     const seed = buildCachedDesktopStateSeed(nestedState);
-    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBe(true);
+    expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBe(true);
   });
 
-  test("buildCachedDesktopStateSeed does not set a2ui override when no legacy flag is present", () => {
+  test("buildCachedDesktopStateSeed does not set REMOVEDUI override when no legacy flag is present", () => {
     const seed = buildCachedDesktopStateSeed(cachedState);
-    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBeUndefined();
+    expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBeUndefined();
   });
 
   test("buildCachedDesktopStateSeed restores plugin management workspace selection", () => {

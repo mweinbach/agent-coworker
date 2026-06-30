@@ -7,18 +7,13 @@ import {
   projectedItemSchema,
   projectedTodosFromItem,
 } from "../../../../../../src/shared/projectedItems";
-import {
-  type ProjectedUiSurface,
-  recordSurfaceRevision,
-  seedDockFromFeed,
-} from "../../a2uiDockReducer";
 import type { ModelStreamUpdate } from "../../modelStream";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
   type ThreadModelStreamRuntime,
 } from "../../store.feedMapping";
 import type { StoreGet, StoreSet } from "../../store.helpers";
-import { createDefaultA2uiDock, type FeedItem, type SessionSnapshot } from "../../types";
+import type { FeedItem, SessionSnapshot } from "../../types";
 import { clearPendingThreadSteer, hasPendingThreadSteer, RUNTIME } from "../runtimeState";
 import { MAX_FEED_ITEMS } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
@@ -204,9 +199,6 @@ export function createFeedProjectionModule(
       reconcileProjectedUserItem(set, threadId, item);
       return;
     }
-    if (item.type === "uiSurface") {
-      recordProjectedUiSurface(set, threadId, item);
-    }
     updateThreadFeed(
       set,
       threadId,
@@ -227,10 +219,6 @@ export function createFeedProjectionModule(
       }
     }
 
-    if (item.type === "uiSurface") {
-      recordProjectedUiSurface(set, threadId, item);
-    }
-
     updateThreadFeed(
       set,
       threadId,
@@ -244,41 +232,6 @@ export function createFeedProjectionModule(
             : undefined,
       },
     );
-  }
-
-  function recordProjectedUiSurface(
-    set: StoreSet,
-    threadId: string,
-    item: Extract<ProjectedItem, { type: "uiSurface" }>,
-  ) {
-    const ts = ctx.deps.nowIso();
-    const projected: ProjectedUiSurface = {
-      type: item.type,
-      surfaceId: item.surfaceId,
-      catalogId: item.catalogId,
-      version: item.version,
-      revision: item.revision,
-      deleted: item.deleted,
-      ...(item.theme !== undefined ? { theme: item.theme } : {}),
-      ...(item.root !== undefined ? { root: item.root } : {}),
-      ...(item.dataModel !== undefined ? { dataModel: item.dataModel } : {}),
-      ...(item.changeKind ? { changeKind: item.changeKind } : {}),
-      ...(item.reason ? { reason: item.reason } : {}),
-      ...(item.toolCallId ? { toolCallId: item.toolCallId } : {}),
-    };
-    set((s) => {
-      const runtime = s.threadRuntimeById[threadId];
-      if (!runtime) return {};
-      const currentDock = runtime.a2uiDock ?? createDefaultA2uiDock();
-      const nextDock = recordSurfaceRevision(currentDock, projected, ts);
-      if (nextDock === runtime.a2uiDock) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...runtime, a2uiDock: nextDock },
-        },
-      };
-    });
   }
 
   function applyProjectedReasoningDeltaToThread(
@@ -461,11 +414,6 @@ export function createFeedProjectionModule(
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
             feed: preserveCurrentFeed ? runtime.feed : snapshot.feed,
-            a2uiDock: seedDockFromFeed(
-              runtime.a2uiDock ?? createDefaultA2uiDock(),
-              preserveCurrentFeed ? runtime.feed : snapshot.feed,
-              ctx.deps.nowIso(),
-            ),
             hydrating: false,
             transcriptOnly: false,
           },

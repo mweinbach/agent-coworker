@@ -49,7 +49,7 @@ describe("feature flags settings page", () => {
             remoteAccess: false,
             workspacePicker: true,
             workspaceLifecycle: true,
-            a2ui: false,
+            REMOVEDUI: false,
           },
           updateState: {
             ...useAppStore.getState().updateState,
@@ -65,7 +65,7 @@ describe("feature flags settings page", () => {
       expect(container.textContent).toContain("Experimental capabilities");
       expect(container.textContent).toContain("Menu bar / tray");
       expect(container.textContent).toContain("Remote access");
-      expect(container.textContent).toContain("Generative UI (A2UI)");
+      expect(container.textContent).toContain("Generative UI (REMOVEDUI)");
       expect(container.textContent).toContain("Unavailable in packaged builds.");
       const remoteSwitch = container.querySelector('[aria-label="Remote access"]');
       expect(remoteSwitch?.hasAttribute("disabled")).toBe(true);
@@ -93,7 +93,7 @@ describe("feature flags settings page", () => {
             remoteAccess: true,
             workspacePicker: true,
             workspaceLifecycle: true,
-            a2ui: false,
+            REMOVEDUI: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -122,7 +122,7 @@ describe("feature flags settings page", () => {
     }
   });
 
-  test("a2ui toggle applies a global desktop override", async () => {
+  test("REMOVEDUI toggle applies a global desktop override", async () => {
     const setDesktopFeatureFlagOverride = mock(async () => {});
     const harness = setupJsdom();
     try {
@@ -137,7 +137,7 @@ describe("feature flags settings page", () => {
             remoteAccess: true,
             workspacePicker: true,
             workspaceLifecycle: true,
-            a2ui: false,
+            REMOVEDUI: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -147,16 +147,18 @@ describe("feature flags settings page", () => {
         root.render(createElement(FeatureFlagsPage));
       });
 
-      const a2uiSwitch = container.querySelector('[aria-label="Generative UI (A2UI)"]');
-      if (!(a2uiSwitch instanceof harness.dom.window.HTMLElement)) {
-        throw new Error("missing a2ui feature switch");
+      const REMOVEDUISwitch = container.querySelector('[aria-label="Generative UI (REMOVEDUI)"]');
+      if (!(REMOVEDUISwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing REMOVEDUI feature switch");
       }
 
       await act(async () => {
-        a2uiSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        REMOVEDUISwitch.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
       });
 
-      expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("a2ui", true);
+      expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("REMOVEDUI", true);
 
       await act(async () => {
         root.unmount();
@@ -184,7 +186,7 @@ describe("feature flags settings page", () => {
             remoteAccess: true,
             workspacePicker: true,
             workspaceLifecycle: true,
-            a2ui: false,
+            REMOVEDUI: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -195,21 +197,23 @@ describe("feature flags settings page", () => {
       });
 
       const menuBarSwitch = container.querySelector('[aria-label="Menu bar / tray"]');
-      const a2uiSwitch = container.querySelector('[aria-label="Generative UI (A2UI)"]');
+      const REMOVEDUISwitch = container.querySelector('[aria-label="Generative UI (REMOVEDUI)"]');
       if (
         !(menuBarSwitch instanceof harness.dom.window.HTMLElement) ||
-        !(a2uiSwitch instanceof harness.dom.window.HTMLElement)
+        !(REMOVEDUISwitch instanceof harness.dom.window.HTMLElement)
       ) {
         throw new Error("missing feature switches");
       }
 
       await act(async () => {
         menuBarSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-        a2uiSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        REMOVEDUISwitch.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
       });
 
       expect(menuBarSwitch.hasAttribute("disabled")).toBe(true);
-      expect(a2uiSwitch.hasAttribute("disabled")).toBe(true);
+      expect(REMOVEDUISwitch.hasAttribute("disabled")).toBe(true);
       expect(setDesktopFeatureFlagOverride).toHaveBeenCalledTimes(1);
       expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("menuBar", false);
 

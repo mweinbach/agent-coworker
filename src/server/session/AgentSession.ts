@@ -107,7 +107,6 @@ import type { ProviderCatalogManager } from "./ProviderCatalogManager";
 import type { SessionAdminManager } from "./SessionAdminManager";
 import { SessionBackupController } from "./SessionBackupController";
 import type {
-  ExperimentalA2uiManager,
   HydratedSessionState,
   PersistedModelSelection,
   PersistedProjectConfigPatch,
@@ -206,8 +205,6 @@ export class AgentSession {
     getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
     readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
     refreshSkillsAcrossWorkspaceSessionsImpl?: SessionDependencies["refreshSkillsAcrossWorkspaceSessionsImpl"];
-    createA2uiSurfaceManagerImpl?: SessionDependencies["createA2uiSurfaceManagerImpl"];
-    deriveA2uiSurfacesFromSnapshotImpl?: SessionDependencies["deriveA2uiSurfacesFromSnapshotImpl"];
     initialSkillCatalogMtimeSnapshot?: string | null;
     hydratedState?: HydratedSessionState;
     initialSessionSnapshot?: SessionSnapshot;
@@ -385,8 +382,6 @@ export class AgentSession {
       getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,
       readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,
       refreshSkillsAcrossWorkspaceSessionsImpl: opts.refreshSkillsAcrossWorkspaceSessionsImpl,
-      createA2uiSurfaceManagerImpl: opts.createA2uiSurfaceManagerImpl,
-      deriveA2uiSurfacesFromSnapshotImpl: opts.deriveA2uiSurfacesFromSnapshotImpl,
     };
 
     if (seededHarnessContext) {
@@ -578,10 +573,6 @@ export class AgentSession {
 
   private getTurnExecutionManager(): TurnExecutionManager {
     return this.managers.getTurnExecutionManager();
-  }
-
-  private getA2uiSurfaceManager(): ExperimentalA2uiManager {
-    return this.managers.getA2uiSurfaceManager();
   }
 
   private getAdminManager(): SessionAdminManager {
@@ -776,7 +767,6 @@ export class AgentSession {
   }
 
   reset() {
-    this.managers.resetLoadedA2uiSurfaceManager();
     this.getAdminManager().reset();
   }
 
@@ -1780,13 +1770,6 @@ export class AgentSession {
       references,
       steerRequestId,
     );
-  }
-
-  validateA2uiAction(opts: {
-    surfaceId: string;
-    componentId: string;
-  }): ReturnType<ExperimentalA2uiManager["validateAction"]> {
-    return this.getA2uiSurfaceManager().validateAction(opts);
   }
 
   getSessionUsage() {

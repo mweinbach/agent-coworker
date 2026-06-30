@@ -1,4 +1,3 @@
-import { resolveExperimentalA2uiConfig } from "../../../experimental/a2ui/flags";
 import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
@@ -6,17 +5,6 @@ import type { SessionContext } from "../SessionContext";
 import { getSessionTaskLock } from "../taskLocks";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
-
-type A2uiSurfaceManagerProvider = () => {
-  applyUnknown: (
-    value: unknown,
-    meta?: { reason?: string; toolCallId?: string },
-  ) => {
-    ok: boolean;
-    surfaceId?: string;
-    error?: string;
-  };
-};
 
 type TurnStreamTracker = {
   startedStepCount: number;
@@ -29,7 +17,6 @@ export type RunTurnInvocationDeps = {
   context: SessionContext;
   turnId: string;
   steerCoordinator: SteerCoordinator;
-  getA2uiSurfaceManager?: A2uiSurfaceManagerProvider;
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
   approveCommand: (command: string, opts?: ApproveCommandOptions) => Promise<boolean>;
@@ -45,7 +32,6 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     context,
     turnId,
     steerCoordinator,
-    getA2uiSurfaceManager,
     log,
     askUser,
     approveCommand,
@@ -249,22 +235,6 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       includeRawChunks,
       costTracker: context.state.costTracker ?? undefined,
       toolEnv: context.deps.toolEnv,
-      ...(resolveExperimentalA2uiConfig(context.state.config) && getA2uiSurfaceManager
-        ? {
-            applyA2uiEnvelope: (
-              envelope: unknown,
-              meta?: { reason?: string; toolCallId?: string },
-            ) => {
-              const manager = getA2uiSurfaceManager?.();
-              return (
-                manager?.applyUnknown(envelope, meta) ?? {
-                  ok: false,
-                  error: "A2UI surface manager is unavailable",
-                }
-              );
-            },
-          }
-        : {}),
       onSessionUsageBudgetUpdated: (snapshot) => {
         context.emit({
           type: "session_usage",

@@ -682,8 +682,8 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(10);
   });
 
-  test("includes a2ui for non-google providers when enabled", async () => {
-    await withEnv("COWORK_EXPERIMENTAL_A2UI", "1", async () => {
+  test("includes REMOVEDUI for non-google providers when enabled", async () => {
+    await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
       const dir = await tmpDir();
       const tools = createTools(
         makeCtx(dir, {
@@ -691,18 +691,18 @@ describe("createTools", () => {
             provider: "openai",
             model: "gpt-5.2",
             preferredChildModel: "gpt-5.2",
-            enableA2ui: true,
+            enableREMOVEDUI: true,
           }),
-          applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
+          applyREMOVEDUIEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
         }),
       );
 
-      expect(tools).toHaveProperty("a2ui");
+      expect(tools).toHaveProperty("REMOVEDUI");
     });
   });
 
-  test("includes a2ui for google when enabled", async () => {
-    await withEnv("COWORK_EXPERIMENTAL_A2UI", "1", async () => {
+  test("includes REMOVEDUI for google when enabled", async () => {
+    await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
       const dir = await tmpDir();
       const tools = createTools(
         makeCtx(dir, {
@@ -710,17 +710,17 @@ describe("createTools", () => {
             provider: "google",
             model: "gemini-3-flash-preview",
             preferredChildModel: "gemini-3-flash-preview",
-            enableA2ui: true,
+            enableREMOVEDUI: true,
           }),
-          applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
+          applyREMOVEDUIEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
         }),
       );
 
-      expect(tools).toHaveProperty("a2ui");
+      expect(tools).toHaveProperty("REMOVEDUI");
     });
   });
 
-  test("omits a2ui when explicitly disabled", async () => {
+  test("omits REMOVEDUI when explicitly disabled", async () => {
     const dir = await tmpDir();
     const tools = createTools(
       makeCtx(dir, {
@@ -728,25 +728,25 @@ describe("createTools", () => {
           provider: "openai",
           model: "gpt-5.2",
           preferredChildModel: "gpt-5.2",
-          enableA2ui: false,
+          enableREMOVEDUI: false,
         }),
-        applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
+        applyREMOVEDUIEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
       }),
     );
 
-    expect(tools).not.toHaveProperty("a2ui");
+    expect(tools).not.toHaveProperty("REMOVEDUI");
   });
 
-  test("listSessionToolNames includes a2ui when the experiment is enabled", async () => {
-    await withEnv("COWORK_EXPERIMENTAL_A2UI", "1", async () => {
+  test("listSessionToolNames includes REMOVEDUI when the experiment is enabled", async () => {
+    await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
       const dir = await tmpDir();
       const names = listSessionToolNames(
         makeConfig(dir, {
-          enableA2ui: true,
+          enableREMOVEDUI: true,
         }),
       );
 
-      expect(names).toContain("a2ui");
+      expect(names).toContain("REMOVEDUI");
     });
   });
 

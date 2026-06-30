@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import * as REAL_AGENT from "../../src/agent";
 import {
-  createExperimentalA2uiSurfaceManager,
-  deriveA2uiSurfacesFromSnapshot,
-} from "../../src/experimental/a2ui/sessionAdapter";
+  createExperimentalREMOVEDRemovedSurfaceManager,
+  deriveREMOVEDRemovedSurfacesFromSnapshot,
+} from "../../src/experimental/REMOVEDUI/sessionAdapter";
 import { defaultSupportedModel, getSupportedModel } from "../../src/models/registry";
 import { __internal as observabilityRuntimeInternal } from "../../src/observability/runtime";
 import { createRuntime } from "../../src/runtime";
@@ -30,10 +30,10 @@ import type { AgentConfig, TodoItem } from "../../src/types";
 export type { TodoItem };
 export {
   ASK_SKIP_TOKEN,
-  createExperimentalA2uiSurfaceManager,
+  createExperimentalREMOVEDRemovedSurfaceManager,
   createRuntime,
   defaultSupportedModel,
-  deriveA2uiSurfacesFromSnapshot,
+  deriveREMOVEDRemovedSurfacesFromSnapshot,
   fs,
   getSupportedModel,
   MAX_ATTACHMENT_BASE64_SIZE,
@@ -258,7 +258,7 @@ export function makeSession(
           | "model"
           | "preferredChildModel"
           | "enableMcp"
-          | "enableA2ui"
+          | "enableREMOVEDUI"
           | "enableMemory"
           | "memoryRequireApproval"
           | "advancedMemory"

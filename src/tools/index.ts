@@ -1,4 +1,3 @@
-import { resolveExperimentalA2uiConfig } from "../experimental/a2ui/flags";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import { filterToolsForRole } from "../server/agents/toolPolicy";
 import { resolveTasksFeatureEnabled } from "../server/tasks/flags";
@@ -68,9 +67,7 @@ type ListSessionToolNameOptions = {
 
 export function listSessionToolNames(
   config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory" | "advancedMemory"> &
-    Partial<
-      Pick<AgentConfig, "enableA2ui" | "featureFlags" | "experimentalFeatures" | "tasksEnabled">
-    >,
+    Partial<Pick<AgentConfig, "featureFlags" | "experimentalFeatures" | "tasksEnabled">>,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const providerIsCodex = config.provider === "codex-cli";
@@ -99,7 +96,6 @@ export function listSessionToolNames(
       : (config.enableMemory ?? true)
         ? ["memory"]
         : []),
-    ...(resolveExperimentalA2uiConfig(config) ? ["a2ui"] : []),
     ...(opts.includeAgentControl
       ? [
           "spawnAgent",
@@ -158,13 +154,6 @@ export function createTools(ctx: ToolContext): Record<string, any> {
         : (ctx.config.enableMemory ?? true)
           ? { memory: createMemoryTool(ctx) }
           : {}),
-    ...(resolveExperimentalA2uiConfig(ctx.config) && ctx.applyA2uiEnvelope
-      ? {
-          a2ui: (
-            require("../experimental/a2ui/tool") as typeof import("../experimental/a2ui/tool")
-          ).createA2uiTool(ctx),
-        }
-      : {}),
   };
 
   const roleFilteredTools = ctx.agentRole

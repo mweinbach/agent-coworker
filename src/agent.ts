@@ -151,22 +151,6 @@ export interface RunTurnParams {
 
   /** Server-authoritative write gate for mutating tool side effects. */
   assertCanMutate?: (toolName: string) => void | Promise<void>;
-
-  /**
-   * Apply an A2UI v0.9 envelope to the session's surface state, returning a
-   * per-envelope outcome. Plumbed into the `a2ui` tool's ToolContext when
-   * provided. Only set when the harness enables generative UI for the turn.
-   */
-  applyA2uiEnvelope?: (
-    envelope: unknown,
-    meta?: { reason?: string; toolCallId?: string },
-  ) => {
-    ok: boolean;
-    surfaceId?: string;
-    change?: "created" | "updated" | "deleted" | "noop";
-    error?: string;
-    warning?: string;
-  };
 }
 
 function mergeToolSets(
@@ -495,7 +479,6 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
       onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
       assertCanMutate: params.assertCanMutate,
-      applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);
     const rawBuiltInTools = deps.createTools(toolCtx);

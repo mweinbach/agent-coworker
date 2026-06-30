@@ -3,10 +3,10 @@ import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
   ASK_SKIP_TOKEN,
-  createExperimentalA2uiSurfaceManager,
+  createExperimentalREMOVEDRemovedSurfaceManager,
   createRuntime,
   defaultSupportedModel,
-  deriveA2uiSurfacesFromSnapshot,
+  deriveREMOVEDRemovedSurfacesFromSnapshot,
   flushAsyncWork,
   fs,
   getSupportedModel,
@@ -709,16 +709,16 @@ describe("AgentSession", () => {
       );
     });
 
-    test("rehydrates persisted A2UI surfaces so resumed actions validate against restored state", () => {
+    test("rehydrates persisted REMOVEDUI surfaces so resumed actions validate against restored state", () => {
       const { emit } = makeEmit();
 
       const session = AgentSession.fromPersisted({
         persisted: {
-          sessionId: "persisted-a2ui-session",
+          sessionId: "persisted-REMOVEDUI-session",
           sessionKind: "root",
           parentSessionId: null,
           role: null,
-          title: "Persisted A2UI",
+          title: "Persisted REMOVEDUI",
           titleSource: "manual",
           titleModel: null,
           provider: "google",
@@ -740,8 +740,8 @@ describe("AgentSession", () => {
           costTracker: null,
         },
         initialSessionSnapshot: {
-          sessionId: "persisted-a2ui-session",
-          title: "Persisted A2UI",
+          sessionId: "persisted-REMOVEDUI-session",
+          title: "Persisted REMOVEDUI",
           titleSource: "manual",
           titleModel: null,
           provider: "google",
@@ -767,10 +767,10 @@ describe("AgentSession", () => {
           feed: [
             {
               id: "ui-surface-1",
-              kind: "ui_surface",
+              kind: "REMOVED_SURFACE",
               ts: "2026-03-09T00:00:01.000Z",
               surfaceId: "surface-1",
-              catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+              catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
               version: "v0.9",
               revision: 1,
               deleted: false,
@@ -800,16 +800,18 @@ describe("AgentSession", () => {
           provider: "google",
           model: "gemini-3.1-pro-preview",
           preferredChildModel: "gemini-3.1-pro-preview",
-          enableA2ui: true,
+          enableREMOVEDUI: true,
         }),
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
-        createA2uiSurfaceManagerImpl: createExperimentalA2uiSurfaceManager,
-        deriveA2uiSurfacesFromSnapshotImpl: deriveA2uiSurfacesFromSnapshot,
+        createREMOVEDRemovedSurfaceManagerImpl: createExperimentalREMOVEDRemovedSurfaceManager,
+        deriveREMOVEDRemovedSurfacesFromSnapshotImpl: deriveREMOVEDRemovedSurfacesFromSnapshot,
       });
 
-      expect(session.validateA2uiAction({ surfaceId: "surface-1", componentId: "buy" })).toEqual({
+      expect(
+        session.validateREMOVEDUIAction({ surfaceId: "surface-1", componentId: "buy" }),
+      ).toEqual({
         ok: true,
         surfaceId: "surface-1",
         componentId: "buy",

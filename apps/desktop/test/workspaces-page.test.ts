@@ -64,7 +64,7 @@ mock.module("../src/lib/desktopCommands", () =>
       remoteAccess: true,
       workspacePicker: workspacePickerEnabled,
       workspaceLifecycle: workspaceLifecycleEnabled,
-      a2ui: false,
+      REMOVEDUI: false,
     }),
     checkForUpdates: async () => {},
     quitAndInstallUpdate: async () => {},
@@ -456,7 +456,7 @@ describe("desktop workspaces page", () => {
     }
   });
 
-  test("keeps A2UI controls out of workspace behavior settings", async () => {
+  test("keeps REMOVEDUI controls out of workspace behavior settings", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
     useAppStore.setState((state) => ({
       ...state,
@@ -510,8 +510,8 @@ describe("desktop workspaces page", () => {
         root.render(createElement(WorkspacesPage));
       });
 
-      expect(container.textContent).not.toContain("Generative UI (A2UI)");
-      expect(container.querySelector('[aria-label="Enable A2UI generative UI"]')).toBeNull();
+      expect(container.textContent).not.toContain("Generative UI (REMOVEDUI)");
+      expect(container.querySelector('[aria-label="Enable REMOVEDUI generative UI"]')).toBeNull();
       expect(updateWorkspaceDefaults).not.toHaveBeenCalled();
     } finally {
       if (root) {
@@ -575,7 +575,7 @@ describe("desktop workspaces page", () => {
         menuBar: true,
         workspacePicker: false,
         workspaceLifecycle: false,
-        a2ui: false,
+        REMOVEDUI: false,
       },
     }));
 

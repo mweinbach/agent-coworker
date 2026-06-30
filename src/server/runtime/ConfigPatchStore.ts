@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
 import {
   EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES,
@@ -27,7 +26,6 @@ export type ProjectConfigPatch = Partial<
     | "preferredChildModelRef"
     | "allowedChildModelRefs"
     | "enableMcp"
-    | "enableA2ui"
     | "enableMemory"
     | "memoryRequireApproval"
     | "advancedMemory"
@@ -46,7 +44,6 @@ export type ProjectConfigPatch = Partial<
 };
 
 type PersistConfigPatchOptions = {
-  a2uiExperimentEnabled?: boolean;
   globalConfigDir?: string;
 };
 
@@ -69,35 +66,6 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
     out[k] = v;
   }
   return out as T;
-}
-
-function readWorkspaceA2uiFlag(value: unknown): boolean | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-  return typeof value.a2ui === "boolean" ? value.a2ui : undefined;
-}
-
-function withWorkspaceA2uiFeatureFlags(
-  featureFlags: AgentConfig["featureFlags"] | undefined,
-  a2ui: boolean,
-): AgentConfig["featureFlags"] {
-  return {
-    ...featureFlags,
-    workspace: { a2ui },
-  };
-}
-
-export function resolveWorkspaceA2ui(
-  config: Pick<AgentConfig, "featureFlags" | "enableA2ui" | "experimentalFeatures">,
-): boolean {
-  if (!isA2uiExperimentEnabled() && config.experimentalFeatures?.a2ui !== true) return false;
-  const workspaceFlag = config.featureFlags?.workspace?.a2ui;
-  return typeof workspaceFlag === "boolean" ? workspaceFlag : (config.enableA2ui ?? false);
-}
-
-function isA2uiExperimentActive(config?: Pick<AgentConfig, "experimentalFeatures">): boolean {
-  return config?.experimentalFeatures?.a2ui === true || isA2uiExperimentEnabled();
 }
 
 export function mergeRuntimeProviderOptions(
@@ -146,15 +114,12 @@ async function persistConfigPatchFile(
   configDir: string,
   patch: ProjectConfigPatch,
   runtimeProviderOptions?: AgentConfig["providerOptions"],
-  opts: PersistConfigPatchOptions = {},
 ): Promise<void> {
-  const a2uiExperimentEnabled = opts.a2uiExperimentEnabled === true || isA2uiExperimentEnabled();
   const entries = Object.entries(patch).filter(
     ([key, value]) =>
       key !== "clearMemoryGenerationModel" &&
       key !== "clearToolOutputOverflowChars" &&
-      value !== undefined &&
-      (a2uiExperimentEnabled || (key !== "enableA2ui" && key !== "featureFlags")),
+      value !== undefined,
   );
   const shouldClearMemoryGenerationModel = patch.clearMemoryGenerationModel === true;
   const shouldClearToolOutputOverflowChars = patch.clearToolOutputOverflowChars === true;
@@ -168,14 +133,6 @@ async function persistConfigPatchFile(
   const current = await loadJsonObjectSafe(configPath);
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of entries) {
-    if (key === "enableA2ui" && typeof value === "boolean") {
-      const currentFeatureFlags = isPlainObject(current.featureFlags)
-        ? (current.featureFlags as AgentConfig["featureFlags"])
-        : undefined;
-      next.featureFlags = withWorkspaceA2uiFeatureFlags(currentFeatureFlags, value);
-      next.enableA2ui = value;
-      continue;
-    }
     if (key === "providerOptions") {
       const currentProviderOptions = isPlainObject(current[key]) ? { ...current[key] } : {};
       for (const provider of EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES) {
@@ -213,17 +170,10 @@ async function persistConfigPatchFile(
       const currentFeatureFlags = isPlainObject(current.featureFlags)
         ? (current.featureFlags as Record<string, unknown>)
         : {};
-      const incomingFeatureFlags: Record<string, unknown> = value;
-      const incomingA2ui = readWorkspaceA2uiFlag(incomingFeatureFlags.workspace);
-      const currentA2ui = readWorkspaceA2uiFlag(currentFeatureFlags.workspace);
-      const resolvedA2ui = incomingA2ui ?? currentA2ui;
       next[key] = {
         ...currentFeatureFlags,
-        ...(resolvedA2ui !== undefined ? { workspace: { a2ui: resolvedA2ui } } : {}),
+        ...value,
       };
-      if (resolvedA2ui !== undefined) {
-        next.enableA2ui = resolvedA2ui;
-      }
       continue;
     }
     next[key] = value;
@@ -264,9 +214,9 @@ export async function persistProjectConfigPatch(
     }
   }
 
-  await persistConfigPatchFile(projectCoworkDir, projectPatch, runtimeProviderOptions, opts);
+  await persistConfigPatchFile(projectCoworkDir, projectPatch, runtimeProviderOptions);
   if (globalConfigDir) {
-    await persistConfigPatchFile(globalConfigDir, globalPatch, runtimeProviderOptions, opts);
+    await persistConfigPatchFile(globalConfigDir, globalPatch, runtimeProviderOptions);
   }
 }
 
@@ -274,17 +224,13 @@ export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch)
   const {
     clearMemoryGenerationModel: _clearMemoryGenerationModel,
     clearToolOutputOverflowChars: _clearToolOutputOverflowChars,
-    enableA2ui: legacyEnableA2uiPatch,
     featureFlags: featureFlagsPatch,
     ...configPatchBase
   } = patch;
-  const a2uiExperimentEnabled = isA2uiExperimentActive(config);
-  const configPatch = a2uiExperimentEnabled
-    ? {
-        ...configPatchBase,
-        ...(featureFlagsPatch !== undefined ? { featureFlags: featureFlagsPatch } : {}),
-      }
-    : configPatchBase;
+  const configPatch = {
+    ...configPatchBase,
+    ...(featureFlagsPatch !== undefined ? { featureFlags: featureFlagsPatch } : {}),
+  };
   const next: AgentConfig = { ...config, ...configPatch };
   if (patch.provider !== undefined && patch.provider !== config.provider) {
     next.runtime = defaultRuntimeNameForProvider(patch.provider);
@@ -316,19 +262,6 @@ export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch)
       ...config.userProfile,
       ...patch.userProfile,
     };
-  }
-  const patchedWorkspaceA2ui = a2uiExperimentEnabled
-    ? readWorkspaceA2uiFlag(featureFlagsPatch?.workspace)
-    : undefined;
-  const nextWorkspaceA2ui = a2uiExperimentEnabled
-    ? (legacyEnableA2uiPatch ??
-      patchedWorkspaceA2ui ??
-      config.featureFlags?.workspace?.a2ui ??
-      config.enableA2ui)
-    : undefined;
-  if (nextWorkspaceA2ui !== undefined) {
-    next.featureFlags = withWorkspaceA2uiFeatureFlags(config.featureFlags, nextWorkspaceA2ui);
-    next.enableA2ui = nextWorkspaceA2ui;
   }
   return next;
 }

@@ -20,7 +20,7 @@ import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared"
 import type { SessionConfigPatch } from "../protocol";
 import type { AgentSession } from "./AgentSession";
 import type { PendingPromptReplayEvent } from "./InteractionManager";
-import type { ExperimentalA2uiManager, SeededSessionContext } from "./SessionContext";
+import type { SeededSessionContext } from "./SessionContext";
 import type { TaskLockError } from "./taskLocks";
 
 export class SessionSnapshotService {
@@ -641,21 +641,6 @@ export class SessionBackupService {
   }
 }
 
-export class SessionA2uiService {
-  constructor(private readonly session: AgentSession) {}
-
-  get enabled(): boolean {
-    return this.session.getSessionConfigEvent().config.enableA2ui === true;
-  }
-
-  validateAction(opts: {
-    surfaceId: string;
-    componentId: string;
-  }): ReturnType<ExperimentalA2uiManager["validateAction"]> {
-    return this.session.validateA2uiAction(opts);
-  }
-}
-
 export class SessionFileService {
   constructor(private readonly session: AgentSession) {}
 
@@ -732,7 +717,6 @@ export class SessionRuntime {
   readonly import: SessionImportService;
   readonly agents: SessionAgentService;
   readonly backups: SessionBackupService;
-  readonly a2ui: SessionA2uiService;
   readonly files: SessionFileService;
   readonly lifecycle: SessionLifecycleService;
 
@@ -751,7 +735,6 @@ export class SessionRuntime {
     this.import = new SessionImportService(session);
     this.agents = new SessionAgentService(session);
     this.backups = new SessionBackupService(session);
-    this.a2ui = new SessionA2uiService(session);
     this.files = new SessionFileService(session);
     this.lifecycle = new SessionLifecycleService(session);
   }

@@ -60,8 +60,6 @@ export type AgentSessionFromPersistedOptions = {
   applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
   createTaskImpl?: SessionDependencies["createTaskImpl"];
   readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
-  createA2uiSurfaceManagerImpl?: SessionDependencies["createA2uiSurfaceManagerImpl"];
-  deriveA2uiSurfacesFromSnapshotImpl?: SessionDependencies["deriveA2uiSurfacesFromSnapshotImpl"];
   initialSessionSnapshot?: SessionSnapshot | null;
 };
 
@@ -183,8 +181,6 @@ export function createAgentSessionFromPersisted(
     applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
     createTaskImpl: opts.createTaskImpl,
     readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,
-    createA2uiSurfaceManagerImpl: opts.createA2uiSurfaceManagerImpl,
-    deriveA2uiSurfacesFromSnapshotImpl: opts.deriveA2uiSurfacesFromSnapshotImpl,
     ...(opts.initialSessionSnapshot ? { initialSessionSnapshot: opts.initialSessionSnapshot } : {}),
     initialLastEventSeq: persisted.lastEventSeq,
     hydratedState,

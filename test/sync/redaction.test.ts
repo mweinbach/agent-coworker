@@ -213,14 +213,14 @@ describe("buildCloudSyncSettingsSnapshot()", () => {
   test("featureFlagOverrides only includes known flag IDs", () => {
     const snapshot = buildCloudSyncSettingsSnapshot({
       desktopFeatureFlagOverrides: {
-        a2ui: true,
+        REMOVEDUI: true,
         workspaceLifecycle: false,
         notARealFlag: true,
         canvas: true,
       },
     });
     const keys = Object.keys(snapshot.desktopFeatureFlagOverrides);
-    expect(keys).toContain("a2ui");
+    expect(keys).toContain("REMOVEDUI");
     expect(keys).toContain("workspaceLifecycle");
     expect(keys).toContain("canvas");
     expect(keys).not.toContain("notARealFlag");
@@ -233,14 +233,14 @@ describe("buildCloudSyncSettingsSnapshot()", () => {
   test("featureFlagOverrides with non-boolean values are excluded", () => {
     const snapshot = buildCloudSyncSettingsSnapshot({
       desktopFeatureFlagOverrides: {
-        a2ui: 1, // truthy but not boolean
+        REMOVEDUI: 1, // truthy but not boolean
         canvas: "true",
         workspaceLifecycle: true,
       },
     });
     const overrides = snapshot.desktopFeatureFlagOverrides;
     expect(overrides.workspaceLifecycle).toBe(true);
-    expect(overrides.a2ui).toBeUndefined();
+    expect(overrides.REMOVEDUI).toBeUndefined();
     expect(overrides.canvas).toBeUndefined();
   });
 

@@ -58,7 +58,7 @@ describe("workspace settings sync", () => {
       },
       featureFlags: {
         workspace: {
-          a2ui: false,
+          REMOVEDUI: false,
         },
       },
       providerOptions: {

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { resolveExperimentalA2uiConfig } from "../experimental/a2ui/flags";
 import type { AgentConfig } from "../types";
 import { discoverSkillsForConfig, stripSkillFrontMatter } from "./index";
 
@@ -79,8 +78,8 @@ function frameUntrustedSkillBody(name: string, body: string): string {
   ].join("\n");
 }
 
-export function isSkillBodyLoadAllowed(config: AgentConfig, name: string): boolean {
-  return name !== "a2ui" || resolveExperimentalA2uiConfig(config);
+export function isSkillBodyLoadAllowed(_config: AgentConfig, _name: string): boolean {
+  return true;
 }
 
 /**

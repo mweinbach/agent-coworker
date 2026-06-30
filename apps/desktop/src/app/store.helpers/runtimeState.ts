@@ -8,7 +8,6 @@ import {
 } from "../store.feedMapping";
 import type { AppStoreState } from "../store.helpers";
 import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../types";
-import { createDefaultA2uiDock } from "../types";
 
 export type PendingThreadSteer = {
   clientMessageId: string;
@@ -367,7 +366,6 @@ export function defaultThreadRuntime(): ThreadRuntime {
     pendingTurnStart: null,
     pendingSteer: null,
     feed: [],
-    a2uiDock: createDefaultA2uiDock(),
     hydrating: false,
     transcriptOnly: false,
     composerReasoningEffort: null,

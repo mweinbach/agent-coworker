@@ -57,16 +57,6 @@ export type UserMessageTurnRunnerDeps = {
   validateUploadedFileAttachments: UserMessageAttachmentHelpers["validateUploadedFileAttachments"];
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   waitForLiveSteerSettlement?: () => Promise<void>;
-  getA2uiSurfaceManager?: () => {
-    applyUnknown: (
-      value: unknown,
-      meta?: { reason?: string; toolCallId?: string },
-    ) => {
-      ok: boolean;
-      surfaceId?: string;
-      error?: string;
-    };
-  };
 };
 
 export type UserMessageTurnRunner = {
@@ -116,7 +106,6 @@ export function createUserMessageTurnRunner(
     validateUploadedFileAttachments,
     onAdvancedMemoryChanged,
     waitForLiveSteerSettlement,
-    getA2uiSurfaceManager,
   } = deps;
 
   const updateSessionExecutionState = (executionState: AgentExecutionState) => {
@@ -260,7 +249,6 @@ export function createUserMessageTurnRunner(
       context,
       turnId,
       steerCoordinator,
-      getA2uiSurfaceManager,
       log,
       askUser,
       approveCommand,

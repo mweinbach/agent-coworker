@@ -5,7 +5,6 @@ import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
 import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
-import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
@@ -535,12 +534,7 @@ export async function createAgentServerRuntime(
       isSessionError: isJsonRpcSessionError,
     },
   };
-  const experimentalHandlers = isA2uiExperimentEnabled(env)
-    ? (await import("../../experimental/a2ui/routes")).createA2uiRouteHandlers(jsonRpcRouteContext)
-    : undefined;
-  const jsonRpcRequestRouter = createJsonRpcRequestRouter(jsonRpcRouteContext, {
-    ...(experimentalHandlers ? { experimentalHandlers } : {}),
-  });
+  const jsonRpcRequestRouter = createJsonRpcRequestRouter(jsonRpcRouteContext);
 
   const routeJsonRpcRequest = async (ws: StartServerSocket, message: JsonRpcRequest) => {
     const params = isPlainObject(message.params) ? message.params : undefined;

@@ -743,7 +743,7 @@ describe("mobile cowork jsonrpc client", () => {
     await expect(startPromise).resolves.toBeUndefined();
   });
 
-  test("accepts uiSurface notifications with A2UI metadata fields", async () => {
+  test("accepts RemovedSurface notifications with REMOVEDUI metadata fields", async () => {
     const sent: string[] = [];
     const notifications: Array<{ method: string; params?: unknown }> = [];
     const client = new CoworkJsonRpcClient({
@@ -784,10 +784,10 @@ describe("mobile cowork jsonrpc client", () => {
           threadId: "thread-1",
           turnId: null,
           item: {
-            id: "uiSurface:surface-1",
-            type: "uiSurface",
+            id: "RemovedSurface:surface-1",
+            type: "RemovedSurface",
             surfaceId: "surface-1",
-            catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+            catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
             version: "v0.9",
             revision: 2,
             deleted: false,
@@ -803,7 +803,7 @@ describe("mobile cowork jsonrpc client", () => {
     expect(notifications[0]?.method).toBe("item/completed");
   });
 
-  test("accepts thread snapshots whose ui_surface feed items include A2UI metadata fields", async () => {
+  test("accepts thread snapshots whose REMOVED_SURFACE feed items include REMOVEDUI metadata fields", async () => {
     const sent: string[] = [];
     const client = new CoworkJsonRpcClient({
       clientInfo: { name: "cowork-mobile", version: "0.1.0" },
@@ -878,10 +878,10 @@ describe("mobile cowork jsonrpc client", () => {
             feed: [
               {
                 id: "ui-surface-1",
-                kind: "ui_surface",
+                kind: "REMOVED_SURFACE",
                 ts: new Date().toISOString(),
                 surfaceId: "surface-1",
-                catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+                catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
                 version: "v0.9",
                 revision: 2,
                 deleted: false,
@@ -903,7 +903,7 @@ describe("mobile cowork jsonrpc client", () => {
       coworkSnapshot: {
         feed: [
           expect.objectContaining({
-            kind: "ui_surface",
+            kind: "REMOVED_SURFACE",
             changeKind: "updateComponents",
             reason: "refresh summary",
             toolCallId: "tool-1",

@@ -187,7 +187,7 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("gpt-5.4");
   });
 
-  test("keeps A2UI absent by default outside the experiment", async () => {
+  test("keeps REMOVEDUI absent by default outside the experiment", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -197,8 +197,8 @@ describe("loadConfig", () => {
       env: { AGENT_PROVIDER: "openai" },
     });
 
-    expect(cfg.enableA2ui).toBeUndefined();
-    expect(cfg.featureFlags?.workspace?.a2ui).toBeUndefined();
+    expect(cfg.enableREMOVEDUI).toBeUndefined();
+    expect(cfg.featureFlags?.workspace?.REMOVEDUI).toBeUndefined();
   });
 
   test("built-in skills stay enabled by default and only disable on explicit opt-out", async () => {

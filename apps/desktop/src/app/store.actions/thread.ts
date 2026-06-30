@@ -5,7 +5,6 @@ import {
 } from "../../lib/composerAttachments";
 import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
-import { seedDockFromFeed } from "../a2uiDockReducer";
 import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
   type AppStoreActions,
@@ -48,7 +47,6 @@ import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
-  createDefaultA2uiDock,
   isOneOffChatWorkspace,
   type SandboxApprovalPrompt,
   type SessionSnapshot,
@@ -219,11 +217,6 @@ export async function hydrateThreadSelection(
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
             feed: snapshot.feed,
-            a2uiDock: seedDockFromFeed(
-              currentRuntime?.a2uiDock ?? createDefaultA2uiDock(),
-              snapshot.feed,
-              nowIso(),
-            ),
             hydrating: false,
             transcriptOnly: false,
             connected: currentRuntime?.connected ?? false,
@@ -440,11 +433,6 @@ export async function hydrateThreadSelection(
                 lastTurnUsage: snapshot.lastTurnUsage,
                 agents: snapshot.agents,
                 feed: snapshot.feed,
-                a2uiDock: seedDockFromFeed(
-                  currentRuntime?.a2uiDock ?? createDefaultA2uiDock(),
-                  snapshot.feed,
-                  nowIso(),
-                ),
                 hydrating: false,
                 transcriptOnly: true,
               },
@@ -527,7 +515,6 @@ export function createThreadActions(
   | "sendMessage"
   | "cancelThread"
   | "clearThreadUsageHardCap"
-  | "dispatchA2uiAction"
   | "setThreadModel"
   | "setThreadReasoningEffort"
   | "setComposerText"
@@ -1222,35 +1209,6 @@ export function createThreadActions(
         sessionId: get().threadRuntimeById[threadId]?.sessionId,
         stopAtUsd: null,
       });
-    },
-
-    dispatchA2uiAction: async ({ threadId, surfaceId, componentId, eventType, payload }) => {
-      const thread = get().threads.find((t) => t.id === threadId);
-      if (!thread) return false;
-      const clientMessageId = makeId();
-      try {
-        const mod = await import("../store.helpers/jsonRpcSocket");
-        await mod.dispatchA2uiAction(get, set, thread.workspaceId, threadId, {
-          surfaceId,
-          componentId,
-          eventType,
-          ...(payload !== undefined ? { payload } : {}),
-          clientMessageId,
-        });
-        return true;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "A2UI action failed",
-            detail: message,
-          }),
-        }));
-        return false;
-      }
     },
 
     setThreadModel: (threadId, provider, model) => {

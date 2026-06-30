@@ -13,7 +13,6 @@ import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
-import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -47,15 +46,8 @@ export default function ThreadDetailScreen() {
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
   const runtimeClient = getActiveCoworkJsonRpcClient();
-  const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
 
   const isDraftThread = threadId.startsWith("draft-");
-  const a2uiEnabled =
-    (typeof controlSnapshot?.sessionConfig?.enableA2ui === "boolean"
-      ? controlSnapshot.sessionConfig.enableA2ui
-      : typeof controlSnapshot?.sessionConfig?.featureFlags?.workspace?.a2ui === "boolean"
-        ? controlSnapshot.sessionConfig.featureFlags.workspace.a2ui
-        : false) === true;
 
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected =
@@ -249,7 +241,6 @@ export default function ThreadDetailScreen() {
             return (
               <ThreadRenderItem
                 renderItem={item.data}
-                a2uiEnabled={a2uiEnabled}
                 showDebugMessages={showDebugMessages}
                 live={item.data.kind === "activity-group" && item.data.id === liveActivityGroupId}
                 liveStartedAt={activeTurnStartedAt}

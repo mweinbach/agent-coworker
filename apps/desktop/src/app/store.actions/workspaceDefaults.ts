@@ -190,7 +190,6 @@ export function createWorkspaceDefaultsActions(
       providerOptions?: WorkspaceRecord["providerOptions"];
       userName?: string;
       userProfile?: WorkspaceRecord["userProfile"];
-      a2uiEnabled?: boolean;
       yolo?: boolean;
     };
   }): ApplySessionDefaultsMessage | null => {
@@ -207,8 +206,6 @@ export function createWorkspaceDefaultsActions(
       providerOptions?: unknown;
       userName?: string;
       userProfile?: WorkspaceRecord["userProfile"];
-      enableA2ui?: boolean;
-      featureFlags?: { workspace?: { a2ui?: boolean } };
       yolo?: boolean;
     };
     const currentProvider =
@@ -319,21 +316,6 @@ export function createWorkspaceDefaultsActions(
       !userProfileEqual(opts.desired.userProfile, currentSessionConfig.userProfile)
     ) {
       configPatch.userProfile = normalizeWorkspaceUserProfile(opts.desired.userProfile);
-    }
-
-    const currentA2uiEnabled =
-      typeof currentSessionConfig.enableA2ui === "boolean"
-        ? currentSessionConfig.enableA2ui
-        : typeof currentSessionConfig.featureFlags?.workspace?.a2ui === "boolean"
-          ? currentSessionConfig.featureFlags.workspace.a2ui
-          : undefined;
-    if (
-      typeof opts.desired.a2uiEnabled === "boolean" &&
-      opts.desired.a2uiEnabled !== currentA2uiEnabled
-    ) {
-      configPatch.featureFlags = {
-        workspace: { a2ui: opts.desired.a2uiEnabled },
-      };
     }
 
     if (!providerChanged && !enableMcpChanged && Object.keys(configPatch).length === 0) {
@@ -499,7 +481,6 @@ export function createWorkspaceDefaultsActions(
     const userProfile = nextWorkspace.userProfile
       ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile)
       : undefined;
-    const globalA2uiEnabled = get().desktopFeatureFlags.a2ui;
     const currentWorkspaceRuntime = get().workspaceRuntimeById[workspaceId];
     const controlMessage =
       controlReady && currentWorkspaceRuntime?.controlSessionId
@@ -526,7 +507,6 @@ export function createWorkspaceDefaultsActions(
               ...(providerOptions ? { providerOptions } : {}),
               ...(userName !== undefined ? { userName } : {}),
               ...(userProfile !== undefined ? { userProfile } : {}),
-              ...(globalA2uiEnabled ? { a2uiEnabled: true } : {}),
             },
           })
         : null;
@@ -750,7 +730,6 @@ export function createWorkspaceDefaultsActions(
       const userProfile = ws.userProfile
         ? normalizeWorkspaceUserProfile(ws.userProfile)
         : undefined;
-      const globalA2uiEnabled = get().desktopFeatureFlags.a2ui;
       const desiredEnableMcp =
         mode === "explicit"
           ? ws.defaultEnableMcp
@@ -787,7 +766,6 @@ export function createWorkspaceDefaultsActions(
           ...(providerOptions ? { providerOptions } : {}),
           ...(userName !== undefined ? { userName } : {}),
           ...(userProfile !== undefined ? { userProfile } : {}),
-          ...(globalA2uiEnabled ? { a2uiEnabled: true } : {}),
         },
       });
       if (message?.type !== "apply_session_defaults") {

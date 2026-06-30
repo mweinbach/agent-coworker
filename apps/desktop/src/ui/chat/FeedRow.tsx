@@ -7,7 +7,6 @@ import {
   FileSpreadsheetIcon,
   FileTextIcon,
   FileVideoIcon,
-  MousePointerClickIcon,
   Table2Icon,
 } from "lucide-react";
 import { memo, useState } from "react";
@@ -30,11 +29,8 @@ import { Message, MessageContent, MessageFooter } from "../../components/ui/mess
 import { openExternalSource } from "../../lib/openExternalSource";
 import { cn } from "../../lib/utils";
 import { DesktopMarkdown } from "../markdown";
-import { A2uiInlineCard } from "./a2ui/A2uiInlineCard";
-import { A2uiSurfaceHistoryRow } from "./a2ui/A2uiSurfaceHistoryRow";
 import { useChatViewContext } from "./ChatViewContext";
 import { CitationSourcesCarousel } from "./CitationSourcesCarousel";
-import { parseA2uiActionMessage, summarizeA2uiActionMessage } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
 import {
   type CanvasRequest,
@@ -199,8 +195,6 @@ export const FeedRow = memo(function FeedRow(props: {
   citationUrlsByIndex?: ReadonlyMap<number, string>;
   citationSources?: CitationSource[];
   desktopBasePath?: string | null;
-  isLatestUiSurface?: boolean;
-  a2uiEnabled: boolean;
 }) {
   const { developerMode, mentionCatalog } = useChatViewContext();
   const item = props.item;
@@ -212,31 +206,7 @@ export const FeedRow = memo(function FeedRow(props: {
 
   if (item.kind === "message") {
     if (item.role === "user") {
-      const a2uiAction = parseA2uiActionMessage(item.text);
-      if (a2uiAction) {
-        if (!props.a2uiEnabled) {
-          return null;
-        }
-        return (
-          <div className="flex w-full justify-end">
-            <div
-              role="status"
-              className="inline-flex max-w-[32rem] items-center gap-2 rounded-full border border-border/45 bg-muted/25 py-1 pl-2.5 pr-3 text-xs text-foreground shadow-sm"
-              title={`Surface ${a2uiAction.surfaceId} • Event ${a2uiAction.eventType}`}
-            >
-              <span className="flex size-4 items-center justify-center rounded-full bg-primary/15 text-primary">
-                <MousePointerClickIcon className="size-2.5" />
-              </span>
-              <span className="truncate font-medium text-foreground/90">
-                {summarizeA2uiActionMessage(a2uiAction)}
-              </span>
-              <span className="truncate font-mono text-[10px] text-muted-foreground">
-                {a2uiAction.surfaceId}
-              </span>
-            </div>
-          </div>
-        );
-      }
+      // action special rendering removed (feature fully stripped)
     }
 
     const userMessage = item.role === "user" ? parseUserMessageAttachments(item.text) : null;
@@ -329,17 +299,6 @@ export const FeedRow = memo(function FeedRow(props: {
         result={item.result}
         state={item.state}
       />
-    );
-  }
-
-  if (item.kind === "ui_surface") {
-    if (!props.a2uiEnabled) {
-      return null;
-    }
-    return props.isLatestUiSurface ? (
-      <A2uiInlineCard item={item} />
-    ) : (
-      <A2uiSurfaceHistoryRow item={item} />
     );
   }
 

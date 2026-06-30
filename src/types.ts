@@ -160,12 +160,10 @@ interface UserProfile {
 }
 
 export type WorkspaceFeatureFlagOverrides = {
-  a2ui?: boolean;
   openAiNativeConnectors?: boolean;
 };
 
 export type WorkspaceFeatureFlags = {
-  a2ui?: boolean;
   openAiNativeConnectors?: boolean;
 };
 
@@ -289,15 +287,8 @@ export interface AgentConfig {
 
   /** Internal experiment gates resolved from environment. Not persisted. */
   experimentalFeatures?: {
-    a2ui?: boolean;
     openAiNativeConnectors?: boolean;
   };
-
-  /**
-   * Experimental A2UI (Agent-to-UI) generative-UI opt-in. Only honored when
-   * COWORK_EXPERIMENTAL_A2UI=1.
-   */
-  enableA2ui?: boolean;
 
   /**
    * Whether workspace/session backups are enabled.

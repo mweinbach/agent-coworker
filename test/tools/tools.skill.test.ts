@@ -223,22 +223,26 @@ describe("skill tool", () => {
     expect(logs).toContain('tool< skill {"ok":false,"reason":"profile_blocked"}');
   });
 
-  test("hides the a2ui skill when the workspace A2UI feature flag is disabled", async () => {
+  test("hides the REMOVEDUI skill when the workspace REMOVEDUI feature flag is disabled", async () => {
     const dir = await tmpDir();
-    const skillDir = path.join(dir, "skills", "a2ui");
+    const skillDir = path.join(dir, "skills", "REMOVEDUI");
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
-      skillDoc("a2ui", "A2UI helper skill.", "# A2UI Skill\nDo not load when disabled."),
+      skillDoc(
+        "REMOVEDUI",
+        "REMOVEDUI helper skill.",
+        "# REMOVEDUI Skill\nDo not load when disabled.",
+      ),
       "utf-8",
     );
 
     const config = makeConfig(dir, {
       skillsDirs: [path.join(dir, "skills")],
-      enableA2ui: true,
+      enableREMOVEDUI: true,
       featureFlags: {
         workspace: {
-          a2ui: false,
+          REMOVEDUI: false,
         },
       },
     });
@@ -246,27 +250,27 @@ describe("skill tool", () => {
     ctx.config = config;
 
     const t: any = createSkillTool(ctx);
-    const res: string = await t.execute({ skillName: "a2ui" });
+    const res: string = await t.execute({ skillName: "REMOVEDUI" });
     expect(res).toContain("not found");
   });
 
-  test("loads the a2ui skill when the workspace A2UI feature flag is enabled", async () => {
-    await withEnv("COWORK_EXPERIMENTAL_A2UI", "1", async () => {
+  test("loads the REMOVEDUI skill when the workspace REMOVEDUI feature flag is enabled", async () => {
+    await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
       const dir = await tmpDir();
-      const skillDir = path.join(dir, "skills", "a2ui");
+      const skillDir = path.join(dir, "skills", "REMOVEDUI");
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(
         path.join(skillDir, "SKILL.md"),
-        skillDoc("a2ui", "A2UI helper skill.", "# A2UI Skill\nProtocol guidance."),
+        skillDoc("REMOVEDUI", "REMOVEDUI helper skill.", "# REMOVEDUI Skill\nProtocol guidance."),
         "utf-8",
       );
 
       const config = makeConfig(dir, {
         skillsDirs: [path.join(dir, "skills")],
-        enableA2ui: false,
+        enableREMOVEDUI: false,
         featureFlags: {
           workspace: {
-            a2ui: true,
+            REMOVEDUI: true,
           },
         },
       });
@@ -274,7 +278,7 @@ describe("skill tool", () => {
       ctx.config = config;
 
       const t: any = createSkillTool(ctx);
-      const res: string = await t.execute({ skillName: "a2ui" });
+      const res: string = await t.execute({ skillName: "REMOVEDUI" });
       expect(res).toContain("Protocol guidance.");
     });
   });

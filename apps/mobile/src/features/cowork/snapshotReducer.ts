@@ -136,20 +136,6 @@ function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem)
         source: normalizeErrorSource(item.source),
         ...(item.data ? { data: item.data } : {}),
       };
-    case "uiSurface":
-      return {
-        id: item.id,
-        kind: "ui_surface",
-        ts: existingTsOr(ts, existing),
-        surfaceId: item.surfaceId,
-        catalogId: item.catalogId,
-        version: item.version,
-        revision: item.revision,
-        deleted: item.deleted,
-        ...(item.theme ? { theme: item.theme } : {}),
-        ...(item.root ? { root: item.root } : {}),
-        ...(item.dataModel !== undefined ? { dataModel: item.dataModel } : {}),
-      };
   }
 }
 

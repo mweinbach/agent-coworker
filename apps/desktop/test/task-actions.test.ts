@@ -211,7 +211,7 @@ function createHarness(options: { workspacePath?: string } = {}) {
       remoteAccess: false,
       workspacePicker: true,
       workspaceLifecycle: true,
-      a2ui: false,
+      REMOVEDUI: false,
       openAiNativeConnectors: false,
       canvas: false,
       tasks: true,

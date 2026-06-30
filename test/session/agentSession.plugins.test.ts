@@ -4,7 +4,6 @@ import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
   ASK_SKIP_TOKEN,
-  createExperimentalREMOVEDRemovedSurfaceManager,
   createRuntime,
   defaultSupportedModel,
   flushAsyncWork,

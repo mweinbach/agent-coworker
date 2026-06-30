@@ -682,7 +682,7 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(10);
   });
 
-  test("includes REMOVEDUI for non-google providers when enabled", async () => {
+  test("omits retired REMOVEDUI tool even if legacy config enables it", async () => {
     await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
       const dir = await tmpDir();
       const tools = createTools(
@@ -692,62 +692,23 @@ describe("createTools", () => {
             model: "gpt-5.2",
             preferredChildModel: "gpt-5.2",
             enableREMOVEDUI: true,
-          }),
-          applyREMOVEDUIEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
+          } as any),
         }),
       );
 
-      expect(tools).toHaveProperty("REMOVEDUI");
+      expect(tools).not.toHaveProperty("REMOVEDUI");
     });
   });
 
-  test("includes REMOVEDUI for google when enabled", async () => {
-    await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
-      const dir = await tmpDir();
-      const tools = createTools(
-        makeCtx(dir, {
-          config: makeConfig(dir, {
-            provider: "google",
-            model: "gemini-3-flash-preview",
-            preferredChildModel: "gemini-3-flash-preview",
-            enableREMOVEDUI: true,
-          }),
-          applyREMOVEDUIEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
-        }),
-      );
-
-      expect(tools).toHaveProperty("REMOVEDUI");
-    });
-  });
-
-  test("omits REMOVEDUI when explicitly disabled", async () => {
+  test("listSessionToolNames omits retired REMOVEDUI tool", async () => {
     const dir = await tmpDir();
-    const tools = createTools(
-      makeCtx(dir, {
-        config: makeConfig(dir, {
-          provider: "openai",
-          model: "gpt-5.2",
-          preferredChildModel: "gpt-5.2",
-          enableREMOVEDUI: false,
-        }),
-        applyREMOVEDUIEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
-      }),
+    const names = listSessionToolNames(
+      makeConfig(dir, {
+        enableREMOVEDUI: true,
+      } as any),
     );
 
-    expect(tools).not.toHaveProperty("REMOVEDUI");
-  });
-
-  test("listSessionToolNames includes REMOVEDUI when the experiment is enabled", async () => {
-    await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
-      const dir = await tmpDir();
-      const names = listSessionToolNames(
-        makeConfig(dir, {
-          enableREMOVEDUI: true,
-        }),
-      );
-
-      expect(names).toContain("REMOVEDUI");
-    });
+    expect(names).not.toContain("REMOVEDUI");
   });
 
   test("listSessionToolNames includes root-session agent controls when requested", () => {

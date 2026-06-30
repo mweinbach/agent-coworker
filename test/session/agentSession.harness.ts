@@ -3,10 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as REAL_AGENT from "../../src/agent";
-import {
-  createExperimentalREMOVEDRemovedSurfaceManager,
-  deriveREMOVEDRemovedSurfacesFromSnapshot,
-} from "../../src/experimental/REMOVEDUI/sessionAdapter";
 import { defaultSupportedModel, getSupportedModel } from "../../src/models/registry";
 import { __internal as observabilityRuntimeInternal } from "../../src/observability/runtime";
 import { createRuntime } from "../../src/runtime";
@@ -30,10 +26,8 @@ import type { AgentConfig, TodoItem } from "../../src/types";
 export type { TodoItem };
 export {
   ASK_SKIP_TOKEN,
-  createExperimentalREMOVEDRemovedSurfaceManager,
   createRuntime,
   defaultSupportedModel,
-  deriveREMOVEDRemovedSurfacesFromSnapshot,
   fs,
   getSupportedModel,
   MAX_ATTACHMENT_BASE64_SIZE,
@@ -258,7 +252,6 @@ export function makeSession(
           | "model"
           | "preferredChildModel"
           | "enableMcp"
-          | "enableREMOVEDUI"
           | "enableMemory"
           | "memoryRequireApproval"
           | "advancedMemory"

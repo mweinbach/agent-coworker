@@ -37,56 +37,9 @@ mock.module("../apps/mobile/src/components/thread/todo-card", () => ({
   TodoCard: () => createElement("todo-card"),
 }));
 
-mock.module("../apps/mobile/src/components/thread/REMOVEDUI-surface-card", () => ({
-  REMOVEDRemovedSurfaceCard: ({ item }: { item: { surfaceId: string } }) =>
-    createElement("REMOVEDUI-surface-card", { "data-surface-id": item.surfaceId }),
-}));
-
 const { ThreadFeedItem } = await import("../apps/mobile/src/components/thread/thread-feed-item");
 
 describe("mobile ThreadFeedItem", () => {
-  test("renders REMOVED_SURFACE items with REMOVEDRemovedSurfaceCard instead of chrome fallback", () => {
-    const rendered = ThreadFeedItem({
-      item: {
-        id: "RemovedSurface:s1",
-        kind: "REMOVED_SURFACE",
-        ts: "2026-04-19T00:00:00.000Z",
-        surfaceId: "s1",
-        catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
-        version: "v0.9",
-        revision: 1,
-        deleted: false,
-        root: { id: "root", type: "Column" },
-      },
-      REMOVEDUIEnabled: true,
-      showDebugMessages: false,
-    });
-
-    expect(rendered.type).toBeDefined();
-    expect(typeof rendered.type).toBe("function");
-    expect((rendered.type as { name?: string }).name).toBe("REMOVEDRemovedSurfaceCard");
-    expect(rendered.props.item.surfaceId).toBe("s1");
-  });
-
-  test("hides REMOVED_SURFACE items when REMOVEDUI is disabled", () => {
-    const rendered = ThreadFeedItem({
-      item: {
-        id: "RemovedSurface:s1",
-        kind: "REMOVED_SURFACE",
-        ts: "2026-04-19T00:00:00.000Z",
-        surfaceId: "s1",
-        catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
-        version: "v0.9",
-        revision: 1,
-        deleted: false,
-        root: { id: "root", type: "Column" },
-      },
-      REMOVEDUIEnabled: false,
-    });
-
-    expect(rendered).toBeNull();
-  });
-
   test("hides reasoning and tool rows because activity groups render them", () => {
     expect(
       ThreadFeedItem({
@@ -97,7 +50,6 @@ describe("mobile ThreadFeedItem", () => {
           ts: "2026-04-19T00:00:00.000Z",
           text: "Thinking",
         },
-        REMOVEDUIEnabled: true,
         showDebugMessages: false,
       }),
     ).toBeNull();
@@ -111,7 +63,6 @@ describe("mobile ThreadFeedItem", () => {
           name: "bash",
           state: "output-available",
         },
-        REMOVEDUIEnabled: true,
         showDebugMessages: false,
       }),
     ).toBeNull();
@@ -125,7 +76,6 @@ describe("mobile ThreadFeedItem", () => {
         ts: "2026-04-19T00:00:00.000Z",
         line: "Observability: enabled=yes",
       },
-      REMOVEDUIEnabled: true,
       showDebugMessages: false,
     });
     expect(hidden).toBeNull();
@@ -137,7 +87,6 @@ describe("mobile ThreadFeedItem", () => {
         ts: "2026-04-19T00:00:00.000Z",
         line: "Observability: enabled=yes",
       },
-      REMOVEDUIEnabled: true,
       showDebugMessages: true,
     });
     expect(visible).not.toBeNull();

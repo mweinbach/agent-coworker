@@ -174,16 +174,4 @@ describe("loadSkillBodyByName", () => {
 
     expect(await loadSkillBodyByName(config, "does-not-exist")).toBeNull();
   });
-
-  test("returns null for REMOVEDUI when the workspace feature flag disables it", async () => {
-    const skillsDir = path.join(workspaceRoot, "skills");
-    await createSkill(skillsDir, "REMOVEDUI", "# REMOVEDUI\nHidden guidance.");
-    const config = {
-      ...makeConfig([skillsDir]),
-      enableREMOVEDUI: true,
-      featureFlags: { workspace: { REMOVEDUI: false } },
-    } as unknown as AgentConfig;
-
-    expect(await loadSkillBodyByName(config, "REMOVEDUI")).toBeNull();
-  });
 });

@@ -3,7 +3,6 @@ import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
   ASK_SKIP_TOKEN,
-  createExperimentalREMOVEDRemovedSurfaceManager,
   createRuntime,
   defaultSupportedModel,
   flushAsyncWork,
@@ -272,46 +271,6 @@ describe("AgentSession", () => {
       ]);
     });
 
-    test("setConfig refreshes the cached system prompt when the REMOVEDUI feature flag changes", async () => {
-      await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
-        const persistProjectConfigPatchImpl = mock(async () => {});
-        const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
-          prompt: `prompt:REMOVEDUI-${String(config.enableREMOVEDUI ?? false)}`,
-          discoveredSkills: [{ name: "ui-skill", description: "UI skill" }],
-        }));
-        const { session } = makeSession({
-          persistProjectConfigPatchImpl,
-          loadSystemPromptWithSkillsImpl,
-          system: "prompt:REMOVEDUI-false",
-        });
-
-        await session.setConfig({
-          featureFlags: {
-            workspace: {
-              REMOVEDUI: true,
-            },
-          },
-        });
-        await session.sendUserMessage("hello");
-
-        expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
-        expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-          featureFlags: {
-            workspace: {
-              REMOVEDUI: true,
-            },
-          },
-        });
-
-        const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
-        expect(runTurnArgs.system).toBe("prompt:REMOVEDUI-true");
-        expect(runTurnArgs.discoveredSkills).toEqual([
-          { name: "ui-skill", description: "UI skill" },
-        ]);
-        expect(session.getSessionConfigEvent().config.enableREMOVEDUI).toBe(true);
-      });
-    });
-
     test("upsertMemory refreshes the cached system prompt for later turns", async () => {
       const loadSystemPromptWithSkillsImpl = mock(async () => ({
         prompt: "prompt:memory-updated",
@@ -428,7 +387,6 @@ describe("AgentSession", () => {
       expect(evt.config.observabilityEnabled).toBe(false);
       expect(evt.config.backupsEnabled).toBe(false);
       expect(evt.config.defaultBackupsEnabled).toBe(false);
-      expect(evt.config.enableREMOVEDUI).toBeUndefined();
       expect(evt.config.toolOutputOverflowChars).toBe(25000);
       expect("defaultToolOutputOverflowChars" in evt.config).toBe(false);
       expect(evt.config.preferredChildModel).toBe("gemini-3-flash-preview");

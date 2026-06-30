@@ -3,10 +3,8 @@ import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
   ASK_SKIP_TOKEN,
-  createExperimentalREMOVEDRemovedSurfaceManager,
   createRuntime,
   defaultSupportedModel,
-  deriveREMOVEDRemovedSurfacesFromSnapshot,
   flushAsyncWork,
   fs,
   getSupportedModel,
@@ -707,116 +705,6 @@ describe("AgentSession", () => {
           targetPaths: ["src/auth", "test/auth"],
         }),
       );
-    });
-
-    test("rehydrates persisted REMOVEDUI surfaces so resumed actions validate against restored state", () => {
-      const { emit } = makeEmit();
-
-      const session = AgentSession.fromPersisted({
-        persisted: {
-          sessionId: "persisted-REMOVEDUI-session",
-          sessionKind: "root",
-          parentSessionId: null,
-          role: null,
-          title: "Persisted REMOVEDUI",
-          titleSource: "manual",
-          titleModel: null,
-          provider: "google",
-          model: "gemini-3.1-pro-preview",
-          workingDirectory: "/tmp/persisted",
-          enableMcp: true,
-          createdAt: "2026-03-09T00:00:00.000Z",
-          updatedAt: "2026-03-09T00:00:01.000Z",
-          status: "active",
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-          messageCount: 1,
-          lastEventSeq: 3,
-          systemPrompt: "system",
-          messages: [{ role: "user", content: "hello" }] as any,
-          providerState: null,
-          todos: [],
-          harnessContext: null,
-          costTracker: null,
-        },
-        initialSessionSnapshot: {
-          sessionId: "persisted-REMOVEDUI-session",
-          title: "Persisted REMOVEDUI",
-          titleSource: "manual",
-          titleModel: null,
-          provider: "google",
-          model: "gemini-3.1-pro-preview",
-          sessionKind: "root",
-          parentSessionId: null,
-          role: null,
-          mode: null,
-          depth: null,
-          nickname: null,
-          taskType: null,
-          targetPaths: null,
-          requestedModel: null,
-          effectiveModel: null,
-          requestedReasoningEffort: null,
-          effectiveReasoningEffort: null,
-          executionState: null,
-          lastMessagePreview: null,
-          createdAt: "2026-03-09T00:00:00.000Z",
-          updatedAt: "2026-03-09T00:00:01.000Z",
-          messageCount: 1,
-          lastEventSeq: 3,
-          feed: [
-            {
-              id: "ui-surface-1",
-              kind: "REMOVED_SURFACE",
-              ts: "2026-03-09T00:00:01.000Z",
-              surfaceId: "surface-1",
-              catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
-              version: "v0.9",
-              revision: 1,
-              deleted: false,
-              root: {
-                id: "root",
-                type: "Column",
-                children: [
-                  {
-                    id: "buy",
-                    type: "Button",
-                    props: { text: "Buy" },
-                  },
-                ],
-              },
-              dataModel: { qty: 1 },
-              changeKind: "createSurface",
-            },
-          ],
-          agents: [],
-          todos: [],
-          sessionUsage: null,
-          lastTurnUsage: null,
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        },
-        baseConfig: makeConfig("/tmp/persisted", {
-          provider: "google",
-          model: "gemini-3.1-pro-preview",
-          preferredChildModel: "gemini-3.1-pro-preview",
-          enableREMOVEDUI: true,
-        }),
-        emit,
-        sessionBackupFactory: makeSessionBackupFactory(),
-        getProviderStatusesImpl: async () => [],
-        createREMOVEDRemovedSurfaceManagerImpl: createExperimentalREMOVEDRemovedSurfaceManager,
-        deriveREMOVEDRemovedSurfacesFromSnapshotImpl: deriveREMOVEDRemovedSurfacesFromSnapshot,
-      });
-
-      expect(
-        session.validateREMOVEDUIAction({ surfaceId: "surface-1", componentId: "buy" }),
-      ).toEqual({
-        ok: true,
-        surfaceId: "surface-1",
-        componentId: "buy",
-        componentType: "Button",
-      });
     });
 
     test("restores persisted providerOptions into resumed runtime config", async () => {

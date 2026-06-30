@@ -743,7 +743,7 @@ describe("mobile cowork jsonrpc client", () => {
     await expect(startPromise).resolves.toBeUndefined();
   });
 
-  test("accepts RemovedSurface notifications with REMOVEDUI metadata fields", async () => {
+  test("drops retired ui surface notifications", async () => {
     const sent: string[] = [];
     const notifications: Array<{ method: string; params?: unknown }> = [];
     const client = new CoworkJsonRpcClient({
@@ -784,8 +784,8 @@ describe("mobile cowork jsonrpc client", () => {
           threadId: "thread-1",
           turnId: null,
           item: {
-            id: "RemovedSurface:surface-1",
-            type: "RemovedSurface",
+            id: "ui-surface-1",
+            type: "uiSurface",
             surfaceId: "surface-1",
             catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
             version: "v0.9",
@@ -799,11 +799,10 @@ describe("mobile cowork jsonrpc client", () => {
       }),
     );
 
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0]?.method).toBe("item/completed");
+    expect(notifications).toHaveLength(0);
   });
 
-  test("accepts thread snapshots whose REMOVED_SURFACE feed items include REMOVEDUI metadata fields", async () => {
+  test("rejects thread snapshots whose feed still contains retired ui surface items", async () => {
     const sent: string[] = [];
     const client = new CoworkJsonRpcClient({
       clientInfo: { name: "cowork-mobile", version: "0.1.0" },
@@ -878,7 +877,7 @@ describe("mobile cowork jsonrpc client", () => {
             feed: [
               {
                 id: "ui-surface-1",
-                kind: "REMOVED_SURFACE",
+                kind: "ui_surface",
                 ts: new Date().toISOString(),
                 surfaceId: "surface-1",
                 catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
@@ -899,18 +898,7 @@ describe("mobile cowork jsonrpc client", () => {
       }),
     );
 
-    await expect(readPromise).resolves.toMatchObject({
-      coworkSnapshot: {
-        feed: [
-          expect.objectContaining({
-            kind: "REMOVED_SURFACE",
-            changeKind: "updateComponents",
-            reason: "refresh summary",
-            toolCallId: "tool-1",
-          }),
-        ],
-      },
-    });
+    await expect(readPromise).rejects.toThrow();
   });
 
   test("resetTransportSession allows a fresh initialize handshake", async () => {

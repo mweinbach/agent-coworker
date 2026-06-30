@@ -133,7 +133,7 @@ export async function resolveReferencedPlugins(
 
   const catalog = pluginCatalog ?? (await buildPluginCatalogSnapshot(context.state.config));
   const enabledSkillNames = new Set(
-    (await discoverSkillsForConfig(context.state.config))
+    (await discoverSkillsForConfig(context.state.config, { pluginCatalog: catalog }))
       .filter((skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name))
       .map((skill) => skill.name),
   );
@@ -149,7 +149,10 @@ export async function resolveReferencedPlugins(
       displayName: entry.displayName || entry.name,
       skillNames: entry.skills
         .filter(
-          (skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name),
+          (skill) =>
+            skill.enabled &&
+            enabledSkillNames.has(skill.name) &&
+            isSkillBodyLoadAllowed(context.state.config, skill.name),
         )
         .map((skill) => skill.name),
     });

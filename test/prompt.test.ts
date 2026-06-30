@@ -1270,48 +1270,6 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("{{spawnAgentXmlSection}}");
   });
 
-  test("injects REMOVEDUI enabled guidance into the system prompt", async () => {
-    const previous = process.env.COWORK_EXPERIMENTAL_REMOVEDUI;
-    process.env.COWORK_EXPERIMENTAL_REMOVEDUI = "1";
-    const config = makeConfig({
-      enableREMOVEDUI: false,
-      featureFlags: {
-        workspace: {
-          REMOVEDUI: true,
-        },
-      },
-      skillsDirs: ["/nonexistent/skills"],
-    });
-
-    try {
-      const prompt = await loadSystemPrompt(config);
-      expect(prompt).toContain("## REMOVEDUI Enabled");
-      expect(prompt).toContain("You may call the `REMOVEDUI` tool");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.COWORK_EXPERIMENTAL_REMOVEDUI;
-      } else {
-        process.env.COWORK_EXPERIMENTAL_REMOVEDUI = previous;
-      }
-    }
-  });
-
-  test("injects REMOVEDUI disabled guidance and hides the REMOVEDUI skill when disabled", async () => {
-    const config = makeConfig({
-      enableREMOVEDUI: true,
-      featureFlags: {
-        workspace: {
-          REMOVEDUI: false,
-        },
-      },
-    });
-
-    const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("## REMOVEDUI Disabled");
-    expect(prompt).not.toContain("- **REMOVEDUI**:");
-    expect(prompt).not.toContain("Use when you need to render generative UI surfaces");
-  });
-
   test("skips hot cache section when AGENT.md is empty/whitespace", async () => {
     const { tmp } = await makeTmpDirs();
     const projectCoworkDir = path.join(tmp, "project", ".cowork");

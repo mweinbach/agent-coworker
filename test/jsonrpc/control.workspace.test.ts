@@ -53,7 +53,6 @@ describe("server JSON-RPC control methods", () => {
           model: "gpt-5.4",
           preferredChildModel: "gpt-5.4",
           enableMcp: false,
-          enableREMOVEDUI: false,
           enableMemory: false,
         },
         null,
@@ -101,61 +100,6 @@ describe("server JSON-RPC control methods", () => {
       expect(targetConfig.featureFlags?.workspace?.REMOVEDUI).toBeUndefined();
       expect(targetConfig.enableMemory).toBe(true);
       await expect(fs.readFile(`${serverRoot}/.cowork/config.json`, "utf-8")).rejects.toBeDefined();
-
-      rpc.close();
-    } finally {
-      await stopTestServer(server);
-    }
-  });
-
-  test("workspace feature flags round-trip through session defaults apply", async () => {
-    const workspace = await makeTmpProject("agent-harness-feature-flags-");
-    await fs.writeFile(
-      `${workspace}/.cowork/config.json`,
-      `${JSON.stringify(
-        {
-          featureFlags: {
-            workspace: {
-              REMOVEDUI: false,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    const { server, url } = await startAgentServer(
-      serverOpts(workspace, { env: { COWORK_EXPERIMENTAL_REMOVEDUI: "1" } }),
-    );
-
-    try {
-      const rpc = await connectJsonRpc(url);
-      const before = await rpc.request("cowork/session/state/read", { cwd: workspace });
-      expect(before.result.events[2]?.type).toBe("session_config");
-      expect(before.result.events[2]?.config?.featureFlags?.workspace?.REMOVEDUI).toBe(false);
-      expect(before.result.events[2]?.config?.enableREMOVEDUI).toBe(false);
-
-      const apply = await rpc.request("cowork/session/defaults/apply", {
-        cwd: workspace,
-        config: {
-          featureFlags: {
-            workspace: {
-              REMOVEDUI: true,
-            },
-          },
-        },
-      });
-      expect(apply.result.event.type).toBe("session_config");
-      expect(apply.result.event.config.featureFlags.workspace.REMOVEDUI).toBe(true);
-      expect(apply.result.event.config.enableREMOVEDUI).toBe(true);
-
-      const persisted = JSON.parse(await fs.readFile(`${workspace}/.cowork/config.json`, "utf-8"));
-      expect(persisted.featureFlags.workspace.REMOVEDUI).toBe(true);
-
-      const after = await rpc.request("cowork/session/state/read", { cwd: workspace });
-      expect(after.result.events[2]?.config?.featureFlags?.workspace?.REMOVEDUI).toBe(true);
-      expect(after.result.events[2]?.config?.enableREMOVEDUI).toBe(true);
 
       rpc.close();
     } finally {

@@ -170,11 +170,6 @@ mockLocalModule(
   () => ({ PendingRequestCard: () => null }),
 );
 mockLocalModule(
-  "@/components/thread/REMOVEDUI-surface-card",
-  "apps/mobile/src/components/thread/REMOVEDUI-surface-card",
-  () => ({ REMOVEDRemovedSurfaceCard: () => null }),
-);
-mockLocalModule(
   "@/components/thread/markdown-text",
   "apps/mobile/src/components/thread/markdown-text",
   () => ({ MarkdownText: () => null }),

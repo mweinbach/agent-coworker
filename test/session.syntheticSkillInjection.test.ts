@@ -77,28 +77,118 @@ describe("referenced plugin resolution", () => {
 
     const config = makeReferenceConfig(root, skillsDir);
     const context = { state: { config } } as any;
+    const pluginsRoot = path.join(root, "plugins");
+    const enabledPluginRoot = path.join(pluginsRoot, "enabled");
+    const enabledPluginSkillsPath = path.join(enabledPluginRoot, "skills");
+    const enabledPluginSkillDir = path.join(enabledPluginSkillsPath, "enabled-skill");
+    const enabledPluginSkillPath = path.join(enabledPluginSkillDir, "SKILL.md");
+    await fs.mkdir(enabledPluginSkillDir, { recursive: true });
+    await fs.writeFile(
+      enabledPluginSkillPath,
+      ["---", 'name: "enabled-skill"', 'description: "Enabled skill"', "---", "", "# Enabled"].join(
+        "\n",
+      ),
+      "utf-8",
+    );
     const catalog: any = {
       plugins: [
         {
+          id: "disabled",
           name: "disabled",
           displayName: "Disabled",
+          scope: "user",
+          discoveryKind: "local",
+          installed: true,
           enabled: false,
-          skills: [{ name: "disabled-plugin-skill", enabled: true }],
+          rootDir: path.join(pluginsRoot, "disabled"),
+          manifestPath: path.join(pluginsRoot, "disabled", "plugin.json"),
+          skillsPath: path.join(pluginsRoot, "disabled", "skills"),
+          skills: [
+            {
+              name: "disabled:disabled-plugin-skill",
+              rawName: "disabled-plugin-skill",
+              description: "Disabled skill",
+              enabled: false,
+              rootDir: path.join(pluginsRoot, "disabled", "skills", "disabled-plugin-skill"),
+              skillPath: path.join(
+                pluginsRoot,
+                "disabled",
+                "skills",
+                "disabled-plugin-skill",
+                "SKILL.md",
+              ),
+              triggers: [],
+            },
+          ],
         },
         {
+          id: "shared",
           name: "shared",
           displayName: "Shared Plugin",
+          scope: "user",
+          discoveryKind: "local",
+          installed: true,
           enabled: true,
-          skills: [{ name: "shared-plugin-skill", enabled: true }],
+          rootDir: path.join(pluginsRoot, "shared"),
+          manifestPath: path.join(pluginsRoot, "shared", "plugin.json"),
+          skillsPath: path.join(pluginsRoot, "shared", "skills"),
+          skills: [
+            {
+              name: "shared:shared-plugin-skill",
+              rawName: "shared-plugin-skill",
+              description: "Shared plugin skill",
+              enabled: true,
+              rootDir: path.join(pluginsRoot, "shared", "skills", "shared-plugin-skill"),
+              skillPath: path.join(
+                pluginsRoot,
+                "shared",
+                "skills",
+                "shared-plugin-skill",
+                "SKILL.md",
+              ),
+              triggers: [],
+            },
+          ],
         },
         {
+          id: "enabled",
           name: "enabled",
           displayName: "Enabled",
+          scope: "user",
+          discoveryKind: "local",
+          installed: true,
           enabled: true,
+          rootDir: enabledPluginRoot,
+          manifestPath: path.join(enabledPluginRoot, "plugin.json"),
+          skillsPath: enabledPluginSkillsPath,
           skills: [
-            { name: "enabled-skill", enabled: true },
-            { name: "disabled-skill", enabled: false },
-            { name: "REMOVEDUI", enabled: true },
+            {
+              name: "enabled:enabled-skill",
+              rawName: "enabled-skill",
+              description: "Enabled skill",
+              enabled: true,
+              rootDir: enabledPluginSkillDir,
+              skillPath: enabledPluginSkillPath,
+              triggers: [],
+            },
+            {
+              name: "enabled:disabled-skill",
+              rawName: "disabled-skill",
+              description: "Disabled skill",
+              enabled: false,
+              rootDir: path.join(enabledPluginSkillsPath, "disabled-skill"),
+              skillPath: path.join(enabledPluginSkillsPath, "disabled-skill", "SKILL.md"),
+              triggers: [],
+            },
+            {
+              name: "enabled:missing-plugin-skill",
+              rawName: "missing-plugin-skill",
+              description: "Missing plugin skill",
+              enabled: true,
+              rootDir: path.join(enabledPluginSkillsPath, "missing-plugin-skill"),
+              skillPath: path.join(enabledPluginSkillsPath, "missing-plugin-skill", "SKILL.md"),
+              triggers: [],
+            },
           ],
         },
       ],
@@ -115,7 +205,7 @@ describe("referenced plugin resolution", () => {
     );
 
     expect(resolved).toEqual([
-      { name: "enabled", displayName: "Enabled", skillNames: ["enabled-skill"] },
+      { name: "enabled", displayName: "Enabled", skillNames: ["enabled:enabled-skill"] },
     ]);
   });
 });

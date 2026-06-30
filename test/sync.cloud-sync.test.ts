@@ -78,6 +78,7 @@ function safePersistedState() {
     desktopFeatureFlagOverrides: {
       REMOVEDUI: true,
       workspaceLifecycle: true,
+      canvas: true,
       notARealFlag: true,
     },
     developerMode: true,
@@ -142,8 +143,8 @@ describe("cloud sync redaction", () => {
 
     expect(snapshot.privacyTelemetrySettings.cloudSyncEnabled).toBe(false);
     expect(snapshot.desktopFeatureFlagOverrides).toEqual({
-      REMOVEDUI: true,
       workspaceLifecycle: true,
+      canvas: true,
     });
     expect(snapshot.appPreferences.perWorkspaceSettings).toBe(true);
     expect(snapshot.providerUiState.lmstudio).toEqual({ enabled: true });

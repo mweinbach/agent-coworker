@@ -377,8 +377,11 @@ mock.module("../src/lib/desktopCommands", () =>
         typeof featureOverrides?.workspaceLifecycle === "boolean"
           ? featureOverrides.workspaceLifecycle
           : true,
-      REMOVEDUI:
-        typeof featureOverrides?.REMOVEDUI === "boolean" ? featureOverrides.REMOVEDUI : false,
+      openAiNativeConnectors:
+        typeof featureOverrides?.openAiNativeConnectors === "boolean"
+          ? featureOverrides.openAiNativeConnectors
+          : false,
+      canvas: typeof featureOverrides?.canvas === "boolean" ? featureOverrides.canvas : false,
       // Default the durable Tasks flag ON in this harness so existing task
       // hydration assertions keep exercising task view; OFF cases pass an
       // explicit `{ tasks: false }` override.
@@ -963,58 +966,32 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.workspaces?.[0]?.wsProtocol).toBe("jsonrpc");
   });
 
-  test("buildCachedDesktopStateSeed migrates legacy flat defaultFeatureFlags.REMOVEDUI=true to override", () => {
-    const legacyFlatREMOVEDUIState = {
-      ...cachedState,
-      persistedState: {
-        ...cachedState.persistedState,
-        workspaces: [
-          {
-            ...cachedState.persistedState.workspaces[0],
-            defaultFeatureFlags: { REMOVEDUI: true },
-          },
-        ],
-      },
-    };
-    const seed = buildCachedDesktopStateSeed(legacyFlatREMOVEDUIState);
-    expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBe(true);
+  test("buildCachedDesktopStateSeed ignores retired legacy REMOVEDUI workspace flags", () => {
+    const legacyWorkspaceShapes = [
+      { defaultFeatureFlags: { REMOVEDUI: true } },
+      { defaultEnableREMOVEDUI: true },
+      { defaultFeatureFlags: { workspace: { REMOVEDUI: true } } },
+    ];
+
+    for (const legacyWorkspaceShape of legacyWorkspaceShapes) {
+      const seed = buildCachedDesktopStateSeed({
+        ...cachedState,
+        persistedState: {
+          ...cachedState.persistedState,
+          workspaces: [
+            {
+              ...cachedState.persistedState.workspaces[0],
+              ...legacyWorkspaceShape,
+            },
+          ],
+        },
+      });
+
+      expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBeUndefined();
+    }
   });
 
-  test("buildCachedDesktopStateSeed migrates legacy defaultEnableREMOVEDUI=true to override", () => {
-    const legacyEnableState = {
-      ...cachedState,
-      persistedState: {
-        ...cachedState.persistedState,
-        workspaces: [
-          {
-            ...cachedState.persistedState.workspaces[0],
-            defaultEnableREMOVEDUI: true,
-          },
-        ],
-      },
-    };
-    const seed = buildCachedDesktopStateSeed(legacyEnableState);
-    expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBe(true);
-  });
-
-  test("buildCachedDesktopStateSeed migrates nested defaultFeatureFlags.workspace.REMOVEDUI=true to override", () => {
-    const nestedState = {
-      ...cachedState,
-      persistedState: {
-        ...cachedState.persistedState,
-        workspaces: [
-          {
-            ...cachedState.persistedState.workspaces[0],
-            defaultFeatureFlags: { workspace: { REMOVEDUI: true } },
-          },
-        ],
-      },
-    };
-    const seed = buildCachedDesktopStateSeed(nestedState);
-    expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBe(true);
-  });
-
-  test("buildCachedDesktopStateSeed does not set REMOVEDUI override when no legacy flag is present", () => {
+  test("buildCachedDesktopStateSeed does not set legacy REMOVEDUI override when no legacy flag is present", () => {
     const seed = buildCachedDesktopStateSeed(cachedState);
     expect(seed?.desktopFeatureFlagOverrides?.REMOVEDUI).toBeUndefined();
   });

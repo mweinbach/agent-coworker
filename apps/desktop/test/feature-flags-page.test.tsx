@@ -49,7 +49,9 @@ describe("feature flags settings page", () => {
             remoteAccess: false,
             workspacePicker: true,
             workspaceLifecycle: true,
-            REMOVEDUI: false,
+            openAiNativeConnectors: false,
+            canvas: false,
+            tasks: false,
           },
           updateState: {
             ...useAppStore.getState().updateState,
@@ -65,7 +67,8 @@ describe("feature flags settings page", () => {
       expect(container.textContent).toContain("Experimental capabilities");
       expect(container.textContent).toContain("Menu bar / tray");
       expect(container.textContent).toContain("Remote access");
-      expect(container.textContent).toContain("Generative UI (REMOVEDUI)");
+      expect(container.textContent).toContain("Canvas");
+      expect(container.textContent).not.toContain("Generative UI (REMOVEDUI)");
       expect(container.textContent).toContain("Unavailable in packaged builds.");
       const remoteSwitch = container.querySelector('[aria-label="Remote access"]');
       expect(remoteSwitch?.hasAttribute("disabled")).toBe(true);
@@ -93,7 +96,9 @@ describe("feature flags settings page", () => {
             remoteAccess: true,
             workspacePicker: true,
             workspaceLifecycle: true,
-            REMOVEDUI: false,
+            openAiNativeConnectors: false,
+            canvas: false,
+            tasks: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -122,7 +127,7 @@ describe("feature flags settings page", () => {
     }
   });
 
-  test("REMOVEDUI toggle applies a global desktop override", async () => {
+  test("canvas toggle applies a global desktop override", async () => {
     const setDesktopFeatureFlagOverride = mock(async () => {});
     const harness = setupJsdom();
     try {
@@ -137,7 +142,9 @@ describe("feature flags settings page", () => {
             remoteAccess: true,
             workspacePicker: true,
             workspaceLifecycle: true,
-            REMOVEDUI: false,
+            openAiNativeConnectors: false,
+            canvas: false,
+            tasks: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -147,18 +154,16 @@ describe("feature flags settings page", () => {
         root.render(createElement(FeatureFlagsPage));
       });
 
-      const REMOVEDUISwitch = container.querySelector('[aria-label="Generative UI (REMOVEDUI)"]');
-      if (!(REMOVEDUISwitch instanceof harness.dom.window.HTMLElement)) {
-        throw new Error("missing REMOVEDUI feature switch");
+      const canvasSwitch = container.querySelector('[aria-label="Canvas"]');
+      if (!(canvasSwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing canvas feature switch");
       }
 
       await act(async () => {
-        REMOVEDUISwitch.dispatchEvent(
-          new harness.dom.window.MouseEvent("click", { bubbles: true }),
-        );
+        canvasSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("REMOVEDUI", true);
+      expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("canvas", true);
 
       await act(async () => {
         root.unmount();
@@ -186,7 +191,9 @@ describe("feature flags settings page", () => {
             remoteAccess: true,
             workspacePicker: true,
             workspaceLifecycle: true,
-            REMOVEDUI: false,
+            openAiNativeConnectors: false,
+            canvas: false,
+            tasks: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -197,23 +204,21 @@ describe("feature flags settings page", () => {
       });
 
       const menuBarSwitch = container.querySelector('[aria-label="Menu bar / tray"]');
-      const REMOVEDUISwitch = container.querySelector('[aria-label="Generative UI (REMOVEDUI)"]');
+      const canvasSwitch = container.querySelector('[aria-label="Canvas"]');
       if (
         !(menuBarSwitch instanceof harness.dom.window.HTMLElement) ||
-        !(REMOVEDUISwitch instanceof harness.dom.window.HTMLElement)
+        !(canvasSwitch instanceof harness.dom.window.HTMLElement)
       ) {
         throw new Error("missing feature switches");
       }
 
       await act(async () => {
         menuBarSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-        REMOVEDUISwitch.dispatchEvent(
-          new harness.dom.window.MouseEvent("click", { bubbles: true }),
-        );
+        canvasSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
       expect(menuBarSwitch.hasAttribute("disabled")).toBe(true);
-      expect(REMOVEDUISwitch.hasAttribute("disabled")).toBe(true);
+      expect(canvasSwitch.hasAttribute("disabled")).toBe(true);
       expect(setDesktopFeatureFlagOverride).toHaveBeenCalledTimes(1);
       expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("menuBar", false);
 

@@ -6,29 +6,26 @@ describe("resolveFeatureFlags", () => {
   test("applies persisted overrides in unpackaged (dev) builds", () => {
     const flags = resolveFeatureFlags({
       isPackaged: false,
-      env: { COWORK_EXPERIMENTAL_REMOVEDUI: "1" },
       overrides: {
         remoteAccess: true,
         workspacePicker: false,
         workspaceLifecycle: false,
-        REMOVEDUI: true,
+        tasks: true,
       },
     });
     expect(flags.remoteAccess).toBe(true);
     expect(flags.workspacePicker).toBe(false);
     expect(flags.workspaceLifecycle).toBe(false);
-    expect(flags.REMOVEDUI).toBe(true);
+    expect(flags.tasks).toBe(true);
   });
 
   test("ignores persisted overrides in packaged (production) builds, using build-time defaults", () => {
     const flags = resolveFeatureFlags({
       isPackaged: true,
-      env: { COWORK_EXPERIMENTAL_REMOVEDUI: "1" },
       overrides: {
         remoteAccess: true,
         workspacePicker: false,
         workspaceLifecycle: false,
-        REMOVEDUI: true,
         tasks: true,
       },
     });
@@ -37,7 +34,6 @@ describe("resolveFeatureFlags", () => {
     expect(flags.remoteAccess).toBe(false);
     expect(flags.workspacePicker).toBe(true);
     expect(flags.workspaceLifecycle).toBe(true);
-    expect(flags.REMOVEDUI).toBe(false);
     expect(flags.tasks).toBe(false);
   });
 
@@ -63,12 +59,12 @@ describe("resolveFeatureFlags", () => {
     expect(flags.remoteAccess).toBe(false);
   });
 
-  test("REMOVEDUI overrides are ignored outside the experiment", () => {
+  test("unknown legacy overrides are ignored", () => {
     const flags = resolveFeatureFlags({
       isPackaged: false,
-      overrides: { REMOVEDUI: true },
+      overrides: { REMOVEDUI: true } as any,
     });
-    expect(flags.REMOVEDUI).toBe(false);
+    expect((flags as Record<string, unknown>).REMOVEDUI).toBeUndefined();
   });
 
   test("packaged forced-off still wins over env for remote access", () => {

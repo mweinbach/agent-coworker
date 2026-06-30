@@ -11,13 +11,11 @@ import {
   formatSessionUsageHeadline,
   getComposerSubmitState,
   loadOverflowCitationContext,
-  parseREMOVEDUIActionMessage,
   reasoningLabelForMode,
   reasoningPreviewText,
   resolveComposerBusyPolicy,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
-  summarizeREMOVEDUIActionMessage,
 } from "../src/ui/ChatView";
 
 describe("desktop reasoning UI helpers", () => {
@@ -56,31 +54,6 @@ describe("desktop reasoning UI helpers", () => {
       { id: "b", kind: "message", role: "assistant", ts: "2024-01-01T00:00:01.000Z", text: "hi" },
     ]);
     expect(filterFeedForDeveloperMode(feed, true)).toEqual(feed);
-  });
-
-  test("parses structured REMOVEDUI action messages", () => {
-    const parsed = parseREMOVEDUIActionMessage(
-      [
-        '[REMOVEDUI.action] The user interacted with surface "demo-surface".',
-        "component: launch",
-        "event: click",
-        'payload: {"value":true}',
-        "",
-        "Respond with another REMOVEDUI tool call to update the surface (or reply in plain text).",
-      ].join("\n"),
-    );
-
-    expect(parsed).toEqual({
-      surfaceId: "demo-surface",
-      componentId: "launch",
-      eventType: "click",
-      payload: { value: true },
-    });
-    expect(summarizeREMOVEDUIActionMessage(parsed!)).toBe("Clicked launch -> true");
-  });
-
-  test("ignores ordinary user messages when parsing REMOVEDUI actions", () => {
-    expect(parseREMOVEDUIActionMessage("hello world")).toBeNull();
   });
 
   test("formats session usage headline for normal mode without token counts", () => {

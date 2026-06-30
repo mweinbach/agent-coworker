@@ -86,12 +86,12 @@ mock.module("../src/lib/desktopCommands", () =>
         typeof featureOverrides?.workspaceLifecycle === "boolean"
           ? featureOverrides.workspaceLifecycle
           : true,
-      REMOVEDUI:
-        typeof featureOverrides?.REMOVEDUI === "boolean" ? featureOverrides.REMOVEDUI : false,
       openAiNativeConnectors:
         typeof featureOverrides?.openAiNativeConnectors === "boolean"
           ? featureOverrides.openAiNativeConnectors
           : false,
+      canvas: typeof featureOverrides?.canvas === "boolean" ? featureOverrides.canvas : false,
+      tasks: typeof featureOverrides?.tasks === "boolean" ? featureOverrides.tasks : false,
     }),
     isPackagedDesktopApp: () => packagedApp,
     onSystemAppearanceChanged: () => () => {},
@@ -169,8 +169,9 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
       notifications: [],
       workspaces: [],
@@ -244,8 +245,9 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: true,
+        canvas: false,
+        tasks: false,
       },
     });
     useAppStore.getState().setSettingsPage("openAiNativeConnectors");
@@ -305,8 +307,9 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
     });
     useAppStore.getState().openSettings("remoteAccess");
@@ -321,8 +324,9 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
     });
     useAppStore.getState().openSettings("openAiNativeConnectors");
@@ -361,8 +365,9 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
       desktopFeatureFlagOverrides: {},
     });
@@ -387,8 +392,9 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
       desktopFeatureFlagOverrides: {},
     });
@@ -423,16 +429,19 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
       desktopFeatureFlagOverrides: {},
     });
 
-    await useAppStore.getState().setDesktopFeatureFlagOverride("REMOVEDUI", true);
+    await useAppStore.getState().setDesktopFeatureFlagOverride("openAiNativeConnectors", true);
 
-    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ REMOVEDUI: true });
-    expect(useAppStore.getState().desktopFeatureFlags.REMOVEDUI).toBe(true);
+    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({
+      openAiNativeConnectors: true,
+    });
+    expect(useAppStore.getState().desktopFeatureFlags.openAiNativeConnectors).toBe(true);
     expect(savedStates.length).toBeGreaterThan(0);
   });
 
@@ -443,8 +452,9 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
       desktopFeatureFlagOverrides: {},
     });
@@ -469,8 +479,9 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
       desktopFeatureFlagOverrides: { remoteAccess: false },
     });
@@ -494,8 +505,9 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        REMOVEDUI: false,
         openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
       },
       desktopFeatureFlagOverrides: { remoteAccess: false },
     });

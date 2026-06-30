@@ -220,9 +220,9 @@ describe("buildCloudSyncSettingsSnapshot()", () => {
       },
     });
     const keys = Object.keys(snapshot.desktopFeatureFlagOverrides);
-    expect(keys).toContain("REMOVEDUI");
     expect(keys).toContain("workspaceLifecycle");
     expect(keys).toContain("canvas");
+    expect(keys).not.toContain("REMOVEDUI");
     expect(keys).not.toContain("notARealFlag");
     // All returned keys must be in FEATURE_FLAG_IDS
     for (const key of keys) {
@@ -240,7 +240,7 @@ describe("buildCloudSyncSettingsSnapshot()", () => {
     });
     const overrides = snapshot.desktopFeatureFlagOverrides;
     expect(overrides.workspaceLifecycle).toBe(true);
-    expect(overrides.REMOVEDUI).toBeUndefined();
+    expect((overrides as Record<string, unknown>).REMOVEDUI).toBeUndefined();
     expect(overrides.canvas).toBeUndefined();
   });
 

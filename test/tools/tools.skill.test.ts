@@ -223,66 +223,6 @@ describe("skill tool", () => {
     expect(logs).toContain('tool< skill {"ok":false,"reason":"profile_blocked"}');
   });
 
-  test("hides the REMOVEDUI skill when the workspace REMOVEDUI feature flag is disabled", async () => {
-    const dir = await tmpDir();
-    const skillDir = path.join(dir, "skills", "REMOVEDUI");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      skillDoc(
-        "REMOVEDUI",
-        "REMOVEDUI helper skill.",
-        "# REMOVEDUI Skill\nDo not load when disabled.",
-      ),
-      "utf-8",
-    );
-
-    const config = makeConfig(dir, {
-      skillsDirs: [path.join(dir, "skills")],
-      enableREMOVEDUI: true,
-      featureFlags: {
-        workspace: {
-          REMOVEDUI: false,
-        },
-      },
-    });
-    const ctx = makeCtx(dir);
-    ctx.config = config;
-
-    const t: any = createSkillTool(ctx);
-    const res: string = await t.execute({ skillName: "REMOVEDUI" });
-    expect(res).toContain("not found");
-  });
-
-  test("loads the REMOVEDUI skill when the workspace REMOVEDUI feature flag is enabled", async () => {
-    await withEnv("COWORK_EXPERIMENTAL_REMOVEDUI", "1", async () => {
-      const dir = await tmpDir();
-      const skillDir = path.join(dir, "skills", "REMOVEDUI");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        skillDoc("REMOVEDUI", "REMOVEDUI helper skill.", "# REMOVEDUI Skill\nProtocol guidance."),
-        "utf-8",
-      );
-
-      const config = makeConfig(dir, {
-        skillsDirs: [path.join(dir, "skills")],
-        enableREMOVEDUI: false,
-        featureFlags: {
-          workspace: {
-            REMOVEDUI: true,
-          },
-        },
-      });
-      const ctx = makeCtx(dir);
-      ctx.config = config;
-
-      const t: any = createSkillTool(ctx);
-      const res: string = await t.execute({ skillName: "REMOVEDUI" });
-      expect(res).toContain("Protocol guidance.");
-    });
-  });
-
   test("appends deck-workspace hygiene guidance to presentations skill loads", async () => {
     const dir = await tmpDir();
     const skillDir = path.join(dir, "skills", "presentations");

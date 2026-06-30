@@ -47,6 +47,8 @@ export class InteractionManager {
       waitForPromptResponse?: <T>(requestId: string, bucket: PromptBucket<T>) => Promise<T>;
       /** Override the abandoned-prompt timeout (ms). <= 0 disables it. */
       promptTimeoutMs?: number;
+      /** Defaults true so abandoned UI prompts do not keep headless processes alive. */
+      unrefPromptTimeouts?: boolean;
     },
   ) {}
 
@@ -59,7 +61,9 @@ export class InteractionManager {
     const ms = this.opts.promptTimeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
     if (!Number.isFinite(ms) || ms <= 0) return null;
     const handle = setTimeout(onTimeout, ms);
-    (handle as { unref?: () => void }).unref?.();
+    if (this.opts.unrefPromptTimeouts !== false) {
+      (handle as { unref?: () => void }).unref?.();
+    }
     return { clear: () => clearTimeout(handle) };
   }
 

@@ -14,6 +14,12 @@ export type TelemetrySettings = {
   metadata?: Record<string, AttributeValue>;
 };
 
+type EnsureObservabilityRuntimeResult = {
+  ready: boolean;
+  health: ObservabilityHealth;
+  healthChanged: boolean;
+};
+
 const DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com";
 const WARN_ONCE_KEYS = new Set<string>();
 const MAX_METADATA_STRING_LENGTH = 2048;
@@ -207,7 +213,7 @@ export function getObservabilityHealth(config: AgentConfig): ObservabilityHealth
 
 export async function ensureObservabilityRuntime(
   config: AgentConfig,
-): Promise<{ ready: boolean; health: ObservabilityHealth; healthChanged: boolean }> {
+): Promise<EnsureObservabilityRuntimeResult> {
   const resolved = resolveRuntime(config);
 
   if (resolved.kind !== "ready") {
@@ -285,6 +291,8 @@ export async function ensureObservabilityRuntime(
   };
 }
 
+let ensureObservabilityRuntimeForTelemetry = ensureObservabilityRuntime;
+
 export function noteObservabilityFailure(
   reason: string,
   message: string,
@@ -361,7 +369,7 @@ export async function buildRuntimeTelemetrySettings(
   config: AgentConfig,
   context: TelemetryContext,
 ): Promise<TelemetrySettings | undefined> {
-  const runtime = await ensureObservabilityRuntime(config);
+  const runtime = await ensureObservabilityRuntimeForTelemetry(config);
   if (!runtime.ready) return undefined;
 
   return {
@@ -380,6 +388,7 @@ export async function buildRuntimeTelemetrySettings(
 export const __internal = {
   async resetForTests() {
     WARN_ONCE_KEYS.clear();
+    ensureObservabilityRuntimeForTelemetry = ensureObservabilityRuntime;
     await shutdownRuntime();
     state.health = {
       status: "disabled",
@@ -395,6 +404,11 @@ export const __internal = {
       hasSpanProcessor: !!state.spanProcessor,
       initializing: !!state.initPromise,
     };
+  },
+  setEnsureObservabilityRuntimeForTests(
+    ensureRuntime: (config: AgentConfig) => Promise<EnsureObservabilityRuntimeResult>,
+  ) {
+    ensureObservabilityRuntimeForTelemetry = ensureRuntime;
   },
   resolveRuntime,
 } as const;

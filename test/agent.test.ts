@@ -1093,6 +1093,16 @@ describe("runTurn", () => {
       },
     });
 
+    observabilityRuntimeInternal.setEnsureObservabilityRuntimeForTests(async () => ({
+      ready: true,
+      health: {
+        status: "ready",
+        reason: "runtime_ready",
+        updatedAt: new Date(0).toISOString(),
+      },
+      healthChanged: false,
+    }));
+
     await runTurn(
       makeParams({
         config,

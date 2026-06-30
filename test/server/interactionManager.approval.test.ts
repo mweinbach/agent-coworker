@@ -103,6 +103,7 @@ describe("InteractionManager prompt timeout", () => {
       getConfig: () => ({}) as unknown as AgentConfig,
       isYolo: () => false,
       promptTimeoutMs,
+      unrefPromptTimeouts: false,
     });
     return { manager, events, persistReasons };
   }

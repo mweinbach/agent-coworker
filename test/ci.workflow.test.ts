@@ -2,12 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
+const rootPackagePath = new URL("../package.json", import.meta.url);
 const setupBunActionPath = new URL("../.github/actions/setup-bun/action.yml", import.meta.url);
 const stableTestRunnerPath = new URL(
   "../packages/harness/src/run_tests_stable.ts",
   import.meta.url,
 );
 const workflow = readFileSync(workflowPath, "utf8");
+const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as {
+  scripts?: Record<string, string>;
+};
 const setupBunAction = readFileSync(setupBunActionPath, "utf8");
 const stableTestRunner = readFileSync(stableTestRunnerPath, "utf8");
 
@@ -34,6 +38,10 @@ describe("main CI workflow", () => {
   });
 
   test("keeps the core reliability guardrails", () => {
+    expect(rootPackage.scripts?.test).toBe("bun packages/harness/src/run_tests_stable.ts");
+    expect(rootPackage.scripts?.["test:stable"]).toBe(
+      "bun packages/harness/src/run_tests_stable.ts",
+    );
     expect(workflow).toContain("- name: Docs consistency check");
     expect(workflow).toContain("run: bun run docs:check");
     expect(workflow).toContain("- name: Typecheck");

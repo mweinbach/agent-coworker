@@ -25,6 +25,7 @@ type SessionDbWriteCoordinatorOptions = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   processAlive?: (pid: number) => boolean;
+  mkdirLockDir?: (dirPath: string) => Promise<void>;
   emitTelemetry?: (
     name: string,
     status: "ok" | "error",
@@ -89,6 +90,7 @@ export class SessionDbWriteCoordinator {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly processAlive: (pid: number) => boolean;
+  private readonly mkdirLockDir: (dirPath: string) => Promise<void>;
   private readonly emitTelemetry?: SessionDbWriteCoordinatorOptions["emitTelemetry"];
 
   constructor(opts: SessionDbWriteCoordinatorOptions) {
@@ -106,6 +108,11 @@ export class SessionDbWriteCoordinator {
         await new Promise((resolve) => setTimeout(resolve, ms));
       });
     this.processAlive = opts.processAlive ?? defaultProcessAlive;
+    this.mkdirLockDir =
+      opts.mkdirLockDir ??
+      (async (dirPath) => {
+        await fs.mkdir(dirPath, { mode: 0o700 });
+      });
     this.emitTelemetry = opts.emitTelemetry;
   }
 
@@ -165,7 +172,7 @@ export class SessionDbWriteCoordinator {
     while (true) {
       const owner = this.makeOwnerMetadata();
       try {
-        await fs.mkdir(this.lockDir, { mode: 0o700 });
+        await this.mkdirLockDir(this.lockDir);
         await fs.writeFile(this.ownerFilePath, `${JSON.stringify(owner, null, 2)}\n`, {
           encoding: "utf-8",
           mode: 0o600,
@@ -205,7 +212,10 @@ export class SessionDbWriteCoordinator {
           typeof error === "object" && error !== null && "code" in error
             ? String((error as { code?: unknown }).code)
             : "";
-        if (code !== "EEXIST") {
+        // Windows can report transient permission errors while a lock directory is
+        // being created or removed by a competing writer; retry like contention.
+        const isTransientAcquireError = code === "EPERM" || code === "EACCES";
+        if (code !== "EEXIST" && !isTransientAcquireError) {
           this.emitTelemetry?.(
             "session.db.write_lock_wait",
             "error",
@@ -219,7 +229,7 @@ export class SessionDbWriteCoordinator {
           throw error;
         }
 
-        if (await this.cleanupStaleLock()) {
+        if (code === "EEXIST" && (await this.cleanupStaleLock())) {
           staleRecoveries += 1;
           continue;
         }

@@ -227,6 +227,38 @@ describe("SessionDbWriteCoordinator", () => {
     );
   });
 
+  test("retries transient permission errors while creating the lock directory", async () => {
+    const paths = await makeTmpCoworkHome();
+    let nowMs = 0;
+    let attempts = 0;
+    let sleepCalls = 0;
+    const coordinator = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      acquireTimeoutMs: 50,
+      retryDelayMs: 5,
+      now: () => nowMs,
+      sleep: async (ms) => {
+        sleepCalls += 1;
+        nowMs += ms;
+      },
+      mkdirLockDir: async (dirPath) => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("transient permission error") as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        }
+        await fs.mkdir(dirPath, { mode: 0o700 });
+      },
+    });
+
+    const result = await coordinator.runExclusive("transient_permission", async () => "ok");
+
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+    expect(sleepCalls).toBe(1);
+  });
+
   test("release tolerates crash-like lock removal while the writer is active", async () => {
     const paths = await makeTmpCoworkHome();
     const coordinator = new SessionDbWriteCoordinator({ rootDir: paths.rootDir });

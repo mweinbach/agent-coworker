@@ -333,13 +333,6 @@ export type AppStoreState = {
   ) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
-  dispatchA2uiAction: (opts: {
-    threadId: string;
-    surfaceId: string;
-    componentId: string;
-    eventType: string;
-    payload?: Record<string, unknown>;
-  }) => Promise<boolean>;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setThreadReasoningEffort: (
     threadId: string,
@@ -693,11 +686,6 @@ export type AppStoreState = {
     expectedFileVersion?: SpreadsheetFileVersion,
   ) => Promise<SpreadsheetBatchPatchResult>;
   loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
-
-  setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;
-  focusA2uiSurface: (threadId: string, surfaceId: string | null) => void;
-  setA2uiActiveRevision: (threadId: string, surfaceId: string, revision: number) => void;
-  markA2uiSurfaceSeen: (threadId: string, surfaceId: string, revision: number) => void;
 };
 
 type AppStoreActionKeys = {

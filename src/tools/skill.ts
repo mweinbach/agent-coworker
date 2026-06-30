@@ -1,16 +1,14 @@
 import { z } from "zod";
 
-import { resolveExperimentalA2uiConfig } from "../experimental/a2ui/flags";
 import { loadSkillBodyByName } from "../skills/loadSkillBody";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
 export function createSkillTool(ctx: ToolContext) {
-  const a2uiEnabled = resolveExperimentalA2uiConfig(ctx.config);
   const allowedSkillNames = ctx.agentProfile ? new Set(ctx.agentProfile.skillNames) : null;
-  const skills = (ctx.availableSkills ?? [])
-    .filter((skill) => !allowedSkillNames || allowedSkillNames.has(skill.name))
-    .filter((skill) => a2uiEnabled || skill.name !== "a2ui");
+  const skills = (ctx.availableSkills ?? []).filter(
+    (skill) => !allowedSkillNames || allowedSkillNames.has(skill.name),
+  );
   const searchOrder = [
     "project",
     "global (~/.cowork/skills)",
@@ -45,10 +43,6 @@ export function createSkillTool(ctx: ToolContext) {
       if (allowedSkillNames && !allowedSkillNames.has(skillName)) {
         ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "profile_blocked" })}`);
         return `Skill "${skillName}" is not available to this subagent profile.`;
-      }
-      if (!a2uiEnabled && skillName === "a2ui") {
-        ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "feature_disabled" })}`);
-        return `Skill "${skillName}" not found.`;
       }
 
       const loaded = await loadSkillBodyByName(ctx.config, skillName);

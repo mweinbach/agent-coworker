@@ -3013,52 +3013,7 @@ When non-null, `context` contains all [HarnessContextPayload](#harnesscontextpay
 
 ---
 
-### a2ui_surface (experimental)
 
-Resolved generative-UI surface state emitted when the agent calls the `a2ui` tool. Published after every envelope application and carries the post-reduction snapshot (not the raw envelope).
-
-This event is not part of the default protocol surface. It is available only when the server is started with `COWORK_EXPERIMENTAL_A2UI=1` and the effective session config enables A2UI.
-
-```json
-{
-  "type": "a2ui_surface",
-  "sessionId": "...",
-  "surfaceId": "greeter",
-  "catalogId": "https://a2ui.org/specification/v0_9/basic_catalog.json",
-  "version": "v0.9",
-  "revision": 3,
-  "deleted": false,
-  "theme": { "primaryColor": "#0f766e" },
-  "root": {
-    "id": "root",
-    "type": "Column",
-    "children": [
-      { "id": "title", "type": "Heading", "props": { "text": "Hello" } },
-      { "id": "body",  "type": "Text",    "props": { "text": { "path": "/message" } } }
-    ]
-  },
-  "dataModel": { "message": "Welcome to A2UI." },
-  "updatedAt": "2026-03-01T12:00:00.000Z"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"a2ui_surface"` | — |
-| `sessionId` | `string` | Session identifier |
-| `surfaceId` | `string` | Unique id inside the session. Subsequent events for the same id replace the previous state. |
-| `catalogId` | `string` | URL identifying the A2UI component catalog the agent wrote against. Clients that only render the v0.9 basic catalog should show a fallback when the id does not match. |
-| `version` | `"v0.9"` | A2UI protocol version. |
-| `revision` | `integer` | Monotonically increases every time the harness folds a new envelope. |
-| `deleted` | `boolean` | `true` after `deleteSurface`. Clients should unmount the surface. |
-| `theme` | `Record<string, unknown> \| undefined` | Opaque theme blob from `createSurface.theme`. |
-| `root` | `Record<string, unknown> \| undefined` | Current root component tree. |
-| `dataModel` | `unknown \| undefined` | Current JSON data model the component tree reads via `{ path, ... }` bindings. |
-| `updatedAt` | `string` | ISO 8601 of the last fold. |
-
-On the JSON-RPC transport, the experimental module projects the event into the standard `item/started` + `item/completed` notifications as a `uiSurface` ProjectedItem. Thin clients can ignore that item type unless they opt into A2UI rendering.
-
-See [`src/experimental/a2ui`](../src/experimental/a2ui) for the envelope schema, reducer, and binding evaluator, and [`skills/a2ui/SKILL.md`](../skills/a2ui/SKILL.md) for the agent-facing guide.
 
 ---
 

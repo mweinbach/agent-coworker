@@ -40,66 +40,6 @@ export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: bool
     : feed.filter((item) => item.kind !== "system" && item.kind !== "log");
 }
 
-export type A2uiActionMessage = {
-  surfaceId: string;
-  componentId: string;
-  eventType: string;
-  payload?: Record<string, unknown>;
-};
-
-export function parseA2uiActionMessage(text: string): A2uiActionMessage | null {
-  const lines = text.trim().split("\n");
-  if (lines.length < 4) return null;
-  const header = lines[0]?.match(/^\[a2ui\.action\] The user interacted with surface "(.+)"\.$/);
-  if (!header) return null;
-  if (!lines[1]?.startsWith("component: ") || !lines[2]?.startsWith("event: ")) {
-    return null;
-  }
-
-  let payload: Record<string, unknown> | undefined;
-  if (lines[3]?.startsWith("payload: ")) {
-    try {
-      const parsed = JSON.parse(lines[3].slice("payload: ".length));
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        payload = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Best effort only.
-    }
-  }
-
-  const surfaceId = header[1];
-  if (!surfaceId) {
-    return null;
-  }
-
-  return {
-    surfaceId,
-    componentId: lines[1].slice("component: ".length).trim(),
-    eventType: lines[2].slice("event: ".length).trim(),
-    ...(payload ? { payload } : {}),
-  };
-}
-
-export function summarizeA2uiActionMessage(action: A2uiActionMessage): string {
-  const prefix =
-    action.eventType === "click"
-      ? "Clicked"
-      : action.eventType === "submit"
-        ? "Submitted"
-        : action.eventType === "change"
-          ? "Changed"
-          : `Triggered ${action.eventType} on`;
-  const payloadValue = action.payload?.value;
-  const valueSuffix =
-    typeof payloadValue === "string" ||
-    typeof payloadValue === "number" ||
-    typeof payloadValue === "boolean"
-      ? ` -> ${String(payloadValue)}`
-      : "";
-  return `${prefix} ${action.componentId}${valueSuffix}`;
-}
-
 export function formatSessionUsageHeadline(
   sessionUsage: SessionUsageSnapshot | null,
   lastTurnUsage: TurnUsageSnapshot | null,

@@ -28,7 +28,6 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<SessionEvent["type"]>([
   "budget_warning",
   "budget_exceeded",
   "config_updated",
-  "a2ui_surface",
 ]);
 
 export function contentText(value: unknown): string {

@@ -3,7 +3,7 @@ import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
   ASK_SKIP_TOKEN,
-  createExperimentalA2uiSurfaceManager,
+  createExperimentalREMOVEDRemovedSurfaceManager,
   createRuntime,
   defaultSupportedModel,
   flushAsyncWork,

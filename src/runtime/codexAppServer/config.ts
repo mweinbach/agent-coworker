@@ -143,7 +143,7 @@ export function codexDeveloperInstructions(
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
       "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
       "Use Codex-native tools for local files, commands, and web access.",
-      "Use Cowork dynamic tools for tasks, subagents, memory, skills, todos, and A2UI.",
+      "Use Cowork dynamic tools for tasks, subagents, memory, skills, and todos.",
       "For user clarification, call Cowork's dynamic `AskUserQuestion` tool directly. Never call the native `request_user_input` tool, which is unavailable on Cowork's Default-mode turns.",
       "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
     ].join("\n"),

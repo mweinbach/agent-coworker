@@ -83,7 +83,7 @@ const initialState: AppStoreDataState = {
     remoteAccess: false,
     workspacePicker: true,
     workspaceLifecycle: true,
-    a2ui: false,
+
     openAiNativeConnectors: false,
     canvas: false,
     tasks: false,

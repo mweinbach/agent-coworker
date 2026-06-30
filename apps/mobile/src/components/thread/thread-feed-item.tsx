@@ -3,17 +3,15 @@ import { Text, View } from "react-native";
 import type { SessionFeedItem } from "@/features/cowork/protocolTypes";
 import { alpha, radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
-import { A2uiSurfaceCard } from "./a2ui-surface-card";
 import { MarkdownText } from "./markdown-text";
 import { TodoCard } from "./todo-card";
 
 type ThreadFeedItemProps = {
   item: SessionFeedItem;
-  a2uiEnabled: boolean;
   showDebugMessages: boolean;
 };
 
-export function ThreadFeedItem({ item, a2uiEnabled, showDebugMessages }: ThreadFeedItemProps) {
+export function ThreadFeedItem({ item, showDebugMessages }: ThreadFeedItemProps) {
   const theme = useAppTheme();
 
   if (item.kind === "message") {
@@ -62,13 +60,6 @@ export function ThreadFeedItem({ item, a2uiEnabled, showDebugMessages }: ThreadF
 
   if (item.kind === "todos") {
     return <TodoCard todos={item.todos} />;
-  }
-
-  if (item.kind === "ui_surface") {
-    if (!a2uiEnabled) {
-      return null;
-    }
-    return <A2uiSurfaceCard item={item} />;
   }
 
   if ((item.kind === "system" || item.kind === "log") && !showDebugMessages) {

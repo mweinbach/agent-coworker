@@ -29,7 +29,6 @@ import {
 } from "../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
-import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
 import { buildChatRenderItems } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
@@ -41,7 +40,6 @@ import {
   countActiveChildAgents,
   filterFeedForDeveloperMode,
   getComposerSubmitState,
-  parseA2uiActionMessage,
   resolveComposerBusyPolicy,
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
@@ -76,13 +74,11 @@ export {
   formatSessionBudgetLine,
   formatSessionUsageHeadline,
   getComposerSubmitState,
-  parseA2uiActionMessage,
   reasoningLabelForMode,
   reasoningPreviewText,
   resolveComposerBusyPolicy,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
-  summarizeA2uiActionMessage,
 } from "./chat/chatLogic";
 export { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 
@@ -196,7 +192,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }, [allThreads, sandboxApprovals, selectedThreadId]);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
-  const desktopA2uiEnabled = useAppStore((s) => s.desktopFeatureFlags.a2ui);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
   const composerOverlayMinHeight = COMPOSER_OVERLAY_MIN_HEIGHT_PX;
   const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<
@@ -347,36 +342,11 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => normalizeFeedForToolCards(feed, developerMode),
     [developerMode, feed],
   );
-  const a2uiEnabled = useMemo(() => {
-    if (typeof rt?.sessionConfig?.enableA2ui === "boolean") {
-      return rt.sessionConfig.enableA2ui;
-    }
-    if (typeof rt?.sessionConfig?.featureFlags?.workspace?.a2ui === "boolean") {
-      return rt.sessionConfig.featureFlags.workspace.a2ui;
-    }
-    return desktopA2uiEnabled === true;
-  }, [
-    desktopA2uiEnabled,
-    rt?.sessionConfig?.enableA2ui,
-    rt?.sessionConfig?.featureFlags?.workspace?.a2ui,
-  ]);
   const visibleFeed = useMemo(() => {
-    const baseVisibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode).filter(
+    return filterFeedForDeveloperMode(normalizedFeed, developerMode).filter(
       (item) => !isHiddenRetryTurnMessage(item),
     );
-    if (a2uiEnabled) {
-      return baseVisibleFeed;
-    }
-    return baseVisibleFeed.filter((item) => {
-      if (item.kind === "ui_surface") {
-        return false;
-      }
-      if (item.kind === "message" && item.role === "user" && parseA2uiActionMessage(item.text)) {
-        return false;
-      }
-      return true;
-    });
-  }, [a2uiEnabled, developerMode, normalizedFeed]);
+  }, [developerMode, normalizedFeed]);
   const inlineCitationUrlsByMessageId = useMemo(
     () => buildCitationUrlsByMessageId(visibleFeed),
     [visibleFeed],
@@ -418,20 +388,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     }
     return null;
   }, [renderItems, rt?.busy]);
-  const latestUiSurfaceItemId = useMemo(() => {
-    for (let i = renderItems.length - 1; i >= 0; i--) {
-      const entry = renderItems[i];
-      if (
-        entry &&
-        entry.kind === "feed-item" &&
-        entry.item.kind === "ui_surface" &&
-        !entry.item.deleted
-      ) {
-        return entry.item.id;
-      }
-    }
-    return null;
-  }, [renderItems]);
   const activeChildAgentCount = useMemo(
     () => countActiveChildAgents(rt?.agents ?? []),
     [rt?.agents],
@@ -780,8 +736,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           citationUrlsByMessageId={citationUrlsByMessageId}
           citationSourcesByMessageId={citationSourcesByMessageId}
           desktopBasePath={workspace?.path ?? null}
-          latestUiSurfaceItemId={latestUiSurfaceItemId}
-          a2uiEnabled={a2uiEnabled}
           composerOverlayHeight={composerOverlayHeight}
           sandboxApprovals={sandboxApprovals}
           onAnswerApproval={answerApproval}
@@ -793,12 +747,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             busy || inputDisabled || hydrating || transcriptOnly || pendingTurnStart !== null
           }
         />
-
-        {selectedThreadId && a2uiEnabled ? (
-          <div className="shrink-0 bg-panel px-4">
-            <A2uiSurfaceDock threadId={selectedThreadId} />
-          </div>
-        ) : null}
 
         {readOnlyNotice ? (
           <div

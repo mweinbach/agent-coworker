@@ -11,13 +11,13 @@ import {
   formatSessionUsageHeadline,
   getComposerSubmitState,
   loadOverflowCitationContext,
-  parseA2uiActionMessage,
+  parseREMOVEDUIActionMessage,
   reasoningLabelForMode,
   reasoningPreviewText,
   resolveComposerBusyPolicy,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
-  summarizeA2uiActionMessage,
+  summarizeREMOVEDUIActionMessage,
 } from "../src/ui/ChatView";
 
 describe("desktop reasoning UI helpers", () => {
@@ -58,15 +58,15 @@ describe("desktop reasoning UI helpers", () => {
     expect(filterFeedForDeveloperMode(feed, true)).toEqual(feed);
   });
 
-  test("parses structured A2UI action messages", () => {
-    const parsed = parseA2uiActionMessage(
+  test("parses structured REMOVEDUI action messages", () => {
+    const parsed = parseREMOVEDUIActionMessage(
       [
-        '[a2ui.action] The user interacted with surface "demo-surface".',
+        '[REMOVEDUI.action] The user interacted with surface "demo-surface".',
         "component: launch",
         "event: click",
         'payload: {"value":true}',
         "",
-        "Respond with another a2ui tool call to update the surface (or reply in plain text).",
+        "Respond with another REMOVEDUI tool call to update the surface (or reply in plain text).",
       ].join("\n"),
     );
 
@@ -76,11 +76,11 @@ describe("desktop reasoning UI helpers", () => {
       eventType: "click",
       payload: { value: true },
     });
-    expect(summarizeA2uiActionMessage(parsed!)).toBe("Clicked launch -> true");
+    expect(summarizeREMOVEDUIActionMessage(parsed!)).toBe("Clicked launch -> true");
   });
 
-  test("ignores ordinary user messages when parsing A2UI actions", () => {
-    expect(parseA2uiActionMessage("hello world")).toBeNull();
+  test("ignores ordinary user messages when parsing REMOVEDUI actions", () => {
+    expect(parseREMOVEDUIActionMessage("hello world")).toBeNull();
   });
 
   test("formats session usage headline for normal mode without token counts", () => {

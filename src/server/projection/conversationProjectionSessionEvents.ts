@@ -202,10 +202,6 @@ export function createSessionEventHandler(
         }
         feedItems.emitErrorItem(event);
         return;
-      case "a2ui_surface":
-        if (state.activeTurnId) reasoning.completeReasoningStateForTurn(state.activeTurnId);
-        feedItems.emitA2uiSurfaceItem(event);
-        return;
       default:
         return;
     }

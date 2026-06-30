@@ -43,7 +43,7 @@ function renderFeedRow(
     },
     createElement(FeedRow, {
       item,
-      a2uiEnabled: false,
+      REMOVEDUIEnabled: false,
       ...props,
     }),
   );

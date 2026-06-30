@@ -98,7 +98,7 @@ describe("referenced plugin resolution", () => {
           skills: [
             { name: "enabled-skill", enabled: true },
             { name: "disabled-skill", enabled: false },
-            { name: "a2ui", enabled: true },
+            { name: "REMOVEDUI", enabled: true },
           ],
         },
       ],

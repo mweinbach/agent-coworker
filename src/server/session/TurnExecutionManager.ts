@@ -36,24 +36,6 @@ export class TurnExecutionManager {
       backupController: SessionBackupController;
       flushPendingExternalSkillRefresh: () => Promise<void>;
       triggerMemoryGeneration?: () => void;
-      /**
-       * Lazily yields the per-session A2UI surface manager. Returns a
-       * structured result per envelope. Present even when the A2UI feature
-       * flag is off; the tool layer gates access via `applyA2uiEnvelope`
-       * on `ToolContext`.
-       */
-      getA2uiSurfaceManager?: () => {
-        applyUnknown: (
-          value: unknown,
-          meta?: { reason?: string; toolCallId?: string },
-        ) => {
-          ok: boolean;
-          surfaceId?: string;
-          change?: "created" | "updated" | "deleted" | "noop";
-          error?: string;
-          warning?: string;
-        };
-      };
       onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
     },
   ) {
@@ -82,7 +64,6 @@ export class TurnExecutionManager {
       classifyTurnError,
       buildUserMessageContent: attachmentHelpers.buildUserMessageContent,
       validateUploadedFileAttachments: attachmentHelpers.validateUploadedFileAttachments,
-      getA2uiSurfaceManager: this.deps.getA2uiSurfaceManager,
       triggerMemoryGeneration: this.deps.triggerMemoryGeneration,
       onAdvancedMemoryChanged: this.deps.onAdvancedMemoryChanged,
       waitForLiveSteerSettlement: async () => await this.waitForLiveSteerSettlement(),

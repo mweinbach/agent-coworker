@@ -5,7 +5,6 @@ import {
   resolveMemoriesDir,
   resolveMemoryFolderName,
 } from "./advancedMemory/store";
-import { resolveExperimentalA2uiConfig } from "./experimental/a2ui/flags";
 import { MemoryStore } from "./memoryStore";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
 import { parseChildModelRef } from "./models/childModelRouting";
@@ -198,30 +197,6 @@ function renderMemorySpecificPrompt(
   }
 
   return `${out}\n\n## Memory Disabled\n\nPersistent memory is disabled for this workspace. Do not read or write AGENT.md and do not call the memory tool.`;
-}
-
-function renderA2uiSpecificPrompt(prompt: string, enabled: boolean): string {
-  if (enabled) {
-    return `${prompt}\n\n## A2UI Enabled\n\nGenerative UI (A2UI) is enabled for this workspace.\n\n- You may call the \`a2ui\` tool when a richer UI surface such as a form, card, table, or progress view would help the user more than plain text.\n- Prefer plain text when a UI surface would add no value.\n- When you need the protocol details, load the \`a2ui\` skill before building a non-trivial surface.`;
-  }
-
-  let out = prompt;
-  const a2uiBlockPatterns = [
-    /\n### a2ui\n[\s\S]*?(?=\n## [^\n]+\n|\n# [^\n]+\n|$)/i,
-    /\n<tool name="a2ui">[\s\S]*?<\/tool>\n?/i,
-    /\n<a2ui>[\s\S]*?<\/a2ui>\n?/i,
-  ];
-
-  for (const pattern of a2uiBlockPatterns) {
-    out = out.replace(pattern, "\n");
-  }
-
-  out = out.replace(/\n{3,}/g, "\n\n").trimEnd();
-  return `${out}\n\n## A2UI Disabled\n\nGenerative UI (A2UI) is disabled for this workspace. Do not call the \`a2ui\` tool and do not load the \`a2ui\` skill.`;
-}
-
-function isA2uiEnabled(config: Pick<AgentConfig, "enableA2ui" | "featureFlags">): boolean {
-  return resolveExperimentalA2uiConfig(config);
 }
 
 function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): string {
@@ -620,10 +595,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 
   const discoveredSkills = await discoverSkillsForConfig(config);
   const agentProfilePromptLines = await readAgentProfilePromptLines(config);
-  const a2uiEnabled = isA2uiEnabled(config);
-  const skills = a2uiEnabled
-    ? discoveredSkills
-    : discoveredSkills.filter((skill) => skill.name !== "a2ui");
+  const skills = discoveredSkills;
 
   // Build dynamic skill-related template variables from discovered skills.
   let skillNames = "";
@@ -671,7 +643,6 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     enabled: config.enableMemory ?? true,
     advanced: config.advancedMemory ?? false,
   });
-  prompt = renderA2uiSpecificPrompt(prompt, a2uiEnabled);
   prompt = renderLocalWebToolProviderPrompt(prompt, config);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderGoogleNativeToolsPrompt(prompt, config);

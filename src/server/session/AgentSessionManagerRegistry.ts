@@ -7,12 +7,7 @@ import { ProviderAuthManager } from "./ProviderAuthManager";
 import { ProviderCatalogManager } from "./ProviderCatalogManager";
 import { SessionAdminManager } from "./SessionAdminManager";
 import type { SessionBackupController } from "./SessionBackupController";
-import type {
-  ExperimentalA2uiManager,
-  SessionContext,
-  SessionDependencies,
-  SessionRuntimeState,
-} from "./SessionContext";
+import type { SessionContext, SessionDependencies, SessionRuntimeState } from "./SessionContext";
 import type { SessionMetadataManager } from "./SessionMetadataManager";
 import type { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SkillManager } from "./SkillManager";
@@ -59,15 +54,10 @@ export class AgentSessionManagerRegistry {
   private providerAuthManager: ProviderAuthManager | null = null;
   private providerCatalogManager: ProviderCatalogManager | null = null;
   private turnExecutionManager: TurnExecutionManager | null = null;
-  private a2uiSurfaceManager: ExperimentalA2uiManager | null = null;
   private skillManager: SkillManager | null = null;
   private adminManager: SessionAdminManager | null = null;
 
   constructor(private readonly host: AgentSessionManagerHost) {}
-
-  resetLoadedA2uiSurfaceManager(): void {
-    this.a2uiSurfaceManager?.reset();
-  }
 
   disposeManagers(): void {
     this.mcpManager?.close();
@@ -75,7 +65,6 @@ export class AgentSessionManagerRegistry {
     this.providerAuthManager = null;
     this.providerCatalogManager = null;
     this.turnExecutionManager = null;
-    this.a2uiSurfaceManager = null;
     this.skillManager = null;
     this.adminManager = null;
   }
@@ -108,32 +97,9 @@ export class AgentSessionManagerRegistry {
           await this.host.flushPendingExternalSkillRefresh(),
         triggerMemoryGeneration: () => this.host.triggerMemoryGeneration(),
         onAdvancedMemoryChanged: async (folder) => await this.host.onAdvancedMemoryChanged(folder),
-        ...(this.host.deps.createA2uiSurfaceManagerImpl
-          ? { getA2uiSurfaceManager: () => this.getA2uiSurfaceManager() }
-          : {}),
       });
     }
     return this.turnExecutionManager;
-  }
-
-  getA2uiSurfaceManager(): ExperimentalA2uiManager {
-    const createManager = this.host.deps.createA2uiSurfaceManagerImpl;
-    if (!createManager) {
-      throw new Error("A2UI is not enabled for this session.");
-    }
-    if (!this.a2uiSurfaceManager) {
-      this.a2uiSurfaceManager = createManager({
-        sessionId: this.host.id,
-        emit: (evt) => this.host.context.emit(evt),
-        log: (line) => this.host.context.emit({ type: "log", sessionId: this.host.id, line }),
-      });
-      this.a2uiSurfaceManager.hydrate(
-        this.host.deps.deriveA2uiSurfacesFromSnapshotImpl?.(
-          this.host.sessionSnapshotProjector.getSnapshot(),
-        ),
-      );
-    }
-    return this.a2uiSurfaceManager;
   }
 
   getAdminManager(): SessionAdminManager {

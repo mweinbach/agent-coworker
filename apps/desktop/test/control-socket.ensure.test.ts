@@ -371,7 +371,7 @@ describe("control socket helpers over JSON-RPC", () => {
             maxSteps: 100,
             featureFlags: {
               workspace: {
-                a2ui: false,
+                REMOVEDUI: false,
               },
             },
           },

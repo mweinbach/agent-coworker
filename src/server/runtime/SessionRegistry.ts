@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { runTurn as runTurnFn } from "../../agent";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
-import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
 import type { loadAgentPrompt as loadAgentPromptFn } from "../../prompt";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { SessionKind } from "../../shared/agents";
@@ -42,7 +41,6 @@ import type { ThreadJournal } from "./ThreadJournal";
 let agentSessionModule: typeof import("../session/AgentSession") | null = null;
 let sessionSnapshotProjectorModule: typeof import("../session/SessionSnapshotProjector") | null =
   null;
-let a2uiSessionAdapterModule: typeof import("../../experimental/a2ui/sessionAdapter") | null = null;
 
 const loadAgentSessionModule = (): typeof import("../session/AgentSession") => {
   agentSessionModule ??=
@@ -55,13 +53,6 @@ const loadSessionSnapshotProjectorModule =
     sessionSnapshotProjectorModule ??=
       require("../session/SessionSnapshotProjector") as typeof import("../session/SessionSnapshotProjector");
     return sessionSnapshotProjectorModule;
-  };
-
-const loadA2uiSessionAdapterModule =
-  (): typeof import("../../experimental/a2ui/sessionAdapter") => {
-    a2uiSessionAdapterModule ??=
-      require("../../experimental/a2ui/sessionAdapter") as typeof import("../../experimental/a2ui/sessionAdapter");
-    return a2uiSessionAdapterModule;
   };
 
 export type SessionRegistryOptions = {
@@ -470,9 +461,6 @@ export class SessionRegistry {
           });
       }
     };
-    const a2uiSessionAdapter = isA2uiExperimentEnabled(this.options.env)
-      ? loadA2uiSessionAdapterModule()
-      : null;
     const globalConfigDir = path.join(currentConfig.userCoworkDir, "config");
 
     return {
@@ -489,7 +477,6 @@ export class SessionRegistry {
                 selection,
                 currentConfig.providerOptions,
                 {
-                  a2uiExperimentEnabled: currentConfig.experimentalFeatures?.a2ui === true,
                   globalConfigDir,
                 },
               );
@@ -505,7 +492,6 @@ export class SessionRegistry {
                 patch,
                 currentConfig.providerOptions,
                 {
-                  a2uiExperimentEnabled: currentConfig.experimentalFeatures?.a2ui === true,
                   globalConfigDir,
                 },
               );
@@ -640,12 +626,6 @@ export class SessionRegistry {
         return "Skill mutations are blocked while another session in this workspace is running.";
       },
       refreshSkillsAcrossWorkspaceSessionsImpl: this.options.refreshSkillsAcrossWorkspaceSessions,
-      ...(a2uiSessionAdapter
-        ? {
-            createA2uiSurfaceManagerImpl: a2uiSessionAdapter.createExperimentalA2uiSurfaceManager,
-            deriveA2uiSurfacesFromSnapshotImpl: a2uiSessionAdapter.deriveA2uiSurfacesFromSnapshot,
-          }
-        : {}),
     };
   }
 

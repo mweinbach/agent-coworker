@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
-import { isA2uiExperimentEnabled } from "./experimental/a2ui/flags";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
@@ -31,13 +30,7 @@ import { resolveFeatureFlags } from "./shared/featureFlags";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
 import { isNetworkTelemetryGloballyDisabled } from "./telemetry/config";
-import type {
-  AgentConfig,
-  CommandTemplateConfig,
-  ProviderName,
-  RuntimeName,
-  WorkspaceFeatureFlagOverrides,
-} from "./types";
+import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 import {
   normalizeRuntimeNameForProvider,
   resolveChildModelRoutingMode,
@@ -353,26 +346,6 @@ function asBoolean(v: unknown): boolean | null {
   return parsed.success ? parsed.data : null;
 }
 
-function normalizeWorkspaceFeatureFlagLayer(
-  value: unknown,
-): WorkspaceFeatureFlagOverrides | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-
-  const parsedA2ui = asBoolean(value.a2ui);
-  const parsedOpenAiNativeConnectors = asBoolean(value.openAiNativeConnectors);
-  if (parsedA2ui === null && parsedOpenAiNativeConnectors === null) {
-    return undefined;
-  }
-  return {
-    ...(parsedA2ui !== null ? { a2ui: parsedA2ui } : {}),
-    ...(parsedOpenAiNativeConnectors !== null
-      ? { openAiNativeConnectors: parsedOpenAiNativeConnectors }
-      : {}),
-  };
-}
-
 function asNonEmptyString(v: unknown): string | undefined {
   const parsed = nonEmptyTrimmedStringSchema.safeParse(v);
   return parsed.success ? parsed.data : undefined;
@@ -604,22 +577,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     work: asString(mergedUserProfile.work) ?? "",
     details: asString(mergedUserProfile.details) ?? "",
   };
-  const mergedFeatureFlagsLayer = isPlainObject((merged as Record<string, unknown>).featureFlags)
-    ? ((merged as Record<string, unknown>).featureFlags as Record<string, unknown>)
-    : undefined;
-  const workspaceFeatureFlagOverrides = normalizeWorkspaceFeatureFlagLayer(
-    mergedFeatureFlagsLayer?.workspace,
-  );
-  const legacyA2uiOverride =
-    asBoolean(env.AGENT_ENABLE_A2UI) ??
-    asBoolean(projectConfig.enableA2ui) ??
-    asBoolean(userConfig.enableA2ui);
-  const resolvedWorkspaceA2ui =
-    workspaceFeatureFlagOverrides?.a2ui !== undefined
-      ? workspaceFeatureFlagOverrides.a2ui
-      : legacyA2uiOverride !== null
-        ? legacyA2uiOverride
-        : undefined;
   const knowledgeCutoff = supportedModel.knowledgeCutoff;
 
   const enableMcp =
@@ -686,8 +643,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     env,
   }).tasks;
 
-  const a2uiExperimentEnabled = isA2uiExperimentEnabled(env);
-  const enableA2ui = a2uiExperimentEnabled ? (resolvedWorkspaceA2ui ?? false) : undefined;
   const openAiNativeConnectorsExperimentEnabled = isOpenAiNativeConnectorsExperimentEnabled(env);
 
   const backupsEnabled =
@@ -828,24 +783,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     includeRawChunks,
     tasksEnabled,
     experimentalFeatures: {
-      a2ui: a2uiExperimentEnabled,
       openAiNativeConnectors: openAiNativeConnectorsExperimentEnabled,
     },
-    ...(enableA2ui !== undefined ? { enableA2ui } : {}),
     backupsEnabled,
     observabilityEnabled,
     observability,
     harness,
     command,
-    ...(a2uiExperimentEnabled && resolvedWorkspaceA2ui !== undefined
-      ? {
-          featureFlags: {
-            workspace: {
-              a2ui: resolvedWorkspaceA2ui,
-            },
-          },
-        }
-      : {}),
     ...(normalizedProviderOptions ? { providerOptions: normalizedProviderOptions } : {}),
     ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };

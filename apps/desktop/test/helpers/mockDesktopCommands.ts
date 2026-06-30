@@ -105,7 +105,7 @@ export function createDesktopCommandsMock(
     remoteAccess?: boolean;
     workspacePicker?: boolean;
     workspaceLifecycle?: boolean;
-    a2ui?: boolean;
+    REMOVEDUI?: boolean;
     openAiNativeConnectors?: boolean;
   }) => ({
     menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
@@ -119,7 +119,8 @@ export function createDesktopCommandsMock(
       typeof featureOverrides?.workspaceLifecycle === "boolean"
         ? featureOverrides.workspaceLifecycle
         : true,
-    a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+    REMOVEDUI:
+      typeof featureOverrides?.REMOVEDUI === "boolean" ? featureOverrides.REMOVEDUI : false,
     openAiNativeConnectors:
       typeof featureOverrides?.openAiNativeConnectors === "boolean"
         ? featureOverrides.openAiNativeConnectors

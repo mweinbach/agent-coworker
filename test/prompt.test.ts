@@ -1270,14 +1270,14 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("{{spawnAgentXmlSection}}");
   });
 
-  test("injects A2UI enabled guidance into the system prompt", async () => {
-    const previous = process.env.COWORK_EXPERIMENTAL_A2UI;
-    process.env.COWORK_EXPERIMENTAL_A2UI = "1";
+  test("injects REMOVEDUI enabled guidance into the system prompt", async () => {
+    const previous = process.env.COWORK_EXPERIMENTAL_REMOVEDUI;
+    process.env.COWORK_EXPERIMENTAL_REMOVEDUI = "1";
     const config = makeConfig({
-      enableA2ui: false,
+      enableREMOVEDUI: false,
       featureFlags: {
         workspace: {
-          a2ui: true,
+          REMOVEDUI: true,
         },
       },
       skillsDirs: ["/nonexistent/skills"],
@@ -1285,30 +1285,30 @@ describe("loadSystemPrompt", () => {
 
     try {
       const prompt = await loadSystemPrompt(config);
-      expect(prompt).toContain("## A2UI Enabled");
-      expect(prompt).toContain("You may call the `a2ui` tool");
+      expect(prompt).toContain("## REMOVEDUI Enabled");
+      expect(prompt).toContain("You may call the `REMOVEDUI` tool");
     } finally {
       if (previous === undefined) {
-        delete process.env.COWORK_EXPERIMENTAL_A2UI;
+        delete process.env.COWORK_EXPERIMENTAL_REMOVEDUI;
       } else {
-        process.env.COWORK_EXPERIMENTAL_A2UI = previous;
+        process.env.COWORK_EXPERIMENTAL_REMOVEDUI = previous;
       }
     }
   });
 
-  test("injects A2UI disabled guidance and hides the a2ui skill when disabled", async () => {
+  test("injects REMOVEDUI disabled guidance and hides the REMOVEDUI skill when disabled", async () => {
     const config = makeConfig({
-      enableA2ui: true,
+      enableREMOVEDUI: true,
       featureFlags: {
         workspace: {
-          a2ui: false,
+          REMOVEDUI: false,
         },
       },
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("## A2UI Disabled");
-    expect(prompt).not.toContain("- **a2ui**:");
+    expect(prompt).toContain("## REMOVEDUI Disabled");
+    expect(prompt).not.toContain("- **REMOVEDUI**:");
     expect(prompt).not.toContain("Use when you need to render generative UI surfaces");
   });
 

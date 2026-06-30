@@ -86,7 +86,8 @@ mock.module("../src/lib/desktopCommands", () =>
         typeof featureOverrides?.workspaceLifecycle === "boolean"
           ? featureOverrides.workspaceLifecycle
           : true,
-      a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+      REMOVEDUI:
+        typeof featureOverrides?.REMOVEDUI === "boolean" ? featureOverrides.REMOVEDUI : false,
       openAiNativeConnectors:
         typeof featureOverrides?.openAiNativeConnectors === "boolean"
           ? featureOverrides.openAiNativeConnectors
@@ -168,7 +169,7 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
       notifications: [],
@@ -243,7 +244,7 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: true,
       },
     });
@@ -304,7 +305,7 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
     });
@@ -320,7 +321,7 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
     });
@@ -360,7 +361,7 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
       desktopFeatureFlagOverrides: {},
@@ -386,7 +387,7 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
       desktopFeatureFlagOverrides: {},
@@ -422,16 +423,16 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
       desktopFeatureFlagOverrides: {},
     });
 
-    await useAppStore.getState().setDesktopFeatureFlagOverride("a2ui", true);
+    await useAppStore.getState().setDesktopFeatureFlagOverride("REMOVEDUI", true);
 
-    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ a2ui: true });
-    expect(useAppStore.getState().desktopFeatureFlags.a2ui).toBe(true);
+    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ REMOVEDUI: true });
+    expect(useAppStore.getState().desktopFeatureFlags.REMOVEDUI).toBe(true);
     expect(savedStates.length).toBeGreaterThan(0);
   });
 
@@ -442,7 +443,7 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
       desktopFeatureFlagOverrides: {},
@@ -468,7 +469,7 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
       desktopFeatureFlagOverrides: { remoteAccess: false },
@@ -493,7 +494,7 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
         openAiNativeConnectors: false,
       },
       desktopFeatureFlagOverrides: { remoteAccess: false },

@@ -3,7 +3,6 @@ export const FEATURE_FLAG_IDS = [
   "remoteAccess",
   "workspacePicker",
   "workspaceLifecycle",
-  "a2ui",
   "openAiNativeConnectors",
   "canvas",
   "tasks",
@@ -55,13 +54,6 @@ export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefiniti
     description:
       "Allow adding, removing, reordering, and restarting workspaces from the desktop UI.",
     defaultEnabled: true,
-  },
-  a2ui: {
-    id: "a2ui",
-    label: "Generative UI (A2UI)",
-    description: "Enable A2UI surfaces and action routing across all workspaces.",
-    defaultEnabled: false,
-    experimentalEnv: "COWORK_EXPERIMENTAL_A2UI",
   },
   openAiNativeConnectors: {
     id: "openAiNativeConnectors",
@@ -121,7 +113,6 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
     remoteAccess: FEATURE_FLAG_DEFINITIONS.remoteAccess.defaultEnabled,
     workspacePicker: FEATURE_FLAG_DEFINITIONS.workspacePicker.defaultEnabled,
     workspaceLifecycle: FEATURE_FLAG_DEFINITIONS.workspaceLifecycle.defaultEnabled,
-    a2ui: FEATURE_FLAG_DEFINITIONS.a2ui.defaultEnabled,
     openAiNativeConnectors: FEATURE_FLAG_DEFINITIONS.openAiNativeConnectors.defaultEnabled,
     canvas: FEATURE_FLAG_DEFINITIONS.canvas.defaultEnabled,
     tasks: FEATURE_FLAG_DEFINITIONS.tasks.defaultEnabled,

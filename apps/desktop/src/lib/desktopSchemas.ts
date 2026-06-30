@@ -224,10 +224,6 @@ const desktopFeatureFlagOverridesSchema = z
       (value) => (typeof value === "boolean" ? value : undefined),
       z.boolean().optional(),
     ),
-    a2ui: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
     openAiNativeConnectors: z.preprocess(
       (value) => (typeof value === "boolean" ? value : undefined),
       z.boolean().optional(),

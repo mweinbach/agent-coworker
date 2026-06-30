@@ -414,7 +414,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("hides A2UI surfaces and dock when A2UI is disabled", async () => {
+  test("hides REMOVEDUI surfaces and dock when REMOVEDUI is disabled", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -426,7 +426,7 @@ describe("desktop chat view stability", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
-        a2ui: false,
+        REMOVEDUI: false,
       },
       workspaces: [
         {
@@ -462,7 +462,7 @@ describe("desktop chat view stability", () => {
             model: "gpt-5.4",
           },
           sessionConfig: {
-            enableA2ui: false,
+            enableREMOVEDUI: false,
           },
           sessionUsage: null,
           lastTurnUsage: null,
@@ -471,18 +471,18 @@ describe("desktop chat view stability", () => {
           busySince: null,
           feed: [
             {
-              id: "uiSurface:surface-1",
-              kind: "ui_surface",
+              id: "RemovedSurface:surface-1",
+              kind: "REMOVED_SURFACE",
               ts: "2026-03-12T00:00:30.000Z",
               surfaceId: "surface-1",
-              catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+              catalogId: "https://REMOVEDUI.org/specification/v0_9/basic_catalog.json",
               version: "v0.9",
               revision: 1,
               deleted: false,
               root: {
                 id: "root",
                 type: "Text",
-                text: "A2UI content",
+                text: "REMOVEDUI content",
               },
             },
           ],
@@ -506,7 +506,7 @@ describe("desktop chat view stability", () => {
 
       expect(container.textContent).toContain("Send a message to start.");
       expect(container.textContent).not.toContain("surface-1");
-      expect(container.textContent).not.toContain("A2UI content");
+      expect(container.textContent).not.toContain("REMOVEDUI content");
     } finally {
       if (root) {
         await act(async () => {

@@ -353,22 +353,6 @@ export function firstActivityTimestampMs(items: ActivityFeedItem[]): number | nu
   return Math.min(...timestamps);
 }
 
-type UiSurfaceFeed = Extract<SessionFeedItem, { kind: "ui_surface" }>;
-
-function shouldDropA2uiRevision(item: UiSurfaceFeed, followers: SessionFeedItem[]): boolean {
-  if (!item.toolCallId) return false;
-  for (let i = 0; i < followers.length; i++) {
-    const next = followers[i];
-    if (!next) continue;
-    if (next.kind !== "ui_surface") continue;
-    if (next.surfaceId !== item.surfaceId) continue;
-    if (next.toolCallId === item.toolCallId && next.revision > item.revision) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function buildChatRenderItems(feed: SessionFeedItem[]): ChatRenderItem[] {
   const items: ChatRenderItem[] = [];
   let currentGroup: ActivityFeedItem[] = [];
@@ -395,9 +379,6 @@ export function buildChatRenderItems(feed: SessionFeedItem[]): ChatRenderItem[] 
     }
     if (item.kind === "tool") {
       currentGroup.push(item);
-      continue;
-    }
-    if (item.kind === "ui_surface" && shouldDropA2uiRevision(item, feed.slice(i + 1))) {
       continue;
     }
     flushGroup();

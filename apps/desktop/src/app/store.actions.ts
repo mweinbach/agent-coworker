@@ -1,4 +1,3 @@
-import { createA2uiDockActions } from "./store.actions/a2uiDock";
 import { createAgentProfileActions } from "./store.actions/agentProfiles";
 import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
@@ -43,6 +42,5 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createPreviewActions(set, get),
     ...createOnboardingActions(set, get),
     ...createPrivacyTelemetryActions(set, get),
-    ...createA2uiDockActions(set, get),
   };
 }

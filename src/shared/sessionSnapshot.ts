@@ -131,23 +131,7 @@ export type SessionFeedItem =
       source: ServerErrorSource;
       data?: ServerErrorData;
     }
-  | { id: string; kind: "system"; ts: string; line: string }
-  | {
-      id: string;
-      kind: "ui_surface";
-      ts: string;
-      surfaceId: string;
-      catalogId: string;
-      version: "v0.9";
-      revision: number;
-      deleted: boolean;
-      theme?: Record<string, unknown>;
-      root?: Record<string, unknown>;
-      dataModel?: unknown;
-      changeKind?: "createSurface" | "updateComponents" | "updateDataModel" | "deleteSurface";
-      reason?: string;
-      toolCallId?: string;
-    };
+  | { id: string; kind: "system"; ts: string; line: string };
 
 export type SessionLastTurnUsage = {
   turnId: string;
@@ -269,26 +253,6 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
       kind: z.literal("system"),
       ts: isoTimestampSchema,
       line: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      id: z.string().trim().min(1),
-      kind: z.literal("ui_surface"),
-      ts: isoTimestampSchema,
-      surfaceId: z.string().trim().min(1),
-      catalogId: z.string().trim().min(1),
-      version: z.literal("v0.9"),
-      revision: z.number().int().nonnegative(),
-      deleted: z.boolean(),
-      theme: z.record(z.string(), z.unknown()).optional(),
-      root: z.record(z.string(), z.unknown()).optional(),
-      dataModel: z.unknown().optional(),
-      changeKind: z
-        .enum(["createSurface", "updateComponents", "updateDataModel", "deleteSurface"])
-        .optional(),
-      reason: z.string().optional(),
-      toolCallId: z.string().optional(),
     })
     .strict(),
 ]);

@@ -152,8 +152,7 @@
     {
       "includes": [
         "apps/mobile/src/components/thread/**",
-        "apps/mobile/src/app/(app)/settings/providers.tsx",
-        "apps/desktop/src/ui/chat/a2ui/**"
+        "apps/mobile/src/app/(app)/settings/providers.tsx"
       ],
       "linter": {
         "rules": {

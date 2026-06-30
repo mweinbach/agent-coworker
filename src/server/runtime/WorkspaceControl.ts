@@ -1,12 +1,11 @@
 import { loadConfig } from "../../config";
-import { isA2uiExperimentEnabled } from "../../experimental/a2ui/flags";
 import { pickEditableOpenAiCompatibleProviderOptions } from "../../shared/openaiCompatibleOptions";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig } from "../../types";
 import type { SessionEvent } from "../protocol";
 import type { SessionRuntime } from "../session/SessionRuntime";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
-import { mergeRuntimeProviderOptions, resolveWorkspaceA2ui } from "./ConfigPatchStore";
+import { mergeRuntimeProviderOptions } from "./ConfigPatchStore";
 import type { SessionRegistry } from "./SessionRegistry";
 import type { SocketSendQueue } from "./SocketSendQueue";
 
@@ -164,8 +163,6 @@ export class WorkspaceControl {
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(
       controlConfig.toolOutputOverflowChars,
     );
-    const a2uiExperimentEnabled = isA2uiExperimentEnabled(this.options.env);
-    const workspaceA2ui = resolveWorkspaceA2ui(controlConfig);
     const preferredChildModelRef =
       controlConfig.preferredChildModelRef ??
       `${controlConfig.provider}:${controlConfig.preferredChildModel}`;
@@ -201,7 +198,6 @@ export class WorkspaceControl {
           observabilityEnabled: controlConfig.observabilityEnabled ?? false,
           backupsEnabled: defaultBackupsEnabled,
           defaultBackupsEnabled,
-          ...(a2uiExperimentEnabled ? { enableA2ui: workspaceA2ui } : {}),
           enableMemory: controlConfig.enableMemory ?? true,
           memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
           advancedMemory: controlConfig.advancedMemory ?? false,
@@ -224,15 +220,6 @@ export class WorkspaceControl {
             work: controlConfig.userProfile?.work ?? "",
             details: controlConfig.userProfile?.details ?? "",
           },
-          ...(a2uiExperimentEnabled
-            ? {
-                featureFlags: {
-                  workspace: {
-                    a2ui: workspaceA2ui,
-                  },
-                },
-              }
-            : {}),
         },
       },
     ];

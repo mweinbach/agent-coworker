@@ -449,7 +449,7 @@ describe("shared JSON-RPC control schemas", () => {
         allowedChildModelRefs: ["openai:gpt-5.4-mini"],
         featureFlags: {
           workspace: {
-            a2ui: false,
+            REMOVEDUI: false,
           },
         },
         providerOptions: {
@@ -485,7 +485,7 @@ describe("shared JSON-RPC control schemas", () => {
             preferredChildModelRef: "openai:gpt-5.4-mini",
             featureFlags: {
               workspace: {
-                a2ui: false,
+                REMOVEDUI: false,
               },
             },
           },
@@ -494,7 +494,7 @@ describe("shared JSON-RPC control schemas", () => {
     });
 
     expect(request.config?.providerOptions?.google?.nativeWebSearch).toBe(true);
-    expect(request.config?.featureFlags?.workspace?.a2ui).toBe(false);
+    expect(request.config?.featureFlags?.workspace?.REMOVEDUI).toBe(false);
     expect(state.events[2]?.type).toBe("session_config");
   });
 

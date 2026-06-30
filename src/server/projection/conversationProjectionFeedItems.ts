@@ -37,26 +37,6 @@ export function createFeedItemProjection(state: ConversationProjectionState) {
     state.opts.sink.emitItemCompleted(null, item);
   };
 
-  const emitA2uiSurfaceItem = (evt: Extract<SessionEvent, { type: "a2ui_surface" }>) => {
-    const item: ProjectedItem = {
-      id: makeItemId("uiSurface", `${evt.surfaceId}@${evt.revision}`),
-      type: "uiSurface",
-      surfaceId: evt.surfaceId,
-      catalogId: evt.catalogId,
-      version: evt.version,
-      revision: evt.revision,
-      deleted: evt.deleted,
-      ...(evt.theme ? { theme: evt.theme } : {}),
-      ...(evt.root ? { root: evt.root } : {}),
-      ...(evt.dataModel !== undefined ? { dataModel: evt.dataModel } : {}),
-      ...(evt.changeKind ? { changeKind: evt.changeKind } : {}),
-      ...(evt.reason ? { reason: evt.reason } : {}),
-      ...(evt.toolCallId ? { toolCallId: evt.toolCallId } : {}),
-    };
-    state.opts.sink.emitItemStarted(null, item);
-    state.opts.sink.emitItemCompleted(null, item);
-  };
-
   const emitErrorItem = (evt: Extract<SessionEvent, { type: "error" }>) => {
     const item: ProjectedItem = {
       id: makeItemId("error", crypto.randomUUID()),
@@ -78,7 +58,6 @@ export function createFeedItemProjection(state: ConversationProjectionState) {
     emitSystemItem,
     emitLogItem,
     emitTodosItem,
-    emitA2uiSurfaceItem,
     emitErrorItem,
     emitServerRequest,
     shouldSuppressRawDebugLogLine,

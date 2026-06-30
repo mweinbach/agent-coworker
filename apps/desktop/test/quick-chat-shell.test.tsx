@@ -32,7 +32,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
       remoteAccess: true,
       workspacePicker: true,
       workspaceLifecycle: true,
-      a2ui: false,
+      REMOVEDUI: false,
     },
     ...overrides,
   } as any);

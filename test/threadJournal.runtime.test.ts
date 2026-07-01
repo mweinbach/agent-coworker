@@ -93,4 +93,44 @@ describe("ThreadJournal runtime", () => {
     });
     expect(listCalls).toBe(0);
   });
+
+  test("close drains queued writes and ignores later enqueues", async () => {
+    const stored: PersistedThreadJournalEvent[] = [];
+    let appendCalls = 0;
+    let releaseAppend!: () => void;
+    const appendBlocked = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const journal = new ThreadJournal({
+      appendThreadJournalEvents: async (batch: Array<Omit<PersistedThreadJournalEvent, "seq">>) => {
+        appendCalls += 1;
+        await appendBlocked;
+        for (const entry of batch) {
+          stored.push({ ...entry, seq: stored.length + 1 });
+        }
+        return batch.map((_, index) => stored.length - batch.length + index + 1);
+      },
+      listThreadJournalEvents: (threadId: string) =>
+        stored.filter((entry) => entry.threadId === threadId),
+      getThreadJournalTailSeq: (threadId: string) =>
+        stored.filter((entry) => entry.threadId === threadId).at(-1)?.seq ?? 0,
+    } as never);
+
+    const queued = journal.enqueue(event("thread-1", "turn/started"));
+    let closeSettled = false;
+    const closed = journal.close().then(() => {
+      closeSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    releaseAppend();
+    await closed;
+    await queued;
+
+    await journal.enqueue(event("thread-1", "turn/completed"));
+
+    expect(appendCalls).toBe(1);
+    expect(journal.list("thread-1").map((entry) => entry.eventType)).toEqual(["turn/started"]);
+  });
 });

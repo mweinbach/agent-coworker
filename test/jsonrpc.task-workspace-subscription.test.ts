@@ -30,6 +30,8 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const MESSAGE_WAIT_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 2_000;
+
 async function removeTempHome(home: string): Promise<void> {
   if (process.platform === "win32") {
     Bun.gc(true);
@@ -63,7 +65,7 @@ async function waitForMessage(
   socket: CapturedSocket,
   predicate: (message: JsonRpcMessage) => boolean,
   label: string,
-  timeoutMs = 2_000,
+  timeoutMs = MESSAGE_WAIT_TIMEOUT_MS,
 ): Promise<JsonRpcMessage> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {

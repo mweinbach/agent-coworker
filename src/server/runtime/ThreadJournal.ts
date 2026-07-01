@@ -32,10 +32,15 @@ export class ThreadJournal {
   private readonly pendingEvents = new Map<string, ThreadJournalEvent[]>();
   private readonly scheduledFlushes = new Set<string>();
   private readonly failures = new Map<string, ThreadJournalFailureState>();
+  private closed = false;
 
   constructor(private readonly sessionDb: SessionDb) {}
 
   enqueue(event: ThreadJournalEvent): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
+    }
+
     const pending = this.pendingEvents.get(event.threadId) ?? [];
     pending.push(event);
     this.pendingEvents.set(event.threadId, pending);
@@ -132,6 +137,14 @@ export class ThreadJournal {
     await (this.writeQueues.get(threadId) ?? Promise.resolve()).catch(() => {
       // Best-effort only.
     });
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    await Promise.allSettled(this.writeQueues.values());
+    this.pendingEvents.clear();
+    this.scheduledFlushes.clear();
+    this.writeQueues.clear();
   }
 
   list(

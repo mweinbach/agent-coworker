@@ -666,14 +666,8 @@ export async function createAgentServerRuntime(
       taskSubscribers.clear();
       threadSubscribers.clear();
       threadSubscriptionsByConnectionId.clear();
-      const journalThreadIds = new Set<string>([
-        ...registry.sessionBindings.keys(),
-        ...sessionDb.listSessions().map((s) => s.sessionId),
-      ]);
       await registry.disposeAll("server stopping");
-      await Promise.allSettled(
-        [...journalThreadIds].map(async (threadId) => await threadJournal.waitForIdle(threadId)),
-      );
+      await threadJournal.close();
       try {
         sessionDb.close();
       } catch {

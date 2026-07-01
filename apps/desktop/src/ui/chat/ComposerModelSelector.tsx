@@ -18,6 +18,7 @@ import {
   decodeProviderModelSelection,
   encodeProviderModelSelection,
   modelChoicesFromCatalog,
+  modelDescriptionsFromCatalog,
   resolveModelDisplayLabel,
 } from "../../lib/modelChoices";
 import { displayProviderName } from "../../lib/providerDisplayNames";
@@ -60,6 +61,10 @@ export function ComposerModelSelector({
   const choices = useMemo(
     () => modelChoicesFromCatalog(providerCatalog, chatCatalogVisibility),
     [providerCatalog, chatCatalogVisibility],
+  );
+  const modelDescriptions = useMemo(
+    () => modelDescriptionsFromCatalog(providerCatalog),
+    [providerCatalog],
   );
   const providers = useMemo(
     () =>
@@ -108,9 +113,17 @@ export function ComposerModelSelector({
               {(choices[p] ?? []).map((m) => {
                 const sel = encodeProviderModelSelection(p, m);
                 const label = resolveModelDisplayLabel(p, m, modelDisplayNames);
+                const description = modelDescriptions[p]?.[m];
                 return (
                   <SelectItem key={sel} value={sel} className="pl-6 text-xs">
-                    <span title={m}>{label}</span>
+                    <span title={description ? `${label}\n${description}\n${m}` : m}>
+                      <span className="block truncate">{label}</span>
+                      {description ? (
+                        <span className="block max-w-[260px] truncate text-[10px] text-muted-foreground">
+                          {description}
+                        </span>
+                      ) : null}
+                    </span>
                   </SelectItem>
                 );
               })}

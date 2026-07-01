@@ -27,11 +27,12 @@ export class ProviderCatalogManager {
     },
   ) {}
 
-  async emitProviderCatalog() {
+  async emitProviderCatalog(opts: { refresh?: boolean } = {}) {
     try {
       const payload = await this.opts.getProviderCatalog({
         paths: this.opts.getGlobalAuthPaths(),
         providerOptions: this.opts.getConfig().providerOptions,
+        refresh: opts.refresh,
       });
       const cfg = this.opts.getConfig();
       const defaults = { ...payload.default, [cfg.provider]: cfg.model };

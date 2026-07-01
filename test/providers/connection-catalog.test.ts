@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,12 +7,20 @@ import {
   getProviderCatalog,
   listProviderCatalogEntries,
 } from "../../src/providers/connectionCatalog";
+import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
 import { PROVIDER_NAMES } from "../../src/types";
 
 const noCodexAccount = async () => ({
   account: null,
   requiresOpenaiAuth: true,
 });
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 describe("providers/connectionCatalog", () => {
   test("marks models with selector-ready reasoning effort metadata", async () => {
@@ -750,6 +758,85 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).toContain("codex-cli");
   });
 
+  test("refreshes live API model catalogs and keeps unknown discovered model IDs", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-api-models-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchImpl = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url);
+      if (href === "https://api.openai.com/v1/models") {
+        expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer sk-test");
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-5.4", object: "model", created: 1780000000, owned_by: "openai" },
+            { id: "gpt-5.6-experimental", object: "model", owned_by: "openai" },
+            { id: "text-embedding-3-small", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      if (href === "https://opencode.ai/zen/go/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "glm-5", object: "model", owned_by: "opencode" },
+            { id: "kimi-k2.7-code", object: "model", owned_by: "opencode" },
+          ],
+        });
+      }
+      if (href === "https://opencode.ai/zen/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "glm-5", object: "model", owned_by: "opencode" },
+            { id: "claude-fable-5", object: "model", owned_by: "opencode" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${href}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    expect(openai?.state).toBe("ready");
+    expect(openai?.defaultModel).toBe("gpt-5.4");
+    expect(openai?.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.6-experimental"]);
+    expect(openai?.models.find((model) => model.id === "gpt-5.6-experimental")).toMatchObject({
+      displayName: "GPT 5.6 Experimental",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+      reasoning: {
+        defaultEffort: "high",
+        availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      },
+    });
+    expect(payload.connected).toContain("openai");
+    expect(
+      payload.all.find((entry) => entry.id === "opencode-go")?.models.map((model) => model.id),
+    ).toEqual(["glm-5", "kimi-k2.7-code"]);
+    expect(
+      payload.all.find((entry) => entry.id === "opencode-zen")?.models.map((model) => model.id),
+    ).toEqual(["glm-5", "claude-fable-5"]);
+  });
+
   test("codex-cli catalog uses app-server available models when account exists", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-models-"));
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -807,7 +894,17 @@ describe("providers/connectionCatalog", () => {
           id: "future-model",
           model: "future-model",
           displayName: "Future Model",
+          description: "Future model from live discovery.",
           supportsImageInput: true,
+          reasoningEfforts: ["low", "medium", "high"],
+          reasoningDefaultEffort: "medium",
+          runtimeOptions: {
+            webSearchMode: "cached",
+            apiKey: "secret",
+          },
+          runtimeOverrides: {
+            reasoningSummary: "concise",
+          },
           isDefault: false,
         },
       ],
@@ -846,9 +943,92 @@ describe("providers/connectionCatalog", () => {
     expect(codex?.models.find((model) => model.id === "future-model")).toEqual({
       id: "future-model",
       displayName: "Future Model",
+      description: "Future model from live discovery.",
       knowledgeCutoff: "Unknown",
       supportsImageInput: true,
+      reasoning: {
+        defaultEffort: "medium",
+        availableEfforts: ["low", "medium", "high"],
+      },
+      runtimeOptions: {
+        webSearchMode: "cached",
+      },
+      runtimeOverrides: {
+        reasoningSummary: "concise",
+      },
     });
+    expect(payload.connected).toContain("codex-cli");
+  });
+
+  test("codex-cli catalog serves stale cached models when app-server discovery fails", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-stale-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeModelDiscoveryCache(
+      paths,
+      "codex-cli",
+      {
+        provider: "codex-cli",
+        source: "app-server",
+        updatedAt: "2026-07-01T12:00:00.000Z",
+        models: [
+          {
+            id: "cached-model",
+            model: "cached-model",
+            displayName: "Cached Model",
+            description: "Cached description.",
+            supportsImageInput: false,
+            isDefault: true,
+            reasoning: {
+              defaultEffort: "high",
+              availableEfforts: ["low", "medium", "high"],
+            },
+            runtimeOptions: {
+              webSearchMode: "cached",
+            },
+          },
+        ],
+      },
+      { ttlMs: -1 },
+    );
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
+      listCodexAppServerModelsImpl: async () => {
+        throw new Error("model/list failed");
+      },
+    });
+
+    const codex = payload.all.find((entry) => entry.id === "codex-cli");
+    expect(codex?.models).toEqual([
+      {
+        id: "cached-model",
+        displayName: "Cached Model",
+        description: "Cached description.",
+        knowledgeCutoff: "Unknown",
+        supportsImageInput: false,
+        reasoning: {
+          defaultEffort: "high",
+          availableEfforts: ["low", "medium", "high"],
+        },
+        runtimeOptions: {
+          webSearchMode: "cached",
+        },
+      },
+    ]);
+    expect(codex?.defaultModel).toBe("cached-model");
+    expect(codex?.state).toBe("unreachable");
+    expect(codex?.message).toContain("model/list failed");
+    expect(codex?.message).toContain("Using cached model catalog from 2026-07-01T12:00:00.000Z");
     expect(payload.connected).toContain("codex-cli");
   });
 

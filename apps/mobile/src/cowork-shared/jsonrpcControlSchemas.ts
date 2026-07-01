@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
 import {
+  CATALOG_REASONING_EFFORT_VALUES,
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
@@ -177,9 +178,20 @@ export const sessionConfigEventSchema = z
 export const providerCatalogModelEntrySchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
+    model: z.string().optional(),
     displayName: z.string(),
+    description: z.string().optional(),
     knowledgeCutoff: z.string(),
     supportsImageInput: z.boolean(),
+    reasoning: z
+      .object({
+        defaultEffort: z.enum(CATALOG_REASONING_EFFORT_VALUES),
+        availableEfforts: z.array(z.enum(CATALOG_REASONING_EFFORT_VALUES)).min(1),
+      })
+      .strict()
+      .optional(),
+    runtimeOptions: z.record(z.string(), z.unknown()).optional(),
+    runtimeOverrides: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 

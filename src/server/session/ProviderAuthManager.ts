@@ -99,7 +99,7 @@ export class ProviderAuthManager {
       ) => void;
       queuePersistSessionSnapshot: (reason: string) => void;
       emitConfigUpdated: () => void;
-      emitProviderCatalog: () => Promise<void>;
+      emitProviderCatalog: (opts?: { refresh?: boolean }) => Promise<void>;
       refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
       getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       runProviderConnect: ConnectProviderHandler;
@@ -109,7 +109,7 @@ export class ProviderAuthManager {
 
   private async refreshProviderState(provider: AgentConfig["provider"]) {
     await this.opts.refreshProviderStatus({ refreshBedrockDiscovery: provider === "bedrock" });
-    await this.opts.emitProviderCatalog();
+    await this.opts.emitProviderCatalog({ refresh: true });
   }
 
   async prepareModelSelection(

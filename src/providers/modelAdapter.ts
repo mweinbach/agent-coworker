@@ -8,7 +8,6 @@ import {
 import { MINIMAX_ADAPTER_PROVIDER, MINIMAX_BASE_URL, resolveMinimaxApiKey } from "./minimaxShared";
 import {
   getOpenCodeProviderConfig,
-  isOpenCodeModelSupportedByProvider,
   type OpenCodeProviderName,
   resolveOpenCodeApiKey,
 } from "./opencodeShared";
@@ -167,9 +166,6 @@ function createOpenCodeModelAdapter(
   modelId: string,
   savedKey?: string,
 ): ProviderModelAdapter {
-  if (!isOpenCodeModelSupportedByProvider(provider, modelId)) {
-    throw new Error(`${provider} does not support model ${modelId}.`);
-  }
   const providerConfig = getOpenCodeProviderConfig(provider);
   return createModelAdapter(modelId, providerConfig.adapterProvider, async () => {
     const key = resolveOpenCodeApiKey(provider, { savedKey });

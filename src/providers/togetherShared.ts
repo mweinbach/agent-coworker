@@ -14,7 +14,7 @@ type TogetherModelSpec = {
   };
 };
 
-const TOGETHER_BASE_URL = "https://api.together.xyz/v1";
+export const TOGETHER_BASE_URL = "https://api.together.xyz/v1";
 
 // Together's serverless model catalog publishes pricing and context windows for these
 // model IDs, but not a consistent explicit max-output limit across the set. Keep the

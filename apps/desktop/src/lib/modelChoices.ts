@@ -95,6 +95,22 @@ export function modelDisplayNamesFromCatalog(
   return out;
 }
 
+export function modelDescriptionsFromCatalog(
+  catalog: readonly ProviderCatalogEntry[],
+): Record<ProviderName, Record<string, string>> {
+  const out = {} as Record<ProviderName, Record<string, string>>;
+  for (const entry of catalog) {
+    const byId: Record<string, string> = {};
+    for (const m of entry.models ?? []) {
+      const id = typeof m.id === "string" ? m.id.trim() : "";
+      const description = typeof m.description === "string" ? m.description.trim() : "";
+      if (id && description) byId[id] = description;
+    }
+    out[entry.id] = byId;
+  }
+  return out;
+}
+
 export function resolveModelDisplayLabel(
   provider: ProviderName,
   modelId: string,

@@ -17,7 +17,7 @@ type NvidiaModelSpec = {
   };
 };
 
-const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 // NVIDIA's Nemotron docs publish a 1M-token context window and route reasoning
 // control through chat_template_kwargs.enable_thinking. Cowork keeps local output

@@ -24,7 +24,7 @@ type ProviderStoreState = {
   } | null;
   lastAuthResult: { provider: string; methodId: string; ok: boolean; message: string } | null;
 
-  fetchCatalog(): Promise<void>;
+  fetchCatalog(opts?: { refresh?: boolean }): Promise<void>;
   fetchAuthMethods(): Promise<void>;
   fetchStatus(): Promise<void>;
   refresh(): Promise<void>;
@@ -58,11 +58,14 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   lastAuthChallenge: null,
   lastAuthResult: null,
 
-  async fetchCatalog() {
+  async fetchCatalog(opts: { refresh?: boolean } = {}) {
     const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
-      const result = await callParsedControlMethod(client, "cowork/provider/catalog/read", { cwd });
+      const result = await callParsedControlMethod(client, "cowork/provider/catalog/read", {
+        cwd,
+        ...(opts.refresh ? { refresh: true } : {}),
+      });
       set({ catalog: result.event.all, loading: false });
       void saveToOfflineCache("providerCatalog", result.event.all);
     } catch (error) {
@@ -100,7 +103,11 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   async refresh() {
     set({ loading: true, error: null });
     try {
-      await Promise.all([get().fetchCatalog(), get().fetchAuthMethods(), get().fetchStatus()]);
+      await Promise.all([
+        get().fetchCatalog({ refresh: true }),
+        get().fetchAuthMethods(),
+        get().fetchStatus(),
+      ]);
       set({ loading: false });
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });

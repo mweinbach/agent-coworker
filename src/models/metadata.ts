@@ -13,6 +13,22 @@ import type { ProviderName } from "../types";
 import type { ResolvedModelMetadata } from "./metadataTypes";
 import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./registry";
 
+type DynamicModelProvider =
+  | "lmstudio"
+  | "bedrock"
+  | "codex-cli"
+  | "google"
+  | "openai"
+  | "anthropic"
+  | "baseten"
+  | "together"
+  | "fireworks"
+  | "firepass"
+  | "nvidia"
+  | "minimax"
+  | "opencode-go"
+  | "opencode-zen";
+
 function toResolvedStaticModel(
   provider: ProviderName,
   modelId: string,
@@ -31,11 +47,14 @@ function toResolvedStaticModel(
   };
 }
 
-function buildCodexAppServerPlaceholderMetadata(modelId: string): ResolvedModelMetadata {
-  const fallback = defaultSupportedModel("codex-cli");
+function buildProviderPlaceholderMetadata(
+  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  modelId: string,
+): ResolvedModelMetadata {
+  const fallback = defaultSupportedModel(provider);
   return {
     id: modelId,
-    provider: "codex-cli",
+    provider,
     displayName: modelId,
     knowledgeCutoff: "Unknown",
     supportsImageInput: false,
@@ -45,10 +64,23 @@ function buildCodexAppServerPlaceholderMetadata(modelId: string): ResolvedModelM
   };
 }
 
-export function isDynamicModelProvider(
-  provider: ProviderName,
-): provider is "lmstudio" | "bedrock" | "codex-cli" {
-  return provider === "lmstudio" || provider === "bedrock" || provider === "codex-cli";
+export function isDynamicModelProvider(provider: ProviderName): provider is DynamicModelProvider {
+  return (
+    provider === "lmstudio" ||
+    provider === "bedrock" ||
+    provider === "codex-cli" ||
+    provider === "google" ||
+    provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "baseten" ||
+    provider === "together" ||
+    provider === "fireworks" ||
+    provider === "firepass" ||
+    provider === "nvidia" ||
+    provider === "minimax" ||
+    provider === "opencode-go" ||
+    provider === "opencode-zen"
+  );
 }
 
 export function normalizeModelIdForProvider(
@@ -63,7 +95,7 @@ export function normalizeModelIdForProvider(
   if (provider === "lmstudio" || provider === "bedrock") {
     return trimmed;
   }
-  if (provider === "codex-cli") {
+  if (isDynamicModelProvider(provider)) {
     return getSupportedModel(provider, trimmed)?.id ?? trimmed;
   }
   return assertSupportedModel(provider, trimmed, source).id;
@@ -98,7 +130,27 @@ export function getResolvedModelMetadataSync(
         source: "static",
       };
     }
-    return buildCodexAppServerPlaceholderMetadata(
+    return buildProviderPlaceholderMetadata(
+      provider,
+      normalizeModelIdForProvider(provider, modelId, source),
+    );
+  }
+  if (isDynamicModelProvider(provider)) {
+    const supported = getSupportedModel(provider, modelId);
+    if (supported) {
+      return {
+        id: supported.id,
+        provider: supported.provider,
+        displayName: supported.displayName,
+        knowledgeCutoff: supported.knowledgeCutoff,
+        supportsImageInput: supported.supportsImageInput,
+        promptTemplate: supported.promptTemplate,
+        providerOptionsDefaults: { ...supported.providerOptionsDefaults },
+        source: "static",
+      };
+    }
+    return buildProviderPlaceholderMetadata(
+      provider,
       normalizeModelIdForProvider(provider, modelId, source),
     );
   }
@@ -123,7 +175,7 @@ export async function resolveModelMetadata(
   }
 
   if (provider !== "lmstudio" && provider !== "bedrock") {
-    return toResolvedStaticModel(provider, modelId, opts.source);
+    return getResolvedModelMetadataSync(provider, modelId, opts.source);
   }
 
   const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);

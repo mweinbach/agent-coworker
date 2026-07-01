@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
+import { getAiCoworkerPaths } from "../../src/connect";
 import { parseChildModelRef } from "../../src/models/childModelRouting";
 import { getProviderCatalog } from "../../src/providers/connectionCatalog";
 import {
@@ -11,6 +15,7 @@ import {
   listLmStudioModels,
 } from "../../src/providers/lmstudio/client";
 import type { LmStudioModel } from "../../src/providers/lmstudio/types";
+import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
 import { routeAgentConfig } from "../../src/server/agents/modelRouter";
 import { AGENT_ROLE_DEFINITIONS } from "../../src/server/agents/roles";
 import type { ConnectionStore } from "../../src/store/connections";
@@ -55,6 +60,10 @@ function lmModel(overrides: Partial<LmStudioModel> & Pick<LmStudioModel, "key">)
   };
 }
 
+async function tmpPaths(prefix: string) {
+  return getAiCoworkerPaths({ homedir: await fs.mkdtemp(path.join(os.tmpdir(), prefix)) });
+}
+
 describe("lmstudio provider", () => {
   test("lists models through the native LM Studio /api/v1/models endpoint", async () => {
     const fetchImpl = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -96,6 +105,7 @@ describe("lmstudio provider", () => {
   });
 
   test("getProviderCatalog returns live LM Studio llms and uses a stored optional token", async () => {
+    const paths = await tmpPaths("lmstudio-catalog-");
     const fetchImpl = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = init?.headers as Record<string, string>;
       expect(headers.authorization).toBe("Bearer stored-token");
@@ -116,6 +126,7 @@ describe("lmstudio provider", () => {
     });
 
     const catalog = await getProviderCatalog({
+      paths,
       readStore: async () =>
         makeStore({
           lmstudio: {
@@ -141,7 +152,9 @@ describe("lmstudio provider", () => {
   });
 
   test("getProviderCatalog surfaces unreachable LM Studio instances without crashing", async () => {
+    const paths = await tmpPaths("lmstudio-catalog-unreachable-");
     const catalog = await getProviderCatalog({
+      paths,
       readStore: async () => makeStore(),
       readCodexAppServerAccountImpl: async () => ({
         account: null,
@@ -157,6 +170,65 @@ describe("lmstudio provider", () => {
     expect(entry?.defaultModel).toBe("");
     expect(entry?.state).toBe("unreachable");
     expect(entry?.message).toContain("LM Studio");
+    expect(catalog.connected).not.toContain("lmstudio");
+  });
+
+  test("getProviderCatalog serves stale cached LM Studio models when local HTTP is down", async () => {
+    const paths = await tmpPaths("lmstudio-catalog-stale-");
+    await writeModelDiscoveryCache(
+      paths,
+      "lmstudio",
+      {
+        provider: "lmstudio",
+        source: "local-http",
+        updatedAt: "2026-07-01T12:00:00.000Z",
+        models: [
+          {
+            id: "local/cached",
+            displayName: "Local Cached",
+            description: "Cached local model.",
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: true,
+            isDefault: true,
+            runtimeOptions: {
+              effectiveContextLength: 8192,
+            },
+          },
+        ],
+      },
+      { ttlMs: -1 },
+    );
+
+    const catalog = await getProviderCatalog({
+      paths,
+      refresh: true,
+      readStore: async () => makeStore(),
+      readCodexAppServerAccountImpl: async () => ({
+        account: null,
+        requiresOpenaiAuth: true,
+      }),
+      lmstudioFetchImpl: mock(async () => {
+        throw new Error("connect ECONNREFUSED");
+      }) as unknown as typeof fetch,
+    });
+
+    const entry = catalog.all.find((provider) => provider.id === "lmstudio");
+    expect(entry?.models).toEqual([
+      {
+        id: "local/cached",
+        displayName: "Local Cached",
+        description: "Cached local model.",
+        knowledgeCutoff: "Unknown",
+        supportsImageInput: true,
+        runtimeOptions: {
+          effectiveContextLength: 8192,
+        },
+      },
+    ]);
+    expect(entry?.defaultModel).toBe("local/cached");
+    expect(entry?.state).toBe("unreachable");
+    expect(entry?.message).toContain("LM Studio server is unreachable");
+    expect(entry?.message).toContain("Using cached model catalog from 2026-07-01T12:00:00.000Z");
     expect(catalog.connected).not.toContain("lmstudio");
   });
 

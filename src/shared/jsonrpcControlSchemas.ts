@@ -193,7 +193,9 @@ const sessionConfigEventSchema = z
 const providerCatalogModelEntrySchema = z
   .object({
     id: nonEmptyTrimmedStringSchema,
+    model: z.string().optional(),
     displayName: z.string(),
+    description: z.string().optional(),
     knowledgeCutoff: z.string(),
     supportsImageInput: z.boolean(),
     reasoning: z
@@ -203,6 +205,8 @@ const providerCatalogModelEntrySchema = z
       })
       .strict()
       .optional(),
+    runtimeOptions: z.record(z.string(), z.unknown()).optional(),
+    runtimeOverrides: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 

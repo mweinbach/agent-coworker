@@ -22,10 +22,11 @@ export function createProviderRouteHandlers(
     "cowork/provider/catalog/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const refresh = params.refresh === true;
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.provider.emitCatalog(),
+        async (runtime) => await runtime.provider.emitCatalog({ refresh }),
         (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
           event.type === "provider_catalog",
       );

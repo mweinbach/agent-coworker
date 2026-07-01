@@ -68,9 +68,15 @@ export async function refreshProviderStatusForWorkspace(
   );
   const catalogPromise = opts.refreshBedrockDiscovery
     ? statusRefreshPromise.then(() =>
-        sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
+        sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
+          cwd: path,
+          refresh: true,
+        }),
       )
-    : sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path });
+    : sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
+        cwd: path,
+        refresh: true,
+      });
   const authMethodsPromise = sendControlEvent(
     get,
     set,

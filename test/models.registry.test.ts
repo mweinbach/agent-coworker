@@ -169,6 +169,21 @@ describe("model registry helpers", () => {
     });
   });
 
+  test("live-discovered API providers preserve unknown model IDs", () => {
+    expect(normalizeModelIdForProvider("openai", "gpt-5.6-experimental")).toBe(
+      "gpt-5.6-experimental",
+    );
+    expect(getResolvedModelMetadataSync("openai", "gpt-5.6-experimental")).toMatchObject({
+      id: "gpt-5.6-experimental",
+      provider: "openai",
+      displayName: "gpt-5.6-experimental",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+      source: "dynamic",
+    });
+    expect(normalizeModelIdForProvider("opencode-go", "kimi-k2.7-code")).toBe("kimi-k2.7-code");
+  });
+
   test("Claude Opus 4.7 and 4.8 use adaptive thinking defaults", () => {
     for (const modelId of ["claude-opus-4-7", "claude-opus-4-8"] as const) {
       expect(providerOptionsDefaultsForModel("anthropic", modelId)).toMatchObject({

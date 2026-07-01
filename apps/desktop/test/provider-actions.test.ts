@@ -59,7 +59,7 @@ describe("provider actions", () => {
 
     expect(calls).toEqual([
       { method: "cowork/provider/status/refresh", params: { cwd: "/tmp/ws-1" } },
-      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1" } },
+      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1", refresh: true } },
       { method: "cowork/provider/authMethods/read", params: { cwd: "/tmp/ws-1" } },
     ]);
     expect(harness.state.providerStatusRefreshing).toBe(false);
@@ -103,7 +103,7 @@ describe("provider actions", () => {
 
     expect(calls).toEqual([
       { method: "cowork/provider/status/refresh", params: { cwd: "/tmp/ws-1" } },
-      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1" } },
+      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1", refresh: true } },
       { method: "cowork/provider/authMethods/read", params: { cwd: "/tmp/ws-1" } },
     ]);
     expect(harness.state.providerStatusRefreshing).toBe(true);
@@ -172,7 +172,7 @@ describe("provider actions", () => {
         params: { cwd: "/tmp/ws-1", refreshBedrockDiscovery: true },
       },
       { method: "cowork/provider/authMethods/read", params: { cwd: "/tmp/ws-1" } },
-      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1" } },
+      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1", refresh: true } },
     ]);
     expect(harness.state.providerStatusRefreshing).toBe(false);
     expect(harness.state.notifications).toEqual([]);

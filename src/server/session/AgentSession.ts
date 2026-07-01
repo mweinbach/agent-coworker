@@ -432,7 +432,8 @@ export class AgentSession {
       syncSessionBackupAvailability: async () => {},
       refreshProviderStatus: async (opts) =>
         await this.getProviderCatalogManager().refreshProviderStatus(opts),
-      emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
+      emitProviderCatalog: async (opts) =>
+        await this.getProviderCatalogManager().emitProviderCatalog(opts),
       emitMcpServers: async () => await this.getMcpManager().emitMcpServers(),
       getSkillMutationBlockReason: () =>
         this.deps.getSkillMutationBlockReasonImpl?.(this.state.config.workingDirectory) ?? null,
@@ -1436,8 +1437,8 @@ export class AgentSession {
     });
   }
 
-  async emitProviderCatalog() {
-    await this.getProviderCatalogManager().emitProviderCatalog();
+  async emitProviderCatalog(opts: { refresh?: boolean } = {}) {
+    await this.getProviderCatalogManager().emitProviderCatalog(opts);
   }
 
   emitProviderAuthMethods() {

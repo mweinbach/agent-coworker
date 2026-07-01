@@ -16,7 +16,7 @@ type BasetenModelSpec = {
   };
 };
 
-const BASETEN_BASE_URL = "https://inference.baseten.co/v1";
+export const BASETEN_BASE_URL = "https://inference.baseten.co/v1";
 
 const BASETEN_MODEL_SPECS: Record<BasetenModelId, BasetenModelSpec> = {
   "moonshotai/Kimi-K2.5": {

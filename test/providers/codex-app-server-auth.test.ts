@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  listCodexAppServerModels,
   loginCodexAppServerChatGpt,
   logoutCodexAppServer,
   readCodexAppServerAccount,
@@ -104,6 +105,69 @@ describe("codex app-server auth", () => {
     expect(result).toEqual({
       primary: { usedPercent: 42, windowDurationMins: 15 },
     });
+  });
+
+  test("normalizes model/list descriptions, reasoning defaults, and runtime options", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-models-"));
+
+    clientInternal.setClientFactoryForTests(async () => {
+      return {
+        command: { command: "node", args: [], source: "managed" },
+        isClosed: () => false,
+        request: async (method) => {
+          if (method === "model/list") {
+            return {
+              data: [
+                {
+                  id: "future-model",
+                  model: "future-model",
+                  displayName: "Future Model",
+                  description: "A future model.",
+                  supports_image_input: true,
+                  reasoning: {
+                    available_efforts: ["low", "medium", "high"],
+                    default_effort: "medium",
+                  },
+                  runtime_options: {
+                    webSearchMode: "cached",
+                  },
+                  runtime_overrides: {
+                    reasoningSummary: "concise",
+                  },
+                  isDefault: true,
+                },
+              ],
+            };
+          }
+          return {};
+        },
+        notify: () => {},
+        interruptTurn: async () => {},
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+        onJsonRpcMessage: () => () => {},
+        close: async () => {},
+      };
+    });
+
+    await expect(listCodexAppServerModels({ codexHome })).resolves.toEqual([
+      {
+        id: "future-model",
+        model: "future-model",
+        displayName: "Future Model",
+        description: "A future model.",
+        supportsImageInput: true,
+        reasoningEfforts: ["low", "medium", "high"],
+        reasoningDefaultEffort: "medium",
+        runtimeOptions: {
+          webSearchMode: "cached",
+        },
+        runtimeOverrides: {
+          reasoningSummary: "concise",
+        },
+        isDefault: true,
+      },
+    ]);
   });
 
   test("login closes pooled clients for the same Codex home so turns reload fresh auth", async () => {

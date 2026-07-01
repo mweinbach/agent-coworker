@@ -253,8 +253,8 @@ export class SessionSettingsService {
 export class SessionProviderService {
   constructor(private readonly session: AgentSession) {}
 
-  async emitCatalog(): Promise<void> {
-    await this.session.emitProviderCatalog();
+  async emitCatalog(opts: { refresh?: boolean } = {}): Promise<void> {
+    await this.session.emitProviderCatalog(opts);
   }
 
   emitAuthMethods(): void {

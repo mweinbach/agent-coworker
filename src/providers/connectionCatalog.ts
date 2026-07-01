@@ -8,31 +8,53 @@ import {
   type SupportedModel,
 } from "../models/registry";
 import {
-  OPENAI_REASONING_EFFORT_VALUES,
-  type CatalogReasoningEffort,
-  isOpenAiReasoningEffort,
-} from "../shared/openaiCompatibleOptions";
-import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
 } from "../shared/googleThinking";
+import {
+  type CatalogReasoningEffort,
+  isOpenAiReasoningEffort,
+  OPENAI_REASONING_EFFORT_VALUES,
+} from "../shared/openaiCompatibleOptions";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { isAntigravitySupportedPlatform } from "./antigravitySupport";
+import { BASETEN_BASE_URL, resolveBasetenApiKey } from "./basetenShared";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
-import { listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
+import { type listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import {
-  listLmStudioLlms,
-  lmStudioCatalogStateMessage,
-  mapLmStudioModelToResolvedMetadata,
-  selectDefaultLmStudioModel,
-} from "./lmstudio/catalog";
+  FIREWORKS_INFERENCE_BASE_URL,
+  isFireworksInferenceProvider,
+  resolveFireworksInferenceApiKey,
+} from "./fireworksShared";
+import { lmStudioCatalogStateMessage } from "./lmstudio/catalog";
+import { isLmStudioError, resolveLmStudioProviderOptions } from "./lmstudio/client";
+import { MINIMAX_BASE_URL, resolveMinimaxApiKey } from "./minimaxShared";
 import {
-  isLmStudioError,
-  listLmStudioModels,
-  resolveLmStudioProviderOptions,
-} from "./lmstudio/client";
-import { getOpenCodeDisplayName } from "./opencodeShared";
+  createAnthropicModelDiscoveryAdapter,
+  createBedrockModelDiscoveryAdapter,
+  createCodexAppServerModelDiscoveryAdapter,
+  createGoogleModelDiscoveryAdapter,
+  createLmStudioModelDiscoveryAdapter,
+  createOpenAiCompatibleModelDiscoveryAdapter,
+} from "./modelDiscoveryAdapters";
+import {
+  type CachedModelDiscoveryModel,
+  isModelDiscoveryCacheFresh,
+  type ModelDiscoveryAdapter,
+  type ModelDiscoveryResult,
+  modelDiscoveryResultFromCache,
+  readModelDiscoveryCache,
+  writeModelDiscoveryCache,
+} from "./modelDiscoveryCache";
+import { NVIDIA_BASE_URL, resolveNvidiaApiKey } from "./nvidiaShared";
+import {
+  getOpenCodeDisplayName,
+  getOpenCodeProviderConfig,
+  isOpenCodeProviderName,
+  resolveOpenCodeApiKey,
+} from "./opencodeShared";
+import { resolveTogetherApiKey, TOGETHER_BASE_URL } from "./togetherShared";
 
 function storedProviderApiKey(
   store: Awaited<ReturnType<typeof readConnectionStore>>,
@@ -47,10 +69,14 @@ export type ProviderCatalogModelEntry = Pick<
   SupportedModel,
   "id" | "displayName" | "knowledgeCutoff" | "supportsImageInput"
 > & {
+  model?: string;
+  description?: string;
   reasoning?: {
     defaultEffort: CatalogReasoningEffort;
     availableEfforts: CatalogReasoningEffort[];
   };
+  runtimeOptions?: Record<string, unknown>;
+  runtimeOverrides?: Record<string, unknown>;
 };
 
 export type ProviderCatalogEntry = {
@@ -90,9 +116,70 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   antigravity: "Antigravity",
 };
 
-function uniqueCatalogEfforts(
-  values: readonly CatalogReasoningEffort[],
-): CatalogReasoningEffort[] {
+type ApiModelDiscoveryProvider = Extract<
+  ProviderName,
+  | "google"
+  | "openai"
+  | "anthropic"
+  | "baseten"
+  | "together"
+  | "fireworks"
+  | "firepass"
+  | "nvidia"
+  | "minimax"
+  | "opencode-go"
+  | "opencode-zen"
+>;
+
+function resolveOpenAiApiKey(opts: {
+  savedKey?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const env = opts.env ?? process.env;
+  return opts.savedKey?.trim() || env.OPENAI_API_KEY?.trim() || undefined;
+}
+
+function resolveGoogleApiKey(opts: {
+  savedKey?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const env = opts.env ?? process.env;
+  return (
+    opts.savedKey?.trim() ||
+    env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ||
+    env.GEMINI_API_KEY?.trim() ||
+    env.GOOGLE_API_KEY?.trim() ||
+    undefined
+  );
+}
+
+function resolveAnthropicApiKey(opts: {
+  savedKey?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const env = opts.env ?? process.env;
+  return opts.savedKey?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined;
+}
+
+function isApiModelDiscoveryProvider(
+  provider: ProviderName,
+): provider is ApiModelDiscoveryProvider {
+  return (
+    provider === "google" ||
+    provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "baseten" ||
+    provider === "together" ||
+    provider === "fireworks" ||
+    provider === "firepass" ||
+    provider === "nvidia" ||
+    provider === "minimax" ||
+    provider === "opencode-go" ||
+    provider === "opencode-zen"
+  );
+}
+
+function uniqueCatalogEfforts(values: readonly CatalogReasoningEffort[]): CatalogReasoningEffort[] {
   return [...new Set(values)];
 }
 
@@ -115,6 +202,29 @@ function reasoningConfigForModel(
   };
 }
 
+function reasoningConfigForDiscoveredModel(
+  model: CachedModelDiscoveryModel,
+  supported?: SupportedModel,
+): ProviderCatalogModelEntry["reasoning"] {
+  const staticReasoning = supported ? reasoningConfigForModel(supported) : undefined;
+  const availableEfforts = uniqueCatalogEfforts(
+    model.reasoning?.availableEfforts ?? staticReasoning?.availableEfforts ?? [],
+  );
+  const defaultEffort =
+    model.reasoning?.defaultEffort ??
+    staticReasoning?.defaultEffort ??
+    (availableEfforts.length > 0 ? availableEfforts[0] : undefined);
+  if (!defaultEffort) return undefined;
+  const nextAvailableEfforts = availableEfforts.includes(defaultEffort)
+    ? availableEfforts
+    : uniqueCatalogEfforts([defaultEffort, ...availableEfforts]);
+  if (nextAvailableEfforts.length === 0) return undefined;
+  return {
+    defaultEffort,
+    availableEfforts: nextAvailableEfforts,
+  };
+}
+
 function staticCatalogModelEntry(model: SupportedModel): ProviderCatalogModelEntry {
   const reasoning = reasoningConfigForModel(model);
   return {
@@ -126,6 +236,147 @@ function staticCatalogModelEntry(model: SupportedModel): ProviderCatalogModelEnt
   };
 }
 
+function resolveDiscoveredModel(
+  provider: ProviderName,
+  model: CachedModelDiscoveryModel,
+): { id: string; supported?: SupportedModel } {
+  const supported =
+    (model.model ? getSupportedModel(provider, model.model) : null) ??
+    getSupportedModel(provider, model.id);
+  return {
+    id: supported?.id ?? model.model ?? model.id,
+    ...(supported ? { supported } : {}),
+  };
+}
+
+function discoveredModelToCatalogEntry(
+  provider: ProviderName,
+  model: CachedModelDiscoveryModel,
+): ProviderCatalogModelEntry {
+  const live = resolveDiscoveredModel(provider, model);
+  const reasoning = reasoningConfigForDiscoveredModel(model, live.supported);
+  return {
+    id: live.id,
+    ...(model.model && model.model !== live.id ? { model: model.model } : {}),
+    displayName: model.displayName || live.supported?.displayName || live.id,
+    ...(model.description ? { description: model.description } : {}),
+    knowledgeCutoff: live.supported?.knowledgeCutoff ?? model.knowledgeCutoff ?? "Unknown",
+    supportsImageInput: live.supported?.supportsImageInput ?? model.supportsImageInput ?? false,
+    ...(reasoning ? { reasoning } : {}),
+    ...(model.runtimeOptions ? { runtimeOptions: model.runtimeOptions } : {}),
+    ...(model.runtimeOverrides ? { runtimeOverrides: model.runtimeOverrides } : {}),
+  };
+}
+
+function discoveredModelsToCatalogEntries(
+  provider: ProviderName,
+  models: readonly CachedModelDiscoveryModel[],
+): ProviderCatalogModelEntry[] {
+  const modelsById = new Map<string, ProviderCatalogModelEntry>();
+  for (const model of models) {
+    const entry = discoveredModelToCatalogEntry(provider, model);
+    if (modelsById.has(entry.id)) continue;
+    modelsById.set(entry.id, entry);
+  }
+  return [...modelsById.values()];
+}
+
+function defaultModelFromDiscovery(
+  provider: ProviderName,
+  discoveryModels: readonly CachedModelDiscoveryModel[],
+  catalogModels: readonly ProviderCatalogModelEntry[],
+): string {
+  const defaultFromDiscovery = discoveryModels.find((model) => model.isDefault);
+  if (defaultFromDiscovery) {
+    return resolveDiscoveredModel(provider, defaultFromDiscovery).id;
+  }
+  const staticDefault = listSupportedModels(provider).find((model) => model.isDefault)?.id;
+  if (staticDefault && catalogModels.some((model) => model.id === staticDefault)) {
+    return staticDefault;
+  }
+  return catalogModels[0]?.id ?? "";
+}
+
+function catalogEntryFromDiscovery(opts: {
+  provider: ProviderName;
+  discovery: ModelDiscoveryResult;
+  state?: ProviderCatalogEntry["state"];
+  message?: string;
+}): ProviderCatalogEntry {
+  const models = discoveredModelsToCatalogEntries(opts.provider, opts.discovery.models);
+  return {
+    id: opts.provider,
+    name: PROVIDER_LABELS[opts.provider],
+    models,
+    defaultModel: defaultModelFromDiscovery(opts.provider, opts.discovery.models, models),
+    ...(opts.state ? { state: opts.state } : {}),
+    ...(opts.message ? { message: opts.message } : {}),
+  };
+}
+
+function discoveryFailureMessage(
+  provider: ProviderName,
+  error: unknown,
+  updatedAt: string,
+): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `${PROVIDER_LABELS[provider]} model discovery failed: ${reason} Using cached model catalog from ${updatedAt}.`;
+}
+
+async function discoverProviderModelsWithCache(opts: {
+  paths: AiCoworkerPaths;
+  adapter: ModelDiscoveryAdapter;
+  forceRefresh?: boolean;
+}): Promise<{
+  discovery: ModelDiscoveryResult;
+  stale: boolean;
+  message?: string;
+}> {
+  const cached = await readModelDiscoveryCache(opts.paths, opts.adapter.provider);
+  if (cached && !opts.forceRefresh && isModelDiscoveryCacheFresh(cached)) {
+    return { discovery: modelDiscoveryResultFromCache(cached), stale: false };
+  }
+
+  try {
+    const discovery = await opts.adapter.discover({
+      reason: opts.forceRefresh ? "manual" : cached ? "ttl" : "catalog",
+      force: opts.forceRefresh || !cached || !isModelDiscoveryCacheFresh(cached),
+    });
+    if (discovery.source === "static" && cached && cached.source !== "static") {
+      return {
+        discovery: modelDiscoveryResultFromCache(cached),
+        stale: true,
+        message:
+          discovery.message ??
+          `${PROVIDER_LABELS[opts.adapter.provider]} model discovery fell back to static data. Using cached model catalog from ${cached.updatedAt}.`,
+      };
+    }
+    if (discovery.source === "static") {
+      return { discovery, stale: false, message: discovery.message };
+    }
+    if (discovery.models.length === 0 && cached && cached.source !== "static") {
+      return {
+        discovery: modelDiscoveryResultFromCache(cached),
+        stale: true,
+        message:
+          discovery.message ??
+          `${PROVIDER_LABELS[opts.adapter.provider]} model discovery returned no usable models. Using cached model catalog from ${cached.updatedAt}.`,
+      };
+    }
+    const next = await writeModelDiscoveryCache(opts.paths, opts.adapter.provider, discovery);
+    return { discovery: modelDiscoveryResultFromCache(next), stale: false };
+  } catch (error) {
+    if (cached) {
+      return {
+        discovery: modelDiscoveryResultFromCache(cached),
+        stale: true,
+        message: discoveryFailureMessage(opts.adapter.provider, error, cached.updatedAt),
+      };
+    }
+    throw error;
+  }
+}
+
 function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): ProviderCatalogEntry {
   return {
     id: provider,
@@ -135,14 +386,213 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
   };
 }
 
+function resolveApiModelDiscoveryKey(opts: {
+  provider: ApiModelDiscoveryProvider;
+  store?: Awaited<ReturnType<typeof readConnectionStore>>;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const savedKey = opts.store ? storedProviderApiKey(opts.store, opts.provider) : undefined;
+  if (opts.provider === "openai") return resolveOpenAiApiKey({ savedKey, env: opts.env });
+  if (opts.provider === "google") return resolveGoogleApiKey({ savedKey, env: opts.env });
+  if (opts.provider === "anthropic") return resolveAnthropicApiKey({ savedKey, env: opts.env });
+  if (opts.provider === "baseten") return resolveBasetenApiKey({ savedKey, env: opts.env });
+  if (opts.provider === "together") return resolveTogetherApiKey({ savedKey, env: opts.env });
+  if (isFireworksInferenceProvider(opts.provider)) {
+    return resolveFireworksInferenceApiKey(opts.provider, { savedKey, env: opts.env });
+  }
+  if (opts.provider === "nvidia") return resolveNvidiaApiKey({ savedKey, env: opts.env });
+  if (opts.provider === "minimax") return resolveMinimaxApiKey({ savedKey, env: opts.env });
+  return resolveOpenCodeApiKey(opts.provider, { savedKey, env: opts.env });
+}
+
+function createApiModelDiscoveryAdapter(opts: {
+  provider: ApiModelDiscoveryProvider;
+  apiKey?: string;
+  fetchImpl?: typeof fetch;
+}): ModelDiscoveryAdapter {
+  if (opts.provider === "google") {
+    if (!opts.apiKey) throw new Error("Google API key unavailable for model discovery.");
+    return createGoogleModelDiscoveryAdapter({ apiKey: opts.apiKey, fetchImpl: opts.fetchImpl });
+  }
+  if (opts.provider === "anthropic") {
+    if (!opts.apiKey) throw new Error("Anthropic API key unavailable for model discovery.");
+    return createAnthropicModelDiscoveryAdapter({
+      apiKey: opts.apiKey,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
+  if (opts.provider === "openai") {
+    if (!opts.apiKey) throw new Error("OpenAI API key unavailable for model discovery.");
+    return createOpenAiCompatibleModelDiscoveryAdapter({
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: opts.apiKey,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
+  if (opts.provider === "baseten") {
+    if (!opts.apiKey) throw new Error("Baseten API key unavailable for model discovery.");
+    return createOpenAiCompatibleModelDiscoveryAdapter({
+      provider: "baseten",
+      baseUrl: BASETEN_BASE_URL,
+      apiKey: opts.apiKey,
+      authorizationPrefix: "Api-Key",
+      fetchImpl: opts.fetchImpl,
+    });
+  }
+  if (opts.provider === "together") {
+    if (!opts.apiKey) throw new Error("Together API key unavailable for model discovery.");
+    return createOpenAiCompatibleModelDiscoveryAdapter({
+      provider: "together",
+      baseUrl: TOGETHER_BASE_URL,
+      apiKey: opts.apiKey,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
+  if (isFireworksInferenceProvider(opts.provider)) {
+    if (!opts.apiKey) {
+      throw new Error(`${PROVIDER_LABELS[opts.provider]} API key unavailable for model discovery.`);
+    }
+    return createOpenAiCompatibleModelDiscoveryAdapter({
+      provider: opts.provider,
+      baseUrl: FIREWORKS_INFERENCE_BASE_URL,
+      apiKey: opts.apiKey,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
+  if (opts.provider === "nvidia") {
+    if (!opts.apiKey) throw new Error("NVIDIA API key unavailable for model discovery.");
+    return createOpenAiCompatibleModelDiscoveryAdapter({
+      provider: "nvidia",
+      baseUrl: NVIDIA_BASE_URL,
+      apiKey: opts.apiKey,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
+  if (opts.provider === "minimax") {
+    if (!opts.apiKey) throw new Error("MiniMax API key unavailable for model discovery.");
+    return createOpenAiCompatibleModelDiscoveryAdapter({
+      provider: "minimax",
+      baseUrl: MINIMAX_BASE_URL,
+      apiKey: opts.apiKey,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
+  const providerConfig = getOpenCodeProviderConfig(opts.provider);
+  return createOpenAiCompatibleModelDiscoveryAdapter({
+    provider: opts.provider,
+    baseUrl: providerConfig.baseUrl,
+    apiKey: opts.apiKey,
+    fetchImpl: opts.fetchImpl,
+  });
+}
+
+function bundledFallbackCatalogEntry(
+  provider: ApiModelDiscoveryProvider,
+  opts: { state?: ProviderCatalogEntry["state"]; message?: string } = {},
+): ProviderCatalogEntry {
+  const entry = staticCatalogEntry(provider);
+  return {
+    ...entry,
+    ...(opts.state ? { state: opts.state } : {}),
+    ...(opts.message ? { message: opts.message } : {}),
+  };
+}
+
+async function apiModelCatalogEntry(opts: {
+  provider: ApiModelDiscoveryProvider;
+  store?: Awaited<ReturnType<typeof readConnectionStore>>;
+  env?: NodeJS.ProcessEnv;
+  paths: AiCoworkerPaths;
+  fetchImpl?: typeof fetch;
+  forceRefresh?: boolean;
+}): Promise<ProviderCatalogEntry> {
+  const apiKey = resolveApiModelDiscoveryKey({
+    provider: opts.provider,
+    store: opts.store,
+    env: opts.env,
+  });
+  const cached = await readModelDiscoveryCache(opts.paths, opts.provider);
+  const cachedIsFresh = isModelDiscoveryCacheFresh(cached);
+  const isPublicCatalog = isOpenCodeProviderName(opts.provider);
+  const shouldUseLive =
+    Boolean(cached) ||
+    (Boolean(apiKey) && opts.forceRefresh === true) ||
+    (isPublicCatalog && opts.forceRefresh === true);
+
+  if (!shouldUseLive) {
+    return bundledFallbackCatalogEntry(opts.provider);
+  }
+
+  if (!apiKey && !isPublicCatalog && cached) {
+    return catalogEntryFromDiscovery({
+      provider: opts.provider,
+      discovery: modelDiscoveryResultFromCache(cached),
+      state: !cachedIsFresh || opts.forceRefresh ? "unreachable" : "ready",
+      message:
+        !cachedIsFresh || opts.forceRefresh
+          ? `${PROVIDER_LABELS[opts.provider]} API key unavailable. Using cached model catalog from ${cached.updatedAt}.`
+          : undefined,
+    });
+  }
+
+  try {
+    const result = await discoverProviderModelsWithCache({
+      paths: opts.paths,
+      adapter: createApiModelDiscoveryAdapter({
+        provider: opts.provider,
+        apiKey,
+        fetchImpl: opts.fetchImpl,
+      }),
+      forceRefresh: opts.forceRefresh,
+    });
+    return catalogEntryFromDiscovery({
+      provider: opts.provider,
+      discovery: result.discovery,
+      state: result.stale ? "unreachable" : result.discovery.models.length > 0 ? "ready" : "empty",
+      message:
+        result.message ??
+        (result.discovery.models.length === 0
+          ? `${PROVIDER_LABELS[opts.provider]} model discovery returned no usable generation models.`
+          : undefined),
+    });
+  } catch (error) {
+    return bundledFallbackCatalogEntry(opts.provider, {
+      state: "unreachable",
+      message: `${PROVIDER_LABELS[opts.provider]} model discovery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }. Showing bundled model catalog.`,
+    });
+  }
+}
+
 async function codexCatalogEntry(opts: {
   listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
   codexHome?: string;
+  paths?: AiCoworkerPaths;
+  forceRefresh?: boolean;
 }): Promise<ProviderCatalogEntry> {
-  const listModels = opts.listCodexAppServerModelsImpl ?? listCodexAppServerModels;
-  let appServerModels: Awaited<ReturnType<typeof listCodexAppServerModels>> = [];
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   try {
-    appServerModels = await listModels({ codexHome: opts.codexHome });
+    const result = await discoverProviderModelsWithCache({
+      paths,
+      adapter: createCodexAppServerModelDiscoveryAdapter({
+        codexHome: opts.codexHome,
+        listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl,
+      }),
+      forceRefresh: opts.forceRefresh,
+    });
+    const entry = catalogEntryFromDiscovery({
+      provider: "codex-cli",
+      discovery: result.discovery,
+      state: result.stale ? "unreachable" : result.discovery.models.length > 0 ? "ready" : "empty",
+      message:
+        result.message ??
+        (result.discovery.models.length === 0
+          ? "Codex app-server did not report any locally supported models."
+          : undefined),
+    });
+    return entry;
   } catch (error) {
     return {
       id: "codex-cli",
@@ -153,53 +603,6 @@ async function codexCatalogEntry(opts: {
       message: error instanceof Error ? error.message : "Unable to read Codex app-server models.",
     };
   }
-
-  const resolveLiveModel = (model: (typeof appServerModels)[number]) => {
-    const supported =
-      getSupportedModel("codex-cli", model.model) ?? getSupportedModel("codex-cli", model.id);
-    const id = supported?.id ?? model.model ?? model.id;
-    return { id, supported };
-  };
-  const modelsById = new Map<string, ProviderCatalogModelEntry>();
-  for (const model of appServerModels) {
-    const live = resolveLiveModel(model);
-    if (modelsById.has(live.id)) continue;
-    const reasoning = live.supported
-      ? reasoningConfigForModel(live.supported, { liveEfforts: model.reasoningEfforts })
-      : undefined;
-    modelsById.set(live.id, {
-      id: live.id,
-      displayName: model.displayName || live.supported?.displayName || live.id,
-      knowledgeCutoff: live.supported?.knowledgeCutoff ?? "Unknown",
-      supportsImageInput: live.supported?.supportsImageInput ?? model.supportsImageInput ?? false,
-      ...(reasoning ? { reasoning } : {}),
-    });
-  }
-  const models = [...modelsById.values()];
-  if (models.length === 0) {
-    return {
-      id: "codex-cli",
-      name: PROVIDER_LABELS["codex-cli"],
-      models: [],
-      defaultModel: "",
-      state: "empty",
-      message: "Codex app-server did not report any locally supported models.",
-    };
-  }
-
-  const defaultFromAppServer = appServerModels.find((model) => model.isDefault);
-  const defaultModel =
-    (defaultFromAppServer ? resolveLiveModel(defaultFromAppServer).id : undefined) ??
-    models[0]?.id ??
-    "";
-
-  return {
-    id: "codex-cli",
-    name: PROVIDER_LABELS["codex-cli"],
-    models,
-    defaultModel,
-    state: "ready",
-  };
 }
 
 async function bedrockCatalogEntry(opts: {
@@ -207,26 +610,28 @@ async function bedrockCatalogEntry(opts: {
   env?: NodeJS.ProcessEnv;
   homedir?: string;
   paths?: AiCoworkerPaths;
+  forceRefresh?: boolean;
 }): Promise<{ entry: ProviderCatalogEntry; connected: boolean }> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
+  const discovery = await discoverProviderModelsWithCache({
+    paths,
+    adapter: createBedrockModelDiscoveryAdapter({
+      paths,
+      env: opts.env,
+    }),
+    forceRefresh: opts.forceRefresh,
+  });
   const snapshot = await readBedrockCatalogSnapshot({
     paths,
     env: opts.env,
   });
   return {
-    entry: {
-      id: "bedrock",
-      name: PROVIDER_LABELS.bedrock,
-      models: snapshot.models.map((model) => ({
-        id: model.id,
-        displayName: model.displayName,
-        knowledgeCutoff: model.knowledgeCutoff,
-        supportsImageInput: model.supportsImageInput,
-      })),
-      defaultModel: snapshot.defaultModel,
-      ...(snapshot.state ? { state: snapshot.state } : {}),
-      ...(snapshot.message ? { message: snapshot.message } : {}),
-    },
+    entry: catalogEntryFromDiscovery({
+      provider: "bedrock",
+      discovery: discovery.discovery,
+      state: discovery.stale ? "unreachable" : snapshot.state,
+      message: discovery.message ?? snapshot.message,
+    }),
     connected: snapshot.connected,
   };
 }
@@ -236,38 +641,40 @@ async function lmStudioCatalogEntry(opts: {
   providerOptions?: unknown;
   env?: NodeJS.ProcessEnv;
   lmstudioFetchImpl?: typeof fetch;
+  paths?: AiCoworkerPaths;
+  forceRefresh?: boolean;
 }): Promise<{ entry: ProviderCatalogEntry; connected: boolean }> {
   const provider = resolveLmStudioProviderOptions(opts.providerOptions, opts.env);
   try {
-    const models = (
-      await listLmStudioModels({
+    const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
+    const discovery = await discoverProviderModelsWithCache({
+      paths,
+      adapter: createLmStudioModelDiscoveryAdapter({
         baseUrl: provider.baseUrl,
         apiKey:
           provider.apiKey ??
           (opts.store ? storedProviderApiKey(opts.store, "lmstudio") : undefined),
         fetchImpl: opts.lmstudioFetchImpl,
-      })
-    ).models;
-    const llms = listLmStudioLlms(models);
-    const defaultModel =
-      llms.length > 0 ? selectDefaultLmStudioModel(models, provider.baseUrl).key : "";
+      }),
+      forceRefresh: opts.forceRefresh,
+    });
+    const entry = catalogEntryFromDiscovery({
+      provider: "lmstudio",
+      discovery: discovery.discovery,
+      state: discovery.stale
+        ? "unreachable"
+        : discovery.discovery.models.length > 0
+          ? "ready"
+          : "empty",
+      message:
+        discovery.message ??
+        (discovery.discovery.models.length === 0
+          ? `LM Studio server at ${provider.baseUrl} is reachable, but no LLMs are available.`
+          : undefined),
+    });
     return {
-      entry: {
-        id: "lmstudio",
-        name: PROVIDER_LABELS.lmstudio,
-        models: llms.map((model) => {
-          const metadata = mapLmStudioModelToResolvedMetadata(model);
-          return {
-            id: metadata.id,
-            displayName: metadata.displayName,
-            knowledgeCutoff: metadata.knowledgeCutoff,
-            supportsImageInput: metadata.supportsImageInput,
-          };
-        }),
-        defaultModel,
-        state: "ready",
-      },
-      connected: true,
+      entry,
+      connected: !discovery.stale,
     };
   } catch (error) {
     if (isLmStudioError(error) && error.code === "no_llms") {
@@ -302,28 +709,67 @@ async function lmStudioCatalogEntry(opts: {
 
 export async function listProviderCatalogEntries(
   opts: {
+    homedir?: string;
+    paths?: AiCoworkerPaths;
     store?: Awaited<ReturnType<typeof readConnectionStore>>;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     lmstudioFetchImpl?: typeof fetch;
+    modelDiscoveryFetchImpl?: typeof fetch;
     listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
     platform?: NodeJS.Platform;
+    refresh?: boolean;
   } = {},
 ): Promise<ProviderCatalogEntry[]> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const bedrock = await bedrockCatalogEntry({
+    paths,
     providerOptions: opts.providerOptions,
     env: opts.env,
+    forceRefresh: opts.refresh,
   });
-  const lmstudio = await lmStudioCatalogEntry(opts);
+  const lmstudio = await lmStudioCatalogEntry({ ...opts, paths, forceRefresh: opts.refresh });
   const codex = opts.listCodexAppServerModelsImpl
-    ? await codexCatalogEntry({ listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl })
+    ? await codexCatalogEntry({
+        listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl,
+        paths,
+        forceRefresh: opts.refresh,
+      })
     : staticCatalogEntry("codex-cli");
+  const apiEntries = new Map<ProviderName, ProviderCatalogEntry>();
+  const shouldReadApiCatalogs = Boolean(
+    opts.paths ||
+      opts.homedir ||
+      opts.store ||
+      opts.env ||
+      opts.modelDiscoveryFetchImpl ||
+      opts.refresh,
+  );
+  if (shouldReadApiCatalogs) {
+    await Promise.all(
+      PROVIDER_NAMES.filter(isApiModelDiscoveryProvider).map(async (provider) => {
+        apiEntries.set(
+          provider,
+          await apiModelCatalogEntry({
+            provider,
+            store: opts.store,
+            env: opts.env,
+            paths,
+            fetchImpl: opts.modelDiscoveryFetchImpl,
+            forceRefresh: opts.refresh,
+          }),
+        );
+      }),
+    );
+  }
   return PROVIDER_NAMES.filter(
     (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
   ).map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
+    const apiEntry = apiEntries.get(provider);
+    if (apiEntry) return apiEntry;
     return staticCatalogEntry(provider);
   });
 }
@@ -338,7 +784,9 @@ export async function getProviderCatalog(
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     lmstudioFetchImpl?: typeof fetch;
+    modelDiscoveryFetchImpl?: typeof fetch;
     platform?: NodeJS.Platform;
+    refresh?: boolean;
   } = {},
 ): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
@@ -351,6 +799,7 @@ export async function getProviderCatalog(
     paths,
     providerOptions: opts.providerOptions,
     env: opts.env,
+    forceRefresh: opts.refresh,
   });
   const hasCodexAccount = Boolean(
     await readCodexAppServerAccountImpl({ refreshToken: false, codexHome }).then(
@@ -363,19 +812,41 @@ export async function getProviderCatalog(
     providerOptions: opts.providerOptions,
     env: opts.env,
     lmstudioFetchImpl: opts.lmstudioFetchImpl,
+    paths,
+    forceRefresh: opts.refresh,
   });
   const codex = hasCodexAccount
     ? await codexCatalogEntry({
         listCodexAppServerModelsImpl: opts.listCodexAppServerModelsImpl,
         codexHome,
+        paths,
+        forceRefresh: opts.refresh,
       })
     : staticCatalogEntry("codex-cli");
+  const apiEntries = new Map<ProviderName, ProviderCatalogEntry>();
+  await Promise.all(
+    PROVIDER_NAMES.filter(isApiModelDiscoveryProvider).map(async (provider) => {
+      apiEntries.set(
+        provider,
+        await apiModelCatalogEntry({
+          provider,
+          store,
+          env: opts.env,
+          paths,
+          fetchImpl: opts.modelDiscoveryFetchImpl,
+          forceRefresh: opts.refresh,
+        }),
+      );
+    }),
+  );
   const all = PROVIDER_NAMES.filter(
     (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
   ).map((provider) => {
     if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     if (provider === "codex-cli") return codex;
+    const apiEntry = apiEntries.get(provider);
+    if (apiEntry) return apiEntry;
     return staticCatalogEntry(provider);
   });
   const defaults: Record<string, string> = {};
@@ -386,6 +857,12 @@ export async function getProviderCatalog(
     }
     if (provider === "bedrock") {
       return bedrock.connected;
+    }
+    if (
+      isApiModelDiscoveryProvider(provider) &&
+      resolveApiModelDiscoveryKey({ provider, store, env: opts.env })
+    ) {
+      return true;
     }
     const entry = store.services[provider];
     if (provider === "antigravity" && !isAntigravitySupportedPlatform(opts.platform)) {

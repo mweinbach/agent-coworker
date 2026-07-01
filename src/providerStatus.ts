@@ -23,12 +23,17 @@ import {
   readCodexAppServerAccount,
   readCodexAppServerRateLimits,
 } from "./providers/codexAppServerAuth";
-import { listLmStudioLlms } from "./providers/lmstudio/catalog";
+import {
+  listLmStudioLlms,
+  mapLmStudioModelToResolvedMetadata,
+  selectDefaultLmStudioModel,
+} from "./providers/lmstudio/catalog";
 import {
   isLmStudioError,
   listLmStudioModels,
   resolveLmStudioProviderOptions,
 } from "./providers/lmstudio/client";
+import { writeModelDiscoveryCache } from "./providers/modelDiscoveryCache";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
@@ -257,6 +262,27 @@ async function getBedrockStatus(opts: {
         paths: opts.paths,
         env: opts.env,
       });
+  if (opts.refreshDiscovery && discovery.auth) {
+    await writeModelDiscoveryCache(opts.paths, "bedrock", {
+      provider: "bedrock",
+      source: "api",
+      updatedAt: "updatedAt" in discovery ? discovery.updatedAt : undefined,
+      message: discovery.message,
+      models: discovery.models.map((model) => ({
+        id: model.id,
+        displayName: model.displayName,
+        ...(model.description ? { description: model.description } : {}),
+        knowledgeCutoff: model.knowledgeCutoff,
+        supportsImageInput: model.supportsImageInput,
+        ...(model.id === discovery.defaultModel ? { isDefault: true } : {}),
+        runtimeOptions: {
+          sourceKind: model.sourceKind,
+          ...(model.sourceModelId ? { sourceModelId: model.sourceModelId } : {}),
+          ...(model.sourceModelArn ? { sourceModelArn: model.sourceModelArn } : {}),
+        },
+      })),
+    });
+  }
 
   if (!discovery.auth) {
     return base;
@@ -423,6 +449,7 @@ async function getCodexCliStatus(opts: {
 }
 
 async function getLmStudioStatus(opts: {
+  paths: AiCoworkerPaths;
   store: ConnectionStore;
   checkedAt: string;
   providerOptions?: unknown;
@@ -440,7 +467,36 @@ async function getLmStudioStatus(opts: {
         fetchImpl: opts.fetchImpl,
       })
     ).models;
-    const llmCount = listLmStudioLlms(models).length;
+    const llms = listLmStudioLlms(models);
+    const llmCount = llms.length;
+    const defaultModel =
+      llmCount > 0 ? selectDefaultLmStudioModel(models, providerConfig.baseUrl) : null;
+    await writeModelDiscoveryCache(opts.paths, "lmstudio", {
+      provider: "lmstudio",
+      source: "local-http",
+      models: llms.map((model) => {
+        const metadata = mapLmStudioModelToResolvedMetadata(model);
+        return {
+          id: metadata.id,
+          displayName: metadata.displayName,
+          ...(model.description ? { description: model.description } : {}),
+          knowledgeCutoff: metadata.knowledgeCutoff,
+          supportsImageInput: metadata.supportsImageInput,
+          ...(defaultModel?.key === model.key ? { isDefault: true } : {}),
+          runtimeOptions: {
+            ...(metadata.maxContextLength ? { maxContextLength: metadata.maxContextLength } : {}),
+            ...(metadata.effectiveContextLength
+              ? { effectiveContextLength: metadata.effectiveContextLength }
+              : {}),
+            ...(metadata.trainedForToolUse !== undefined
+              ? { trainedForToolUse: metadata.trainedForToolUse }
+              : {}),
+            ...(metadata.architecture ? { architecture: metadata.architecture } : {}),
+            ...(metadata.format ? { format: metadata.format } : {}),
+          },
+        };
+      }),
+    });
     return {
       provider: "lmstudio",
       authorized: true,
@@ -511,6 +567,7 @@ export async function getProviderStatuses(
     if (provider === "lmstudio") {
       out.push(
         await getLmStudioStatus({
+          paths,
           store,
           checkedAt,
           providerOptions: opts.providerOptions,

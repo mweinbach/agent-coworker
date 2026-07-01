@@ -153,8 +153,8 @@ export class AgentSessionManagerRegistry {
         updateSessionInfo: (patch) => this.host.metadataManager.updateSessionInfo(patch),
         queuePersistSessionSnapshot: (reason) => this.host.queuePersistSessionSnapshot(reason),
         emitConfigUpdated: () => this.host.metadataManager.emitConfigUpdated(),
-        emitProviderCatalog: async () =>
-          await this.getProviderCatalogManager().emitProviderCatalog(),
+        emitProviderCatalog: async (opts) =>
+          await this.getProviderCatalogManager().emitProviderCatalog(opts),
         refreshProviderStatus: async (opts) =>
           await this.getProviderCatalogManager().refreshProviderStatus(opts),
         getGlobalAuthPaths: () => this.host.getGlobalAuthPaths(),

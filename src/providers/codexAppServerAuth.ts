@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { isCatalogReasoningEffort, type CatalogReasoningEffort } from "../shared/openaiCompatibleOptions";
+import {
+  type CatalogReasoningEffort,
+  isCatalogReasoningEffort,
+} from "../shared/openaiCompatibleOptions";
 import { asArray, asRecord, asString } from "../shared/recordParsing";
 import { openExternalUrl, type UrlOpener } from "../utils/browser";
 import {
@@ -43,6 +46,9 @@ export type CodexAppServerModel = {
   description?: string;
   supportsImageInput?: boolean;
   reasoningEfforts?: CatalogReasoningEffort[];
+  reasoningDefaultEffort?: CatalogReasoningEffort;
+  runtimeOptions?: Record<string, unknown>;
+  runtimeOverrides?: Record<string, unknown>;
   isDefault: boolean;
 };
 
@@ -151,7 +157,14 @@ function normalizeReasoningEfforts(value: unknown): CatalogReasoningEffort[] | u
   return out.length > 0 ? out : undefined;
 }
 
-function modelReasoningEfforts(model: Record<string, unknown>): CatalogReasoningEffort[] | undefined {
+function normalizeReasoningEffort(value: unknown): CatalogReasoningEffort | undefined {
+  const normalized = asString(value)?.trim().toLowerCase();
+  return isCatalogReasoningEffort(normalized) ? normalized : undefined;
+}
+
+function modelReasoningEfforts(
+  model: Record<string, unknown>,
+): CatalogReasoningEffort[] | undefined {
   const reasoning = asRecord(model.reasoning);
   return (
     normalizeReasoningEfforts(model.reasoningEfforts) ??
@@ -164,6 +177,32 @@ function modelReasoningEfforts(model: Record<string, unknown>): CatalogReasoning
     normalizeReasoningEfforts(reasoning?.available_efforts) ??
     normalizeReasoningEfforts(reasoning?.efforts)
   );
+}
+
+function modelReasoningDefaultEffort(
+  model: Record<string, unknown>,
+): CatalogReasoningEffort | undefined {
+  const reasoning = asRecord(model.reasoning);
+  return (
+    normalizeReasoningEffort(model.reasoningDefaultEffort) ??
+    normalizeReasoningEffort(model.reasoning_default_effort) ??
+    normalizeReasoningEffort(model.defaultReasoningEffort) ??
+    normalizeReasoningEffort(model.default_reasoning_effort) ??
+    normalizeReasoningEffort(reasoning?.defaultEffort) ??
+    normalizeReasoningEffort(reasoning?.default_effort) ??
+    normalizeReasoningEffort(reasoning?.default)
+  );
+}
+
+function firstRecord(
+  model: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> | undefined {
+  for (const key of keys) {
+    const record = asRecord(model[key]);
+    if (record && Object.keys(record).length > 0) return record;
+  }
+  return undefined;
 }
 
 function normalizeModel(value: unknown): CodexAppServerModel | null {
@@ -181,6 +220,21 @@ function normalizeModel(value: unknown): CodexAppServerModel | null {
         ? model.supports_image_input
         : undefined;
   const reasoningEfforts = modelReasoningEfforts(model);
+  const reasoningDefaultEffort = modelReasoningDefaultEffort(model);
+  const runtimeOptions = firstRecord(model, [
+    "runtimeOptions",
+    "runtime_options",
+    "codexOptions",
+    "codex_options",
+    "options",
+  ]);
+  const runtimeOverrides = firstRecord(model, [
+    "runtimeOverrides",
+    "runtime_overrides",
+    "codexOverrides",
+    "codex_overrides",
+    "overrides",
+  ]);
   return {
     id: canonicalId,
     model: modelId || canonicalId,
@@ -188,6 +242,9 @@ function normalizeModel(value: unknown): CodexAppServerModel | null {
     ...(description ? { description } : {}),
     ...(supportsImageInput !== undefined ? { supportsImageInput } : {}),
     ...(reasoningEfforts ? { reasoningEfforts } : {}),
+    ...(reasoningDefaultEffort ? { reasoningDefaultEffort } : {}),
+    ...(runtimeOptions ? { runtimeOptions } : {}),
+    ...(runtimeOverrides ? { runtimeOverrides } : {}),
     isDefault: model?.isDefault === true,
   };
 }

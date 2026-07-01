@@ -146,8 +146,18 @@ async function createCallbackCapture(
   try {
     const ipv4 = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handleRequest });
     servers.push(ipv4);
+    if (typeof ipv4.port !== "number") {
+      throw new Error("listener did not report a TCP port");
+    }
     port = ipv4.port;
   } catch (error) {
+    for (const server of servers) {
+      try {
+        server.stop();
+      } catch {
+        // best effort
+      }
+    }
     throw new Error(
       `Failed to allocate OAuth callback listener: ${error instanceof Error ? error.message : String(error)}`,
     );

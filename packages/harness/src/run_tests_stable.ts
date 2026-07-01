@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
-import fg from "fast-glob";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const DEFAULT_BATCH_SIZE = 1;
@@ -50,28 +48,30 @@ function parseCli(argv: string[]): { batchSize: number; bunTestArgs: string[] } 
 }
 
 async function runBun(args: string[]): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
-      cwd: REPO_ROOT,
-      env: process.env,
-      stdio: "inherit",
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
+  const proc = Bun.spawn([process.execPath, ...args], {
+    cwd: REPO_ROOT,
+    env: process.env,
+    stdout: "inherit",
+    stderr: "inherit",
   });
+  return await proc.exited;
+}
+
+async function collectTestFiles(): Promise<string[]> {
+  const unique = new Set<string>();
+  for (const pattern of TEST_FILE_PATTERNS) {
+    const glob = new Bun.Glob(pattern);
+    for await (const file of glob.scan({ cwd: REPO_ROOT, followSymlinks: false })) {
+      unique.add(file);
+    }
+  }
+  return [...unique].sort((a, b) => a.localeCompare(b));
 }
 
 async function main() {
   const startedAt = Date.now();
   const { batchSize, bunTestArgs } = parseCli(process.argv.slice(2));
-  const testFiles = (
-    await fg(TEST_FILE_PATTERNS, {
-      cwd: REPO_ROOT,
-      onlyFiles: true,
-      unique: true,
-      followSymbolicLinks: false,
-    })
-  ).sort((a, b) => a.localeCompare(b));
+  const testFiles = await collectTestFiles();
 
   if (testFiles.length === 0) {
     console.error("[test:stable] No test files were found.");

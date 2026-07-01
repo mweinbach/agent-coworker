@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
 const APP_DIRS = ["apps/desktop"] as const;
@@ -10,23 +9,17 @@ if (process.env.CI || process.env.SKIP_POSTINSTALL) {
   process.exit(0);
 }
 
-function runBunInstall(args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("bun", args, {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: "inherit",
-    });
-
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`bun ${args.join(" ")} exited with code ${code ?? "unknown"}`));
-    });
+async function runBunInstall(args: string[]): Promise<void> {
+  const proc = Bun.spawn(["bun", ...args], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdout: "inherit",
+    stderr: "inherit",
   });
+  const code = await proc.exited;
+  if (code !== 0) {
+    throw new Error(`bun ${args.join(" ")} exited with code ${code}`);
+  }
 }
 
 for (const dir of APP_DIRS) {

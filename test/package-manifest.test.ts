@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import fg from "fast-glob";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -38,13 +37,16 @@ function dryRunPackPaths(): string[] {
     .map((pattern) => pattern.slice(1))
     .flatMap((pattern) => patternToFileGlob(pattern));
 
-  return fg.sync(includePatterns, {
-    cwd: repoRoot,
-    dot: true,
-    onlyFiles: true,
-    unique: true,
-    ignore: ignorePatterns,
-  });
+  const ignoreMatchers = ignorePatterns.map((pattern) => new Bun.Glob(pattern));
+  const unique = new Set<string>();
+  for (const pattern of includePatterns) {
+    const glob = new Bun.Glob(pattern);
+    for (const file of glob.scanSync({ cwd: repoRoot, dot: true })) {
+      if (ignoreMatchers.some((matcher) => matcher.match(file))) continue;
+      unique.add(file);
+    }
+  }
+  return [...unique];
 }
 
 describe("package manifest", () => {

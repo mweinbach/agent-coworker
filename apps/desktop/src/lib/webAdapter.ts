@@ -517,6 +517,8 @@ export function createWebAdapter(): DesktopApi {
       await maybePostWebJson<void>("/cowork/desktop/workspace/stop", opts);
     },
 
+    async writeRendererLog(): Promise<void> {},
+
     async getWorkspaceServerStatus(opts) {
       return {
         workspaceId: opts.workspaceId,

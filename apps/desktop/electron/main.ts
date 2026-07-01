@@ -116,7 +116,11 @@ const updater = new DesktopUpdaterService({
     });
   },
 });
-const diagnostics = new DiagnosticsService({ persistence, updater });
+const diagnostics = new DiagnosticsService({
+  persistence,
+  updater,
+  serverDiagnostics: () => serverManager.getDiagnostics(),
+});
 let unregisterAppearanceListener = () => {};
 let mainWindow: Electron.BrowserWindow | null = null;
 let quickChatController: QuickChatController | null = null;

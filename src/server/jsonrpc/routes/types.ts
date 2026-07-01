@@ -2,6 +2,7 @@ import type { LibreOfficeCapabilityDiagnostic } from "../../../coworkRuntime";
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
+import type { ThreadJournalHealth } from "../../runtime/ThreadJournal";
 import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../../startServer/types";
@@ -89,6 +90,8 @@ export interface JsonRpcRouteContext {
     readSnapshot(
       threadId: string,
     ): import("../../../shared/sessionSnapshot").SessionSnapshot | null;
+    getByCreationKey?(key: string): SessionRuntime | null;
+    rememberCreationKey?(key: string, threadId: string): void | Promise<void>;
   };
   workspaceControl: {
     getOrCreateBinding(cwd: string): Promise<SessionBinding>;
@@ -112,6 +115,7 @@ export interface JsonRpcRouteContext {
       afterSeq?: number,
       limit?: number,
     ): ReadonlySet<string>;
+    getHealth?(threadId: string): ThreadJournalHealth;
   };
   events: {
     capture<T extends SessionEvent>(
@@ -137,6 +141,32 @@ export interface JsonRpcRouteContext {
   };
   runtime: {
     checkLibreOffice(opts: { smoke?: boolean }): Promise<LibreOfficeCapabilityDiagnostic>;
+    getDiagnostics(): {
+      sendQueue: {
+        queuedSends: number;
+        droppedDeltas: number;
+        droppedImportant: number;
+        serializationFailures: number;
+        sendFailures: number;
+        externalSinkFailures: number;
+        maxQueueDepth: number;
+        queueDepthByConnection: Record<string, number>;
+      };
+      journal: {
+        untrustedThreadCount: number;
+        failedWriteCount: number;
+        droppedEventCount: number;
+        pendingThreadCount: number;
+      };
+      dbLocks: {
+        waitCount: number;
+        timeoutCount: number;
+        sqliteLockErrorCount: number;
+        staleRecoveryCount: number;
+        lastWaitMs: number;
+        maxWaitMs: number;
+      };
+    };
   };
   jsonrpc: {
     send(ws: StartServerSocket, payload: unknown): void;

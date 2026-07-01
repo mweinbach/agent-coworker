@@ -132,11 +132,16 @@ export function createSocketModule(
           : await startJsonRpcThread(get, set, workspaceId, {
               provider: startProvider,
               model: startModel,
+              clientThreadId: activeThreadId,
             });
         if (isWorkspaceDisposed(workspaceId)) {
           return;
         }
-        const thread = (result as { thread?: JsonRpcThreadStart } | null)?.thread;
+        const response = result as {
+          thread?: JsonRpcThreadStart;
+          replayHealth?: { snapshotRequired?: boolean };
+        } | null;
+        const thread = response?.thread;
         if (!thread) return;
 
         if (!existingSessionId && activeThreadId !== thread.id) {
@@ -172,13 +177,20 @@ export function createSocketModule(
           ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
           sessionId: thread.id,
         } as SessionEvent);
-        if (opts?.refreshSnapshot !== false) {
+        const forceSnapshotFeed = response?.replayHealth?.snapshotRequired === true;
+        if (opts?.refreshSnapshot !== false || forceSnapshotFeed) {
           const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
           if (isWorkspaceDisposed(workspaceId)) {
             return;
           }
           if (snapshot) {
-            applyJsonRpcThreadSnapshot(get, set, activeThreadId, snapshot);
+            applyJsonRpcThreadSnapshot(
+              get,
+              set,
+              activeThreadId,
+              snapshot,
+              forceSnapshotFeed ? { forceFeed: true } : undefined,
+            );
           }
         }
       } catch (error) {

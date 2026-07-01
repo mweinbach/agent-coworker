@@ -12,12 +12,14 @@ import {
   installFakeSocket,
   jsonRpcHandlers,
   jsonRpcRequests,
+  jsonRpcResponses,
   MockJsonRpcSocket,
   makeThread,
   makeThreadListEntry,
   persistCalls,
   RUNTIME,
   registerControlSocketLifecycleHooks,
+  respondToJsonRpcRequest,
   setJsonRpcSocketOverride,
 } from "./control-socket.harness";
 
@@ -96,6 +98,18 @@ describe("control socket helpers over JSON-RPC", () => {
     expect((secondSocket as MockJsonRpcSocket).opts.url).toBe("ws://changed");
   });
 
+  test("ensureControlSocket uses desktop socket startup budgets", () => {
+    const workspaceId = "ws-timeout-budget";
+    const { get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    const socket = helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    expect(socket).toBeInstanceOf(MockJsonRpcSocket);
+    expect((socket as MockJsonRpcSocket).opts.openTimeoutMs).toBe(5_000);
+    expect((socket as MockJsonRpcSocket).opts.handshakeTimeoutMs).toBe(10_000);
+  });
+
   test("stale socket close after a serverUrl swap does not clear the active control session", async () => {
     const workspaceId = "ws-stale-close";
     const { state, get, set } = createState(workspaceId);
@@ -163,6 +177,149 @@ describe("control socket helpers over JSON-RPC", () => {
     });
   });
 
+  test("reconnecting lifecycle keeps transient control state before reopen", async () => {
+    const workspaceId = "ws-reconnecting";
+    const { state, get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+    const skillInstall = Promise.withResolvers<void>();
+    const pluginInstall = Promise.withResolvers<void>();
+
+    const socket = helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await flushAsyncWork();
+    Object.assign(state.workspaceRuntimeById[workspaceId], {
+      controlConfig: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/tmp/workspace",
+      },
+      memoriesLoading: true,
+      skillMutationPendingKeys: { "skill:install": true },
+      pluginMutationPendingKeys: { "plugin:install": true },
+    });
+    RUNTIME.skillInstallWaiters.set(workspaceId, {
+      pendingKey: "skill:install",
+      resolve: skillInstall.resolve,
+      reject: skillInstall.reject,
+    });
+    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+      pendingKey: "plugin:install",
+      resolve: pluginInstall.resolve,
+      reject: pluginInstall.reject,
+    });
+
+    (socket as MockJsonRpcSocket).reconnecting();
+    await flushAsyncWork();
+
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].controlConfig).toEqual({
+      provider: "openai",
+      model: "gpt-5.2",
+      workingDirectory: "/tmp/workspace",
+    });
+    expect(state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(true);
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(true);
+    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(true);
+    expect(state.notifications).toEqual([]);
+
+    const connectCalls = (socket as MockJsonRpcSocket).connectCalls;
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    expect((socket as MockJsonRpcSocket).connectCalls).toBe(connectCalls);
+  });
+
+  test("requestJsonRpc retries only classified methods", async () => {
+    const workspaceId = "ws-retry-classification";
+    const { get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await helpers.requestJsonRpcControl(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/session/state/read",
+      { cwd: "/tmp/workspace" },
+    );
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "research/get", {
+      researchId: "research-1",
+    });
+    await helpers.requestJsonRpcControl(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/runtime/libreoffice/check",
+      { smoke: false },
+    );
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "thread/start", {
+      cwd: "/tmp/workspace",
+      clientThreadId: "draft-1",
+    });
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "turn/start", {
+      threadId: "thread-1",
+      clientMessageId: "message-1",
+      input: [],
+    });
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "turn/steer", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      clientMessageId: "message-2",
+      input: [],
+    });
+    await helpers.requestJsonRpcControl(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/session/title/set",
+      { threadId: "thread-1", title: "New title" },
+    );
+
+    expect(jsonRpcRequests.at(-7)?.options).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
+    expect(jsonRpcRequests.at(-6)?.options).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
+    expect(jsonRpcRequests.at(-5)?.options).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
+    expect(jsonRpcRequests.at(-4)?.options).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
+    expect(jsonRpcRequests.at(-3)?.options).toEqual({
+      retryable: false,
+      retryOnDisconnect: false,
+    });
+    expect(jsonRpcRequests.at(-2)?.options).toEqual({
+      retryable: false,
+      retryOnDisconnect: false,
+    });
+    expect(jsonRpcRequests.at(-1)?.options).toEqual({
+      retryable: false,
+      retryOnDisconnect: false,
+    });
+  });
+
+  test("server-request responses are not marked retryable across reconnects", () => {
+    const workspaceId = "ws-response-classification";
+    const { get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    expect(respondToJsonRpcRequest(workspaceId, "ask-1", { answer: "yes" })).toBe(true);
+    expect(jsonRpcResponses).toEqual([
+      {
+        id: "ask-1",
+        result: { answer: "yes" },
+        options: undefined,
+      },
+    ]);
+  });
+
   test("re-runs control bootstrap after reconnect when the previous bootstrap is still in flight", async () => {
     const workspaceId = "ws-bootstrap-reconnect";
     const { get, set } = createState(workspaceId);
@@ -193,6 +350,8 @@ describe("control socket helpers over JSON-RPC", () => {
 
     const socket = MockJsonRpcSocket.instances[0];
     expect(socket).toBeDefined();
+    socket.reconnecting();
+    await flushAsyncWork();
     socket.connect();
     await flushAsyncWork();
 

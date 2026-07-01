@@ -1195,6 +1195,40 @@ describe("desktop server manager bun crash detection", () => {
     ).toBe(false);
   });
 
+  test("reusing a healthy workspace server does not increment restart diagnostics", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-server-reuse-"));
+    try {
+      const manager = new ServerManager();
+      (manager as any).servers.set("ws-reuse", {
+        child: createFakeChild(),
+        url: "ws://127.0.0.1:7337/ws",
+        mobileH3: null,
+        cleanup: () => {},
+      });
+      (manager as any).startCountsByWorkspace.set("ws-reuse", 1);
+
+      await expect(
+        manager.startWorkspaceServer({
+          workspaceId: "ws-reuse",
+          workspacePath,
+          yolo: false,
+        }),
+      ).resolves.toEqual({
+        url: "ws://127.0.0.1:7337/ws",
+        mobileH3: null,
+      });
+
+      expect(manager.getDiagnostics().workspaces).toContainEqual(
+        expect.objectContaining({
+          workspaceId: "ws-reuse",
+          restartCount: 0,
+        }),
+      );
+    } finally {
+      await fs.rm(workspacePath, { recursive: true, force: true });
+    }
+  });
+
   test("server exit cleanup emits a workspaceServerExited event", () => {
     const child = createFakeChild();
     const exits: unknown[] = [];

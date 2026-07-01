@@ -54,6 +54,7 @@ import {
   type UpdateTaskPlanInput,
   type WorkItemInput,
 } from "./sessionDb/tasks";
+import type { SessionDbWriteLockDiagnostics } from "./sessionDb/writeCoordinator";
 import { SessionDbWriteCoordinator } from "./sessionDb/writeCoordinator";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
@@ -180,6 +181,14 @@ export type PersistedThreadJournalEvent = {
   itemId: string | null;
   requestId: string | null;
   payload: unknown;
+};
+
+export type PersistedThreadJournalFailure = {
+  threadId: string;
+  failedWriteCount: number;
+  droppedEventCount: number;
+  lastFailureAt: string;
+  lastFailureMessage: string;
 };
 
 export type PersistedResearchRecord = ResearchRecord;
@@ -437,6 +446,42 @@ export class SessionDb {
     opts?: { afterSeq?: number; limit?: number },
   ): PersistedThreadJournalEvent[] {
     return this.readRepository.listThreadJournalEvents(threadId, opts);
+  }
+
+  getThreadJournalTailSeq(threadId: string): number {
+    return this.readRepository.getThreadJournalTailSeq(threadId);
+  }
+
+  getThreadJournalFailure(threadId: string): PersistedThreadJournalFailure | null {
+    return this.readRepository.getThreadJournalFailure(threadId);
+  }
+
+  async recordThreadJournalFailure(input: PersistedThreadJournalFailure): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "record_thread_journal_failure",
+      async () => {
+        this.repository.recordThreadJournalFailure(input);
+      },
+      { threadId: input.threadId },
+    );
+  }
+
+  getThreadIdByCreationKey(creationKey: string): string | null {
+    return this.readRepository.getThreadIdByCreationKey(creationKey);
+  }
+
+  async rememberThreadCreationKey(creationKey: string, threadId: string): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "remember_thread_creation_key",
+      async () => {
+        this.repository.rememberThreadCreationKey(creationKey, threadId);
+      },
+      { threadId },
+    );
+  }
+
+  getWriteLockDiagnostics(): SessionDbWriteLockDiagnostics {
+    return this.writeCoordinator.getDiagnostics();
   }
 
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {

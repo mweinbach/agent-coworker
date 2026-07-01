@@ -66,6 +66,13 @@ export type StopWorkspaceServerInput = {
   workspaceId: string;
 };
 
+export type RendererLogInput = {
+  level?: "info" | "warn" | "error";
+  category: string;
+  message: string;
+  meta?: Record<string, string | number | boolean | null>;
+};
+
 export type MobileRelayStartInput = {
   workspaceId: string;
   workspacePath: string;
@@ -560,6 +567,7 @@ export interface DesktopApi {
   trashPath(opts: TrashPathInput): Promise<void>;
   confirmAction(opts: ConfirmActionInput): Promise<boolean>;
   showNotification(opts: DesktopNotificationInput): Promise<boolean>;
+  writeRendererLog(opts: RendererLogInput): Promise<void>;
   createDiagnosticsBundle(): Promise<CreateDiagnosticsBundleOutput>;
   revealDiagnosticsBundle(opts: DiagnosticsBundlePathInput): Promise<void>;
   openLogsFolder(): Promise<void>;
@@ -637,6 +645,7 @@ export const DESKTOP_IPC_CHANNELS = {
   trashPath: "desktop:trashPath",
   confirmAction: "desktop:confirmAction",
   showNotification: "desktop:showNotification",
+  writeRendererLog: "desktop:writeRendererLog",
   createDiagnosticsBundle: "desktop:createDiagnosticsBundle",
   revealDiagnosticsBundle: "desktop:revealDiagnosticsBundle",
   openLogsFolder: "desktop:openLogsFolder",

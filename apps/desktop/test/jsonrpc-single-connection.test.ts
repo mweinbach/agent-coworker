@@ -8,7 +8,7 @@ const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: bool
 const oneOffWorkspaceCalls: Array<{ titleHint?: string }> = [];
 let oneOffWorkspaceCounter = 0;
 const savedStates: any[] = [];
-const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcRequests: Array<{ method: string; params?: unknown; options?: unknown }> = [];
 const jsonRpcRequestHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 const jsonRpcRequestFailures = new Map<string, string>();
 
@@ -55,8 +55,8 @@ class MockJsonRpcSocket {
     this.opts.onOpen?.();
   }
 
-  async request(method: string, params?: unknown) {
-    jsonRpcRequests.push({ method, params });
+  async request(method: string, params?: unknown, options?: unknown) {
+    jsonRpcRequests.push({ method, params, options });
     const failure = jsonRpcRequestFailures.get(method);
     if (failure) {
       throw new Error(failure);
@@ -1181,6 +1181,38 @@ describe("desktop JSON-RPC single connection path", () => {
           openai: { reasoningEffort: "none" },
         },
       },
+    });
+  });
+
+  test("spreadsheet workspace reads use reconnect-safe request options", async () => {
+    seedActiveThreadState();
+
+    await useAppStore.getState().loadSpreadsheetWorkbook("/tmp/jsonrpc-workspace/workbook.xlsx");
+    await useAppStore.getState().loadSpreadsheetFileVersion("/tmp/jsonrpc-workspace/workbook.xlsx");
+    await useAppStore
+      .getState()
+      .patchSpreadsheetWorkbook("/tmp/jsonrpc-workspace/workbook.xlsx", []);
+
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/workspace/spreadsheet/workbook")
+        ?.options,
+    ).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/workspace/spreadsheet/version")
+        ?.options,
+    ).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/workspace/spreadsheet/patch")
+        ?.options,
+    ).toEqual({
+      retryable: false,
+      retryOnDisconnect: false,
     });
   });
 

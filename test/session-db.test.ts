@@ -802,11 +802,49 @@ describe("sessionDb", () => {
 
       expect(db.listThreadJournalEvents("thread-1")).toHaveLength(1_005);
       expect(db.listThreadJournalEvents("thread-1", { limit: 10 })).toHaveLength(10);
+      expect(db.getThreadJournalTailSeq("thread-1")).toBe(1_005);
+      expect(db.getThreadJournalTailSeq("missing-thread")).toBe(0);
       expect(db.listThreadJournalEvents("thread-1").at(-1)?.payload).toMatchObject({
         delta: "chunk-1004",
       });
     } finally {
       db.close();
+    }
+  });
+
+  test("persists thread journal failure markers across database reopen", async () => {
+    const paths = await makeTmpCoworkHome();
+    const first = await SessionDb.create({ paths });
+    try {
+      await first.recordThreadJournalFailure({
+        threadId: "thread-1",
+        failedWriteCount: 2,
+        droppedEventCount: 5,
+        lastFailureAt: "2026-07-01T00:00:00.000Z",
+        lastFailureMessage: "database is locked",
+      });
+      expect(first.getThreadJournalFailure("thread-1")).toEqual({
+        threadId: "thread-1",
+        failedWriteCount: 2,
+        droppedEventCount: 5,
+        lastFailureAt: "2026-07-01T00:00:00.000Z",
+        lastFailureMessage: "database is locked",
+      });
+    } finally {
+      first.close();
+    }
+
+    const reopened = await SessionDb.create({ paths });
+    try {
+      expect(reopened.getThreadJournalFailure("thread-1")).toEqual({
+        threadId: "thread-1",
+        failedWriteCount: 2,
+        droppedEventCount: 5,
+        lastFailureAt: "2026-07-01T00:00:00.000Z",
+        lastFailureMessage: "database is locked",
+      });
+    } finally {
+      reopened.close();
     }
   });
 

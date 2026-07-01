@@ -1,47 +1,140 @@
 import { createThreadJournalNotificationProjector } from "../jsonrpc/threadJournalNotificationProjector";
 import type { SessionEvent } from "../protocol";
-import type { PersistedThreadJournalEvent, SessionDb } from "../sessionDb";
+import type {
+  PersistedThreadJournalEvent,
+  PersistedThreadJournalFailure,
+  SessionDb,
+} from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 
 type ThreadJournalEvent = Omit<PersistedThreadJournalEvent, "seq">;
+
+export type ThreadJournalHealth = {
+  trusted: boolean;
+  failedWriteCount: number;
+  droppedEventCount: number;
+  pendingEventCount: number;
+  pendingThreadCount: number;
+  lastFailureAt: string | null;
+  lastFailureMessage: string | null;
+  tailSeq: number;
+};
+
+type ThreadJournalFailureState = {
+  failedWriteCount: number;
+  droppedEventCount: number;
+  lastFailureAt: string;
+  lastFailureMessage: string;
+};
 
 export class ThreadJournal {
   private readonly writeQueues = new Map<string, Promise<void>>();
   private readonly pendingEvents = new Map<string, ThreadJournalEvent[]>();
   private readonly scheduledFlushes = new Set<string>();
+  private readonly failures = new Map<string, ThreadJournalFailureState>();
+  private closed = false;
 
   constructor(private readonly sessionDb: SessionDb) {}
 
   enqueue(event: ThreadJournalEvent): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
+    }
+
     const pending = this.pendingEvents.get(event.threadId) ?? [];
     pending.push(event);
     this.pendingEvents.set(event.threadId, pending);
 
-    if (this.scheduledFlushes.has(event.threadId)) {
-      return this.writeQueues.get(event.threadId) ?? Promise.resolve();
+    this.scheduleFlush(event.threadId);
+    return this.writeQueues.get(event.threadId) ?? Promise.resolve();
+  }
+
+  private scheduleFlush(threadId: string): void {
+    if (this.closed) {
+      return;
     }
 
-    this.scheduledFlushes.add(event.threadId);
-    const previous = this.writeQueues.get(event.threadId) ?? Promise.resolve();
+    if (this.scheduledFlushes.has(threadId)) {
+      return;
+    }
+
+    this.scheduledFlushes.add(threadId);
+    const previous = this.writeQueues.get(threadId) ?? Promise.resolve();
     const next = previous
       .catch(() => {
         // Keep queue alive after prior failure.
       })
       .then(async () => {
         while (true) {
-          const batch = this.pendingEvents.get(event.threadId) ?? [];
+          const batch = this.pendingEvents.get(threadId) ?? [];
           if (batch.length === 0) {
-            this.pendingEvents.delete(event.threadId);
-            this.scheduledFlushes.delete(event.threadId);
-            this.writeQueues.delete(event.threadId);
+            this.pendingEvents.delete(threadId);
+            this.scheduledFlushes.delete(threadId);
+            this.writeQueues.delete(threadId);
             return;
           }
-          this.pendingEvents.set(event.threadId, []);
-          await this.sessionDb.appendThreadJournalEvents(batch);
+          this.pendingEvents.set(threadId, []);
+          try {
+            await this.sessionDb.appendThreadJournalEvents(batch);
+          } catch (error) {
+            try {
+              await this.recordFailure(threadId, batch.length, error);
+            } catch {
+              // Keep the original append failure as the caller-visible error.
+            }
+            this.scheduledFlushes.delete(threadId);
+            this.writeQueues.delete(threadId);
+            if (!this.closed && (this.pendingEvents.get(threadId)?.length ?? 0) > 0) {
+              queueMicrotask(() => this.scheduleFlush(threadId));
+            }
+            throw error;
+          }
         }
       });
-    this.writeQueues.set(event.threadId, next);
-    return next;
+    this.writeQueues.set(threadId, next);
+  }
+
+  private readPersistedFailure(threadId: string): ThreadJournalFailureState | null {
+    const readFailure = (this.sessionDb as Partial<Pick<SessionDb, "getThreadJournalFailure">>)
+      .getThreadJournalFailure;
+    const persisted = readFailure?.call(this.sessionDb, threadId) ?? null;
+    if (!persisted) return null;
+    return {
+      failedWriteCount: persisted.failedWriteCount,
+      droppedEventCount: persisted.droppedEventCount,
+      lastFailureAt: persisted.lastFailureAt,
+      lastFailureMessage: persisted.lastFailureMessage,
+    };
+  }
+
+  private async persistFailure(
+    threadId: string,
+    failure: ThreadJournalFailureState,
+  ): Promise<void> {
+    const writeFailure = (this.sessionDb as Partial<Pick<SessionDb, "recordThreadJournalFailure">>)
+      .recordThreadJournalFailure;
+    if (!writeFailure) return;
+    const input: PersistedThreadJournalFailure = {
+      threadId,
+      ...failure,
+    };
+    await writeFailure.call(this.sessionDb, input);
+  }
+
+  private async recordFailure(
+    threadId: string,
+    droppedEventCount: number,
+    error: unknown,
+  ): Promise<void> {
+    const previous = this.failures.get(threadId) ?? this.readPersistedFailure(threadId);
+    const next = {
+      failedWriteCount: (previous?.failedWriteCount ?? 0) + 1,
+      droppedEventCount: (previous?.droppedEventCount ?? 0) + droppedEventCount,
+      lastFailureAt: new Date().toISOString(),
+      lastFailureMessage: error instanceof Error ? error.message : String(error),
+    };
+    this.failures.set(threadId, next);
+    await this.persistFailure(threadId, next);
   }
 
   async waitForIdle(threadId: string): Promise<void> {
@@ -50,11 +143,38 @@ export class ThreadJournal {
     });
   }
 
+  async close(): Promise<void> {
+    this.closed = true;
+    await Promise.allSettled(this.writeQueues.values());
+    this.pendingEvents.clear();
+    this.scheduledFlushes.clear();
+    this.writeQueues.clear();
+  }
+
   list(
     threadId: string,
     opts?: { afterSeq?: number; limit?: number },
   ): PersistedThreadJournalEvent[] {
     return this.sessionDb.listThreadJournalEvents(threadId, opts);
+  }
+
+  getHealth(threadId: string): ThreadJournalHealth {
+    const failure = this.failures.get(threadId) ?? this.readPersistedFailure(threadId);
+    if (failure && !this.failures.has(threadId)) {
+      this.failures.set(threadId, failure);
+    }
+    const pendingEventCount = this.pendingEvents.get(threadId)?.length ?? 0;
+    const tailSeq = this.sessionDb.getThreadJournalTailSeq(threadId);
+    return {
+      trusted: !failure,
+      failedWriteCount: failure?.failedWriteCount ?? 0,
+      droppedEventCount: failure?.droppedEventCount ?? 0,
+      pendingEventCount,
+      pendingThreadCount: this.pendingEvents.size,
+      lastFailureAt: failure?.lastFailureAt ?? null,
+      lastFailureMessage: failure?.lastFailureMessage ?? null,
+      tailSeq,
+    };
   }
 
   ensureSink(

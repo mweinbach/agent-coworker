@@ -20,6 +20,7 @@ import type {
   PersistedSessionMutation,
   PersistedSessionRecord,
   PersistedThreadJournalEvent,
+  PersistedThreadJournalFailure,
 } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
 import {
@@ -772,6 +773,113 @@ export class SessionDbRepository {
     }));
   }
 
+  getThreadJournalTailSeq(threadId: string): number {
+    const row = this.db
+      .query(
+        sql([
+          "SELECT seq",
+          "           FROM thread_journal_events",
+          "           WHERE thread_id = ?",
+          "           ORDER BY seq DESC",
+          "           LIMIT 1",
+        ]),
+      )
+      .get(threadId) as Record<string, unknown> | null;
+    return parseNonNegativeInteger(row?.seq ?? 0, "thread_journal_events.seq");
+  }
+
+  getThreadJournalFailure(threadId: string): PersistedThreadJournalFailure | null {
+    const row = this.db
+      .query(
+        sql([
+          "SELECT",
+          "             thread_id,",
+          "             failed_write_count,",
+          "             dropped_event_count,",
+          "             last_failure_at,",
+          "             last_failure_message",
+          "           FROM thread_journal_failures",
+          "           WHERE thread_id = ?",
+          "           LIMIT 1",
+        ]),
+      )
+      .get(threadId) as Record<string, unknown> | null;
+    if (!row) return null;
+    return {
+      threadId: String(row.thread_id),
+      failedWriteCount: parseNonNegativeInteger(
+        row.failed_write_count,
+        "thread_journal_failures.failed_write_count",
+      ),
+      droppedEventCount: parseNonNegativeInteger(
+        row.dropped_event_count,
+        "thread_journal_failures.dropped_event_count",
+      ),
+      lastFailureAt: parseRequiredIsoTimestamp(
+        row.last_failure_at,
+        "thread_journal_failures.last_failure_at",
+      ),
+      lastFailureMessage: String(row.last_failure_message ?? ""),
+    };
+  }
+
+  recordThreadJournalFailure(input: PersistedThreadJournalFailure): void {
+    this.db
+      .query(
+        sql([
+          "INSERT INTO thread_journal_failures (",
+          "           thread_id,",
+          "           failed_write_count,",
+          "           dropped_event_count,",
+          "           last_failure_at,",
+          "           last_failure_message",
+          "         ) VALUES (?, ?, ?, ?, ?)",
+          "         ON CONFLICT(thread_id) DO UPDATE SET",
+          "           failed_write_count = excluded.failed_write_count,",
+          "           dropped_event_count = excluded.dropped_event_count,",
+          "           last_failure_at = excluded.last_failure_at,",
+          "           last_failure_message = excluded.last_failure_message",
+        ]),
+      )
+      .run(
+        input.threadId,
+        parseNonNegativeInteger(input.failedWriteCount, "thread_journal_failures.failedWriteCount"),
+        parseNonNegativeInteger(
+          input.droppedEventCount,
+          "thread_journal_failures.droppedEventCount",
+        ),
+        parseRequiredIsoTimestamp(input.lastFailureAt, "thread_journal_failures.lastFailureAt"),
+        input.lastFailureMessage,
+      );
+  }
+
+  getThreadIdByCreationKey(creationKey: string): string | null {
+    const row = this.db
+      .query("SELECT thread_id FROM thread_creation_keys WHERE creation_key = ? LIMIT 1")
+      .get(creationKey) as Record<string, unknown> | null;
+    const threadId = typeof row?.thread_id === "string" ? row.thread_id.trim() : "";
+    return threadId || null;
+  }
+
+  rememberThreadCreationKey(creationKey: string, threadId: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .query(
+        sql([
+          "INSERT INTO thread_creation_keys (",
+          "           creation_key,",
+          "           thread_id,",
+          "           created_at,",
+          "           updated_at",
+          "         ) VALUES (?, ?, ?, ?)",
+          "         ON CONFLICT(creation_key) DO UPDATE SET",
+          "           thread_id = excluded.thread_id,",
+          "           updated_at = excluded.updated_at",
+        ]),
+      )
+      .run(creationKey, threadId, now, now);
+  }
+
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
     const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = this.db
@@ -1079,6 +1187,10 @@ export class SessionDbRepository {
       ]),
     );
 
+    this.addThreadJournalFailuresTable();
+
+    this.addThreadCreationKeysTable();
+
     this.db.exec(
       sql([
         "CREATE TABLE IF NOT EXISTS research (",
@@ -1333,6 +1445,36 @@ export class SessionDbRepository {
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)",
+    );
+  }
+
+  addThreadJournalFailuresTable(): void {
+    this.db.exec(
+      sql([
+        "CREATE TABLE IF NOT EXISTS thread_journal_failures (",
+        "         thread_id TEXT PRIMARY KEY,",
+        "         failed_write_count INTEGER NOT NULL,",
+        "         dropped_event_count INTEGER NOT NULL,",
+        "         last_failure_at TEXT NOT NULL,",
+        "         last_failure_message TEXT NOT NULL",
+        "       )",
+      ]),
+    );
+  }
+
+  addThreadCreationKeysTable(): void {
+    this.db.exec(
+      sql([
+        "CREATE TABLE IF NOT EXISTS thread_creation_keys (",
+        "         creation_key TEXT PRIMARY KEY,",
+        "         thread_id TEXT NOT NULL,",
+        "         created_at TEXT NOT NULL,",
+        "         updated_at TEXT NOT NULL",
+        "       )",
+      ]),
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_thread_creation_keys_thread ON thread_creation_keys(thread_id)",
     );
   }
 

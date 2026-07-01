@@ -499,6 +499,114 @@ describe("JsonRpcSocket runtime", () => {
     await expect(queued).resolves.toEqual({ threads: [] });
   });
 
+  test("manual connect cancels a pending reconnect timer", async () => {
+    FakeWebSocket.instances = [];
+    const timers = createManualTimers();
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      timers: timers.scheduler as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = FakeWebSocket.instances[0]!;
+    await ws1.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+    ws1.close();
+
+    const pendingReconnect = timers.timeoutCallbacks[0]!;
+    socket.connect();
+
+    expect(timers.timeoutCallbacks).not.toContain(pendingReconnect);
+    await flushMicrotasks();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  test("requeues retryable in-flight requests on disconnect", async () => {
+    FakeWebSocket.instances = [];
+    const timers = createManualTimers();
+    const reconnects: Array<{ attempt: number; queuedOperationCount: number }> = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      timers: timers.scheduler as any,
+      onReconnecting: (event) => {
+        reconnects.push({
+          attempt: event.attempt,
+          queuedOperationCount: event.queuedOperationCount,
+        });
+      },
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = FakeWebSocket.instances[0]!;
+    await ws1.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    const request = socket.request(
+      "thread/read",
+      { threadId: "thread-1" },
+      { retryable: true, retryOnDisconnect: true },
+    );
+    expect(parseSentMessages(ws1).at(-1)).toMatchObject({
+      id: 2,
+      method: "thread/read",
+    });
+    ws1.close();
+    expect(reconnects).toEqual([{ attempt: 1, queuedOperationCount: 1 }]);
+
+    timers.timeoutCallbacks[0]!();
+    await flushMicrotasks();
+    const ws2 = FakeWebSocket.instances[1]!;
+    await ws2.emitMessage(JSON.stringify({ id: 3, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    expect(parseSentMessages(ws2).at(-1)).toMatchObject({
+      id: 4,
+      method: "thread/read",
+      params: {
+        threadId: "thread-1",
+      },
+    });
+    await ws2.emitMessage(JSON.stringify({ id: 4, result: { thread: { id: "thread-1" } } }));
+    await expect(request).resolves.toEqual({ thread: { id: "thread-1" } });
+  });
+
+  test("rejects non retry-on-disconnect in-flight requests on close", async () => {
+    FakeWebSocket.instances = [];
+    const timers = createManualTimers();
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      timers: timers.scheduler as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = FakeWebSocket.instances[0]!;
+    await ws1.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    const request = socket.request("cowork/session/title/set", {
+      threadId: "thread-1",
+      title: "New title",
+    });
+    ws1.close();
+
+    await expect(request).rejects.toThrow("websocket closed");
+  });
+
   test("counts failed initialize handshakes toward reconnect exhaustion", async () => {
     FakeWebSocket.instances = [];
     const timers = createManualTimers();

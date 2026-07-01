@@ -10,5 +10,10 @@ export function createRuntimeRouteHandlers(context: JsonRpcRouteContext): JsonRp
       });
       context.jsonrpc.sendResult(ws, message.id, { status });
     },
+    "cowork/runtime/diagnostics/read": (ws, message) => {
+      context.jsonrpc.sendResult(ws, message.id, {
+        diagnostics: context.runtime.getDiagnostics(),
+      });
+    },
   };
 }

@@ -1,10 +1,9 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import readline from "node:readline";
 
 import { asRecord, asString } from "../shared/recordParsing";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import { type StreamingSubprocess, subscribeLines } from "../utils/subprocess";
 import { VERSION } from "../version";
 import {
   type CodexAppServerCommand,
@@ -117,10 +116,17 @@ export async function startCodexAppServerClient(
   const codexHome = opts.codexHome ?? resolveCodexHome();
   await fs.mkdir(codexHome, { recursive: true, mode: 0o700 });
   const baseEnv = opts.env ?? process.env;
-  const child = spawnCodexAppServer(command, {
-    cwd: opts.cwd,
-    env: { ...baseEnv, CODEX_HOME: codexHome },
-  });
+  let child: StreamingSubprocess;
+  try {
+    child = spawnCodexAppServer(command, {
+      cwd: opts.cwd,
+      env: { ...baseEnv, CODEX_HOME: codexHome },
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to start codex app-server: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const pending = new Map<number | string, PendingRequest>();
   const listeners = new Set<(notification: CodexAppServerJsonRpcNotification) => void>();
   const serverRequestHandlers = new Set<CodexAppServerRequestHandler>();
@@ -144,14 +150,9 @@ export async function startCodexAppServerClient(
     pending.clear();
   };
 
-  child.once("error", (error) => {
-    rejectAll(new Error(`Failed to start codex app-server: ${error.message}`));
-    for (const listener of errorListeners) listener(error);
-  });
-  child.stdin.on("error", (error) => {
-    opts.log?.(`[codex-app-server:stdin:error] ${error.message}`);
-  });
-  child.once("exit", (code, signal) => {
+  void child.exited.then(({ exitCode, signalCode }) => {
+    const code = exitCode;
+    const signal = (signalCode ?? null) as NodeJS.Signals | null;
     closed = true;
     lastCloseInfo = {
       code,
@@ -172,15 +173,14 @@ export async function startCodexAppServerClient(
     }
     for (const listener of closeListeners) listener(code, signal);
   });
-  child.stderr.on("data", (chunk) => {
-    const text = String(chunk);
-    stderrBytes += Buffer.byteLength(text);
-    const trimmed = text.trim();
+  const stderrSubscription = subscribeLines(child.stderr, (line) => {
+    stderrBytes += Buffer.byteLength(`${line}\n`);
+    const trimmed = line.trim();
     if (trimmed) opts.log?.(`[codex-app-server:stderr] ${trimmed}`);
   });
+  void stderrSubscription.done;
 
-  const rl = readline.createInterface({ input: child.stdout });
-  rl.on("line", (line) => {
+  const stdoutSubscription = subscribeLines(child.stdout, (line) => {
     if (!line.trim()) return;
     let parsed: unknown;
     try {
@@ -233,9 +233,16 @@ export async function startCodexAppServerClient(
   });
 
   const write = (payload: Record<string, unknown>, direction: CodexAppServerJsonRpcDirection) => {
-    if (closed || child.stdin.destroyed) throw new Error("codex app-server is not running.");
+    if (closed || !child.writeStdin) throw new Error("codex app-server is not running.");
     emitJsonRpcMessage({ direction, message: payload });
-    child.stdin.write(`${JSON.stringify(payload)}\n`);
+    try {
+      child.writeStdin(`${JSON.stringify(payload)}\n`);
+    } catch (error) {
+      opts.log?.(
+        `[codex-app-server:stdin:error] ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new Error("codex app-server is not running.");
+    }
   };
 
   const request = (method: string, params?: unknown, timeoutMs?: number): Promise<unknown> => {
@@ -321,14 +328,15 @@ export async function startCodexAppServerClient(
       };
     },
     close: async () => {
-      rl.close();
+      stdoutSubscription.close();
+      stderrSubscription.close();
       await stopProcess(child);
     },
   };
 }
 
 async function respondToServerRequest(
-  child: ChildProcessWithoutNullStreams,
+  child: StreamingSubprocess,
   request: CodexAppServerJsonRpcRequest,
   handlers: ReadonlySet<CodexAppServerRequestHandler>,
   onJsonRpcMessage: (message: CodexAppServerJsonRpcRawMessage) => void,
@@ -336,7 +344,7 @@ async function respondToServerRequest(
   const writeResponse = (response: Record<string, unknown>) => {
     onJsonRpcMessage({ direction: "client_response", message: response });
     try {
-      child.stdin.write(`${JSON.stringify(response)}\n`);
+      child.writeStdin?.(`${JSON.stringify(response)}\n`);
     } catch {
       // The app-server may have exited after issuing a request. There is no
       // live peer to receive the response, so keep the client shutdown local.
@@ -364,27 +372,23 @@ async function respondToServerRequest(
   }
 }
 
-async function stopProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.killed) return;
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      if (process.platform === "win32") {
-        child.kill(); // Windows uses default termination
-      } else {
-        child.kill("SIGKILL");
-      }
-      resolve();
-    }, 5_000);
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    if (process.platform === "win32") {
-      child.kill(); // Windows uses default termination
-    } else {
-      child.kill("SIGTERM");
-    }
-  });
+async function stopProcess(child: StreamingSubprocess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === "win32") {
+    child.kill(); // Windows uses default termination
+  } else {
+    child.kill("SIGTERM");
+  }
+  const exited = await Promise.race([
+    child.exited.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+  ]);
+  if (exited) return;
+  if (process.platform === "win32") {
+    child.kill(); // Windows uses default termination
+  } else {
+    child.kill("SIGKILL");
+  }
 }
 
 const pooledClients = new Map<string, Promise<CodexAppServerClient>>();

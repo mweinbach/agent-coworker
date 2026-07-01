@@ -1,10 +1,11 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { resolveAuthHomeDir } from "../utils/authHome";
+import { execFileCompat } from "../utils/execFileCompat";
+import { type StreamingSubprocess, spawnStreamingSubprocess } from "../utils/subprocess";
 
 type CodexAppServerSource = "override" | "system" | "managed";
 
@@ -52,7 +53,6 @@ type ProcessResult = {
 export type CodexAppServerResolverOverrides = {
   fetchImpl?: typeof fetch;
   spawnForResult?: (command: string, args: string[]) => Promise<ProcessResult>;
-  spawnAppServer?: typeof spawn;
   promoteManagedInstall?: (
     executablePath: string,
     currentPath: string,
@@ -319,33 +319,25 @@ async function resolveSystemCodexCandidates(
   return candidates;
 }
 
-function defaultSpawnForResult(command: string, args: string[]): Promise<ProcessResult> {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve({ ok: false, stdout, stderr, error: "Timed out." });
-    }, 5_000);
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      resolve({ ok: false, stdout, stderr, error: error.message });
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      resolve({ ok: code === 0, stdout, stderr });
-    });
+async function defaultSpawnForResult(command: string, args: string[]): Promise<ProcessResult> {
+  const result = await execFileCompat(command, args, {
+    env: process.env,
+    timeoutMs: 5_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 4 * 1024 * 1024,
   });
+  if (result.errorCode === "TIMEOUT") {
+    return { ok: false, stdout: result.stdout, stderr: result.stderr, error: "Timed out." };
+  }
+  if (result.errorCode) {
+    return {
+      ok: false,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: `${command} failed (${result.errorCode}).`,
+    };
+  }
+  return { ok: result.exitCode === 0, stdout: result.stdout, stderr: result.stderr };
 }
 
 async function readVersionFile(executablePath: string): Promise<string | undefined> {
@@ -527,23 +519,14 @@ async function downloadFile(
 }
 
 async function extractTarGz(archivePath: string, destDir: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("tar", ["-xzf", archivePath, "-C", destDir], {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Failed to extract Codex app-server archive: ${stderr.trim()}`));
-      }
-    });
+  const result = await execFileCompat("tar", ["-xzf", archivePath, "-C", destDir], {
+    maxBuffer: 4 * 1024 * 1024,
   });
+  if (result.exitCode !== 0 || result.errorCode) {
+    throw new Error(
+      `Failed to extract Codex app-server archive: ${result.stderr.trim() || (result.errorCode ?? `exit ${result.exitCode}`)}`,
+    );
+  }
 }
 
 async function findFileRecursive(dir: string, wantedBasename: string): Promise<string | null> {
@@ -797,11 +780,11 @@ export async function updateManagedCodexAppServer(
 export function spawnCodexAppServer(
   command: CodexAppServerCommand,
   opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): ChildProcessWithoutNullStreams {
-  return spawn(command.command, command.args, {
+): StreamingSubprocess {
+  return spawnStreamingSubprocess([command.command, ...command.args], {
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     env: opts.env ?? process.env,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdin: "pipe",
   });
 }
 

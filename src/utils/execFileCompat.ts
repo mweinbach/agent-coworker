@@ -17,8 +17,10 @@ export type ExecFileCompatOptions = {
   env?: Record<string, string | undefined>;
   /** Byte cap applied to stdout and stderr independently. Default 1 MiB. */
   maxBuffer?: number;
-  /** SIGTERM the child when elapsed. */
+  /** Kill the child (default SIGTERM) when elapsed. */
   timeoutMs?: number;
+  /** Signal used for timeout/abort/overflow termination. Default SIGTERM. */
+  killSignal?: NodeJS.Signals;
   signal?: AbortSignal;
 };
 
@@ -71,7 +73,7 @@ export async function execFileCompat(
     if (cause) return;
     cause = nextCause;
     try {
-      proc.kill("SIGTERM");
+      proc.kill(opts.killSignal ?? "SIGTERM");
     } catch {
       // already exited
     }

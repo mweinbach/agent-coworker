@@ -170,11 +170,8 @@ setInterval(() => {}, 1000);
     const rawMessages: unknown[] = [];
     const calls: string[] = [];
     const child = {
-      stdin: {
-        write: (value: string) => {
-          writes.push(value);
-          return true;
-        },
+      writeStdin: (value: string | Uint8Array) => {
+        writes.push(String(value));
       },
     } as Parameters<typeof __internal.respondToServerRequest>[0];
     const handlers: Parameters<typeof __internal.respondToServerRequest>[2] = new Set([

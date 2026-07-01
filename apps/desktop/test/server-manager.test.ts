@@ -56,6 +56,30 @@ type FakeChild = EventEmitter & {
   kill: (signal?: NodeJS.Signals | number) => boolean;
 };
 
+type ServerManagerTestHandle = {
+  child: FakeChild;
+  cleanup: () => void;
+};
+
+type ServerManagerTestInternals = {
+  servers: Map<
+    string,
+    ServerManagerTestHandle & {
+      url: string;
+      mobileH3: null;
+    }
+  >;
+  pendingStarts: Map<string, ServerManagerTestHandle>;
+  finishWorkspaceServerExit: (
+    workspaceId: string,
+    child: FakeChild,
+    url: string | null,
+    cleanup: () => void,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ) => void;
+};
+
 function createFakeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
   child.stdout = new PassThrough();
@@ -70,6 +94,39 @@ function createFakeChild(): FakeChild {
     return true;
   };
   return child;
+}
+
+function getServerManagerTestInternals(
+  manager: InstanceType<typeof ServerManager>,
+): ServerManagerTestInternals {
+  return manager as unknown as ServerManagerTestInternals;
+}
+
+function createCountingCleanup(): { cleanup: () => void; getCount: () => number } {
+  let cleaned = false;
+  let count = 0;
+  return {
+    cleanup: () => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      count += 1;
+    },
+    getCount: () => count,
+  };
+}
+
+function forwardFakeExitToManager(
+  internals: ServerManagerTestInternals,
+  workspaceId: string,
+  child: FakeChild,
+  url: string | null,
+  cleanup: () => void,
+): void {
+  child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    internals.finishWorkspaceServerExit(workspaceId, child, url, cleanup, code, signal);
+  });
 }
 
 async function withProcessEnv<T>(
@@ -1177,6 +1234,37 @@ describe("desktop server manager bun crash detection", () => {
     ]);
   });
 
+  test("stopWorkspaceServer suppresses active server exit notifications", async () => {
+    const child = createFakeChild();
+    const exits: unknown[] = [];
+    const manager = new ServerManager({
+      onWorkspaceServerExited: (event) => exits.push(event),
+    });
+    const internals = getServerManagerTestInternals(manager);
+    const cleanupCounter = createCountingCleanup();
+
+    internals.servers.set("ws-stop", {
+      child,
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+      cleanup: cleanupCounter.cleanup,
+    });
+    forwardFakeExitToManager(
+      internals,
+      "ws-stop",
+      child,
+      "ws://127.0.0.1:7337/ws",
+      cleanupCounter.cleanup,
+    );
+
+    await manager.stopWorkspaceServer("ws-stop");
+
+    expect(internals.servers.has("ws-stop")).toBe(false);
+    expect(cleanupCounter.getCount()).toBe(1);
+    expect(child.exitCode).toBe(0);
+    expect(exits).toEqual([]);
+  });
+
   test("stopAll concurrently kills and cleans up all active and pending servers", async () => {
     const manager = new ServerManager();
     const child1 = createFakeChild();
@@ -1222,5 +1310,46 @@ describe("desktop server manager bun crash detection", () => {
     expect(child1.exitCode).toBe(0);
     expect(child2.exitCode).toBe(0);
     expect(childPending.exitCode).toBe(0);
+  });
+
+  test("stopAll suppresses exit notifications for active and pending servers", async () => {
+    const childActive = createFakeChild();
+    const childPending = createFakeChild();
+    const exits: unknown[] = [];
+    const manager = new ServerManager({
+      onWorkspaceServerExited: (event) => exits.push(event),
+    });
+    const internals = getServerManagerTestInternals(manager);
+    const activeCleanup = createCountingCleanup();
+    const pendingCleanup = createCountingCleanup();
+
+    internals.servers.set("ws-active", {
+      child: childActive,
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+      cleanup: activeCleanup.cleanup,
+    });
+    internals.pendingStarts.set("ws-pending", {
+      child: childPending,
+      cleanup: pendingCleanup.cleanup,
+    });
+    forwardFakeExitToManager(
+      internals,
+      "ws-active",
+      childActive,
+      "ws://127.0.0.1:7337/ws",
+      activeCleanup.cleanup,
+    );
+    forwardFakeExitToManager(internals, "ws-pending", childPending, null, pendingCleanup.cleanup);
+
+    await manager.stopAll();
+
+    expect(internals.servers.size).toBe(0);
+    expect(internals.pendingStarts.size).toBe(0);
+    expect(activeCleanup.getCount()).toBe(1);
+    expect(pendingCleanup.getCount()).toBe(1);
+    expect(childActive.exitCode).toBe(0);
+    expect(childPending.exitCode).toBe(0);
+    expect(exits).toEqual([]);
   });
 });

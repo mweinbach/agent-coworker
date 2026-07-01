@@ -133,4 +133,33 @@ describe("ThreadJournal runtime", () => {
     expect(appendCalls).toBe(1);
     expect(journal.list("thread-1").map((entry) => entry.eventType)).toEqual(["turn/started"]);
   });
+
+  test("close ignores later sink events without touching the store", async () => {
+    let appendCalls = 0;
+    const binding = {
+      sinks: new Map<string, (event: unknown) => void>(),
+    };
+    const journal = new ThreadJournal({
+      appendThreadJournalEvents: async () => {
+        appendCalls += 1;
+        throw new Error("closed database should not be touched");
+      },
+      listThreadJournalEvents: () => [],
+      getThreadJournalTailSeq: () => 0,
+    } as never);
+
+    journal.ensureSink(binding as never, "thread-1", (target, sinkId, sink) => {
+      target.sinks.set(sinkId, sink);
+    });
+
+    await journal.close();
+    binding.sinks.get("journal:thread-1")?.({
+      type: "session_info",
+      sessionId: "thread-1",
+      timestamp: "2026-07-01T00:00:00.000Z",
+    });
+    await Promise.resolve();
+
+    expect(appendCalls).toBe(0);
+  });
 });

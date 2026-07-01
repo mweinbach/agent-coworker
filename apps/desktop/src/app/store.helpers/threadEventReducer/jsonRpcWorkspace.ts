@@ -329,6 +329,12 @@ export function createJsonRpcWorkspaceModule(
       onClose: () => {
         markWorkspaceThreadsDisconnected(get, set, workspaceId);
       },
+      onReconnecting: () => {
+        markWorkspaceThreadsDisconnected(get, set, workspaceId);
+      },
+      onReconnectExhausted: () => {
+        markWorkspaceThreadsDisconnected(get, set, workspaceId);
+      },
     });
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
   }

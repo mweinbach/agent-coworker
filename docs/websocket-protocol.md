@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.39`
+- Current protocol version: `7.40`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -148,7 +148,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/spreadsheet/patch`
 - `cowork/workspace/presentation/preview`
 
-`turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
+`thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream, but turn sends are not retry-safe until the server persists and deduplicates that key.
 
 `command/list` takes `{ threadId }` and returns the server-resolved slash command catalog, including enabled skills. `command/execute` takes `{ threadId, name, arguments?, clientMessageId? }`, expands the command or skill in the harness, and starts a normal projected turn. Clients should send `/task ...` through `command/execute` with `name: "task"` rather than treating it as ordinary message text.
 
@@ -282,6 +282,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/auth/copyApiKey`
 - runtime diagnostics
   - `cowork/runtime/libreoffice/check`
+  - `cowork/runtime/diagnostics/read`
 - MCP controls
   - `cowork/mcp/servers/read`
   - `cowork/mcp/server/upsert`
@@ -410,6 +411,8 @@ When either param is provided, the server filters and deduplicates thread summar
 One-off chat thread workspaces must live under the global `~/.cowork/chats` directory. Project-local `.cowork/chats` paths are not accepted for `thread/list` or `thread/start`.
 
 `cowork/session/state/read` returns the current workspace control session state as a bundle of `config_updated`, `session_settings`, and `session_config` session events so JSON-RPC clients can hydrate provider/model defaults before diffing local settings.
+
+`cowork/runtime/diagnostics/read` returns `{ diagnostics }` with `sendQueue` counters (`queuedSends`, `droppedDeltas`, `droppedImportant`, serialization/send failures, max/current queue depth), `journal` counters (untrusted thread count, failed writes, dropped journal events, pending threads), and `dbLocks` counters (write-lock waits, timeouts, SQLite lock errors, stale lock recoveries). Clients should use these counters for support diagnostics and to decide whether a reconnect gap needs a full thread snapshot refresh.
 
 `cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive.
 
@@ -696,7 +699,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/read.coworkSnapshot` is the authoritative projected-feed hydration payload for UI clients and matches live `turn/*` + `item/*` ordering
 - `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
 - `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events. Optional `afterSeq` skips journal events up to and including that cursor when building the `turns` array (useful for pull-based catchup); `journalTailSeq` is returned when `includeTurns: true` so callers can advance the cursor. Ideal for lightweight previews.
-- `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice
+- `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice. The result includes `replayHealth: { trusted, snapshotRequired, reason, tailSeq, failedWriteCount, droppedEventCount }`; when `snapshotRequired` is true, clients must treat the stream as discontinuous and call `thread/read` to refresh `coworkSnapshot`.
 - `thread/unsubscribe` returns an unsubscribe status and emits `thread/closed` with `{ threadId }` after the connection is detached from a live subscription
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
 - `cowork/workspace/spreadsheet/workbook` returns full workbook snapshots for embedded spreadsheet editors while preserving native workbook objects in the source file.
@@ -784,6 +787,11 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.40`:
+
+- `thread/start` accepts stable `clientThreadId` for idempotent desktop draft-thread retries, and `thread/resume` / `thread/read` / `thread/hydrate` include `replayHealth` so clients can force a snapshot refresh when journal replay is degraded or the cursor is beyond the tail.
+- Added `cowork/runtime/diagnostics/read` for send-queue drops/depth, journal write health, and session DB write-lock counters.
 
 Changes in `7.39`:
 

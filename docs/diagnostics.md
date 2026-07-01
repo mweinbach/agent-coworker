@@ -13,7 +13,7 @@ Desktop logs live under Electron `userData/logs`:
 | `server.log` | Workspace server lifecycle and startup diagnostics. |
 | `desktop-main.log` | Electron main-process lifecycle, crash-reporting, analytics, and diagnostics status. |
 | `updater.log` | Auto-update checks, availability, download, and error status. |
-| `renderer.log` | Reserved for future renderer diagnostics. |
+| `renderer.log` | Renderer-observed socket open/close/reconnect/exhausted events and sidecar startup/exit events. |
 
 Log writers sanitize metadata before appending. Logs must not contain prompts, completions, transcripts, file contents, shell output, API keys, tokens, cookies, or unsanitized absolute paths.
 
@@ -27,6 +27,7 @@ Included:
 - privacy and telemetry toggle states
 - desktop feature flag override state
 - update state
+- sidecar lifecycle state: current sanitized server URL, restart count, start/exit state, and last child exit per workspace
 - recent crash report ids when available
 - observability health placeholder when desktop cannot read live health
 - workspace count and thread count
@@ -51,6 +52,10 @@ The shared diagnostics redactor handles:
 - JSON body, payload, transcript, prompt, completion, stdout/stderr, and message fields
 
 Bundle generation only reads an allowlist of local log files and the normalized desktop state counts/settings needed for support.
+
+## Runtime Health Signals
+
+Desktop reconnect logs include the socket generation, reconnect attempt, retry queue size, and sanitized server URL. The sidecar also exposes `cowork/runtime/diagnostics/read` with send queue drop/depth counters, journal write health, and session DB write-lock waits. If `thread/resume.replayHealth.snapshotRequired` is true, clients should treat replay as discontinuous and refresh the thread with `thread/read`.
 
 ## Uploads
 

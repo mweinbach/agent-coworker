@@ -7,6 +7,7 @@ import {
   type DesktopNotificationInput,
   type DiagnosticsBundlePathInput,
   type OpenExternalUrlInput,
+  type RendererLogInput,
   type SetWindowAppearanceInput,
   type TelemetryStatusInput,
   type UploadDiagnosticsBundleInput,
@@ -17,12 +18,14 @@ import {
   desktopNotificationInputSchema,
   diagnosticsBundlePathInputSchema,
   openExternalUrlInputSchema,
+  rendererLogInputSchema,
   setWindowAppearanceInputSchema,
   telemetryStatusInputSchema,
   uploadDiagnosticsBundleInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "../services/appearance";
 import { buildConfirmDialog } from "../services/dialogs";
+import { writeLocalLog } from "../services/localLogs";
 import { resolveDesktopTelemetryStatus } from "../services/telemetryStatus";
 import type { DesktopIpcModuleContext } from "./types";
 
@@ -64,6 +67,20 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
       });
       notification.show();
       return true;
+    },
+  );
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.writeRendererLog,
+    async (_event, args: RendererLogInput) => {
+      const input = parseWithSchema(rendererLogInputSchema, args, "renderer log input");
+      writeLocalLog(
+        "renderer.log",
+        input.level ?? "info",
+        input.category,
+        input.message,
+        input.meta,
+      );
     },
   );
 

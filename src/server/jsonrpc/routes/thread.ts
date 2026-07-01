@@ -13,6 +13,41 @@ import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 const THREAD_READ_JOURNAL_BATCH_SIZE = 250;
 
+type ReplayHealth = {
+  trusted: boolean;
+  snapshotRequired: boolean;
+  reason: "ok" | "journal_write_failed" | "after_seq_beyond_tail";
+  tailSeq: number;
+  failedWriteCount: number;
+  droppedEventCount: number;
+};
+
+function buildReplayHealth(
+  context: JsonRpcRouteContext,
+  threadId: string,
+  afterSeq = 0,
+): ReplayHealth | undefined {
+  const health = context.journal.getHealth?.(threadId);
+  if (!health) return undefined;
+  const reason = !health.trusted
+    ? "journal_write_failed"
+    : afterSeq > health.tailSeq
+      ? "after_seq_beyond_tail"
+      : "ok";
+  return {
+    trusted: reason === "ok",
+    snapshotRequired: reason !== "ok",
+    reason,
+    tailSeq: health.tailSeq,
+    failedWriteCount: health.failedWriteCount,
+    droppedEventCount: health.droppedEventCount,
+  };
+}
+
+function buildThreadCreationKey(cwd: string, clientThreadId: string): string {
+  return `${cwd}\0${clientThreadId}`;
+}
+
 async function resolveThreadListWorkspacePath(
   context: JsonRpcRouteContext,
   params: Record<string, unknown>,
@@ -63,6 +98,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       const provider = parsed.data.provider as AgentConfig["provider"] | undefined;
       const model = parsed.data.model;
+      const clientThreadId = parsed.data.clientThreadId;
       let cwd: string;
       try {
         cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
@@ -73,7 +109,19 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         });
         return;
       }
+      const creationKey = clientThreadId ? buildThreadCreationKey(cwd, clientThreadId) : null;
+      const existingRuntime = creationKey ? context.threads.getByCreationKey?.(creationKey) : null;
+      if (existingRuntime) {
+        context.threads.subscribe(ws, existingRuntime.id);
+        const thread = context.utils.buildThreadFromSession(existingRuntime);
+        context.jsonrpc.sendResult(ws, message.id, { thread });
+        context.jsonrpc.send(ws, { method: "thread/started", params: { thread } });
+        return;
+      }
       const runtime = context.threads.create({ cwd, provider, model });
+      if (creationKey) {
+        await context.threads.rememberCreationKey?.(creationKey, runtime.id);
+      }
       context.threads.subscribe(ws, runtime.id);
       const thread = context.utils.buildThreadFromSession(runtime);
       void context.journal
@@ -110,10 +158,14 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       const thread = context.utils.buildThreadFromSession(binding.runtime);
       let replayedRequestIds: ReadonlySet<string> | undefined;
+      let replayHealth = buildReplayHealth(context, threadId, afterSeq);
       if (afterSeq > 0) {
         await context.journal.waitForIdle(threadId);
+        replayHealth = buildReplayHealth(context, threadId, afterSeq);
         binding.runtime.replay.beginDisconnectedReplayBuffer();
-        replayedRequestIds = context.journal.replay(ws, threadId, afterSeq);
+        if (!replayHealth || replayHealth.trusted) {
+          replayedRequestIds = context.journal.replay(ws, threadId, afterSeq);
+        }
       }
       const pendingPromptEvents = binding.runtime.replay.getPendingPromptEventsForReplay();
       context.threads.subscribe(ws, threadId, {
@@ -127,7 +179,10 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         pendingPromptEvents,
         ...(replayedRequestIds?.size ? { skipPendingPromptRequestIds: replayedRequestIds } : {}),
       });
-      context.jsonrpc.sendResult(ws, message.id, { thread });
+      context.jsonrpc.sendResult(ws, message.id, {
+        thread,
+        ...(replayHealth ? { replayHealth } : {}),
+      });
       context.jsonrpc.send(ws, { method: "thread/started", params: { thread } });
     },
 
@@ -236,6 +291,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         }
         turns = projector.build();
       }
+      const replayHealth = buildReplayHealth(context, threadId, journalTailSeq);
       context.jsonrpc.sendResult(ws, message.id, {
         thread: {
           ...thread,
@@ -243,6 +299,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         },
         coworkSnapshot: enrichedSnapshot,
         ...(includeTurns ? { journalTailSeq } : {}),
+        ...(replayHealth ? { replayHealth } : {}),
       });
       queueMicrotask(() => {
         primeSessionSnapshotCitationCache(enrichedSnapshot);
@@ -306,6 +363,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         }
         turns = projector.build();
       }
+      const replayHealth = buildReplayHealth(context, threadId, journalTailSeq);
       context.jsonrpc.sendResult(ws, message.id, {
         thread: {
           ...thread,
@@ -313,6 +371,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         },
         coworkSnapshot: enrichedSnapshot,
         ...(includeTurns ? { journalTailSeq } : {}),
+        ...(replayHealth ? { replayHealth } : {}),
       });
       queueMicrotask(() => {
         primeSessionSnapshotCitationCache(enrichedSnapshot);

@@ -85,6 +85,21 @@ async function createService(opts: {
   uploadUrl?: string;
   disableNetworkTelemetry?: boolean;
   fetchImpl?: typeof fetch;
+  serverDiagnostics?: () => {
+    workspaces: Array<{
+      workspaceId: string;
+      running: boolean;
+      starting: boolean;
+      currentServerUrl: string | null;
+      restartCount: number;
+      lastChildExit: {
+        url: string | null;
+        code: number | null;
+        signal: string | null;
+        exitedAt: string;
+      } | null;
+    }>;
+  };
 }) {
   const { DiagnosticsService } = await loadDiagnosticsModule(opts.userDataDir);
   const state = createState(opts.uploadEnabled);
@@ -116,6 +131,7 @@ async function createService(opts: {
     isPackaged: () => false,
     platform: "darwin",
     arch: "arm64",
+    serverDiagnostics: opts.serverDiagnostics,
   });
 }
 
@@ -163,6 +179,43 @@ describe("desktop diagnostics service", () => {
       expect(bundle.logs["server.log"]).toContain("[workspace-path]");
       expect(result.uploadConfigured).toBe(false);
       expect(result.uploadEnabled).toBe(false);
+    } finally {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("includes sanitized sidecar lifecycle diagnostics", async () => {
+    const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-diagnostics-"));
+    try {
+      const service = await createService({
+        userDataDir,
+        uploadEnabled: false,
+        serverDiagnostics: () => ({
+          workspaces: [
+            {
+              workspaceId: "ws-1",
+              running: false,
+              starting: false,
+              currentServerUrl: "ws://127.0.0.1:7337/ws?coworkBrowserToken=secret",
+              restartCount: 2,
+              lastChildExit: {
+                url: "ws://127.0.0.1:7337/ws?coworkBrowserToken=secret",
+                code: 1,
+                signal: null,
+                exitedAt: "2026-06-01T12:00:00.000Z",
+              },
+            },
+          ],
+        }),
+      });
+      const result = await service.createBundle();
+      const bundleText = await fs.readFile(result.path, "utf8");
+      const bundle = JSON.parse(bundleText) as {
+        sidecarLifecycle: { workspaces: Array<{ restartCount: number }> };
+      };
+
+      expect(bundle.sidecarLifecycle.workspaces[0]?.restartCount).toBe(2);
+      expect(bundleText).not.toContain("secret");
     } finally {
       await fs.rm(userDataDir, { recursive: true, force: true });
     }

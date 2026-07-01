@@ -17,6 +17,7 @@ import type {
 } from "../../src/lib/desktopApi";
 import { getLocalLogPath, getLogsDir, logError, logInfo, logWarn, tailLog } from "./localLogs";
 import type { PersistenceService } from "./persistence";
+import type { ServerManagerDiagnostics } from "./serverManager";
 import type { DesktopUpdaterService } from "./updater";
 import {
   readWindowsSandboxReadiness,
@@ -38,6 +39,7 @@ type DiagnosticsServiceOptions = {
   isPackaged?: () => boolean;
   platform?: NodeJS.Platform;
   arch?: string;
+  serverDiagnostics?: () => ServerManagerDiagnostics;
 };
 
 type DiagnosticsBundle = {
@@ -64,6 +66,7 @@ type DiagnosticsBundle = {
     reason: "not_collected_by_desktop";
   };
   updateState: unknown;
+  sidecarLifecycle: ServerManagerDiagnostics | null;
   windowsSandbox: WindowsSandboxReadiness | { state: "not-applicable" } | null;
   logs: Partial<Record<"server.log" | "desktop-main.log" | "updater.log" | "renderer.log", string>>;
 };
@@ -95,6 +98,36 @@ function sanitizeLogTail(tail: string, context: DiagnosticsRedactionContext): st
     .map((line) => redactDiagnosticText(line, { ...context, maxStringLength: 4096 }))
     .join("\n")
     .trim();
+}
+
+function stripDiagnosticUrlSecrets(rawUrl: string | null): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return rawUrl.split("?")[0] ?? rawUrl;
+  }
+}
+
+function sanitizeServerDiagnostics(
+  diagnostics: ServerManagerDiagnostics | undefined,
+): ServerManagerDiagnostics | null {
+  if (!diagnostics) return null;
+  return {
+    workspaces: diagnostics.workspaces.map((workspace) => ({
+      ...workspace,
+      currentServerUrl: stripDiagnosticUrlSecrets(workspace.currentServerUrl),
+      lastChildExit: workspace.lastChildExit
+        ? {
+            ...workspace.lastChildExit,
+            url: stripDiagnosticUrlSecrets(workspace.lastChildExit.url),
+          }
+        : null,
+    })),
+  };
 }
 
 function buildSummary(input: {
@@ -155,6 +188,7 @@ export class DiagnosticsService {
   private readonly isPackaged: () => boolean;
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
+  private readonly serverDiagnostics?: () => ServerManagerDiagnostics;
 
   constructor(options: DiagnosticsServiceOptions) {
     this.persistence = options.persistence;
@@ -166,6 +200,7 @@ export class DiagnosticsService {
     this.isPackaged = options.isPackaged ?? (() => app.isPackaged);
     this.platform = options.platform ?? process.platform;
     this.arch = options.arch ?? process.arch;
+    this.serverDiagnostics = options.serverDiagnostics;
   }
 
   getDiagnosticsDir(): string {
@@ -206,6 +241,10 @@ export class DiagnosticsService {
         reason: "not_collected_by_desktop",
       },
       updateState: sanitizeLogMeta(this.updater.getState(), context),
+      sidecarLifecycle: sanitizeLogMeta(
+        sanitizeServerDiagnostics(this.serverDiagnostics?.()),
+        context,
+      ) as ServerManagerDiagnostics | null,
       windowsSandbox:
         this.platform === "win32"
           ? await readWindowsSandboxReadiness(app.getPath("userData"))

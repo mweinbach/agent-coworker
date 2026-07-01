@@ -185,6 +185,7 @@ export function createDesktopCommandsMock(
     trashPath: async () => {},
     confirmAction: async () => true,
     showNotification: async () => true,
+    writeRendererLog: async () => {},
     createDiagnosticsBundle: async () => ({
       path: "/tmp/cowork-diagnostics.json",
       createdAt: "2026-06-01T00:00:00.000Z",

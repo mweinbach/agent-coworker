@@ -16,6 +16,132 @@ import {
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
+  test("thread/start is idempotent for a stable clientThreadId", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const first = await rpc.sendRequest(
+        "thread/start",
+        {
+          cwd: tmpDir,
+          clientThreadId: "desktop-draft-1",
+        },
+        JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
+      );
+      const second = await rpc.sendRequest(
+        "thread/start",
+        {
+          cwd: tmpDir,
+          clientThreadId: "desktop-draft-1",
+        },
+        JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
+      );
+
+      expect(second.result.thread.id).toBe(first.result.thread.id);
+      await rpc.sendRequest("thread/read", {
+        threadId: first.result.thread.id,
+        includeTurns: true,
+      });
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("thread/start idempotency survives a server restart", async () => {
+    const tmpDir = await makeTmpProject();
+    let threadId = "";
+
+    {
+      const { server, url } = await startAgentServer(serverOpts(tmpDir));
+      try {
+        const rpc = await connectJsonRpc(url);
+        const first = await rpc.sendRequest("thread/start", {
+          cwd: tmpDir,
+          clientThreadId: "desktop-draft-after-restart",
+        });
+        threadId = first.result.thread.id;
+        await rpc.sendRequest("thread/read", { threadId });
+        rpc.close();
+      } finally {
+        await stopTestServer(server);
+      }
+    }
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const rpc = await connectJsonRpc(url);
+      const replayed = await rpc.sendRequest("thread/start", {
+        cwd: tmpDir,
+        clientThreadId: "desktop-draft-after-restart",
+      });
+
+      expect(replayed.result.thread.id).toBe(threadId);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("thread/resume reports a replay gap when afterSeq is beyond the journal tail", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      const resumed = await rpc.sendRequest("thread/resume", {
+        threadId: started.result.thread.id,
+        afterSeq: 999_999,
+      });
+
+      expect(resumed.result.replayHealth).toMatchObject({
+        trusted: false,
+        snapshotRequired: true,
+        reason: "after_seq_beyond_tail",
+      });
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("runtime diagnostics exposes send queue, journal, and DB lock counters", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const result = await rpc.sendRequest("cowork/runtime/diagnostics/read");
+
+      expect(result.result.diagnostics).toMatchObject({
+        sendQueue: {
+          queuedSends: expect.any(Number),
+          droppedDeltas: expect.any(Number),
+          droppedImportant: expect.any(Number),
+        },
+        journal: {
+          untrustedThreadCount: expect.any(Number),
+          failedWriteCount: expect.any(Number),
+          droppedEventCount: expect.any(Number),
+        },
+        dbLocks: {
+          waitCount: expect.any(Number),
+          timeoutCount: expect.any(Number),
+          sqliteLockErrorCount: expect.any(Number),
+        },
+      });
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("thread/resume does not duplicate a pending user input request when afterSeq also replays it", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

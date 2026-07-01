@@ -42,6 +42,7 @@ import {
   type ReadFileInput,
   type ReadTranscriptInput,
   type RenamePathInput,
+  type RendererLogInput,
   type RevealPathInput,
   type SaveExportedFileInput,
   type SetWindowAppearanceInput,
@@ -91,6 +92,7 @@ import {
   readFileInputSchema,
   readTranscriptInputSchema,
   renamePathInputSchema,
+  rendererLogInputSchema,
   revealPathInputSchema,
   saveExportedFileInputSchema,
   setWindowAppearanceInputSchema,
@@ -694,6 +696,10 @@ const desktopApi = Object.freeze<DesktopApi>({
   showNotification: (opts: DesktopNotificationInput) => {
     assertDesktopNotificationInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showNotification, opts);
+  },
+  writeRendererLog: (opts: RendererLogInput) => {
+    parseWithSchema(rendererLogInputSchema, opts, "renderer log input");
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.writeRendererLog, opts);
   },
 
   createDiagnosticsBundle: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createDiagnosticsBundle),

@@ -1,0 +1,62 @@
+name: Setup Rust cache
+description: Restore Cargo dependency and build caches for the Windows sandbox helpers.
+
+inputs:
+  cache-scope:
+    description: Extra cache scope for jobs that build different Rust targets.
+    required: false
+    default: root
+  cache-dependency-path:
+    description: Newline-separated files or globs that should invalidate the Rust dependency cache.
+    required: false
+    default: |
+      crates/cowork-win-sandbox/Cargo.lock
+      crates/cowork-win-sandbox/Cargo.toml
+      crates/cowork-win-sandbox/build.rs
+      crates/cowork-win-sandbox/vendor/**/Cargo.toml
+
+runs:
+  using: composite
+  steps:
+    - name: Compute Rust cache hash
+      id: cache-hash
+      shell: bash
+      env:
+        CACHE_DEPENDENCY_PATH: ${{ inputs.cache-dependency-path }}
+      run: |
+        set -euo pipefail
+        shopt -s globstar
+
+        digest="$(
+          while IFS= read -r path; do
+            if [ -z "$path" ]; then
+              continue
+            fi
+
+            matched=false
+            while IFS= read -r match; do
+              if [ -f "$match" ]; then
+                matched=true
+                git hash-object "$match"
+              fi
+            done < <(compgen -G "$path" || true)
+
+            if [ "$matched" = false ] && [ -f "$path" ]; then
+              git hash-object "$path"
+            fi
+          done <<< "$CACHE_DEPENDENCY_PATH" | git hash-object --stdin
+        )"
+
+        echo "value=$digest" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Cargo caches
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          crates/cowork-win-sandbox/target
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-
+          ${{ runner.os }}-${{ runner.arch }}-cargo-

@@ -80,6 +80,11 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: windows-smoke-${{ matrix.arch }}
+
       - name: Windows sandbox helper enforcement
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"

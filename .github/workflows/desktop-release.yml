@@ -77,6 +77,12 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
+      - name: Setup Rust cache
+        if: ${{ runner.os == 'Windows' }}
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: desktop-${{ matrix.build_arch }}
+
       - name: Validate public telemetry build variables
         shell: bash
         run: |

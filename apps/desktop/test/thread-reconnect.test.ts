@@ -647,6 +647,66 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(runtime?.feed.map((item) => item.id)).toEqual(["snapshot-authoritative"]);
   });
 
+  test("forced replay snapshots preserve missing optimistic user messages", async () => {
+    const { threadId } = seedStore(
+      {
+        lastEventSeq: 10,
+      },
+      {
+        busy: true,
+        feed: [
+          {
+            id: "stale-journal-item",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:03.000Z",
+            text: "Stale journal projection",
+          },
+          {
+            id: "client-msg-force",
+            kind: "message",
+            role: "user",
+            ts: "2024-01-01T00:00:04.000Z",
+            text: "Still sending",
+          },
+        ],
+      },
+    );
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    RUNTIME.optimisticUserMessageIds.set(activeThreadId, new Set(["client-msg-force"]));
+
+    jsonRpcHandlers.set("thread/resume", async () => ({
+      thread: threadMeta("session-1"),
+      replayHealth: {
+        snapshotRequired: true,
+      },
+    }));
+    jsonRpcHandlers.set("thread/read", async () => ({
+      coworkSnapshot: {
+        ...threadSnapshot("session-1"),
+        lastEventSeq: 4,
+        feed: [
+          {
+            id: "snapshot-authoritative",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:02.000Z",
+            text: "Authoritative snapshot",
+          },
+        ],
+      },
+    }));
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById[activeThreadId];
+    expect(runtime?.feed.map((item) => item.id)).toEqual([
+      "snapshot-authoritative",
+      "client-msg-force",
+    ]);
+  });
+
   test("selectThread reasserts resume for an already connected selected thread", async () => {
     const { threadId } = seedStore(
       {

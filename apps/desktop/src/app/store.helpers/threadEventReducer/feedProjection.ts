@@ -304,22 +304,49 @@ export function createFeedProjectionModule(
     currentFeed: FeedItem[],
     snapshotFeed: FeedItem[],
   ): boolean {
+    return getMissingOptimisticUserItems(threadId, currentFeed, snapshotFeed).length > 0;
+  }
+
+  function getMissingOptimisticUserItems(
+    threadId: string,
+    currentFeed: FeedItem[],
+    snapshotFeed: FeedItem[],
+  ): FeedItem[] {
     const optimisticIds = RUNTIME.optimisticUserMessageIds.get(threadId);
     if (!optimisticIds || optimisticIds.size === 0 || currentFeed.length === 0) {
-      return false;
+      return [];
     }
 
     const hasSnapshotItemWithIdOrCmid = (cmid: string) => {
       return snapshotFeed.some((entry) => entry.id === cmid || entry.id.endsWith(`:${cmid}`));
     };
 
-    return currentFeed.some(
+    return currentFeed.filter(
       (item) =>
         item.kind === "message" &&
         item.role === "user" &&
         optimisticIds.has(item.id) &&
         !hasSnapshotItemWithIdOrCmid(item.id),
     );
+  }
+
+  function mergeSnapshotFeedWithMissingOptimisticUserItems(
+    threadId: string,
+    currentFeed: FeedItem[],
+    snapshotFeed: FeedItem[],
+  ): FeedItem[] {
+    const missingOptimisticItems = getMissingOptimisticUserItems(
+      threadId,
+      currentFeed,
+      snapshotFeed,
+    );
+    if (missingOptimisticItems.length === 0) {
+      return snapshotFeed;
+    }
+    const nextFeed = [...snapshotFeed, ...missingOptimisticItems];
+    return nextFeed.length > MAX_FEED_ITEMS
+      ? nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS)
+      : nextFeed;
   }
 
   function shouldPreserveCurrentFeed(
@@ -417,7 +444,15 @@ export function createFeedProjectionModule(
             agents: snapshot.agents,
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
-            feed: preserveCurrentFeed ? runtime.feed : snapshot.feed,
+            feed: preserveCurrentFeed
+              ? runtime.feed
+              : opts?.forceFeed === true
+                ? mergeSnapshotFeedWithMissingOptimisticUserItems(
+                    threadId,
+                    runtime.feed,
+                    snapshot.feed,
+                  )
+                : snapshot.feed,
             hydrating: false,
             transcriptOnly: false,
           },

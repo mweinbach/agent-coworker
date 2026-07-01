@@ -13,7 +13,7 @@ import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness
 
 export type JsonRpcConnection = {
   ws: WebSocket;
-  sendRequest: (method: string, params?: unknown) => Promise<any>;
+  sendRequest: (method: string, params?: unknown, timeoutMs?: number) => Promise<any>;
   sendResponse: (id: string | number, result: unknown) => void;
   waitFor: (predicate: (message: any) => boolean, timeoutMs?: number) => Promise<any>;
   close: () => void;
@@ -88,10 +88,10 @@ export async function connectJsonRpc(
   };
 
   let nextId = 0;
-  const sendRequest = async (method: string, params?: unknown) => {
+  const sendRequest = async (method: string, params?: unknown, timeoutMs?: number) => {
     const id = ++nextId;
     ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
-    return await waitFor((message) => message.id === id);
+    return await waitFor((message) => message.id === id, timeoutMs);
   };
 
   const sendResponse = (id: string | number, result: unknown) => {

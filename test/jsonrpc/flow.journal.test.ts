@@ -16,20 +16,30 @@ import {
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
-  test("thread/start is idempotent for a stable clientThreadId", async () => {
+  test("thread/start is idempotent for a stable clientThreadId", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
     try {
       const rpc = await connectJsonRpc(url);
-      const first = await rpc.sendRequest("thread/start", {
-        cwd: tmpDir,
-        clientThreadId: "desktop-draft-1",
-      });
-      const second = await rpc.sendRequest("thread/start", {
-        cwd: tmpDir,
-        clientThreadId: "desktop-draft-1",
-      });
+      const first = await rpc.sendRequest(
+        "thread/start",
+        {
+          cwd: tmpDir,
+          clientThreadId: "desktop-draft-1",
+        },
+        JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
+      );
+      const second = await rpc.sendRequest(
+        "thread/start",
+        {
+          cwd: tmpDir,
+          clientThreadId: "desktop-draft-1",
+        },
+        JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
+      );
 
       expect(second.result.thread.id).toBe(first.result.thread.id);
       await rpc.sendRequest("thread/read", {

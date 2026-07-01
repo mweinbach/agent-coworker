@@ -27,6 +27,7 @@ const TASK_CREATION_MIGRATION = 22;
 const TASK_REVIEW_STATE_MIGRATION = 23;
 const TASK_ARTIFACT_REVISION_SETTLEMENT_MIGRATION = 24;
 const THREAD_CREATION_KEYS_MIGRATION = 25;
+const THREAD_JOURNAL_FAILURES_MIGRATION = 26;
 
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
@@ -62,6 +63,7 @@ type BootstrapSessionDbOptions = {
     | "addTaskCreationColumns"
     | "addTaskReviewTables"
     | "addThreadCreationKeysTable"
+    | "addThreadJournalFailuresTable"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -203,6 +205,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(THREAD_CREATION_KEYS_MIGRATION)) {
     opts.repository.addThreadCreationKeysTable();
     opts.repository.markMigration(THREAD_CREATION_KEYS_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(THREAD_JOURNAL_FAILURES_MIGRATION)) {
+    opts.repository.addThreadJournalFailuresTable();
+    opts.repository.markMigration(THREAD_JOURNAL_FAILURES_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

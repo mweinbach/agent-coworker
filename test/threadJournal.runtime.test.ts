@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { ThreadJournal } from "../src/server/runtime/ThreadJournal";
-import type { PersistedThreadJournalEvent } from "../src/server/sessionDb";
+import type {
+  PersistedThreadJournalEvent,
+  PersistedThreadJournalFailure,
+} from "../src/server/sessionDb";
 
 function event(threadId: string, eventType: string): Omit<PersistedThreadJournalEvent, "seq"> {
   return {
@@ -18,8 +21,9 @@ function event(threadId: string, eventType: string): Omit<PersistedThreadJournal
 describe("ThreadJournal runtime", () => {
   test("records write failures and keeps later writes flowing", async () => {
     const stored: PersistedThreadJournalEvent[] = [];
+    let persistedFailure: PersistedThreadJournalFailure | null = null;
     let appendCalls = 0;
-    const journal = new ThreadJournal({
+    const journalStore = {
       appendThreadJournalEvents: async (batch: Array<Omit<PersistedThreadJournalEvent, "seq">>) => {
         appendCalls += 1;
         if (appendCalls === 1) {
@@ -34,7 +38,13 @@ describe("ThreadJournal runtime", () => {
         stored.filter((entry) => entry.threadId === threadId),
       getThreadJournalTailSeq: (threadId: string) =>
         stored.filter((entry) => entry.threadId === threadId).at(-1)?.seq ?? 0,
-    } as never);
+      getThreadJournalFailure: (threadId: string) =>
+        persistedFailure?.threadId === threadId ? persistedFailure : null,
+      recordThreadJournalFailure: async (failure: PersistedThreadJournalFailure) => {
+        persistedFailure = failure;
+      },
+    };
+    const journal = new ThreadJournal(journalStore as never);
 
     await expect(journal.enqueue(event("thread-1", "turn/started"))).rejects.toThrow(
       "database is locked",
@@ -54,6 +64,15 @@ describe("ThreadJournal runtime", () => {
       trusted: false,
       tailSeq: 1,
       failedWriteCount: 1,
+    });
+
+    const restartedJournal = new ThreadJournal(journalStore as never);
+    expect(restartedJournal.getHealth("thread-1")).toMatchObject({
+      trusted: false,
+      tailSeq: 1,
+      failedWriteCount: 1,
+      droppedEventCount: 1,
+      lastFailureMessage: "database is locked",
     });
   });
 

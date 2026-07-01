@@ -183,6 +183,14 @@ export type PersistedThreadJournalEvent = {
   payload: unknown;
 };
 
+export type PersistedThreadJournalFailure = {
+  threadId: string;
+  failedWriteCount: number;
+  droppedEventCount: number;
+  lastFailureAt: string;
+  lastFailureMessage: string;
+};
+
 export type PersistedResearchRecord = ResearchRecord;
 
 type SessionDbOptions = {
@@ -442,6 +450,20 @@ export class SessionDb {
 
   getThreadJournalTailSeq(threadId: string): number {
     return this.readRepository.getThreadJournalTailSeq(threadId);
+  }
+
+  getThreadJournalFailure(threadId: string): PersistedThreadJournalFailure | null {
+    return this.readRepository.getThreadJournalFailure(threadId);
+  }
+
+  async recordThreadJournalFailure(input: PersistedThreadJournalFailure): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "record_thread_journal_failure",
+      async () => {
+        this.repository.recordThreadJournalFailure(input);
+      },
+      { threadId: input.threadId },
+    );
   }
 
   getThreadIdByCreationKey(creationKey: string): string | null {

@@ -308,6 +308,17 @@ export const coworkThreadSchema = z
   })
   .strict();
 
+const replayHealthSchema = z
+  .object({
+    trusted: z.boolean(),
+    snapshotRequired: z.boolean(),
+    reason: z.enum(["ok", "journal_write_failed", "after_seq_beyond_tail"]),
+    tailSeq: z.number().int().nonnegative(),
+    failedWriteCount: z.number().int().nonnegative(),
+    droppedEventCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const coworkThreadReadResultSchema = z
   .object({
     thread: coworkThreadSchema.extend({
@@ -325,6 +336,7 @@ export const coworkThreadReadResultSchema = z
     }),
     coworkSnapshot: sessionSnapshotSchema.nullable(),
     journalTailSeq: z.number().int().nonnegative().optional(),
+    replayHealth: replayHealthSchema.optional(),
   })
   .strict();
 
@@ -338,6 +350,7 @@ export const coworkThreadListResultSchema = z
 export const coworkThreadResumeResultSchema = z
   .object({
     thread: coworkThreadSchema,
+    replayHealth: replayHealthSchema.optional(),
   })
   .strict();
 

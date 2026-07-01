@@ -812,6 +812,42 @@ describe("sessionDb", () => {
     }
   });
 
+  test("persists thread journal failure markers across database reopen", async () => {
+    const paths = await makeTmpCoworkHome();
+    const first = await SessionDb.create({ paths });
+    try {
+      await first.recordThreadJournalFailure({
+        threadId: "thread-1",
+        failedWriteCount: 2,
+        droppedEventCount: 5,
+        lastFailureAt: "2026-07-01T00:00:00.000Z",
+        lastFailureMessage: "database is locked",
+      });
+      expect(first.getThreadJournalFailure("thread-1")).toEqual({
+        threadId: "thread-1",
+        failedWriteCount: 2,
+        droppedEventCount: 5,
+        lastFailureAt: "2026-07-01T00:00:00.000Z",
+        lastFailureMessage: "database is locked",
+      });
+    } finally {
+      first.close();
+    }
+
+    const reopened = await SessionDb.create({ paths });
+    try {
+      expect(reopened.getThreadJournalFailure("thread-1")).toEqual({
+        threadId: "thread-1",
+        failedWriteCount: 2,
+        droppedEventCount: 5,
+        lastFailureAt: "2026-07-01T00:00:00.000Z",
+        lastFailureMessage: "database is locked",
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
   test("filters listed sessions by working directory and persists materialized snapshots", async () => {
     const paths = await makeTmpCoworkHome();
     const db = await SessionDb.create({ paths });

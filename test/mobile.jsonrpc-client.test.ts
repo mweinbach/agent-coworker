@@ -276,6 +276,14 @@ describe("mobile cowork jsonrpc client", () => {
             status: { type: "loaded" },
           },
           coworkSnapshot: null,
+          replayHealth: {
+            trusted: true,
+            snapshotRequired: false,
+            reason: "ok",
+            tailSeq: 1,
+            failedWriteCount: 0,
+            droppedEventCount: 0,
+          },
         },
       }),
     );
@@ -285,6 +293,9 @@ describe("mobile cowork jsonrpc client", () => {
         id: "thread-1",
       },
       coworkSnapshot: null,
+      replayHealth: {
+        trusted: true,
+      },
     });
   });
 
@@ -429,6 +440,14 @@ describe("mobile cowork jsonrpc client", () => {
             lastEventSeq: 1,
             status: { type: "loaded" },
           },
+          replayHealth: {
+            trusted: false,
+            snapshotRequired: true,
+            reason: "journal_write_failed",
+            tailSeq: 4,
+            failedWriteCount: 1,
+            droppedEventCount: 2,
+          },
         },
       }),
     );
@@ -436,6 +455,10 @@ describe("mobile cowork jsonrpc client", () => {
     await expect(resumePromise).resolves.toMatchObject({
       thread: {
         id: "thread-1",
+      },
+      replayHealth: {
+        trusted: false,
+        snapshotRequired: true,
       },
     });
   });

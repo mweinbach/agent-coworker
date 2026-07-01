@@ -160,9 +160,14 @@ It bypasses the live WebSocket protocol on purpose so the inner loop stays fast.
 Use the WebSocket/session harness when you need to validate the real product boundary:
 
 - session creation and handshake
+- delayed handshakes and desktop reconnect timeout budgets
+- sidecar death after startup or during a turn
 - `harness_context_set` / `harness_context_get`
 - ask / approval flows
+- reconnect during ask / approval prompts
 - persistence + resume
+- send queue overflow, journal write failure, replay gap, and snapshot-refresh recovery
+- session DB write-lock contention diagnostics
 - child-agent protocol controls (`agent_spawn`, `agent_list_get`, `agent_wait`, and related follow-up flows)
 
 This layer should use deterministic `startAgentServer({ runTurnImpl })` tests instead of live provider APIs whenever possible.

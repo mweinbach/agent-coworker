@@ -21,6 +21,7 @@ import {
   showCanvasWindow,
   showNotification,
   showQuickChatWindow,
+  writeRendererLog,
 } from "./lib/desktopCommands";
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
 import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
@@ -412,13 +413,37 @@ export default function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   useEffect(
-    () => onWorkspaceServerStartupProgress(setWorkspaceServerStartupProgress),
+    () =>
+      onWorkspaceServerStartupProgress((event) => {
+        void writeRendererLog({
+          category: "sidecar",
+          message: "workspace server startup progress",
+          meta: {
+            workspaceId: event.workspaceId,
+            phase: event.progress.phase,
+            version: event.progress.version,
+            percent: event.progress.percent,
+          },
+        }).catch(() => {});
+        setWorkspaceServerStartupProgress(event);
+      }),
     [setWorkspaceServerStartupProgress],
   );
 
   useEffect(() => {
     if (windowMode !== "main") return;
-    return onWorkspaceServerExited(handleWorkspaceServerExited);
+    return onWorkspaceServerExited((event) => {
+      void writeRendererLog({
+        category: "sidecar",
+        message: "workspace server exited",
+        meta: {
+          workspaceId: event.workspaceId,
+          code: event.code,
+          signal: event.signal,
+        },
+      }).catch(() => {});
+      handleWorkspaceServerExited(event);
+    });
   }, [handleWorkspaceServerExited, windowMode]);
 
   useEffect(() => {

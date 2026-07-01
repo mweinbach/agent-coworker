@@ -54,6 +54,7 @@ import {
   type UpdateTaskPlanInput,
   type WorkItemInput,
 } from "./sessionDb/tasks";
+import type { SessionDbWriteLockDiagnostics } from "./sessionDb/writeCoordinator";
 import { SessionDbWriteCoordinator } from "./sessionDb/writeCoordinator";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
@@ -437,6 +438,10 @@ export class SessionDb {
     opts?: { afterSeq?: number; limit?: number },
   ): PersistedThreadJournalEvent[] {
     return this.readRepository.listThreadJournalEvents(threadId, opts);
+  }
+
+  getWriteLockDiagnostics(): SessionDbWriteLockDiagnostics {
+    return this.writeCoordinator.getDiagnostics();
   }
 
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {

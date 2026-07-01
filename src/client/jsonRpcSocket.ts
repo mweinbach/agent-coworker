@@ -37,6 +37,7 @@ type QueuedOperation =
       kind: "request";
       method: string;
       params?: unknown;
+      retryOnDisconnect: boolean;
       resolve: (value: unknown) => void;
       reject: (error: Error) => void;
     }
@@ -44,6 +45,11 @@ type QueuedOperation =
       kind: "notification";
       method: string;
       params?: unknown;
+    }
+  | {
+      kind: "response";
+      id: string | number;
+      result: unknown;
     };
 
 const webSocketImplSchema = z.custom<WebSocketConstructorLike>(
@@ -105,6 +111,20 @@ type JsonRpcRequestError = Error & {
   jsonRpcCode?: number;
 };
 
+export type JsonRpcSocketReconnectEvent = {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  reason: string;
+  queuedOperationCount: number;
+  pendingRequestCount: number;
+};
+
+export type JsonRpcSocketRequestOptions = {
+  retryable?: boolean;
+  retryOnDisconnect?: boolean;
+};
+
 export type JsonRpcSocketOpts = {
   url: string;
   clientInfo: {
@@ -124,6 +144,8 @@ export type JsonRpcSocketOpts = {
   timers?: JsonRpcSocketTimerScheduler;
   onOpen?: () => void;
   onClose?: (reason: string) => void;
+  onReconnecting?: (event: JsonRpcSocketReconnectEvent) => void;
+  onReconnectExhausted?: (reason: string) => void;
   onNotification?: (message: { method: string; params?: unknown }) => void;
   onServerRequest?: (message: JsonRpcLiteRequest) => void;
   onInvalidMessage?: (message: JsonRpcSocketInvalidMessage) => void;
@@ -159,6 +181,8 @@ export class JsonRpcSocket {
   private readonly timers: JsonRpcSocketTimerScheduler;
   private readonly onOpen?: () => void;
   private readonly onClose?: (reason: string) => void;
+  private readonly onReconnecting?: (event: JsonRpcSocketReconnectEvent) => void;
+  private readonly onReconnectExhausted?: (reason: string) => void;
   private readonly onNotification?: (message: { method: string; params?: unknown }) => void;
   private readonly onServerRequest?: (message: JsonRpcLiteRequest) => void;
   private readonly onInvalidMessage?: (message: JsonRpcSocketInvalidMessage) => void;
@@ -176,7 +200,13 @@ export class JsonRpcSocket {
   private nextId = 0;
   private pendingRequests = new Map<
     string | number,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+    {
+      method: string;
+      params?: unknown;
+      retryOnDisconnect: boolean;
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+    }
   >();
   private queuedOperations: QueuedOperation[] = [];
 
@@ -197,6 +227,8 @@ export class JsonRpcSocket {
     this.timers = opts.timers ?? defaultTimerScheduler;
     this.onOpen = opts.onOpen;
     this.onClose = opts.onClose;
+    this.onReconnecting = opts.onReconnecting;
+    this.onReconnectExhausted = opts.onReconnectExhausted;
     this.onNotification = opts.onNotification;
     this.onServerRequest = opts.onServerRequest;
     this.onInvalidMessage = opts.onInvalidMessage;
@@ -240,7 +272,7 @@ export class JsonRpcSocket {
     this.pendingInitializationFailure = null;
     const closedError = new Error("socket closed");
     this.rejectQueuedRequests(closedError);
-    this.rejectPendingRequests(closedError);
+    this.rejectPendingRequests(closedError, false);
     try {
       this.ws?.close();
     } catch {
@@ -252,7 +284,7 @@ export class JsonRpcSocket {
   async request(
     method: string,
     params?: unknown,
-    opts?: { retryable?: boolean },
+    opts?: JsonRpcSocketRequestOptions,
   ): Promise<unknown> {
     if (!this.initialized || !this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
       if (this.reconnectExhausted) {
@@ -263,11 +295,12 @@ export class JsonRpcSocket {
           kind: "request",
           method,
           params,
+          retryOnDisconnect: opts.retryOnDisconnect === true,
         });
       }
       throw new Error(`JSON-RPC socket is not ready for request: ${method}`);
     }
-    return await this.sendRequestNow(method, params);
+    return await this.sendRequestNow(method, params, opts);
   }
 
   notify(method: string, params?: unknown, opts?: { retryable?: boolean }): boolean {
@@ -293,8 +326,16 @@ export class JsonRpcSocket {
     }
   }
 
-  respond(id: string | number, result: unknown): boolean {
+  respond(id: string | number, result: unknown, opts?: { retryable?: boolean }): boolean {
     if (!this.initialized || !this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+      if (opts?.retryable === true && this.autoReconnect && !this.intentionalClose) {
+        try {
+          this.enqueueResponse({ kind: "response", id, result });
+          return true;
+        } catch {
+          return false;
+        }
+      }
       return false;
     }
     try {
@@ -321,6 +362,13 @@ export class JsonRpcSocket {
   }
 
   private enqueueNotification(operation: Extract<QueuedOperation, { kind: "notification" }>) {
+    if (this.queuedOperations.length >= this.maxQueuedMessages) {
+      throw new Error("JSON-RPC retry queue is full");
+    }
+    this.queuedOperations.push(operation);
+  }
+
+  private enqueueResponse(operation: Extract<QueuedOperation, { kind: "response" }>) {
     if (this.queuedOperations.length >= this.maxQueuedMessages) {
       throw new Error("JSON-RPC retry queue is full");
     }
@@ -390,12 +438,12 @@ export class JsonRpcSocket {
       this.ws = null;
       this.pendingInitializationFailure = null;
       this.clearConnectionTimeouts();
-      this.rejectPendingRequests(failure);
+      this.rejectPendingRequests(failure, !this.intentionalClose && this.autoReconnect);
       if (!this.intentionalClose && this.autoReconnect) {
         if (wasInitialized) {
           this.resetReadyPromise();
         }
-        this.scheduleReconnect();
+        this.scheduleReconnect(failure);
       } else {
         if (!wasInitialized) {
           this.ready.reject(failure);
@@ -495,14 +543,24 @@ export class JsonRpcSocket {
     }
   }
 
-  private async sendRequestNow(method: string, params?: unknown): Promise<unknown> {
+  private async sendRequestNow(
+    method: string,
+    params?: unknown,
+    opts?: JsonRpcSocketRequestOptions,
+  ): Promise<unknown> {
     const ws = this.ws;
     if (!ws || ws.readyState !== this.WebSocketImpl.OPEN) {
       throw new Error(`JSON-RPC socket is not open for request: ${method}`);
     }
     const id = ++this.nextId;
     const promise = new Promise<unknown>((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
+      this.pendingRequests.set(id, {
+        method,
+        params,
+        retryOnDisconnect: opts?.retryOnDisconnect === true,
+        resolve,
+        reject,
+      });
     });
     try {
       ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
@@ -539,7 +597,13 @@ export class JsonRpcSocket {
         this.notify(operation.method, operation.params);
         continue;
       }
-      void this.sendRequestNow(operation.method, operation.params)
+      if (operation.kind === "response") {
+        this.respond(operation.id, operation.result);
+        continue;
+      }
+      void this.sendRequestNow(operation.method, operation.params, {
+        retryOnDisconnect: operation.retryOnDisconnect,
+      })
         .then((result) => {
           operation.resolve(result);
         })
@@ -549,12 +613,13 @@ export class JsonRpcSocket {
     }
   }
 
-  private scheduleReconnect() {
+  private scheduleReconnect(reason: Error) {
     if (this.reconnectAttempt >= this.maxReconnectAttempts) {
       this.reconnectExhausted = true;
       const exhaustedError = new Error("max reconnect attempts exceeded");
       this.ready.reject(exhaustedError);
       this.rejectQueuedRequests(exhaustedError);
+      this.onReconnectExhausted?.(exhaustedError.message);
       this.onClose?.(exhaustedError.message);
       return;
     }
@@ -562,6 +627,14 @@ export class JsonRpcSocket {
       BASE_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempt + Math.random() * 200,
       MAX_RECONNECT_DELAY_MS,
     );
+    this.onReconnecting?.({
+      attempt: this.reconnectAttempt + 1,
+      maxAttempts: this.maxReconnectAttempts,
+      delayMs: delay,
+      reason: reason.message,
+      queuedOperationCount: this.queuedOperations.length,
+      pendingRequestCount: this.pendingRequests.size,
+    });
     this.reconnectAttempt += 1;
     this.reconnectTimer = this.timers.setTimeout(() => {
       this.reconnectTimer = null;
@@ -577,8 +650,23 @@ export class JsonRpcSocket {
     this.reconnectAttempt = 0;
   }
 
-  private rejectPendingRequests(error: Error) {
+  private rejectPendingRequests(error: Error, requeueRetryable: boolean) {
     for (const pending of this.pendingRequests.values()) {
+      if (requeueRetryable && pending.retryOnDisconnect) {
+        if (this.queuedOperations.length < this.maxQueuedMessages) {
+          this.queuedOperations.push({
+            kind: "request",
+            method: pending.method,
+            params: pending.params,
+            retryOnDisconnect: true,
+            resolve: pending.resolve,
+            reject: pending.reject,
+          });
+          continue;
+        }
+        pending.reject(new Error("JSON-RPC retry queue is full"));
+        continue;
+      }
       pending.reject(error);
     }
     this.pendingRequests.clear();

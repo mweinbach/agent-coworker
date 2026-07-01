@@ -6,6 +6,7 @@ import type {
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../../src/shared/spreadsheetPreview";
 import { JsonRpcSocket } from "../../lib/agentSocket";
+import { writeRendererLog } from "../../lib/desktopCommands";
 import { withBrowserAccessToken } from "../../lib/webAdapter";
 import type { TurnReference } from "../../lib/wsProtocol";
 import type { StoreGet, StoreSet } from "../store.helpers";
@@ -25,6 +26,8 @@ type WorkspaceNotificationRouter = (message: JsonRpcNotification) => void;
 type WorkspaceLifecycleListener = {
   onOpen?: () => void;
   onClose?: () => void;
+  onReconnecting?: () => void;
+  onReconnectExhausted?: () => void;
 };
 
 const workspaceRouters = new Map<string, Set<WorkspaceNotificationRouter>>();
@@ -32,13 +35,21 @@ const workspaceLifecycleListeners = new Map<string, Set<WorkspaceLifecycleListen
 const workspaceStoreSetters = new Map<string, StoreSet>();
 const disposedWorkspaceIds = new Set<string>();
 const noopSet: StoreSet = () => {};
-const DESKTOP_JSONRPC_OPEN_TIMEOUT_MS = 1_500;
-const DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS = 1_500;
+const DESKTOP_JSONRPC_OPEN_TIMEOUT_MS = 5_000;
+const DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
   readyPromise?: Promise<void>;
-  request?: (method: string, params?: unknown, options?: unknown) => Promise<any>;
-  respond?: (requestId: string | number, result: unknown) => boolean;
+  request?: (
+    method: string,
+    params?: unknown,
+    options?: JsonRpcRequestRetryOptions,
+  ) => Promise<any>;
+  respond?: (
+    requestId: string | number,
+    result: unknown,
+    options?: { retryable?: boolean },
+  ) => boolean;
   connect: () => void;
   close?: () => void;
   __coworkOpened?: boolean;
@@ -60,6 +71,11 @@ type JsonRpcThreadRecord = {
   model?: string | null;
   cwd?: string | null;
   status?: { type?: string | null } | null;
+};
+
+type JsonRpcRequestRetryOptions = {
+  retryable?: boolean;
+  retryOnDisconnect?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -124,6 +140,51 @@ function emitWorkspaceLifecycle(workspaceId: string, event: "open" | "close") {
   }
 }
 
+function emitWorkspaceReconnectLifecycle(
+  workspaceId: string,
+  event: "reconnecting" | "reconnectExhausted",
+) {
+  if (isWorkspaceDisposed(workspaceId)) return;
+  const listeners = workspaceLifecycleListeners.get(workspaceId);
+  if (!listeners) return;
+  for (const listener of listeners) {
+    if (event === "reconnecting") {
+      listener.onReconnecting?.();
+      continue;
+    }
+    listener.onReconnectExhausted?.();
+  }
+}
+
+function safeServerUrl(rawUrl: string | null): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return rawUrl.split("?")[0] ?? rawUrl;
+  }
+}
+
+function logRendererSocketEvent(
+  workspaceId: string,
+  event: string,
+  meta: Record<string, string | number | boolean | null> = {},
+): void {
+  void writeRendererLog({
+    category: "jsonrpc-socket",
+    message: event,
+    meta: {
+      workspaceId,
+      ...meta,
+    },
+  }).catch(() => {
+    // Renderer diagnostics are best-effort only.
+  });
+}
+
 function syncWorkspaceSocketState(workspaceId: string, isOpen: boolean) {
   getWorkspaceStoreSet(workspaceId)((s) => ({
     workspaceRuntimeById: {
@@ -135,6 +196,19 @@ function syncWorkspaceSocketState(workspaceId: string, isOpen: boolean) {
     },
   }));
   emitWorkspaceLifecycle(workspaceId, isOpen ? "open" : "close");
+}
+
+function markWorkspaceSocketReconnecting(workspaceId: string) {
+  getWorkspaceStoreSet(workspaceId)((s) => ({
+    workspaceRuntimeById: {
+      ...s.workspaceRuntimeById,
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        controlSessionId: null,
+      },
+    },
+  }));
+  emitWorkspaceReconnectLifecycle(workspaceId, "reconnecting");
 }
 
 function isActiveWorkspaceJsonRpcSocketGeneration(
@@ -289,13 +363,60 @@ export function ensureWorkspaceJsonRpcSocket(
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
+      logRendererSocketEvent(workspaceId, "socket open", {
+        generation: socket.__coworkGeneration ?? null,
+        serverUrl: safeServerUrl(url),
+      });
       syncWorkspaceSocketState(workspaceId, true);
+    },
+    onReconnecting: (event: {
+      attempt?: unknown;
+      maxAttempts?: unknown;
+      delayMs?: unknown;
+      reason?: unknown;
+      queuedOperationCount?: unknown;
+      pendingRequestCount?: unknown;
+    }) => {
+      socket.__coworkOpened = false;
+      if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
+        return;
+      }
+      const attempt = typeof event.attempt === "number" ? event.attempt : null;
+      logRendererSocketEvent(workspaceId, "socket reconnecting", {
+        generation: socket.__coworkGeneration ?? null,
+        serverUrl: safeServerUrl(url),
+        attempt,
+        maxAttempts: typeof event.maxAttempts === "number" ? event.maxAttempts : null,
+        delayMs: typeof event.delayMs === "number" ? Math.round(event.delayMs) : null,
+        reason: typeof event.reason === "string" ? event.reason : "websocket closed",
+        queuedOperationCount:
+          typeof event.queuedOperationCount === "number" ? event.queuedOperationCount : null,
+        pendingRequestCount:
+          typeof event.pendingRequestCount === "number" ? event.pendingRequestCount : null,
+      });
+      markWorkspaceSocketReconnecting(workspaceId);
+    },
+    onReconnectExhausted: (reason: string) => {
+      socket.__coworkOpened = false;
+      if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
+        return;
+      }
+      logRendererSocketEvent(workspaceId, "socket reconnect exhausted", {
+        generation: socket.__coworkGeneration ?? null,
+        serverUrl: safeServerUrl(url),
+        reason,
+      });
+      emitWorkspaceReconnectLifecycle(workspaceId, "reconnectExhausted");
     },
     onClose: () => {
       socket.__coworkOpened = false;
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
+      logRendererSocketEvent(workspaceId, "socket close", {
+        generation: socket.__coworkGeneration ?? null,
+        serverUrl: safeServerUrl(url),
+      });
       syncWorkspaceSocketState(workspaceId, false);
     },
   }) as WorkspaceJsonRpcSocket;
@@ -323,7 +444,41 @@ export async function requestJsonRpc(
   if (!socket) {
     throw new Error("JSON-RPC workspace socket is unavailable");
   }
-  return await socket.request(method, params, { retryable: true });
+  return await socket.request(method, params, getJsonRpcRequestRetryOptions(method, params));
+}
+
+function hasStableStringKey(params: unknown, key: string): boolean {
+  return isRecord(params) && typeof params[key] === "string" && params[key].trim().length > 0;
+}
+
+function getJsonRpcRequestRetryOptions(
+  method: string,
+  params: unknown,
+): JsonRpcRequestRetryOptions {
+  if (
+    method === "thread/list" ||
+    method === "thread/read" ||
+    method === "thread/resume" ||
+    method === "thread/hydrate" ||
+    method.endsWith("/read") ||
+    method.endsWith("/list") ||
+    method.endsWith("/catalog/read") ||
+    method === "cowork/session/state/read" ||
+    method === "cowork/provider/authMethods/read" ||
+    method === "cowork/provider/status/refresh"
+  ) {
+    return { retryable: true, retryOnDisconnect: true };
+  }
+  if (method === "thread/start" && hasStableStringKey(params, "clientThreadId")) {
+    return { retryable: true, retryOnDisconnect: true };
+  }
+  if (
+    (method === "turn/start" || method === "turn/steer") &&
+    hasStableStringKey(params, "clientMessageId")
+  ) {
+    return { retryable: true, retryOnDisconnect: true };
+  }
+  return { retryable: false, retryOnDisconnect: false };
 }
 
 export async function requestJsonRpcThreadList(
@@ -354,13 +509,14 @@ export async function startJsonRpcThread(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
-  opts?: { provider?: string | null; model?: string | null },
+  opts?: { provider?: string | null; model?: string | null; clientThreadId?: string | null },
 ): Promise<unknown> {
   const workspace = getWorkspaceById(get, workspaceId);
   const provider = typeof opts?.provider === "string" ? opts.provider.trim() : "";
   const model = typeof opts?.model === "string" ? opts.model.trim() : "";
   return await requestJsonRpc(get, set, workspaceId, "thread/start", {
     cwd: workspace?.path,
+    ...(opts?.clientThreadId ? { clientThreadId: opts.clientThreadId } : {}),
     ...(provider && model ? { provider, model } : {}),
   });
 }
@@ -577,7 +733,7 @@ export function respondToJsonRpcRequest(
 ): boolean {
   const socket = RUNTIME.jsonRpcSockets.get(workspaceId);
   if (!socket) return false;
-  return socket.respond?.(requestId, result) ?? false;
+  return socket.respond?.(requestId, result, { retryable: true }) ?? false;
 }
 
 export function findThreadIdForJsonRpcNotification(

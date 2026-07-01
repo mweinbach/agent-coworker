@@ -103,10 +103,22 @@ const turnReferenceSchema = z
 // Bound history inflation: each skill reference injects a full SKILL.md body.
 const turnReferencesSchema = z.array(turnReferenceSchema).max(32);
 
+const replayHealthSchema = z
+  .object({
+    trusted: z.boolean(),
+    snapshotRequired: z.boolean(),
+    reason: z.enum(["ok", "journal_write_failed", "after_seq_beyond_tail"]),
+    tailSeq: z.number().int().nonnegative(),
+    failedWriteCount: z.number().int().nonnegative(),
+    droppedEventCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const jsonRpcThreadTurnRequestSchemas = {
   "thread/start": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
+      clientThreadId: nonEmptyTrimmedStringSchema.optional(),
       provider: z.string().trim().min(1).optional(),
       model: z.string().trim().min(1).optional(),
     })
@@ -276,6 +288,7 @@ export const jsonRpcThreadTurnResultSchemas = {
   "thread/resume": z
     .object({
       thread: jsonRpcThreadSchema,
+      replayHealth: replayHealthSchema.optional(),
     })
     .strict(),
   "thread/list": z
@@ -301,6 +314,7 @@ export const jsonRpcThreadTurnResultSchemas = {
       }),
       coworkSnapshot: sessionSnapshotSchema.nullable(),
       journalTailSeq: z.number().int().nonnegative().optional(),
+      replayHealth: replayHealthSchema.optional(),
     })
     .strict(),
   "thread/unsubscribe": z
@@ -325,6 +339,7 @@ export const jsonRpcThreadTurnResultSchemas = {
       }),
       coworkSnapshot: sessionSnapshotSchema.nullable(),
       journalTailSeq: z.number().int().nonnegative().optional(),
+      replayHealth: replayHealthSchema.optional(),
     })
     .strict(),
   "turn/start": z

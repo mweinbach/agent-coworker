@@ -393,6 +393,12 @@ export function onWorkspaceServerExited(
   return getDesktopApi()?.onWorkspaceServerExited(listener) ?? noopUnsubscribe;
 }
 
+export async function writeRendererLog(
+  opts: import("./desktopApi").RendererLogInput,
+): Promise<void> {
+  await getDesktopApi()?.writeRendererLog(opts);
+}
+
 export function onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void {
   return getDesktopApi()?.onMenuCommand(listener) ?? noopUnsubscribe;
 }

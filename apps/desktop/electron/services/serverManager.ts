@@ -167,6 +167,22 @@ type WorkspaceServerStatus = {
   error?: string;
 };
 
+export type ServerManagerDiagnostics = {
+  workspaces: Array<{
+    workspaceId: string;
+    running: boolean;
+    starting: boolean;
+    currentServerUrl: string | null;
+    restartCount: number;
+    lastChildExit: {
+      url: string | null;
+      code: number | null;
+      signal: string | null;
+      exitedAt: string;
+    } | null;
+  }>;
+};
+
 const trustedDevicePermissionSchema = z.preprocess(
   (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {}),
   z.object({
@@ -1048,6 +1064,18 @@ function toHttpServerRequestUrl(websocketUrl: string, pathname: string): string 
   return url.toString();
 }
 
+function stripUrlSecrets(rawUrl: string | null): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return rawUrl.split("?")[0] ?? rawUrl;
+  }
+}
+
 function getServerLogPath(): string {
   return getLocalLogPath(SERVER_LOG_FILE_NAME);
 }
@@ -1121,6 +1149,11 @@ export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
   private readonly suppressedExitNotifications = new WeakSet<ServerChildProcess>();
+  private readonly startCountsByWorkspace = new Map<string, number>();
+  private readonly lastExitByWorkspace = new Map<
+    string,
+    ServerManagerDiagnostics["workspaces"][number]["lastChildExit"]
+  >();
 
   constructor(private readonly options: ServerManagerOptions = {}) {}
 
@@ -1142,6 +1175,12 @@ export class ServerManager {
       this.servers.delete(workspaceId);
     }
     if (!this.suppressedExitNotifications.has(child)) {
+      this.lastExitByWorkspace.set(workspaceId, {
+        url: stripUrlSecrets(url),
+        code,
+        signal,
+        exitedAt: new Date().toISOString(),
+      });
       this.options.onWorkspaceServerExited?.({
         workspaceId,
         url,
@@ -1209,6 +1248,10 @@ export class ServerManager {
     assertSafeId(workspaceId, "workspaceId");
     await assertWorkspaceDirectory(workspacePath);
     const startedAt = Date.now();
+    this.startCountsByWorkspace.set(
+      workspaceId,
+      (this.startCountsByWorkspace.get(workspaceId) ?? 0) + 1,
+    );
     const productAnalyticsState =
       opts.productAnalyticsState ?? this.options.getProductAnalyticsState?.() ?? null;
 
@@ -1632,6 +1675,33 @@ export class ServerManager {
     ];
 
     await Promise.all(killPromises);
+  }
+
+  getDiagnostics(): ServerManagerDiagnostics {
+    const workspaceIds = new Set<string>([
+      ...this.servers.keys(),
+      ...this.pendingStarts.keys(),
+      ...this.startCountsByWorkspace.keys(),
+      ...this.lastExitByWorkspace.keys(),
+    ]);
+    return {
+      workspaces: [...workspaceIds].sort().map((workspaceId) => {
+        const handle = this.servers.get(workspaceId);
+        const pending = this.pendingStarts.get(workspaceId);
+        return {
+          workspaceId,
+          running:
+            Boolean(handle) && handle?.child.exitCode === null && handle.child.signalCode === null,
+          starting:
+            Boolean(pending) &&
+            pending?.child.exitCode === null &&
+            pending.child.signalCode === null,
+          currentServerUrl: stripUrlSecrets(handle?.url ?? null),
+          restartCount: Math.max(0, (this.startCountsByWorkspace.get(workspaceId) ?? 0) - 1),
+          lastChildExit: this.lastExitByWorkspace.get(workspaceId) ?? null,
+        };
+      }),
+    };
   }
 }
 

@@ -512,6 +512,18 @@ export function createControlSocketHelpers(
         if (!currentGet || !currentSet) return;
         clearWorkspaceControlRuntime(currentGet, currentSet, workspaceId);
       },
+      onReconnecting: () => {
+        const currentGet = getControlStoreGet(workspaceId);
+        const currentSet = getControlStoreSet(workspaceId);
+        if (!currentGet || !currentSet) return;
+        clearWorkspaceControlRuntime(currentGet, currentSet, workspaceId);
+      },
+      onReconnectExhausted: () => {
+        const currentGet = getControlStoreGet(workspaceId);
+        const currentSet = getControlStoreSet(workspaceId);
+        if (!currentGet || !currentSet) return;
+        clearWorkspaceControlRuntime(currentGet, currentSet, workspaceId);
+      },
     });
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
     const routerCleanup = registerWorkspaceJsonRpcRouter(workspaceId, (message) => {

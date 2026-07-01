@@ -41,6 +41,15 @@ type LockHandle = {
   release: () => Promise<void>;
 };
 
+export type SessionDbWriteLockDiagnostics = {
+  waitCount: number;
+  timeoutCount: number;
+  sqliteLockErrorCount: number;
+  staleRecoveryCount: number;
+  lastWaitMs: number;
+  maxWaitMs: number;
+};
+
 const activeWriteLocks = new AsyncLocalStorage<ReadonlySet<string>>();
 
 function defaultProcessAlive(pid: number): boolean {
@@ -92,6 +101,14 @@ export class SessionDbWriteCoordinator {
   private readonly processAlive: (pid: number) => boolean;
   private readonly mkdirLockDir: (dirPath: string) => Promise<void>;
   private readonly emitTelemetry?: SessionDbWriteCoordinatorOptions["emitTelemetry"];
+  private readonly diagnostics: SessionDbWriteLockDiagnostics = {
+    waitCount: 0,
+    timeoutCount: 0,
+    sqliteLockErrorCount: 0,
+    staleRecoveryCount: 0,
+    lastWaitMs: 0,
+    maxWaitMs: 0,
+  };
 
   constructor(opts: SessionDbWriteCoordinatorOptions) {
     this.lockRootDir = path.join(opts.rootDir, "locks");
@@ -141,6 +158,7 @@ export class SessionDbWriteCoordinator {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.toLowerCase().includes("database is locked")) {
+        this.diagnostics.sqliteLockErrorCount += 1;
         this.emitTelemetry?.(
           "session.db.sqlite_lock",
           "error",
@@ -181,6 +199,7 @@ export class SessionDbWriteCoordinator {
 
         const waitedMs = this.now() - acquireStartedAt;
         if (waitedMs > 0 || staleRecoveries > 0) {
+          this.recordWait(waitedMs, staleRecoveries);
           this.emitTelemetry?.(
             "session.db.write_lock_wait",
             "ok",
@@ -239,6 +258,8 @@ export class SessionDbWriteCoordinator {
           const timeoutError = new Error(
             `Timed out acquiring session DB write lock after ${waitedMs}ms for ${operation}`,
           );
+          this.recordWait(waitedMs, staleRecoveries);
+          this.diagnostics.timeoutCount += 1;
           this.emitTelemetry?.(
             "session.db.write_lock_wait",
             "error",
@@ -317,5 +338,16 @@ export class SessionDbWriteCoordinator {
       startedAt: at,
       updatedAt: at,
     };
+  }
+
+  private recordWait(waitedMs: number, staleRecoveries: number): void {
+    this.diagnostics.waitCount += 1;
+    this.diagnostics.staleRecoveryCount += staleRecoveries;
+    this.diagnostics.lastWaitMs = waitedMs;
+    this.diagnostics.maxWaitMs = Math.max(this.diagnostics.maxWaitMs, waitedMs);
+  }
+
+  getDiagnostics(): SessionDbWriteLockDiagnostics {
+    return { ...this.diagnostics };
   }
 }

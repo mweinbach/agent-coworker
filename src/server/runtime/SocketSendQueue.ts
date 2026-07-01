@@ -2,7 +2,18 @@ import type { StartServerSocket } from "../startServer/types";
 
 const DEFAULT_SEND_QUEUE_MAX = 500;
 
-function evictLeastCriticalSend(queue: string[]): void {
+export type SocketSendQueueStats = {
+  queuedSends: number;
+  droppedDeltas: number;
+  droppedImportant: number;
+  serializationFailures: number;
+  sendFailures: number;
+  externalSinkFailures: number;
+  maxQueueDepth: number;
+  queueDepthByConnection: Record<string, number>;
+};
+
+function evictLeastCriticalSend(queue: string[]): "delta" | "important" | "none" {
   for (let i = 0; i < queue.length; i++) {
     try {
       const parsed = JSON.parse(queue[i]) as {
@@ -11,18 +22,27 @@ function evictLeastCriticalSend(queue: string[]): void {
       };
       if (parsed.method === "model_stream_chunk" || parsed.params?.type === "agentMessage/delta") {
         queue.splice(i, 1);
-        return;
+        return "delta";
       }
     } catch {
       // ignore malformed JSON
     }
   }
-  queue.shift();
+  return queue.shift() === undefined ? "none" : "important";
 }
 
 export class SocketSendQueue {
   private readonly pendingSends = new Map<string, string[]>();
   private readonly externalSinks = new Map<string, (serialized: string) => boolean>();
+  private readonly stats: Omit<SocketSendQueueStats, "queueDepthByConnection"> = {
+    queuedSends: 0,
+    droppedDeltas: 0,
+    droppedImportant: 0,
+    serializationFailures: 0,
+    sendFailures: 0,
+    externalSinkFailures: 0,
+    maxQueueDepth: 0,
+  };
 
   constructor(private readonly maxQueuedSends = DEFAULT_SEND_QUEUE_MAX) {}
 
@@ -31,6 +51,7 @@ export class SocketSendQueue {
     try {
       serialized = JSON.stringify(payload);
     } catch {
+      this.stats.serializationFailures += 1;
       return;
     }
 
@@ -42,6 +63,7 @@ export class SocketSendQueue {
           return;
         }
       } catch {
+        this.stats.externalSinkFailures += 1;
         return;
       }
     }
@@ -52,12 +74,20 @@ export class SocketSendQueue {
         if (!connectionId) return;
         const queue = this.pendingSends.get(connectionId) ?? [];
         if (queue.length >= this.maxQueuedSends) {
-          evictLeastCriticalSend(queue);
+          const evicted = evictLeastCriticalSend(queue);
+          if (evicted === "delta") {
+            this.stats.droppedDeltas += 1;
+          } else if (evicted === "important") {
+            this.stats.droppedImportant += 1;
+          }
         }
         queue.push(serialized);
+        this.stats.queuedSends += 1;
+        this.stats.maxQueueDepth = Math.max(this.stats.maxQueueDepth, queue.length);
         this.pendingSends.set(connectionId, queue);
       }
     } catch {
+      this.stats.sendFailures += 1;
       // Socket closed or send failed; drop the message.
     }
   }
@@ -87,6 +117,18 @@ export class SocketSendQueue {
     if (!connectionId) return;
     this.pendingSends.delete(connectionId);
     this.externalSinks.delete(connectionId);
+  }
+
+  getStats(): SocketSendQueueStats {
+    return {
+      ...this.stats,
+      queueDepthByConnection: Object.fromEntries(
+        [...this.pendingSends.entries()].map(([connectionId, queue]) => [
+          connectionId,
+          queue.length,
+        ]),
+      ),
+    };
   }
 
   shouldSendNotification(ws: StartServerSocket, method: string): boolean {

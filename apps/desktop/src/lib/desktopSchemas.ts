@@ -50,6 +50,7 @@ import type {
   ReadFileInput,
   ReadTranscriptInput,
   RenamePathInput,
+  RendererLogInput,
   RevealPathInput,
   SaveExportedFileInput,
   SetWindowAppearanceInput,
@@ -385,6 +386,16 @@ export const createOneOffChatWorkspaceInputSchema: z.ZodType<CreateOneOffChatWor
 export const stopWorkspaceServerInputSchema: z.ZodType<StopWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
 });
+
+const rendererLogMetaValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+export const rendererLogInputSchema: z.ZodType<RendererLogInput> = z
+  .object({
+    level: z.enum(["info", "warn", "error"]).optional(),
+    category: z.string().trim().min(1).max(80),
+    message: z.string().trim().min(1).max(200),
+    meta: z.record(z.string(), rendererLogMetaValueSchema).optional(),
+  })
+  .strict();
 
 const productAnalyticsPropertyValueSchema = z.union([
   z.string(),

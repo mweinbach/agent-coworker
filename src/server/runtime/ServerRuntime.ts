@@ -212,6 +212,7 @@ export async function createAgentServerRuntime(
   const jsonRpcConnections = new Set<StartServerSocket>();
   const threadSubscribers = new Map<string, Map<string, StartServerSocket>>();
   const threadSubscriptionsByConnectionId = new Map<string, Set<string>>();
+  const threadCreationKeys = new Map<string, string>();
   let workspaceListRevision = 0;
   const rememberThreadSubscriber = (ws: StartServerSocket, threadId: string): void => {
     const connectionId = ws.data.connectionId;
@@ -491,6 +492,14 @@ export async function createAgentServerRuntime(
         return result;
       },
       readSnapshot: (threadId) => registry.readThreadSnapshot(threadId),
+      getByCreationKey: (key) => {
+        const threadId = threadCreationKeys.get(key);
+        if (!threadId) return null;
+        return registry.loadThreadBinding(threadId)?.runtime ?? null;
+      },
+      rememberCreationKey: (key, threadId) => {
+        threadCreationKeys.set(key, threadId);
+      },
     },
     workspaceControl: {
       getOrCreateBinding: async (cwd) => await workspaceControl.getOrCreateBinding(cwd),
@@ -504,6 +513,7 @@ export async function createAgentServerRuntime(
       list: (threadId, journalOpts) => threadJournal.list(threadId, journalOpts),
       replay: (ws, threadId, afterSeq, limit) =>
         jsonRpcTransport.replayJournal(ws, threadId, afterSeq, limit),
+      getHealth: (threadId) => threadJournal.getHealth(threadId),
     },
     events: {
       capture: registry.sessionEventCapture.capture,
@@ -516,6 +526,37 @@ export async function createAgentServerRuntime(
           env,
           smoke: checkOpts.smoke === true,
         }),
+      getDiagnostics: () => {
+        const threadIds = new Set<string>([
+          ...registry.sessionBindings.keys(),
+          ...sessionDb.listSessions().map((record) => record.sessionId),
+        ]);
+        let untrustedThreadCount = 0;
+        let failedWriteCount = 0;
+        let droppedEventCount = 0;
+        let pendingThreadCount = 0;
+        for (const threadId of threadIds) {
+          const health = threadJournal.getHealth(threadId);
+          if (!health.trusted) {
+            untrustedThreadCount += 1;
+          }
+          failedWriteCount += health.failedWriteCount;
+          droppedEventCount += health.droppedEventCount;
+          if (health.pendingEventCount > 0) {
+            pendingThreadCount += 1;
+          }
+        }
+        return {
+          sendQueue: sendQueue.getStats(),
+          journal: {
+            untrustedThreadCount,
+            failedWriteCount,
+            droppedEventCount,
+            pendingThreadCount,
+          },
+          dbLocks: sessionDb.getWriteLockDiagnostics(),
+        };
+      },
     },
     jsonrpc: {
       send: (ws, payload) => sendQueue.send(ws, payload),
@@ -614,7 +655,14 @@ export async function createAgentServerRuntime(
       taskSubscribers.clear();
       threadSubscribers.clear();
       threadSubscriptionsByConnectionId.clear();
+      const journalThreadIds = new Set<string>([
+        ...registry.sessionBindings.keys(),
+        ...sessionDb.listSessions().map((s) => s.sessionId),
+      ]);
       await registry.disposeAll("server stopping");
+      await Promise.allSettled(
+        [...journalThreadIds].map(async (threadId) => await threadJournal.waitForIdle(threadId)),
+      );
       try {
         sessionDb.close();
       } catch {

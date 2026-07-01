@@ -499,6 +499,89 @@ describe("JsonRpcSocket runtime", () => {
     await expect(queued).resolves.toEqual({ threads: [] });
   });
 
+  test("requeues retryable in-flight requests on disconnect", async () => {
+    FakeWebSocket.instances = [];
+    const timers = createManualTimers();
+    const reconnects: Array<{ attempt: number; queuedOperationCount: number }> = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      timers: timers.scheduler as any,
+      onReconnecting: (event) => {
+        reconnects.push({
+          attempt: event.attempt,
+          queuedOperationCount: event.queuedOperationCount,
+        });
+      },
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = FakeWebSocket.instances[0]!;
+    await ws1.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    const request = socket.request(
+      "turn/start",
+      { threadId: "thread-1", clientMessageId: "client-message-1", input: "hello" },
+      { retryable: true, retryOnDisconnect: true },
+    );
+    expect(parseSentMessages(ws1).at(-1)).toMatchObject({
+      id: 2,
+      method: "turn/start",
+    });
+    ws1.close();
+    expect(reconnects).toEqual([{ attempt: 1, queuedOperationCount: 1 }]);
+
+    timers.timeoutCallbacks[0]!();
+    await flushMicrotasks();
+    const ws2 = FakeWebSocket.instances[1]!;
+    await ws2.emitMessage(JSON.stringify({ id: 3, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    expect(parseSentMessages(ws2).at(-1)).toMatchObject({
+      id: 4,
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        clientMessageId: "client-message-1",
+        input: "hello",
+      },
+    });
+    await ws2.emitMessage(JSON.stringify({ id: 4, result: { turn: { id: "turn-1" } } }));
+    await expect(request).resolves.toEqual({ turn: { id: "turn-1" } });
+  });
+
+  test("rejects non retry-on-disconnect in-flight requests on close", async () => {
+    FakeWebSocket.instances = [];
+    const timers = createManualTimers();
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      timers: timers.scheduler as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = FakeWebSocket.instances[0]!;
+    await ws1.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    const request = socket.request("cowork/session/title/set", {
+      threadId: "thread-1",
+      title: "New title",
+    });
+    ws1.close();
+
+    await expect(request).rejects.toThrow("websocket closed");
+  });
+
   test("counts failed initialize handshakes toward reconnect exhaustion", async () => {
     FakeWebSocket.instances = [];
     const timers = createManualTimers();

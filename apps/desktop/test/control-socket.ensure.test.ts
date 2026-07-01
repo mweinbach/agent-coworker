@@ -96,6 +96,18 @@ describe("control socket helpers over JSON-RPC", () => {
     expect((secondSocket as MockJsonRpcSocket).opts.url).toBe("ws://changed");
   });
 
+  test("ensureControlSocket uses desktop socket startup budgets", () => {
+    const workspaceId = "ws-timeout-budget";
+    const { get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    const socket = helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    expect(socket).toBeInstanceOf(MockJsonRpcSocket);
+    expect((socket as MockJsonRpcSocket).opts.openTimeoutMs).toBe(5_000);
+    expect((socket as MockJsonRpcSocket).opts.handshakeTimeoutMs).toBe(10_000);
+  });
+
   test("stale socket close after a serverUrl swap does not clear the active control session", async () => {
     const workspaceId = "ws-stale-close";
     const { state, get, set } = createState(workspaceId);
@@ -160,6 +172,56 @@ describe("control socket helpers over JSON-RPC", () => {
       jsonRpcRequests.find((entry) => entry.method === "cowork/provider/catalog/read")?.params,
     ).toEqual({
       cwd: "/tmp/workspace-second",
+    });
+  });
+
+  test("reconnecting lifecycle clears control runtime before reopen", async () => {
+    const workspaceId = "ws-reconnecting";
+    const { state, get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    const socket = helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await flushAsyncWork();
+    state.workspaceRuntimeById[workspaceId].controlConfig = {
+      provider: "openai",
+      model: "gpt-5.2",
+      workingDirectory: "/tmp/workspace",
+    } as any;
+
+    (socket as MockJsonRpcSocket).reconnecting();
+
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].controlConfig).toBeNull();
+  });
+
+  test("requestJsonRpc retries only classified methods", async () => {
+    const workspaceId = "ws-retry-classification";
+    const { get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await helpers.requestJsonRpcControl(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/session/state/read",
+      { cwd: "/tmp/workspace" },
+    );
+    await helpers.requestJsonRpcControl(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/session/title/set",
+      { threadId: "thread-1", title: "New title" },
+    );
+
+    expect(jsonRpcRequests.at(-2)?.options).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
+    expect(jsonRpcRequests.at(-1)?.options).toEqual({
+      retryable: false,
+      retryOnDisconnect: false,
     });
   });
 

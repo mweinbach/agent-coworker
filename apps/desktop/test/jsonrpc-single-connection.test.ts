@@ -332,6 +332,12 @@ const desktopApiMock = createDesktopApiMock({
     startCalls.push(opts);
     return { url: "ws://jsonrpc-workspace" };
   },
+  getWorkspaceServerStatus: async ({ workspaceId }: { workspaceId: string }) => ({
+    workspaceId,
+    running: true,
+    url: "ws://jsonrpc-workspace",
+    reason: "running",
+  }),
   stopWorkspaceServer: async () => {},
   createOneOffChatWorkspace: async (opts?: { titleHint?: string }) => {
     oneOffWorkspaceCalls.push(opts ?? {});

@@ -59,6 +59,7 @@ export type RuntimeMaps = {
   workspaceStartPromises: Map<string, { generation: number; promise: Promise<void> }>;
   workspaceStartGenerations: Map<string, number>;
   workspaceServerRestartAttempts: Map<string, number>;
+  workspaceServerRestartStabilityTimers: Map<string, ReturnType<typeof setTimeout>>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   sessionSnapshots: Map<string, CachedSessionSnapshot>;
   workspacePickerOpen: boolean;
@@ -84,6 +85,7 @@ export const RUNTIME: RuntimeMaps = {
   workspaceStartPromises: new Map(),
   workspaceStartGenerations: new Map(),
   workspaceServerRestartAttempts: new Map(),
+  workspaceServerRestartStabilityTimers: new Map(),
   modelStreamByThread: new Map(),
   sessionSnapshots: new Map(),
   workspacePickerOpen: false,
@@ -401,6 +403,20 @@ export function bumpWorkspaceStartGeneration(workspaceId: string): number {
 export function clearWorkspaceStartState(workspaceId: string): void {
   RUNTIME.workspaceStartPromises.delete(workspaceId);
   RUNTIME.workspaceStartGenerations.delete(workspaceId);
+  clearWorkspaceServerRestartBackoffState(workspaceId);
+}
+
+export function clearWorkspaceServerRestartStabilityTimer(workspaceId: string): void {
+  const timer = RUNTIME.workspaceServerRestartStabilityTimers.get(workspaceId);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  RUNTIME.workspaceServerRestartStabilityTimers.delete(workspaceId);
+}
+
+export function clearWorkspaceServerRestartBackoffState(workspaceId: string): void {
+  clearWorkspaceServerRestartStabilityTimer(workspaceId);
+  RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
 }
 
 export function ensureWorkspaceRuntime(

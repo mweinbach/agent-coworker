@@ -96,6 +96,7 @@ export async function startWorkspaceServer(opts: {
   workspacePath: string;
   yolo: boolean;
   forceRestart?: boolean;
+  preserveMobileRelay?: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
 }): Promise<{ url: string }> {

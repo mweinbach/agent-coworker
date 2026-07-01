@@ -63,6 +63,7 @@ import {
   clearPendingThreadSteers,
   clearThreadSelectionRequest,
   clearWorkspaceJsonRpcSocketGeneration,
+  clearWorkspaceServerRestartStabilityTimer,
   clearWorkspaceStartState,
   type DraftModelSelection,
   defaultThreadRuntime,
@@ -161,6 +162,7 @@ function shouldAdoptServerTitle(opts: {
 }
 
 const MAX_NOTIFICATIONS = 50;
+const WORKSPACE_SERVER_RESTART_STABLE_DEFAULT_MS = 10_000;
 const WORKSPACE_SERVER_RESTART_BACKOFF_BASE_MS = 250;
 const WORKSPACE_SERVER_RESTART_BACKOFF_MAX_MS = 5_000;
 
@@ -741,6 +743,7 @@ const {
   disposeWorkspaceThreadEventState,
   reactivateWorkspaceThreadEventState,
   ensureThreadSocket,
+  markWorkspaceThreadsDisconnected,
   sendThread,
   sendUserMessageToThread,
   __internal: __threadEventReducerInternal,
@@ -776,6 +779,7 @@ function markWorkspaceServerStale(
   workspaceId: string,
   message?: string,
 ) {
+  markWorkspaceThreadsDisconnected(get, set, workspaceId);
   bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
   closeWorkspaceJsonRpcSocket(workspaceId);
   disposeWorkspaceJsonRpcState(get, workspaceId);
@@ -799,13 +803,40 @@ function markWorkspaceServerStale(
   });
 }
 
+function workspaceServerRestartStableMs(): number {
+  const raw =
+    typeof process !== "undefined"
+      ? process.env.COWORK_WORKSPACE_SERVER_RESTART_STABLE_MS
+      : undefined;
+  if (!raw) {
+    return WORKSPACE_SERVER_RESTART_STABLE_DEFAULT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : WORKSPACE_SERVER_RESTART_STABLE_DEFAULT_MS;
+}
+
 function nextWorkspaceServerRestartBackoffMs(workspaceId: string): number {
+  clearWorkspaceServerRestartStabilityTimer(workspaceId);
   const attempts = (RUNTIME.workspaceServerRestartAttempts.get(workspaceId) ?? 0) + 1;
   RUNTIME.workspaceServerRestartAttempts.set(workspaceId, attempts);
   return Math.min(
     WORKSPACE_SERVER_RESTART_BACKOFF_MAX_MS,
     WORKSPACE_SERVER_RESTART_BACKOFF_BASE_MS * 2 ** (attempts - 1),
   );
+}
+
+function scheduleWorkspaceServerRestartBackoffReset(workspaceId: string): void {
+  if (!RUNTIME.workspaceServerRestartAttempts.has(workspaceId)) {
+    return;
+  }
+  clearWorkspaceServerRestartStabilityTimer(workspaceId);
+  const timer = setTimeout(() => {
+    RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
+    RUNTIME.workspaceServerRestartStabilityTimers.delete(workspaceId);
+  }, workspaceServerRestartStableMs());
+  RUNTIME.workspaceServerRestartStabilityTimers.set(workspaceId, timer);
 }
 
 async function waitForWorkspaceServerRestartBackoff(workspaceId: string): Promise<void> {
@@ -853,7 +884,10 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
       error: error instanceof Error ? error.message : String(error),
     }));
     if (status.running) {
-      RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
+      scheduleWorkspaceServerRestartBackoffReset(workspaceId);
+      return;
+    }
+    if (status.reason === "starting") {
       return;
     }
     const message =
@@ -900,6 +934,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
         workspacePath: ws.path,
         yolo: ws.yolo,
         forceRestart,
+        preserveMobileRelay: true,
         featureFlags: get().desktopFeatureFlags,
         privacyTelemetrySettings: get().privacyTelemetrySettings,
       });
@@ -918,7 +953,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
           },
         },
       }));
-      RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
+      scheduleWorkspaceServerRestartBackoffReset(workspaceId);
     } catch (err) {
       if (getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;

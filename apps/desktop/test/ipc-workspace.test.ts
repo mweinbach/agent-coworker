@@ -41,7 +41,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => true },
         persistence: {},
         serverManager: {
           async startWorkspaceServer(opts: unknown) {
@@ -118,6 +118,7 @@ describe("workspace IPC", () => {
         workspacePath: "/tmp/ws-1",
         yolo: false,
         forceRestart: true,
+        preserveMobileRelay: true,
         privacyTelemetrySettings: {
           aiTraceTelemetryEnabled: true,
           aiTracePayloadsEnabled: false,
@@ -131,6 +132,7 @@ describe("workspace IPC", () => {
       workspacePath: "/tmp/ws-1",
       yolo: false,
       forceRestart: true,
+      mobileH3: true,
       privacyTelemetrySettings: {
         aiTraceTelemetryEnabled: true,
         aiTracePayloadsEnabled: false,
@@ -173,7 +175,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState() {
             callOrder.push("saveState");
@@ -261,7 +263,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState(state: unknown) {
             savedState = state;
@@ -465,7 +467,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState(state: unknown) {
             persistedState = state;
@@ -594,7 +596,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState(state: unknown) {
             persistedState = state;
@@ -694,7 +696,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState(state: unknown) {
             persistedState = state;
@@ -836,7 +838,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState(state: unknown) {
             savedState = state;
@@ -954,7 +956,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState(state: unknown) {
             savedState = state;
@@ -1104,7 +1106,7 @@ describe("workspace IPC", () => {
 
     registerWorkspaceIpc({
       deps: {
-        mobileRelayBridge: {},
+        mobileRelayBridge: { isActiveForWorkspace: () => false },
         persistence: {
           async saveState(state: unknown) {
             savedState = state;

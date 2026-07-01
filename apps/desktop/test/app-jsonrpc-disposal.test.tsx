@@ -33,6 +33,8 @@ const MOCK_UPDATE_STATE = {
   progress: null,
 };
 
+let workspaceServerExitedSubscriptions = 0;
+
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
     appendTranscriptBatch: async () => {},
@@ -69,6 +71,12 @@ mock.module("../src/lib/desktopCommands", () =>
     onSystemAppearanceChanged: () => () => {},
     onMenuCommand: () => () => {},
     onUpdateStateChanged: () => () => {},
+    onWorkspaceServerExited: () => {
+      workspaceServerExitedSubscriptions += 1;
+      return () => {
+        workspaceServerExitedSubscriptions -= 1;
+      };
+    },
   }),
 );
 
@@ -260,6 +268,7 @@ describe("App JSON-RPC shutdown disposal", () => {
     RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
+    workspaceServerExitedSubscriptions = 0;
     useAppStore.setState(defaultStoreState);
   });
 
@@ -273,6 +282,7 @@ describe("App JSON-RPC shutdown disposal", () => {
     RUNTIME.workspaceJsonRpcSocketGenerations.clear();
     RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
+    workspaceServerExitedSubscriptions = 0;
     useAppStore.setState(defaultStoreState);
   });
 
@@ -443,6 +453,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       });
 
       expect(harness.dom.window.document.querySelector('[aria-label="Onboarding"]')).toBeNull();
+      expect(workspaceServerExitedSubscriptions).toBe(0);
     } finally {
       if (root) {
         await act(async () => {

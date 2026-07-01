@@ -47,6 +47,7 @@ const startCalls: Array<{
   workspacePath: string;
   yolo: boolean;
   forceRestart?: boolean;
+  preserveMobileRelay?: boolean;
   featureFlags?: Record<string, boolean>;
   privacyTelemetrySettings?: Record<string, boolean>;
 }> = [];
@@ -127,6 +128,8 @@ mock.module("../src/lib/desktopCommands", () =>
       workspaceId: string;
       workspacePath: string;
       yolo: boolean;
+      forceRestart?: boolean;
+      preserveMobileRelay?: boolean;
       featureFlags?: Record<string, boolean>;
       privacyTelemetrySettings?: Record<string, boolean>;
     }) => {
@@ -266,6 +269,10 @@ describe("workspace startup flow", () => {
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.workspaceServerRestartAttempts.clear();
+    for (const timer of RUNTIME.workspaceServerRestartStabilityTimers.values()) {
+      clearTimeout(timer);
+    }
+    RUNTIME.workspaceServerRestartStabilityTimers.clear();
     RUNTIME.modelStreamByThread.clear();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.sessionSnapshots.clear();
@@ -336,6 +343,11 @@ describe("workspace startup flow", () => {
   });
 
   afterEach(() => {
+    for (const timer of RUNTIME.workspaceServerRestartStabilityTimers.values()) {
+      clearTimeout(timer);
+    }
+    RUNTIME.workspaceServerRestartStabilityTimers.clear();
+    RUNTIME.workspaceServerRestartAttempts.clear();
     clearJsonRpcSocketOverride();
   });
 
@@ -621,6 +633,7 @@ describe("workspace startup flow", () => {
     expect(statusCalls).toEqual([workspaceId]);
     expect(stopCalls).toEqual([workspaceId]);
     expect(startCalls[0]?.forceRestart).toBe(true);
+    expect(startCalls[0]?.preserveMobileRelay).toBe(true);
     expect(closeCount).toBe(1);
     expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(false);
     expect(RUNTIME.workspaceJsonRpcSocketGenerations.get(workspaceId)).toBe(
@@ -633,12 +646,12 @@ describe("workspace startup flow", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(runtime?.serverUrl).toBe("ws://fresh");
     expect(runtime?.error).toBeNull();
-    expect(RUNTIME.workspaceServerRestartAttempts.has(workspaceId)).toBe(false);
+    expect(RUNTIME.workspaceServerRestartAttempts.has(workspaceId)).toBe(true);
+    expect(RUNTIME.workspaceServerRestartStabilityTimers.has(workspaceId)).toBe(true);
   });
 
-  test("workspaceServerExited clears stale URL immediately and restarts with backoff", async () => {
-    const workspaceId = "ws-exited";
-    let closeCount = 0;
+  test("selectWorkspace waits when main reports a pending workspace server start", async () => {
+    const workspaceId = "ws-pending-start";
     useAppStore.setState({
       workspaces: [
         {
@@ -655,10 +668,78 @@ describe("workspace startup flow", () => {
       workspaceRuntimeById: {
         [workspaceId]: {
           ...useAppStore.getState().workspaceRuntimeById[workspaceId],
+          serverUrl: "ws://cached",
+          starting: false,
+          startupProgress: null,
+          error: null,
+        } as never,
+      },
+    });
+    workspaceServerStatusById.set(workspaceId, {
+      workspaceId,
+      running: false,
+      url: null,
+      reason: "starting",
+    });
+
+    await useAppStore.getState().selectWorkspace(workspaceId);
+
+    expect(statusCalls).toContain(workspaceId);
+    expect(stopCalls).toEqual([]);
+    expect(startCalls).toEqual([]);
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.serverUrl).toBe("ws://cached");
+  });
+
+  test("workspaceServerExited clears stale URL immediately and restarts with backoff", async () => {
+    const workspaceId = "ws-exited";
+    const threadId = "thread-exited";
+    let closeCount = 0;
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: threadId,
+          workspaceId,
+          title: "Busy thread",
+          titleSource: "manual",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastMessageAt: "2026-03-08T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-exited",
+          messageCount: 1,
+          lastEventSeq: 1,
+          draft: false,
+          legacyTranscriptId: null,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...useAppStore.getState().workspaceRuntimeById[workspaceId],
           serverUrl: "ws://dead",
           starting: false,
           startupProgress: null,
           error: null,
+        } as never,
+      },
+      threadRuntimeById: {
+        [threadId]: {
+          wsUrl: "ws://dead",
+          connected: true,
+          sessionId: "session-exited",
+          busy: true,
+          busySince: "2026-03-08T00:00:01.000Z",
+          activeTurnId: "turn-1",
         } as never,
       },
     });
@@ -677,6 +758,11 @@ describe("workspace startup flow", () => {
     });
 
     expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.serverUrl).toBeNull();
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
+      "disconnected",
+    );
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.connected).toBe(false);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.busy).toBe(false);
     expect(closeCount).toBe(1);
     expect(RUNTIME.workspaceJsonRpcSocketGenerations.get(workspaceId)).toBe(
       initialSocketGeneration + 1,
@@ -694,6 +780,50 @@ describe("workspace startup flow", () => {
 
     expect(startCalls[restartCallIndex]?.workspaceId).toBe(workspaceId);
     expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.error).toBeNull();
+  });
+
+  test("workspaceServerExited ignores stale events for replaced server URLs", () => {
+    const workspaceId = "ws-exited-stale-url";
+    let closeCount = 0;
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...useAppStore.getState().workspaceRuntimeById[workspaceId],
+          serverUrl: "ws://fresh",
+          starting: false,
+          startupProgress: null,
+          error: null,
+        } as never,
+      },
+    });
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      close: () => {
+        closeCount += 1;
+      },
+    } as never);
+
+    useAppStore.getState().handleWorkspaceServerExited({
+      workspaceId,
+      url: "ws://old",
+      code: 1,
+      signal: null,
+    });
+
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.serverUrl).toBe("ws://fresh");
+    expect(closeCount).toBe(0);
+    expect(startCalls).toHaveLength(0);
   });
 
   test("workspaceServerExited supersedes an in-flight startup before restarting", async () => {

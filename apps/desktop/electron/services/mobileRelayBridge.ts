@@ -190,6 +190,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     };
   }
 
+  isActiveForWorkspace(workspaceId: string): boolean {
+    return this.currentStartOptions?.workspaceId === workspaceId;
+  }
+
   async start(options: StartOptions): Promise<MobileRelaySnapshot> {
     const previousOptions = this.currentStartOptions;
     const startedAt = Date.now();

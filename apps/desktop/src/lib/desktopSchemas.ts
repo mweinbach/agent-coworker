@@ -335,6 +335,7 @@ export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInpu
   workspacePath: nonEmptyStringSchema,
   yolo: z.boolean(),
   forceRestart: z.boolean().optional(),
+  preserveMobileRelay: z.boolean().optional(),
   featureFlags: desktopFeatureFlagOverridesSchema.optional(),
   privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
 });
@@ -362,7 +363,7 @@ export const workspaceServerStatusSchema: z.ZodType<WorkspaceServerStatus> = z
     workspaceId: safeIdSchema,
     running: z.boolean(),
     url: z.string().min(1).nullable(),
-    reason: z.enum(["running", "not_found", "exited", "health_failed"]),
+    reason: z.enum(["running", "starting", "not_found", "exited", "health_failed"]),
     error: z.string().min(1).optional(),
   })
   .strict();

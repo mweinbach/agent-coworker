@@ -21,6 +21,7 @@ export type StartWorkspaceServerInput = {
   workspacePath: string;
   yolo: boolean;
   forceRestart?: boolean;
+  preserveMobileRelay?: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
 };
@@ -30,7 +31,12 @@ export type WorkspaceServerStartupProgress = {
   progress: CoworkRuntimeBootstrapProgress;
 };
 
-export type WorkspaceServerStatusReason = "running" | "not_found" | "exited" | "health_failed";
+export type WorkspaceServerStatusReason =
+  | "running"
+  | "starting"
+  | "not_found"
+  | "exited"
+  | "health_failed";
 
 export type WorkspaceServerStatus = {
   workspaceId: string;

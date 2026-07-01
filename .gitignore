@@ -21,6 +21,7 @@ uploads/
 .agent/
 .agent-user
 .cowork/
+/windows-sandbox/
 
 # Env / misc
 .env

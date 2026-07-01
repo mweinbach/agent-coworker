@@ -416,10 +416,10 @@ export default function App() {
     [setWorkspaceServerStartupProgress],
   );
 
-  useEffect(
-    () => onWorkspaceServerExited(handleWorkspaceServerExited),
-    [handleWorkspaceServerExited],
-  );
+  useEffect(() => {
+    if (windowMode !== "main") return;
+    return onWorkspaceServerExited(handleWorkspaceServerExited);
+  }, [handleWorkspaceServerExited, windowMode]);
 
   useEffect(() => {
     document.documentElement.dataset.windowMode = windowMode;

@@ -264,6 +264,7 @@ describe("desktop persisted-state schema defaults", () => {
         workspacePath: "/tmp/workspace",
         yolo: false,
         forceRestart: true,
+        preserveMobileRelay: true,
         privacyTelemetrySettings: {
           aiTraceTelemetryEnabled: false,
           aiTracePayloadsEnabled: true,
@@ -271,6 +272,7 @@ describe("desktop persisted-state schema defaults", () => {
       }),
     ).toMatchObject({
       forceRestart: true,
+      preserveMobileRelay: true,
       privacyTelemetrySettings: {
         crashReportsEnabled: false,
         productAnalyticsEnabled: false,

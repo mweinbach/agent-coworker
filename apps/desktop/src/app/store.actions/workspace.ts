@@ -443,10 +443,13 @@ export function createWorkspaceActions(
       void requestWorkspaceSessions(get, set, workspaceId);
     },
 
-    handleWorkspaceServerExited: ({ workspaceId }) => {
+    handleWorkspaceServerExited: (event) => {
       if (!isWorkspaceLifecycleEnabled()) return;
+      const { workspaceId } = event;
       const current = get();
       if (!current.workspaces.some((workspace) => workspace.id === workspaceId)) return;
+      const currentUrl = current.workspaceRuntimeById[workspaceId]?.serverUrl ?? null;
+      if (event.url && currentUrl && event.url !== currentUrl) return;
       bumpWorkspaceStartGeneration(workspaceId);
       markWorkspaceServerStale(get, set, workspaceId, "Workspace server exited");
       void (async () => {

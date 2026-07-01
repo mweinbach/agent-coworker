@@ -75,6 +75,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     reactivateWorkspaceThreadEventState,
     disposeAllThreadEventState,
     ensureThreadSocket: socket.ensureThreadSocket,
+    markWorkspaceThreadsDisconnected: jsonRpc.markWorkspaceThreadsDisconnected,
     sendThread: messaging.sendThread,
     sendUserMessageToThread: messaging.sendUserMessageToThread,
     __internal: {

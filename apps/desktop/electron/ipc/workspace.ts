@@ -189,9 +189,14 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
         "startWorkspaceServer options",
       );
       const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
+      const { preserveMobileRelay, ...serverInput } = input;
+      const shouldPreserveMobileRelay =
+        preserveMobileRelay === true &&
+        deps.mobileRelayBridge.isActiveForWorkspace(input.workspaceId);
       const listening = await deps.serverManager.startWorkspaceServer({
-        ...input,
+        ...serverInput,
         workspacePath,
+        ...(shouldPreserveMobileRelay ? { mobileH3: true } : {}),
         productAnalyticsState: deps.productAnalytics?.getPersistedState(),
         onCoworkRuntimeBootstrapProgress: (progress) => {
           if (_event.sender.isDestroyed()) return;

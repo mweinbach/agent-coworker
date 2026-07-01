@@ -163,7 +163,7 @@ type WorkspaceServerStatus = {
   workspaceId: string;
   running: boolean;
   url: string | null;
-  reason: "running" | "not_found" | "exited" | "health_failed";
+  reason: "running" | "starting" | "not_found" | "exited" | "health_failed";
   error?: string;
 };
 
@@ -1153,6 +1153,16 @@ export class ServerManager {
 
   async getWorkspaceServerStatus(workspaceId: string): Promise<WorkspaceServerStatus> {
     assertSafeId(workspaceId, "workspaceId");
+    const pending = this.pendingStarts.get(workspaceId);
+    if (pending) {
+      if (pending.child.exitCode === null && pending.child.signalCode === null) {
+        return { workspaceId, running: false, url: null, reason: "starting" };
+      }
+      this.pendingStarts.delete(workspaceId);
+      pending.cleanup();
+      return { workspaceId, running: false, url: null, reason: "exited" };
+    }
+
     const handle = this.servers.get(workspaceId);
     if (!handle) {
       return { workspaceId, running: false, url: null, reason: "not_found" };

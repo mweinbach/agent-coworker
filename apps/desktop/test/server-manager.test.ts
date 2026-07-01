@@ -1108,6 +1108,22 @@ describe("desktop server manager bun crash detection", () => {
     });
   });
 
+  test("getWorkspaceServerStatus reports live pending starts", async () => {
+    const child = createFakeChild();
+    const manager = new ServerManager();
+    (manager as any).pendingStarts.set("ws-pending", {
+      child,
+      cleanup: () => {},
+    });
+
+    await expect(manager.getWorkspaceServerStatus("ws-pending")).resolves.toEqual({
+      workspaceId: "ws-pending",
+      running: false,
+      url: null,
+      reason: "starting",
+    });
+  });
+
   test("forceRestart skips the existing workspace server reuse branch", () => {
     const existing = {
       child: createFakeChild(),

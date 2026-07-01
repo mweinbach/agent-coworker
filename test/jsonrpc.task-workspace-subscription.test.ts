@@ -30,6 +30,19 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function removeTempHome(home: string): Promise<void> {
+  if (process.platform === "win32") {
+    Bun.gc(true);
+    await delay(50);
+  }
+  await fs.rm(home, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === "win32" ? 10 : 0,
+    retryDelay: 50,
+  });
+}
+
 function makeSocket(connectionId: string): CapturedSocket {
   const sentMessages: JsonRpcMessage[] = [];
   const socket = {
@@ -489,7 +502,7 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(outsideReader, (message) => message.method === "task/created");
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 15_000);
 
@@ -661,7 +674,7 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(reader, (message) => message.method?.startsWith("task/"));
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 20_000);
 
@@ -1244,7 +1257,7 @@ describe("task workspace subscription routing", () => {
       );
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 20_000);
 
@@ -1374,7 +1387,7 @@ describe("task workspace subscription routing", () => {
       );
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 20_000);
 
@@ -1461,7 +1474,7 @@ describe("task workspace subscription routing", () => {
       );
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 20_000);
 
@@ -1572,7 +1585,7 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(reader, (message) => message.method === "task/updated");
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 15_000);
 
@@ -1668,7 +1681,7 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(reader, (message) => message.method === "task/updated");
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 15_000);
 
@@ -1772,7 +1785,7 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(unrelatedChat, (message) => message.method?.startsWith("task/"));
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 15_000);
 
@@ -1839,7 +1852,7 @@ describe("task workspace subscription routing", () => {
       expect(typeof createdResult.task?.revision).toBe("number");
     } finally {
       await runtime?.stop();
-      await fs.rm(home, { recursive: true, force: true });
+      await removeTempHome(home);
     }
   }, 15_000);
 });

@@ -177,23 +177,49 @@ describe("control socket helpers over JSON-RPC", () => {
     });
   });
 
-  test("reconnecting lifecycle clears control runtime before reopen", async () => {
+  test("reconnecting lifecycle keeps transient control state before reopen", async () => {
     const workspaceId = "ws-reconnecting";
     const { state, get, set } = createState(workspaceId);
     const helpers = createControlSocketHelpers(deps);
+    const skillInstall = Promise.withResolvers<void>();
+    const pluginInstall = Promise.withResolvers<void>();
 
     const socket = helpers.ensureControlSocket(get as any, set as any, workspaceId);
     await flushAsyncWork();
-    state.workspaceRuntimeById[workspaceId].controlConfig = {
+    Object.assign(state.workspaceRuntimeById[workspaceId], {
+      controlConfig: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/tmp/workspace",
+      },
+      memoriesLoading: true,
+      skillMutationPendingKeys: { "skill:install": true },
+      pluginMutationPendingKeys: { "plugin:install": true },
+    });
+    RUNTIME.skillInstallWaiters.set(workspaceId, {
+      pendingKey: "skill:install",
+      resolve: skillInstall.resolve,
+      reject: skillInstall.reject,
+    });
+    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+      pendingKey: "plugin:install",
+      resolve: pluginInstall.resolve,
+      reject: pluginInstall.reject,
+    });
+
+    (socket as MockJsonRpcSocket).reconnecting();
+    await flushAsyncWork();
+
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].controlConfig).toEqual({
       provider: "openai",
       model: "gpt-5.2",
       workingDirectory: "/tmp/workspace",
-    } as any;
-
-    (socket as MockJsonRpcSocket).reconnecting();
-
-    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBeNull();
-    expect(state.workspaceRuntimeById[workspaceId].controlConfig).toBeNull();
+    });
+    expect(state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(true);
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(true);
+    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(true);
+    expect(state.notifications).toEqual([]);
 
     const connectCalls = (socket as MockJsonRpcSocket).connectCalls;
     helpers.ensureControlSocket(get as any, set as any, workspaceId);
@@ -313,6 +339,8 @@ describe("control socket helpers over JSON-RPC", () => {
 
     const socket = MockJsonRpcSocket.instances[0];
     expect(socket).toBeDefined();
+    socket.reconnecting();
+    await flushAsyncWork();
     socket.connect();
     await flushAsyncWork();
 

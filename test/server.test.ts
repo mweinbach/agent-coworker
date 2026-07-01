@@ -157,13 +157,39 @@ describe("Server Startup", () => {
     }
   });
 
-  test("serves explicit cowork health endpoint", async () => {
+  test("serves explicit cowork health endpoint with diagnostics payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server } = await startAgentServer(serverOpts(tmpDir));
     try {
       const response = await fetch(`http://127.0.0.1:${server.port}/cowork/health`);
-      await expect(response.json()).resolves.toEqual({ ok: true });
       expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ok: boolean;
+        version: string;
+        uptimeMs: number;
+        cwd: string;
+        activeSessions: number;
+        db: { ok: boolean; lockWaitMs?: number };
+        journal: { healthy: boolean; backlog: number };
+        sendQueue: { dropped: number; queued: number };
+        startup: { ready: boolean };
+      };
+      // Liveness stays true; subsystem detail rides in the body booleans.
+      expect(body.ok).toBe(true);
+      expect(typeof body.version).toBe("string");
+      expect(body.version.length).toBeGreaterThan(0);
+      expect(body.uptimeMs).toBeGreaterThanOrEqual(0);
+      expect(body.cwd).toBe(tmpDir);
+      expect(body.activeSessions).toBe(0);
+      expect(body.db.ok).toBe(true);
+      // lockWaitMs is optional (present only once the write lock has recorded a
+      // wait); when present it must be a non-negative number.
+      if (body.db.lockWaitMs !== undefined) {
+        expect(body.db.lockWaitMs).toBeGreaterThanOrEqual(0);
+      }
+      expect(body.journal).toEqual({ healthy: true, backlog: 0 });
+      expect(body.sendQueue).toEqual({ dropped: 0, queued: 0 });
+      expect(body.startup).toEqual({ ready: true });
     } finally {
       await stopTestServer(server);
     }

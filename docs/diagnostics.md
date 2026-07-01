@@ -57,6 +57,26 @@ Bundle generation only reads an allowlist of local log files and the normalized 
 
 Desktop reconnect logs include the socket generation, reconnect attempt, retry queue size, and sanitized server URL. The sidecar also exposes `cowork/runtime/diagnostics/read` with send queue drop/depth counters, journal write health, and session DB write-lock waits. If `thread/resume.replayHealth.snapshotRequired` is true, clients should treat replay as discontinuous and refresh the thread with `thread/read`.
 
+### `GET /cowork/health`
+
+The `/cowork/health` HTTP endpoint is a cheap liveness probe (the desktop supervisor polls it with a 1.5s timeout and treats any non-2xx response as a failed health check). It **always** responds `HTTP 200` with `ok: true` when the process can answer — subsystem detail rides in the body rather than the status code — and every field comes from an O(1) or in-memory accessor so the probe stays cheap on a fast polling loop.
+
+```jsonc
+{
+  "ok": true,                          // liveness: true whenever the process can answer
+  "version": "0.1.0",                  // resolveVersion(env)
+  "uptimeMs": 12345,                   // ms since the runtime was created
+  "cwd": "/path/to/workspace",         // config.workingDirectory
+  "activeSessions": 0,                 // live in-memory session bindings
+  "db": { "ok": true, "lockWaitMs": 0 }, // ok = SELECT 1; lockWaitMs present only when > 0
+  "journal": { "healthy": true, "backlog": 0 }, // healthy = no failed/dropped writes; backlog = pending events
+  "sendQueue": { "dropped": 0, "queued": 0 },   // dropped = deltas + important drops; queued = queued sends
+  "startup": { "ready": true }         // false while listening but not fully booted
+}
+```
+
+For deeper counters (per-connection queue depth, per-thread journal failures, full write-lock diagnostics), use the `cowork/runtime/diagnostics/read` JSON-RPC method instead.
+
 ## Uploads
 
 `diagnosticsUploadEnabled` is consent to allow user-initiated uploads. It is not consent for automatic uploads.

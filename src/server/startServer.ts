@@ -97,6 +97,10 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     runtime.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
     (webDesktopService || networkExposedListener ? createBrowserAccessToken() : "");
   let mobileServer: H3MobileServer | undefined;
+  // Flipped true once startAgentServer finishes its full boot (mobile server +
+  // idle eviction). The health endpoint reports it as `startup.ready`, so a
+  // supervisor can tell "listening but not fully wired" from "ready".
+  let startupReady = false;
 
   const createServer = (port: number): ReturnType<typeof Bun.serve> =>
     Bun.serve<StartServerSocketData>({
@@ -145,7 +149,10 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           }
         }
         if (req.method === "GET" && url.pathname === "/cowork/health") {
-          return Response.json({ ok: true });
+          return Response.json(
+            { ...runtime.getHealthSnapshot(), startup: { ready: startupReady } },
+            { headers: corsHeaders },
+          );
         }
         if (url.pathname === "/ws") {
           const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
@@ -346,6 +353,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     await originalStop(closeActiveConnections);
   };
 
+  startupReady = true;
   const url = `ws://${hostname}:${server.port}/ws`;
   return {
     server: stoppableServer,

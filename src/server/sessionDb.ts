@@ -484,6 +484,21 @@ export class SessionDb {
     return this.writeCoordinator.getDiagnostics();
   }
 
+  /**
+   * Cheap liveness probe for the health endpoint. Runs a trivial `SELECT 1`
+   * against the committed read connection; returns false if the database
+   * cannot answer (closed, corrupted, or locked out). O(1), no I/O beyond the
+   * in-process SQLite call, so it is safe to hit on a fast polling loop.
+   */
+  ping(): boolean {
+    try {
+      this.committedReadDb.query("SELECT 1").get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
     return this.readRepository.listResearch(opts);
   }

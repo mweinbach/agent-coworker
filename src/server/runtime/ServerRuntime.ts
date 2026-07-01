@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { runTurn as runTurnFn } from "../../agent";
 import { loadConfig } from "../../config";
+import { resolveVersion } from "../../version";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
@@ -109,6 +110,24 @@ export interface StartAgentServerOptions {
 type JsonRpcRequest = { id: string | number; method: string; params?: unknown };
 type JsonRpcDecodedMessage = JsonRpcRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
 
+/**
+ * Summarized reliability snapshot served by the cheap `/cowork/health` endpoint.
+ * Distinct from the detailed `cowork/runtime/diagnostics/read` JSON-RPC payload:
+ * every field is derived from an O(1) / in-memory accessor so it is safe to hit
+ * on a fast polling loop. `startup` is appended by `startAgentServer`, which owns
+ * the readiness flag.
+ */
+export type HealthSnapshot = {
+  ok: true;
+  version: string;
+  uptimeMs: number;
+  cwd: string;
+  activeSessions: number;
+  db: { ok: boolean; lockWaitMs?: number };
+  journal: { healthy: boolean; backlog: number };
+  sendQueue: { dropped: number; queued: number };
+};
+
 export type AgentServerRuntime = {
   config: AgentConfig;
   system: string;
@@ -123,12 +142,14 @@ export type AgentServerRuntime = {
   drainConnection(ws: StartServerSocket): void;
   isAddrInUse(err: unknown): boolean;
   startIdleEviction(): ReturnType<typeof setInterval>;
+  getHealthSnapshot(): HealthSnapshot;
   stop(): Promise<void>;
 };
 
 export async function createAgentServerRuntime(
   opts: StartAgentServerOptions,
 ): Promise<AgentServerRuntime> {
+  const startedAtMs = Date.now();
   const rawEnv = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
   const env: Record<string, string | undefined> & {
     COWORK_BUILTIN_DIR?: string;
@@ -657,6 +678,30 @@ export async function createAgentServerRuntime(
       setInterval(() => {
         registry.evictIdleSessionBindings(5 * 60 * 1000);
       }, 60_000),
+    getHealthSnapshot: () => {
+      const lockDiagnostics = sessionDb.getWriteLockDiagnostics();
+      const journalHealth = threadJournal.getAggregateHealth();
+      const sendQueueStats = sendQueue.getStats();
+      return {
+        ok: true,
+        version: resolveVersion(env),
+        uptimeMs: Date.now() - startedAtMs,
+        cwd: config.workingDirectory,
+        activeSessions: registry.sessionBindings.size,
+        db: {
+          ok: sessionDb.ping(),
+          ...(lockDiagnostics.maxWaitMs > 0 ? { lockWaitMs: lockDiagnostics.maxWaitMs } : {}),
+        },
+        journal: {
+          healthy: journalHealth.healthy,
+          backlog: journalHealth.backlog,
+        },
+        sendQueue: {
+          dropped: sendQueueStats.droppedDeltas + sendQueueStats.droppedImportant,
+          queued: sendQueueStats.queuedSends,
+        },
+      };
+    },
     stop: async () => {
       if (stopped) return;
       stopped = true;

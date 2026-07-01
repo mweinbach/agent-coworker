@@ -177,6 +177,42 @@ export class ThreadJournal {
     };
   }
 
+  /**
+   * Cheap, process-wide journal health summary for the `/cowork/health`
+   * endpoint. Unlike {@link getHealth}, this reads only the in-memory failure
+   * and pending-event maps — no per-thread persisted-failure file reads — so it
+   * stays O(active threads) and safe to hit on a fast polling loop.
+   */
+  getAggregateHealth(): {
+    healthy: boolean;
+    backlog: number;
+    failedWriteCount: number;
+    droppedEventCount: number;
+    pendingThreadCount: number;
+  } {
+    let failedWriteCount = 0;
+    let droppedEventCount = 0;
+    for (const failure of this.failures.values()) {
+      failedWriteCount += failure.failedWriteCount;
+      droppedEventCount += failure.droppedEventCount;
+    }
+    let backlog = 0;
+    let pendingThreadCount = 0;
+    for (const events of this.pendingEvents.values()) {
+      if (events.length > 0) {
+        pendingThreadCount += 1;
+        backlog += events.length;
+      }
+    }
+    return {
+      healthy: failedWriteCount === 0 && droppedEventCount === 0,
+      backlog,
+      failedWriteCount,
+      droppedEventCount,
+      pendingThreadCount,
+    };
+  }
+
   ensureSink(
     binding: SessionBinding,
     threadId: string,

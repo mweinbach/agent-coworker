@@ -42,6 +42,41 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("thread/start idempotency survives a server restart", async () => {
+    const tmpDir = await makeTmpProject();
+    let threadId = "";
+
+    {
+      const { server, url } = await startAgentServer(serverOpts(tmpDir));
+      try {
+        const rpc = await connectJsonRpc(url);
+        const first = await rpc.sendRequest("thread/start", {
+          cwd: tmpDir,
+          clientThreadId: "desktop-draft-after-restart",
+        });
+        threadId = first.result.thread.id;
+        await rpc.sendRequest("thread/read", { threadId });
+        rpc.close();
+      } finally {
+        await stopTestServer(server);
+      }
+    }
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const rpc = await connectJsonRpc(url);
+      const replayed = await rpc.sendRequest("thread/start", {
+        cwd: tmpDir,
+        clientThreadId: "desktop-draft-after-restart",
+      });
+
+      expect(replayed.result.thread.id).toBe(threadId);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("thread/resume reports a replay gap when afterSeq is beyond the journal tail", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

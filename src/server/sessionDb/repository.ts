@@ -787,6 +787,33 @@ export class SessionDbRepository {
     return parseNonNegativeInteger(row?.seq ?? 0, "thread_journal_events.seq");
   }
 
+  getThreadIdByCreationKey(creationKey: string): string | null {
+    const row = this.db
+      .query("SELECT thread_id FROM thread_creation_keys WHERE creation_key = ? LIMIT 1")
+      .get(creationKey) as Record<string, unknown> | null;
+    const threadId = typeof row?.thread_id === "string" ? row.thread_id.trim() : "";
+    return threadId || null;
+  }
+
+  rememberThreadCreationKey(creationKey: string, threadId: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .query(
+        sql([
+          "INSERT INTO thread_creation_keys (",
+          "           creation_key,",
+          "           thread_id,",
+          "           created_at,",
+          "           updated_at",
+          "         ) VALUES (?, ?, ?, ?)",
+          "         ON CONFLICT(creation_key) DO UPDATE SET",
+          "           thread_id = excluded.thread_id,",
+          "           updated_at = excluded.updated_at",
+        ]),
+      )
+      .run(creationKey, threadId, now, now);
+  }
+
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
     const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = this.db
@@ -1094,6 +1121,8 @@ export class SessionDbRepository {
       ]),
     );
 
+    this.addThreadCreationKeysTable();
+
     this.db.exec(
       sql([
         "CREATE TABLE IF NOT EXISTS research (",
@@ -1348,6 +1377,22 @@ export class SessionDbRepository {
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)",
+    );
+  }
+
+  addThreadCreationKeysTable(): void {
+    this.db.exec(
+      sql([
+        "CREATE TABLE IF NOT EXISTS thread_creation_keys (",
+        "         creation_key TEXT PRIMARY KEY,",
+        "         thread_id TEXT NOT NULL,",
+        "         created_at TEXT NOT NULL,",
+        "         updated_at TEXT NOT NULL",
+        "       )",
+      ]),
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_thread_creation_keys_thread ON thread_creation_keys(thread_id)",
     );
   }
 

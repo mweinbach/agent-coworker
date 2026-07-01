@@ -444,6 +444,20 @@ export class SessionDb {
     return this.readRepository.getThreadJournalTailSeq(threadId);
   }
 
+  getThreadIdByCreationKey(creationKey: string): string | null {
+    return this.readRepository.getThreadIdByCreationKey(creationKey);
+  }
+
+  async rememberThreadCreationKey(creationKey: string, threadId: string): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "remember_thread_creation_key",
+      async () => {
+        this.repository.rememberThreadCreationKey(creationKey, threadId);
+      },
+      { threadId },
+    );
+  }
+
   getWriteLockDiagnostics(): SessionDbWriteLockDiagnostics {
     return this.writeCoordinator.getDiagnostics();
   }

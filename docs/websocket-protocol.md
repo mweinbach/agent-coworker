@@ -148,7 +148,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/spreadsheet/patch`
 - `cowork/workspace/presentation/preview`
 
-`thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream and safely retry idempotent sends.
+`thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream, but turn sends are not retry-safe until the server persists and deduplicates that key.
 
 `command/list` takes `{ threadId }` and returns the server-resolved slash command catalog, including enabled skills. `command/execute` takes `{ threadId, name, arguments?, clientMessageId? }`, expands the command or skill in the harness, and starts a normal projected turn. Clients should send `/task ...` through `command/execute` with `name: "task"` rather than treating it as ordinary message text.
 

@@ -243,6 +243,13 @@ describe("control socket helpers over JSON-RPC", () => {
     await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "research/get", {
       researchId: "research-1",
     });
+    await helpers.requestJsonRpcControl(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/runtime/libreoffice/check",
+      { smoke: false },
+    );
     await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "thread/start", {
       cwd: "/tmp/workspace",
       clientThreadId: "draft-1",
@@ -266,6 +273,10 @@ describe("control socket helpers over JSON-RPC", () => {
       { threadId: "thread-1", title: "New title" },
     );
 
+    expect(jsonRpcRequests.at(-7)?.options).toEqual({
+      retryable: true,
+      retryOnDisconnect: true,
+    });
     expect(jsonRpcRequests.at(-6)?.options).toEqual({
       retryable: true,
       retryOnDisconnect: true,

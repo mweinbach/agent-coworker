@@ -493,12 +493,23 @@ export async function createAgentServerRuntime(
       },
       readSnapshot: (threadId) => registry.readThreadSnapshot(threadId),
       getByCreationKey: (key) => {
-        const threadId = threadCreationKeys.get(key);
+        let threadId = threadCreationKeys.get(key);
+        if (!threadId) {
+          threadId = sessionDb.getThreadIdByCreationKey(key) ?? undefined;
+          if (threadId) {
+            threadCreationKeys.set(key, threadId);
+          }
+        }
         if (!threadId) return null;
-        return registry.loadThreadBinding(threadId)?.runtime ?? null;
+        const runtime = registry.loadThreadBinding(threadId)?.runtime ?? null;
+        if (!runtime) {
+          threadCreationKeys.delete(key);
+        }
+        return runtime;
       },
-      rememberCreationKey: (key, threadId) => {
+      rememberCreationKey: async (key, threadId) => {
         threadCreationKeys.set(key, threadId);
+        await sessionDb.rememberThreadCreationKey(key, threadId);
       },
     },
     workspaceControl: {

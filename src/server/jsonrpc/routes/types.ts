@@ -91,7 +91,7 @@ export interface JsonRpcRouteContext {
       threadId: string,
     ): import("../../../shared/sessionSnapshot").SessionSnapshot | null;
     getByCreationKey?(key: string): SessionRuntime | null;
-    rememberCreationKey?(key: string, threadId: string): void;
+    rememberCreationKey?(key: string, threadId: string): void | Promise<void>;
   };
   workspaceControl: {
     getOrCreateBinding(cwd: string): Promise<SessionBinding>;

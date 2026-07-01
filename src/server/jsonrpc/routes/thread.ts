@@ -120,7 +120,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       const runtime = context.threads.create({ cwd, provider, model });
       if (creationKey) {
-        context.threads.rememberCreationKey?.(creationKey, runtime.id);
+        await context.threads.rememberCreationKey?.(creationKey, runtime.id);
       }
       context.threads.subscribe(ws, runtime.id);
       const thread = context.utils.buildThreadFromSession(runtime);

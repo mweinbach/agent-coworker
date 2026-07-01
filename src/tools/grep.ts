@@ -1,15 +1,13 @@
-import { execFile } from "node:child_process";
 import path from "node:path";
 import { z } from "zod";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
+import { type ExecFileCompatRunner, execFileCompat } from "../utils/execFileCompat";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed, credentialReadDenyDirs } from "../utils/permissions";
 import { ensureRipgrep } from "../utils/ripgrep";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
-const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
-const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
 const DEFAULT_TIMEOUT_SECONDS = 300;
 const MAX_TIMEOUT_SECONDS = 600;
 
@@ -44,9 +42,9 @@ function credentialDenyGlobs(searchPath: string, ctx: ToolContext): string[] {
 
 export function createGrepTool(
   ctx: ToolContext,
-  opts: { execFileImpl?: typeof execFile; ensureRipgrepImpl?: typeof ensureRipgrep } = {},
+  opts: { execFileImpl?: ExecFileCompatRunner; ensureRipgrepImpl?: typeof ensureRipgrep } = {},
 ) {
-  const execFileImpl = opts.execFileImpl ?? execFile;
+  const execFileImpl = opts.execFileImpl ?? execFileCompat;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
 
   return defineTool({
@@ -109,48 +107,28 @@ export function createGrepTool(
         return msg;
       }
 
-      const output = await new Promise<string>((resolve) => {
-        execFileImpl(
-          rgPath,
-          args,
-          {
-            maxBuffer: 1024 * 1024 * 10,
-            signal: ctx.abortSignal,
-            timeout: timeoutMs,
-            killSignal: "SIGTERM",
-          },
-          (err, stdout, stderr) => {
-            // ripgrep returns exit code 1 when there are no matches.
-            const parsedErrorCode = errorCodeSchema.safeParse(err);
-            const code = parsedErrorCode.success ? parsedErrorCode.data.code : undefined;
-            const isAbortByName = abortByNameSchema.safeParse(err).success;
-            const timedOut =
-              !!err &&
-              "killed" in err &&
-              err.killed === true &&
-              "signal" in err &&
-              err.signal === "SIGTERM";
-            const stderrText = String(stderr ?? "").trim();
-
-            if (timedOut) {
-              return resolve(
-                `grep timed out after ${resolvedTimeoutSeconds}s. The ripgrep process was terminated.`,
-              );
-            }
-            if (isAbortByName || code === "ABORT_ERR" || ctx.abortSignal?.aborted) {
-              return resolve("grep aborted.");
-            }
-            if (code === 1) return resolve("No matches found.");
-            if (code === "ENOENT") {
-              return resolve("ripgrep (rg) not found.");
-            }
-            if (err) {
-              return resolve(`rg failed: ${stderrText || String(err)}`);
-            }
-            return resolve(stdout.toString());
-          },
-        );
+      const result = await execFileImpl(rgPath, args, {
+        maxBuffer: 1024 * 1024 * 10,
+        ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
+        timeoutMs,
       });
+
+      const stderrText = result.stderr.trim();
+      const output = (() => {
+        if (result.errorCode === "TIMEOUT") {
+          return `grep timed out after ${resolvedTimeoutSeconds}s. The ripgrep process was terminated.`;
+        }
+        if (result.errorCode === "ABORT_ERR" || ctx.abortSignal?.aborted) {
+          return "grep aborted.";
+        }
+        // ripgrep returns exit code 1 when there are no matches.
+        if (result.exitCode === 1 && !result.errorCode) return "No matches found.";
+        if (result.errorCode === "ENOENT") return "ripgrep (rg) not found.";
+        if (result.exitCode !== 0 || result.errorCode) {
+          return `rg failed: ${stderrText || (result.errorCode ?? `exit code ${result.exitCode}`)}`;
+        }
+        return result.stdout;
+      })();
 
       const res = output;
       ctx.log(`tool< grep ${JSON.stringify({ chars: res.length })}`);

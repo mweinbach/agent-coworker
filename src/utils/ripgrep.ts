@@ -1,10 +1,10 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { getAiCoworkerPaths } from "../connect";
+import { execFileCompat } from "./execFileCompat";
 
 export interface EnsureRipgrepOptions {
   homedir?: string;
@@ -167,17 +167,15 @@ async function execFileOk(
   args: string[],
   opts: { cwd?: string } = {},
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      { cwd: opts.cwd, windowsHide: true, maxBuffer: 1024 * 1024 * 10 },
-      (err) => {
-        if (err) return reject(err);
-        return resolve();
-      },
-    );
+  const result = await execFileCompat(command, args, {
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    maxBuffer: 1024 * 1024 * 10,
   });
+  if (result.exitCode !== 0 || result.errorCode) {
+    throw new Error(
+      `${command} ${args.join(" ")} failed (${result.errorCode ?? `exit ${result.exitCode}`}): ${result.stderr.trim()}`,
+    );
+  }
 }
 
 async function extractArchive(

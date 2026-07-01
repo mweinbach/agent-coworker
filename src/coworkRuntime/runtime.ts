@@ -1,9 +1,9 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
+
+import { execFileCompat } from "../utils/execFileCompat";
 import {
   primeVerifiedRuntimeTrust,
   RUNTIME_INTEGRITY_MANIFEST_FILE,
@@ -16,8 +16,6 @@ import { RUNTIME_MANIFEST_FILE, readRuntimeManifest } from "./manifest";
 import { assertHostCompatible } from "./platform";
 import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
 import type { CoworkRuntimeManifest, RuntimeHost, RuntimeVerification } from "./types";
-
-const execFileAsync = promisify(execFile);
 
 export function resolveManifestPath(runtimeDir: string, relativePath: string): string {
   return path.join(runtimeDir, ...relativePath.split("/"));
@@ -158,18 +156,35 @@ async function payloadStats(
   return { fileCount, unpackedBytes };
 }
 
+async function runVerificationCommand(
+  executable: string,
+  args: string[],
+  opts: { env: Record<string, string>; cwd?: string; timeoutMs: number },
+): Promise<{ stdout: string; stderr: string }> {
+  const result = await execFileCompat(executable, args, {
+    env: opts.env,
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    timeoutMs: opts.timeoutMs,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.exitCode !== 0 || result.errorCode) {
+    throw new Error(
+      `${executable} ${args.join(" ")} failed (${result.errorCode ?? `exit ${result.exitCode}`}): ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  }
+  return { stdout: result.stdout, stderr: result.stderr };
+}
+
 async function commandVersion(
   executable: string,
   args: string[],
   env: Record<string, string>,
   cwd?: string,
 ): Promise<string> {
-  const result = await execFileAsync(executable, args, {
+  const result = await runVerificationCommand(executable, args, {
     env,
-    cwd,
-    windowsHide: true,
-    timeout: 120_000,
-    maxBuffer: 4 * 1024 * 1024,
+    ...(cwd ? { cwd } : {}),
+    timeoutMs: 120_000,
   });
   return `${result.stdout || result.stderr}`.trim().split(/\r?\n/)[0] ?? "ok";
 }
@@ -187,12 +202,10 @@ async function verifySofficeConversion(
       "<!doctype html><title>Cowork Runtime</title><p>Managed headless LibreOffice smoke test.</p>\n",
       "utf8",
     );
-    await execFileAsync(executable, ["--convert-to", "pdf", "--outdir", tempDir, input], {
+    await runVerificationCommand(executable, ["--convert-to", "pdf", "--outdir", tempDir, input], {
       env,
       cwd: tempDir,
-      windowsHide: true,
-      timeout: 180_000,
-      maxBuffer: 4 * 1024 * 1024,
+      timeoutMs: 180_000,
     });
     const stat = await fs.stat(output).catch(() => null);
     if (!stat?.isFile() || stat.size === 0) {

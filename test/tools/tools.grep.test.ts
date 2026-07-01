@@ -45,9 +45,9 @@ describe("grep tool", () => {
     return new RegExp(re);
   }
 
-  const fakeExecFile: any = (_cmd: string, args: string[], _opts: any, cb: any) => {
-    void (async () => {
-      try {
+  const fakeExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+    try {
+      {
         let caseInsensitive = false;
         let contextLines = 0;
         const includeGlobs: string[] = [];
@@ -136,17 +136,14 @@ describe("grep tool", () => {
         }
 
         if (outLines.length === 0) {
-          const err: any = new Error("no matches");
-          err.code = 1;
-          cb(err, "", "");
-          return;
+          return { stdout: "", stderr: "", exitCode: 1 };
         }
 
-        cb(null, outLines.join("\n") + "\n", "");
-      } catch (err) {
-        cb(err, "", "");
+        return { stdout: outLines.join("\n") + "\n", stderr: "", exitCode: 0 };
       }
-    })();
+    } catch (err) {
+      return { stdout: "", stderr: String(err), exitCode: 2 };
+    }
   };
 
   test("returns matches for pattern", async () => {
@@ -391,11 +388,11 @@ describe("grep tool", () => {
     let capturedCmd = "";
     let capturedArgs: string[] = [];
 
-    const argCaptureExecFile: any = (cmd: string, args: string[], _opts: any, cb: any) => {
+    const argCaptureExecFile: any = async (cmd: string, args: string[], _opts: any) => {
       capturedCmd = cmd;
       capturedArgs = [...args];
       // Simulate rg producing output so the tool returns normally
-      cb(null, `${path.join(dir, "file.ts")}:1:match\n`, "");
+      return { stdout: `${path.join(dir, "file.ts")}:1:match\n`, stderr: "", exitCode: 0 };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
@@ -433,9 +430,9 @@ describe("grep tool", () => {
     const controller = new AbortController();
     let capturedOpts: any;
 
-    const argCaptureExecFile: any = (_cmd: string, _args: string[], opts: any, cb: any) => {
+    const argCaptureExecFile: any = async (_cmd: string, _args: string[], opts: any) => {
       capturedOpts = opts;
-      cb(null, "match\n", "");
+      return { stdout: "match\n", stderr: "", exitCode: 0 };
     };
 
     const t: any = createGrepTool(makeCtx(dir, { abortSignal: controller.signal }), {
@@ -450,17 +447,13 @@ describe("grep tool", () => {
     });
 
     expect(capturedOpts.signal).toBe(controller.signal);
-    expect(capturedOpts.timeout).toBe(7000);
-    expect(capturedOpts.killSignal).toBe("SIGTERM");
+    expect(capturedOpts.timeoutMs).toBe(7000);
   });
 
   test("returns an aborted message when ripgrep is cancelled", async () => {
     const dir = await tmpDir();
-    const abortingExecFile: any = (_cmd: string, _args: string[], _opts: any, cb: any) => {
-      const err: any = new Error("aborted");
-      err.name = "AbortError";
-      err.code = "ABORT_ERR";
-      cb(err, "", "");
+    const abortingExecFile: any = async (_cmd: string, _args: string[], _opts: any) => {
+      return { stdout: "", stderr: "", exitCode: 130, errorCode: "ABORT_ERR" };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
@@ -474,8 +467,8 @@ describe("grep tool", () => {
 
   test("includes ripgrep stderr diagnostics on failures", async () => {
     const dir = await tmpDir();
-    const failingExecFile: any = (_cmd: string, _args: string[], _opts: any, cb: any) => {
-      cb(new Error("Command failed"), "", "regex parse error: missing ]");
+    const failingExecFile: any = async (_cmd: string, _args: string[], _opts: any) => {
+      return { stdout: "", stderr: "regex parse error: missing ]", exitCode: 2 };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
@@ -505,9 +498,9 @@ describe("grep tool", () => {
 
     let capturedArgs: string[] = [];
 
-    const argCaptureExecFile: any = (cmd: string, args: string[], _opts: any, cb: any) => {
+    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
       capturedArgs = [...args];
-      cb(null, `${path.join(dir, "file.txt")}:1:data\n`, "");
+      return { stdout: `${path.join(dir, "file.txt")}:1:data\n`, stderr: "", exitCode: 0 };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
@@ -534,9 +527,13 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "flags.txt"), "--files-with-matches\n", "utf-8");
 
     let capturedArgs: string[] = [];
-    const argCaptureExecFile: any = (_cmd: string, args: string[], _opts: any, cb: any) => {
+    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
       capturedArgs = [...args];
-      cb(null, `${path.join(dir, "flags.txt")}:1:--files-with-matches\n`, "");
+      return {
+        stdout: `${path.join(dir, "flags.txt")}:1:--files-with-matches\n`,
+        stderr: "",
+        exitCode: 0,
+      };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {

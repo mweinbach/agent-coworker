@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -21,6 +20,7 @@ import {
 } from "../platform/shell";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import { classifyCommandDetailed } from "../utils/approval";
+import { execFileCompat } from "../utils/execFileCompat";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -130,10 +130,7 @@ type ExecRunner = (
   },
 ) => Promise<ExecResult>;
 
-const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
-const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
-
-function execFileAsync(
+async function execFileAsync(
   file: string,
   args: string[],
   opts: {
@@ -144,67 +141,32 @@ function execFileAsync(
     env?: Record<string, string | undefined>;
   },
 ): Promise<ExecResult> {
-  return new Promise((resolve) => {
-    let timedOut = false;
-    execFile(
-      file,
-      args,
-      {
-        cwd: opts.cwd,
-        maxBuffer: opts.maxBuffer,
-        windowsHide: true,
-        ...(opts.env ? { env: opts.env } : {}),
-        ...(opts.timeoutMs ? { timeout: opts.timeoutMs, killSignal: "SIGTERM" } : {}), // Node.js converts SIGTERM to Windows process termination
-        ...(opts.signal ? { signal: opts.signal } : {}),
-      },
-      (err, stdout, stderr) => {
-        const isAbortByName = abortByNameSchema.safeParse(err).success;
-        const parsedErrorCode = errorCodeSchema.safeParse(err);
-        const code = parsedErrorCode.success ? parsedErrorCode.data.code : undefined;
-
-        // Detect timeout: Node sets killed=true and signal='SIGTERM' on timeout
-        if (
-          err &&
-          "killed" in err &&
-          err.killed === true &&
-          "signal" in err &&
-          err.signal === "SIGTERM" &&
-          opts.timeoutMs
-        ) {
-          timedOut = true;
-        }
-
-        if (timedOut) {
-          const timeoutSeconds = (opts.timeoutMs ?? 0) / 1000;
-          resolve({
-            stdout: String(stdout ?? ""),
-            stderr: `Command timed out after ${timeoutSeconds}s. The child process was terminated.`,
-            exitCode: 124,
-            errorCode: "TIMEOUT",
-          });
-          return;
-        }
-
-        if (isAbortByName || code === "ABORT_ERR") {
-          resolve({
-            stdout: String(stdout ?? ""),
-            stderr: String(stderr ?? "") || "Command aborted.",
-            exitCode: 130,
-            errorCode: "ABORT_ERR",
-          });
-          return;
-        }
-        const errorCode = typeof code === "string" ? code : undefined;
-        const exitCode = typeof code === "number" ? code : err ? 1 : 0;
-        resolve({
-          stdout: String(stdout ?? ""),
-          stderr: String(stderr ?? ""),
-          exitCode,
-          errorCode,
-        });
-      },
-    );
+  const result = await execFileCompat(file, args, {
+    cwd: opts.cwd,
+    maxBuffer: opts.maxBuffer,
+    ...(opts.env ? { env: opts.env } : {}),
+    ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
+
+  if (result.errorCode === "TIMEOUT") {
+    const timeoutSeconds = (opts.timeoutMs ?? 0) / 1000;
+    return {
+      stdout: result.stdout,
+      stderr: `Command timed out after ${timeoutSeconds}s. The child process was terminated.`,
+      exitCode: 124,
+      errorCode: "TIMEOUT",
+    };
+  }
+  if (result.errorCode === "ABORT_ERR") {
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr || "Command aborted.",
+      exitCode: 130,
+      errorCode: "ABORT_ERR",
+    };
+  }
+  return result;
 }
 
 /** Exec result augmented with which sandbox backend (if any) wrapped the run. */

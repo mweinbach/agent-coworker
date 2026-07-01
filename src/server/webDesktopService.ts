@@ -1,10 +1,7 @@
-import { type ChildProcessByStdio, spawn } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import readline from "node:readline";
-import type { Readable } from "node:stream";
 import { z } from "zod";
 
 import type { DesktopFeatureFlagOverrides } from "../shared/featureFlags";
@@ -25,6 +22,11 @@ import {
   type WorkspaceKindSource,
   withWorkspaceKindSource,
 } from "../utils/oneOffChats";
+import {
+  type StreamingSubprocess,
+  spawnStreamingSubprocess,
+  subscribeLines,
+} from "../utils/subprocess";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const PRIVATE_FILE_MODE = 0o600;
@@ -110,14 +112,14 @@ export type WebDesktopServiceLike = {
 };
 
 type WorkspaceServerHandle = {
-  child: ChildProcessByStdio<null, Readable, Readable>;
+  child: StreamingSubprocess;
   url: string;
   workspacePath: string;
   yolo: boolean;
 };
 
 type SourceWorkspaceServerLaunch = {
-  child: ChildProcessByStdio<null, Readable, Readable>;
+  child: StreamingSubprocess;
   url: string;
 };
 
@@ -137,7 +139,7 @@ type SourceWorkspaceServerManagerDeps = {
     workspacePath: string;
     yolo: boolean;
   }) => Promise<SourceWorkspaceServerLaunch>;
-  gracefulKill?: (child: ChildProcessByStdio<null, Readable, Readable>) => Promise<void>;
+  gracefulKill?: (child: StreamingSubprocess) => Promise<void>;
 };
 
 const transcriptEventSchema = z
@@ -482,9 +484,7 @@ async function assertWorkspaceDirectory(workspacePath: string): Promise<string> 
   return await fs.realpath(resolved);
 }
 
-function waitForServerListening(
-  child: ChildProcessByStdio<null, Readable, Readable>,
-): Promise<{ url: string }> {
+function waitForServerListening(child: StreamingSubprocess): Promise<{ url: string }> {
   const monitor = createWorkspaceServerMonitor(
     child,
     shouldMirrorWorkspaceServerOutputToTerminal()
@@ -519,7 +519,7 @@ function writeWorkspaceServerOutputToTerminal(
 }
 
 function createWorkspaceServerMonitor(
-  child: ChildProcessByStdio<null, Readable, Readable>,
+  child: StreamingSubprocess,
   onOutputLine: (source: WorkspaceServerOutputSource, line: string) => void = () => {},
 ): WorkspaceServerMonitor {
   let resolveReady!: (value: { url: string }) => void;
@@ -537,8 +537,6 @@ function createWorkspaceServerMonitor(
   });
 
   const recentLines: string[] = [];
-  const stdoutReader = readline.createInterface({ input: child.stdout });
-  const stderrReader = readline.createInterface({ input: child.stderr });
   let readySeen = false;
   let finished = false;
   let readySettled = false;
@@ -579,12 +577,8 @@ function createWorkspaceServerMonitor(
     }
     finished = true;
     clearTimeout(timeout);
-    stdoutReader.off("line", onStdoutLine);
-    stderrReader.off("line", onStderrLine);
-    child.off("exit", onExit);
-    child.off("error", onError);
-    stdoutReader.close();
-    stderrReader.close();
+    stdoutSubscription.close();
+    stderrSubscription.close();
     return true;
   };
 
@@ -603,15 +597,7 @@ function createWorkspaceServerMonitor(
 
   const timeout = setTimeout(onTimeout, SERVER_STARTUP_TIMEOUT_MS);
 
-  const onError = (error: Error) => {
-    if (!cleanup()) {
-      return;
-    }
-    settleReadyReject(error);
-    rejectDrained(error);
-  };
-
-  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+  const onExit = (code: number | null, signal: string | null) => {
     if (!cleanup()) {
       return;
     }
@@ -651,53 +637,45 @@ function createWorkspaceServerMonitor(
     onOutputLine(source, trimmed);
   };
 
-  const onStdoutLine = (line: string) => {
-    handleOutputLine("stdout", line);
-  };
+  const stdoutSubscription = subscribeLines(child.stdout, (line) =>
+    handleOutputLine("stdout", line),
+  );
+  const stderrSubscription = subscribeLines(child.stderr, (line) =>
+    handleOutputLine("stderr", line),
+  );
 
-  const onStderrLine = (line: string) => {
-    handleOutputLine("stderr", line);
-  };
-
-  stdoutReader.on("line", onStdoutLine);
-  stderrReader.on("line", onStderrLine);
-  child.once("exit", onExit);
-  child.once("error", onError);
+  // Handle exit only after both output streams drain so buffered lines are
+  // mirrored (and recorded for diagnostics) before drained resolves.
+  void Promise.allSettled([stdoutSubscription.done, stderrSubscription.done, child.exited]).then(
+    async () => {
+      const { exitCode, signalCode } = await child.exited;
+      onExit(exitCode, signalCode);
+    },
+  );
 
   return { ready, drained };
 }
 
-async function gracefulKill(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
+async function gracefulKill(child: StreamingSubprocess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
 
-  try {
-    child.kill();
-  } catch {
-    // ignore
-  }
+  child.kill();
 
-  const exited = await new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), 3_000);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
+  const exited = await Promise.race([
+    child.exited.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3_000)),
+  ]);
 
   if (exited) {
     return;
   }
 
-  try {
-    if (process.platform === "win32") {
-      child.kill(); // Windows uses default termination
-    } else {
-      child.kill("SIGKILL");
-    }
-  } catch {
-    // ignore
+  if (process.platform === "win32") {
+    child.kill(); // Windows uses default termination
+  } else {
+    child.kill("SIGKILL");
   }
 }
 
@@ -753,7 +731,7 @@ class SourceWorkspaceServerManager {
       yolo: opts.yolo,
     };
     this.servers.set(workspaceId, handle);
-    listening.child.once("exit", () => {
+    void listening.child.exited.then(() => {
       const active = this.servers.get(workspaceId);
       if (active?.child === listening.child) {
         this.servers.delete(workspaceId);
@@ -793,9 +771,8 @@ async function launchWorkspaceServer(opts: {
     args.push("--yolo");
   }
 
-  const child = spawn(process.execPath, args, {
+  const child = spawnStreamingSubprocess([process.execPath, ...args], {
     cwd: opts.repoRoot,
-    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",

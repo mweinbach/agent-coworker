@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
@@ -31,13 +29,50 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
   throw new Error("Timed out waiting for condition");
 }
 
-function createMockWorkspaceChild() {
-  return Object.assign(new EventEmitter(), {
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    exitCode: null,
-    signalCode: null,
+function createMockStream() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
   });
+  const encoder = new TextEncoder();
+  return {
+    stream,
+    write(text: string) {
+      controller.enqueue(encoder.encode(text));
+    },
+    end() {
+      controller.close();
+    },
+  };
+}
+
+function createMockWorkspaceChild() {
+  const stdout = createMockStream();
+  const stderr = createMockStream();
+  let resolveExited!: (value: { exitCode: number | null; signalCode: string | null }) => void;
+  const exited = new Promise<{ exitCode: number | null; signalCode: string | null }>((resolve) => {
+    resolveExited = resolve;
+  });
+  return {
+    pid: 1,
+    exitCode: null as number | null,
+    signalCode: null as string | null,
+    exited,
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    kill() {},
+    writeStdout: stdout.write,
+    endStdout: stdout.end,
+    writeStderr: stderr.write,
+    endStderr: stderr.end,
+    emitExit(exitCode: number | null, signalCode: string | null) {
+      this.exitCode = exitCode;
+      this.signalCode = signalCode;
+      resolveExited({ exitCode, signalCode });
+    },
+  };
 }
 
 afterEach(async () => {
@@ -506,9 +541,8 @@ describe("web desktop routes", () => {
         __id: id,
         exitCode: null,
         signalCode: null,
-        once() {
-          return this;
-        },
+        exited: new Promise(() => {}),
+        kill() {},
       } as any;
     }
 
@@ -640,21 +674,22 @@ describe("web desktop routes", () => {
       seenLines.push({ source, line });
     });
 
-    child.stdout.write('{"type":"server_listening","url":"ws://127.0.0.1:7337/ws"}\n');
+    child.writeStdout('{"type":"server_listening","url":"ws://127.0.0.1:7337/ws"}\n');
     await expect(monitor.ready).resolves.toEqual({ url: "ws://127.0.0.1:7337/ws" });
 
-    child.stdout.write("stdout after ready\n");
-    child.stderr.write("stderr after ready\n");
-    await Bun.sleep(0);
+    child.writeStdout("stdout after ready\n");
+    await waitForCondition(() => seenLines.length >= 1);
+    child.writeStderr("stderr after ready\n");
+    await waitForCondition(() => seenLines.length >= 2);
 
     expect(seenLines).toEqual([
       { source: "stdout", line: "stdout after ready" },
       { source: "stderr", line: "stderr after ready" },
     ]);
 
-    child.stdout.end();
-    child.stderr.end();
-    child.emit("exit", 0, null);
+    child.endStdout();
+    child.endStderr();
+    child.emitExit(0, null);
     await expect(monitor.drained).resolves.toBeUndefined();
   });
 

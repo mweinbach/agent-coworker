@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +31,9 @@ type ProcessRunner = (
   },
 ) => Promise<ProcessCapture>;
 
+/** Cap accumulated output so a chatty soffice run cannot grow without bound. */
+const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
+
 async function runProcessCapture(
   command: string,
   args: string[],
@@ -40,40 +42,46 @@ async function runProcessCapture(
     timeoutMs: number;
   },
 ): Promise<ProcessCapture> {
-  return await new Promise<ProcessCapture>((resolve, reject) => {
-    const child = spawn(command, args, {
-      env: opts.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill("SIGKILL");
+  const proc = Bun.spawn([command, ...args], {
+    env: opts.env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    windowsHide: true,
+  });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already exited
+      }
       reject(new Error(`${command} timed out after ${opts.timeoutMs}ms`));
     }, opts.timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      stdout += Buffer.from(chunk).toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += Buffer.from(chunk).toString("utf8");
-    });
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("exit", (exitCode) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ exitCode, stdout, stderr });
-    });
   });
+
+  const readCapped = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+    const decoder = new TextDecoder();
+    let text = "";
+    for await (const chunk of stream) {
+      if (text.length < MAX_CAPTURE_BYTES) {
+        text += decoder.decode(chunk, { stream: true });
+      }
+    }
+    return text.slice(0, MAX_CAPTURE_BYTES);
+  };
+
+  try {
+    const [stdout, stderr, exitCode] = await Promise.race([
+      Promise.all([readCapped(proc.stdout), readCapped(proc.stderr), proc.exited]),
+      timeoutPromise,
+    ]);
+    return { exitCode, stdout, stderr };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function envValue(env: Record<string, string | undefined>, name: string): string | undefined {

@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { execFileCompat } from "../utils/execFileCompat";
+import { sha256FileHex } from "../utils/hash";
 import { type StreamingSubprocess, spawnStreamingSubprocess } from "../utils/subprocess";
 
 type CodexAppServerSource = "override" | "system" | "managed";
@@ -147,9 +147,7 @@ async function verifyDownloadedAssetChecksum(opts: {
       `Refusing to install Codex app-server ${opts.version}: no pinned SHA-256 checksum for asset ${opts.assetName}.`,
     );
   }
-  const actual = createHash("sha256")
-    .update(await fs.readFile(opts.assetPath))
-    .digest("hex");
+  const actual = await sha256FileHex(opts.assetPath);
   if (actual.toLowerCase() !== expected.toLowerCase()) {
     throw new Error(
       `Codex app-server asset ${opts.assetName} failed checksum verification ` +

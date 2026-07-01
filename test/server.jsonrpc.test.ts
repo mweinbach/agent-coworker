@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { WebSocket as NodeWebSocket } from "ws";
 
 import { startAgentServer } from "../src/server/startServer";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
@@ -31,40 +30,6 @@ async function expectWorkspaceListResponse(response: Response, tmpDir: string): 
   expect(body.workspaces).toHaveLength(1);
   expect(body.workspaces[0]?.name).toBe(path.basename(tmpDir));
   expect(await fs.realpath(body.workspaces[0]?.path ?? "")).toBe(await fs.realpath(tmpDir));
-}
-
-function waitForNodeWsOpen(ws: NodeWebSocket): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("Timed out waiting for websocket open")),
-      5_000,
-    );
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-}
-
-function waitForNodeWsJson(ws: NodeWebSocket): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("Timed out waiting for websocket message")),
-      5_000,
-    );
-    ws.once("message", (data) => {
-      clearTimeout(timer);
-      resolve(JSON.parse(typeof data === "string" ? data : data.toString("utf8")));
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
 }
 
 function waitForSingleMessage(ws: WebSocket): Promise<any> {
@@ -454,8 +419,8 @@ describe("server JSON-RPC websocket mode", () => {
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
     try {
-      const ws = new NodeWebSocket(url, ["cowork.jsonrpc.v1", "foo"]);
-      await waitForNodeWsOpen(ws);
+      const ws = new WebSocket(url, ["cowork.jsonrpc.v1", "foo"]);
+      await waitForOpen(ws);
       expect(ws.protocol).toBe("cowork.jsonrpc.v1");
 
       ws.send(
@@ -469,7 +434,7 @@ describe("server JSON-RPC websocket mode", () => {
           },
         }),
       );
-      const response = await waitForNodeWsJson(ws);
+      const response = await waitForSingleMessage(ws);
       expect(response.id).toBe(1);
       expect(response.result.serverInfo.subprotocol).toBe("cowork.jsonrpc.v1");
       ws.close();

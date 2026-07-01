@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { getAiCoworkerPaths } from "../connect";
 import { execFileCompat } from "./execFileCompat";
+import { sha256FileHex } from "./hash";
 
 export interface EnsureRipgrepOptions {
   homedir?: string;
@@ -147,10 +147,7 @@ async function _fetchToFile(url: string, filePath: string): Promise<void> {
   await fs.writeFile(filePath, buf);
 }
 
-async function sha256File(filePath: string): Promise<string> {
-  const buf = await fs.readFile(filePath);
-  return createHash("sha256").update(buf).digest("hex");
-}
+const sha256File = sha256FileHex;
 
 function parseSha256File(text: string): string | null {
   const m = text.match(/[0-9a-f]{64}/i);

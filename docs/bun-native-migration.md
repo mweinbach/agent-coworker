@@ -1,6 +1,6 @@
 # Bun-Native Migration: Audit & Plan
 
-Status: audit complete, migration not started. This document is the system-of-record for moving the harness from Node.js APIs to Bun-native APIs where it is a win, and for recording what deliberately stays on `node:` builtins.
+Status: **Phases 0–6 implemented** (see "Implementation status" below). This document is the system-of-record for moving the harness from Node.js APIs to Bun-native APIs where it is a win, and for recording what deliberately stays on `node:` builtins.
 
 Audited at repo `e8c7bb66`. Scope: `src/`, `packages/`, `scripts/`. `apps/desktop` (Electron) and `apps/mobile` (Expo) run Node/Chromium/React Native and are only in scope as consumers of shared `src/` modules.
 
@@ -182,6 +182,25 @@ Define a `HarnessSubprocess` interface (spawn, write stdin, async line iteration
 - Drop `ws` from the one test; evaluate dropping it from desktop via a Bun-subprocess smoke.
 - Evaluate `Bun.Glob` for `src/tools/glob.ts` behind its existing tool tests.
 - Async-ify `workspace/map.ts`; telemetry config/SDK split.
+
+## Implementation status
+
+- **Phase 0** ✅ `test/desktopSharedBunBoundary.test.ts` computes the Electron-main and renderer value-import closures and fails on any `bun:`/`Bun.*` usage inside them.
+- **Phase 1** ✅ global `crypto.randomUUID()`/`getRandomValues` replace `node:crypto` imports in 7 files; `Bun.spawn` in `scripts/postinstall.ts`, `scripts/open_xcode_workspace.ts`, and the stable test runner; `Bun.Glob` replaces `fast-glob` in the harness runner and `test/package-manifest.test.ts` (verified identical file sets).
+- **Phase 2** ✅ MCP OAuth callback on `Bun.serve`, bound to `127.0.0.1` + best-effort `::1` on one port, redirect URI pinned to `127.0.0.1`, with an IPv6 coverage test.
+- **Phase 3** ✅ `src/utils/execFileCompat.ts` (Bun.spawn, Node execFile contract: maxBuffer, timeout→SIGTERM/exit 124, abort/exit 130, ENOENT codes, pipe teardown on kill) + parity tests; consumers migrated: `tools/bash.ts`, `tools/grep.ts`, `utils/ripgrep.ts`, `coworkRuntime/runtime.ts`. Streaming consumers on `src/utils/subprocess.ts` (`spawnStreamingSubprocess` + `subscribeLines`): `sessionBackup/command.ts`, `coworkRuntime/libreOffice.ts` (now with a 4 MiB output cap), `webDesktopService.ts`.
+- **Phase 4** ✅ `Bun.file` reads on hot paths: edit/read tools, prompt templates, skill catalog/bodies, config layers, session snapshots, memory/MCP-auth/CLI-state stores; `Bun.write` in the edit tool.
+- **Phase 5** ✅ codex app-server client/resolver on `StreamingSubprocess` (NDJSON via `subscribeLines`, stdin via Bun `FileSink`, SIGTERM→SIGKILL stop escalation; probe/tar via `execFileCompat` with SIGKILL timeout).
+- **Phase 6** ✅ `src/utils/hash.ts` (`Bun.CryptoHasher` sha256 helpers, streaming file hashing) adopted by ripgrep + codex asset checksums; `ws` removed from the root test suite (Bun's client negotiates multi-protocol offers natively).
+
+Deferred follow-ups (deliberate):
+
+- `src/tools/glob.ts` keeps `fast-glob` (stat-streaming + abort semantics; revisit with behavior tests).
+- `utils/browser.ts` keeps `node:child_process` `detached`+`unref` until fire-and-forget parity is verified on macOS/Windows.
+- `platform/sandbox/detect.ts` stays fully on `node:` (value-imported by Electron main).
+- `config.ts` `getSavedProviderApiKeyForHome` sync read and `workspace/map.ts` sync walk (API-shape changes; separate slice).
+- Telemetry config/SDK split for preload bundling hygiene.
+- Remaining `createHash("sha256")` fingerprint sites work natively under Bun; adopt `utils/hash.ts` opportunistically.
 
 ## Keep-on-Node register (deliberate, with reasons)
 

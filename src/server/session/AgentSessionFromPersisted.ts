@@ -1,6 +1,6 @@
 import type { runTurn } from "../../agent";
 import type { connectProvider as connectModelProvider } from "../../connect";
-import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
+import { getKnownResolvedModelMetadata, isRuntimeDiscoveryProvider } from "../../models/metadata";
 import { defaultSupportedModel } from "../../models/registry";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
@@ -77,11 +77,11 @@ export function createAgentSessionFromPersisted(
   const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
   const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
   const migratedUnsupportedModel =
-    resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
+    resolvedPersistedModel === null && !isRuntimeDiscoveryProvider(persisted.provider);
   const migratedAliasedModel =
     resolvedPersistedModel !== null &&
     resolvedPersistedModel.id !== persisted.model &&
-    !isDynamicModelProvider(persisted.provider);
+    !isRuntimeDiscoveryProvider(persisted.provider);
   const migratedLegacyModel = migratedUnsupportedModel || migratedAliasedModel;
   const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
   const config: AgentConfig = {

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { getAiCoworkerPaths } from "../../connect";
 import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 import { resolveModelMetadata } from "../../models/metadata";
@@ -139,6 +141,9 @@ export class ProviderAuthManager {
       resolvedModel = await resolveModelMetadata(nextProvider, modelId, {
         providerOptions: currentConfig.providerOptions,
         source: "model",
+        // Discovery-cache lookups must resolve against this session's auth home
+        // so tests (and non-default homes) stay deterministic.
+        home: path.dirname(currentConfig.userCoworkDir),
       });
     } catch (error) {
       this.opts.emitError(
@@ -148,21 +153,35 @@ export class ProviderAuthManager {
       );
       return null;
     }
-    const normalizedChildRouting = normalizeChildRoutingConfig({
-      provider: nextProvider,
-      model: resolvedModel.id,
-      childModelRoutingMode: currentConfig.childModelRoutingMode,
-      preferredChildModelRef:
-        currentConfig.childModelRoutingMode === "cross-provider-allowlist"
-          ? currentConfig.preferredChildModelRef
-          : currentConfig.provider !== nextProvider ||
-              currentConfig.preferredChildModel === currentConfig.model
-            ? `${nextProvider}:${resolvedModel.id}`
-            : (currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel),
-      preferredChildModel: currentConfig.preferredChildModel,
-      allowedChildModelRefs: currentConfig.allowedChildModelRefs,
-      source: "model selection",
-    });
+    let normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig>;
+    try {
+      normalizedChildRouting = normalizeChildRoutingConfig({
+        provider: nextProvider,
+        model: resolvedModel.id,
+        childModelRoutingMode: currentConfig.childModelRoutingMode,
+        preferredChildModelRef:
+          currentConfig.childModelRoutingMode === "cross-provider-allowlist"
+            ? currentConfig.preferredChildModelRef
+            : currentConfig.provider !== nextProvider ||
+                currentConfig.preferredChildModel === currentConfig.model
+              ? `${nextProvider}:${resolvedModel.id}`
+              : (currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel),
+        preferredChildModel: currentConfig.preferredChildModel,
+        allowedChildModelRefs: currentConfig.allowedChildModelRefs,
+        source: "model selection",
+      });
+    } catch {
+      // A stale preferred child target (e.g. persisted before a provider switch)
+      // must not block model selection; fall back to the selected model itself.
+      normalizedChildRouting = normalizeChildRoutingConfig({
+        provider: nextProvider,
+        model: resolvedModel.id,
+        childModelRoutingMode: currentConfig.childModelRoutingMode,
+        preferredChildModelRef: `${nextProvider}:${resolvedModel.id}`,
+        allowedChildModelRefs: currentConfig.allowedChildModelRefs,
+        source: "model selection",
+      });
+    }
     const nextRuntime =
       currentConfig.provider === nextProvider
         ? currentConfig.runtime

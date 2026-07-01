@@ -66,8 +66,22 @@ describe("getModel", () => {
       env: { AGENT_PROVIDER: "google" },
     });
 
-    expect(() => getModel(cfg, "gemini-custom-override")).toThrow(
-      'Unsupported model override "gemini-custom-override" for provider google',
+    // Unknown ids pass through for dynamic model discovery.
+    expect(getModel(cfg, "gemini-custom-override")).toBeDefined();
+  });
+
+  test("model override registered to another provider is rejected with guidance", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_PROVIDER: "google" },
+    });
+
+    expect(() => getModel(cfg, "claude-sonnet-4-6")).toThrow(
+      'Unsupported model override "claude-sonnet-4-6" for provider google',
     );
   });
 

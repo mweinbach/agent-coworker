@@ -9,9 +9,16 @@ import {
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
+import { readModelDiscoveryCache } from "../providers/modelDiscoveryCache";
+import { getAiCoworkerPaths } from "../store/connections";
 import type { ProviderName } from "../types";
 import type { ResolvedModelMetadata } from "./metadataTypes";
-import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./registry";
+import {
+  assertSupportedModel,
+  defaultSupportedModel,
+  getSupportedModel,
+  isModelIdForeignToProvider,
+} from "./registry";
 
 type DynamicModelProvider =
   | "lmstudio"
@@ -83,6 +90,16 @@ export function isDynamicModelProvider(provider: ProviderName): provider is Dyna
   );
 }
 
+/**
+ * Providers whose model catalogs are resolved entirely at runtime (local
+ * discovery or an external tool), so unknown model ids are always passthrough.
+ */
+export function isRuntimeDiscoveryProvider(
+  provider: ProviderName,
+): provider is "lmstudio" | "bedrock" | "codex-cli" {
+  return provider === "lmstudio" || provider === "bedrock" || provider === "codex-cli";
+}
+
 export function normalizeModelIdForProvider(
   provider: ProviderName,
   modelId: string,
@@ -96,7 +113,14 @@ export function normalizeModelIdForProvider(
     return trimmed;
   }
   if (isDynamicModelProvider(provider)) {
-    return getSupportedModel(provider, trimmed)?.id ?? trimmed;
+    const supported = getSupportedModel(provider, trimmed);
+    if (supported) return supported.id;
+    // Unknown ids pass through for dynamic model discovery, but ids that
+    // provably belong to a different provider are rejected with guidance.
+    if (isModelIdForeignToProvider(provider, trimmed)) {
+      return assertSupportedModel(provider, trimmed, source).id;
+    }
+    return trimmed;
   }
   return assertSupportedModel(provider, trimmed, source).id;
 }
@@ -157,6 +181,28 @@ export function getResolvedModelMetadataSync(
   return toResolvedStaticModel(provider, modelId, source);
 }
 
+/**
+ * Placeholder metadata for a model previously discovered from the provider's
+ * live catalog (persisted under `~/.cowork/cache/models/<provider>.json`).
+ * Returns null when the id is not present in the discovery cache.
+ */
+export async function getDiscoveredModelMetadata(
+  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  modelId: string,
+  opts: { home?: string } = {},
+): Promise<ResolvedModelMetadata | null> {
+  try {
+    const paths = getAiCoworkerPaths(opts.home ? { homedir: opts.home } : {});
+    const cached = await readModelDiscoveryCache(paths, provider);
+    if (!cached) return null;
+    const match = cached.models.find((model) => model.id === modelId || model.model === modelId);
+    if (!match) return null;
+    return buildProviderPlaceholderMetadata(provider, modelId);
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveModelMetadata(
   provider: ProviderName,
   modelId: string,
@@ -175,6 +221,21 @@ export async function resolveModelMetadata(
   }
 
   if (provider !== "lmstudio" && provider !== "bedrock") {
+    const trimmed = modelId.trim();
+    if (
+      trimmed &&
+      isDynamicModelProvider(provider) &&
+      !opts.allowPlaceholder &&
+      !getSupportedModel(provider, trimmed)
+    ) {
+      // Strict resolution (model selection paths): unknown ids are only
+      // accepted when they were previously discovered from the provider.
+      const discovered = await getDiscoveredModelMetadata(provider, trimmed, {
+        ...(opts.home ? { home: opts.home } : {}),
+      });
+      if (discovered) return discovered;
+      return toResolvedStaticModel(provider, trimmed, opts.source);
+    }
     return getResolvedModelMetadataSync(provider, modelId, opts.source);
   }
 

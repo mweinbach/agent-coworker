@@ -329,12 +329,13 @@ const LEGACY_MODEL_ALIASES: Record<string, string> = {
   "antigravity:gemini-3.1-pro": "antigravity:gemini-3.1-pro-preview",
 };
 
-type LikelyModelProvider = "openai" | "anthropic";
+type LikelyModelProvider = "openai" | "anthropic" | "google";
 
 function inferLikelyProviderForModelId(modelId: string): LikelyModelProvider | null {
   const normalized = modelId.trim().toLowerCase();
   if (!normalized) return null;
   if (normalized.startsWith("claude-")) return "anthropic";
+  if (normalized.startsWith("gemini-")) return "google";
   if (
     normalized.startsWith("gpt-5") ||
     normalized.startsWith("gpt-4o") ||
@@ -353,6 +354,9 @@ function providerMatchesLikelyModelProvider(
   if (expectedProvider === "openai") {
     return provider === "openai" || provider === "codex-cli";
   }
+  if (expectedProvider === "google") {
+    return provider === "google" || provider === "antigravity";
+  }
   return provider === expectedProvider;
 }
 
@@ -366,6 +370,9 @@ export function describeModelProviderMismatch(
   }
   if (expectedProvider === "openai") {
     return `"${modelId}" looks like an OpenAI model; use provider openai instead (Responses API).`;
+  }
+  if (expectedProvider === "google") {
+    return `"${modelId}" looks like a Google model; use provider google instead.`;
   }
   return `"${modelId}" looks like an Anthropic model; use provider anthropic instead.`;
 }
@@ -418,6 +425,25 @@ export function providerOptionsDefaultsForModel(
   modelId: string,
 ): Record<string, unknown> {
   return { ...(getSupportedModel(provider, modelId)?.providerOptionsDefaults ?? {}) };
+}
+
+/**
+ * True when `modelId` provably belongs to a different provider: it is not
+ * registered for `provider`, does not look like a model from `provider`'s
+ * family, and is registered for at least one other static provider.
+ *
+ * Unknown-everywhere ids are NOT foreign — dynamic model discovery allows
+ * providers to expose models outside the static registry.
+ */
+export function isModelIdForeignToProvider(provider: ProviderName, modelId: string): boolean {
+  if (getSupportedModel(provider, modelId)) return false;
+  const likelyProvider = inferLikelyProviderForModelId(modelId);
+  if (likelyProvider && providerMatchesLikelyModelProvider(provider, likelyProvider)) {
+    return false;
+  }
+  return STATIC_MODEL_PROVIDER_NAMES.some(
+    (candidate) => candidate !== provider && getSupportedModel(candidate, modelId) !== null,
+  );
 }
 
 export function assertSupportedModel(

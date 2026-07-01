@@ -708,6 +708,8 @@ describe("providers/connectionCatalog", () => {
   test("connected providers exclude oauth_pending entries", async () => {
     const payload = await getProviderCatalog({
       readCodexAppServerAccountImpl: noCodexAccount,
+      // Pin env so ambient provider API keys can't mark providers connected.
+      env: {},
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",

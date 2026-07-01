@@ -32,6 +32,8 @@ describe("ThreadJournal runtime", () => {
       },
       listThreadJournalEvents: (threadId: string) =>
         stored.filter((entry) => entry.threadId === threadId),
+      getThreadJournalTailSeq: (threadId: string) =>
+        stored.filter((entry) => entry.threadId === threadId).at(-1)?.seq ?? 0,
     } as never);
 
     await expect(journal.enqueue(event("thread-1", "turn/started"))).rejects.toThrow(
@@ -53,5 +55,23 @@ describe("ThreadJournal runtime", () => {
       tailSeq: 1,
       failedWriteCount: 1,
     });
+  });
+
+  test("health reads the journal tail without loading the full event list", () => {
+    let listCalls = 0;
+    const journal = new ThreadJournal({
+      appendThreadJournalEvents: async () => [],
+      listThreadJournalEvents: () => {
+        listCalls += 1;
+        throw new Error("full journal scan should not run");
+      },
+      getThreadJournalTailSeq: (threadId: string) => (threadId === "thread-1" ? 42 : 0),
+    } as never);
+
+    expect(journal.getHealth("thread-1")).toMatchObject({
+      trusted: true,
+      tailSeq: 42,
+    });
+    expect(listCalls).toBe(0);
   });
 });

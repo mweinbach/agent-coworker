@@ -257,6 +257,7 @@ export class JsonRpcSocket {
 
   connect() {
     if (this.ws) return;
+    this.cancelReconnect();
     this.intentionalClose = false;
     this.reconnectExhausted = false;
     this.resetReadyPromise();

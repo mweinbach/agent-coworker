@@ -103,7 +103,7 @@ export class ThreadJournal {
   getHealth(threadId: string): ThreadJournalHealth {
     const failure = this.failures.get(threadId);
     const pendingEventCount = this.pendingEvents.get(threadId)?.length ?? 0;
-    const tailSeq = this.list(threadId).at(-1)?.seq ?? 0;
+    const tailSeq = this.sessionDb.getThreadJournalTailSeq(threadId);
     return {
       trusted: !failure,
       failedWriteCount: failure?.failedWriteCount ?? 0,

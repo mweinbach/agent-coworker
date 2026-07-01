@@ -772,6 +772,21 @@ export class SessionDbRepository {
     }));
   }
 
+  getThreadJournalTailSeq(threadId: string): number {
+    const row = this.db
+      .query(
+        sql([
+          "SELECT seq",
+          "           FROM thread_journal_events",
+          "           WHERE thread_id = ?",
+          "           ORDER BY seq DESC",
+          "           LIMIT 1",
+        ]),
+      )
+      .get(threadId) as Record<string, unknown> | null;
+    return parseNonNegativeInteger(row?.seq ?? 0, "thread_journal_events.seq");
+  }
+
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
     const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = this.db

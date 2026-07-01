@@ -60,13 +60,13 @@ function createRouterHarness(
   const enqueued: unknown[] = [];
   const subscribed: string[] = [];
   const created: Array<{ cwd: string; provider?: string; model?: string }> = [];
-  const thread = {
-    id: "thread-1",
+  const makeThread = (id: string, cwd = "C:/project") => ({
+    id,
     title: "Thread 1",
     preview: "",
     modelProvider: "google",
     model: "gemini-3-flash-preview",
-    cwd: "C:/project",
+    cwd,
     createdAt: "2026-03-22T00:00:00.000Z",
     updatedAt: "2026-03-22T00:00:00.000Z",
     messageCount: 0,
@@ -74,9 +74,16 @@ function createRouterHarness(
     status: {
       type: "loaded" as const,
     },
-  };
-  const session = { id: thread.id } as any;
-  const runtime = createRuntime(session) as any;
+  });
+  const threadsById = new Map<string, ReturnType<typeof makeThread>>();
+  const runtimesById = new Map<string, ReturnType<typeof createRuntime>>();
+  const creationKeys = new Map<string, string>();
+  const creationKeyLookups: string[] = [];
+  const creationKeyWrites: Array<{ key: string; threadId: string }> = [];
+  const thread = makeThread("thread-1");
+  threadsById.set(thread.id, thread);
+  const runtime = createRuntime({ id: thread.id } as any) as any;
+  runtimesById.set(thread.id, runtime);
   const workingDirectory = opts.workingDirectory ?? "C:/default";
 
   const context: JsonRpcRouteContext = {
@@ -85,7 +92,12 @@ function createRouterHarness(
     threads: {
       create: ({ cwd, provider, model }) => {
         created.push({ cwd, provider, model });
-        return runtime;
+        const nextId = `thread-${created.length}`;
+        const createdThread = makeThread(nextId, cwd);
+        const createdRuntime = createRuntime({ id: nextId } as any) as any;
+        threadsById.set(nextId, createdThread);
+        runtimesById.set(nextId, createdRuntime);
+        return createdRuntime;
       },
       load: () => null,
       getLive: () => undefined,
@@ -102,6 +114,15 @@ function createRouterHarness(
       },
       unsubscribe: () => "notSubscribed",
       readSnapshot: () => null,
+      getByCreationKey: (key) => {
+        creationKeyLookups.push(key);
+        const threadId = creationKeys.get(key);
+        return threadId ? (runtimesById.get(threadId) as any) : null;
+      },
+      rememberCreationKey: (key, threadId) => {
+        creationKeyWrites.push({ key, threadId });
+        creationKeys.set(key, threadId);
+      },
     },
     workspaceControl: {
       getOrCreateBinding: (async () => {
@@ -148,7 +169,7 @@ function createRouterHarness(
             ? params.cwd.trim()
             : workingDirectory),
       extractTextInput: () => "",
-      buildThreadFromSession: () => thread,
+      buildThreadFromSession: (sessionRuntime) => threadsById.get(sessionRuntime.id) ?? thread,
       buildThreadFromRecord: (record) => ({
         ...thread,
         id: record.sessionId,
@@ -167,6 +188,8 @@ function createRouterHarness(
     enqueued,
     subscribed,
     created,
+    creationKeyLookups,
+    creationKeyWrites,
     thread,
     router: createJsonRpcRequestRouter(context),
   };
@@ -495,6 +518,35 @@ describe("JSON-RPC request router", () => {
         },
       },
     ]);
+  });
+
+  test("thread/start creation keys are scoped by resolved workspace path", async () => {
+    const harness = createRouterHarness();
+
+    await harness.router({} as any, {
+      id: 1,
+      method: "thread/start",
+      params: {
+        cwd: "C:/project-a",
+        clientThreadId: "draft-1",
+      },
+    });
+    await harness.router({} as any, {
+      id: 2,
+      method: "thread/start",
+      params: {
+        cwd: "C:/project-b",
+        clientThreadId: "draft-1",
+      },
+    });
+
+    expect(harness.created.map((entry) => entry.cwd)).toEqual(["C:/project-a", "C:/project-b"]);
+    expect(harness.creationKeyLookups).toEqual(["C:/project-a\0draft-1", "C:/project-b\0draft-1"]);
+    expect(harness.creationKeyWrites).toEqual([
+      { key: "C:/project-a\0draft-1", threadId: "thread-1" },
+      { key: "C:/project-b\0draft-1", threadId: "thread-2" },
+    ]);
+    expect(harness.subscribed).toEqual(["thread-1", "thread-2"]);
   });
 
   test("unknown methods return methodNotFound from the router", async () => {

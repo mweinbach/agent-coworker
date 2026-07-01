@@ -44,6 +44,10 @@ function buildReplayHealth(
   };
 }
 
+function buildThreadCreationKey(cwd: string, clientThreadId: string): string {
+  return `${cwd}\0${clientThreadId}`;
+}
+
 async function resolveThreadListWorkspacePath(
   context: JsonRpcRouteContext,
   params: Record<string, unknown>,
@@ -105,9 +109,8 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         });
         return;
       }
-      const existingRuntime = clientThreadId
-        ? context.threads.getByCreationKey?.(clientThreadId)
-        : null;
+      const creationKey = clientThreadId ? buildThreadCreationKey(cwd, clientThreadId) : null;
+      const existingRuntime = creationKey ? context.threads.getByCreationKey?.(creationKey) : null;
       if (existingRuntime) {
         context.threads.subscribe(ws, existingRuntime.id);
         const thread = context.utils.buildThreadFromSession(existingRuntime);
@@ -116,8 +119,8 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         return;
       }
       const runtime = context.threads.create({ cwd, provider, model });
-      if (clientThreadId) {
-        context.threads.rememberCreationKey?.(clientThreadId, runtime.id);
+      if (creationKey) {
+        context.threads.rememberCreationKey?.(creationKey, runtime.id);
       }
       context.threads.subscribe(ws, runtime.id);
       const thread = context.utils.buildThreadFromSession(runtime);

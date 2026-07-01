@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 
 const jsonRpcRequests: Array<{ method: string; params?: unknown; options?: unknown }> = [];
+const jsonRpcResponses: Array<{ id: string | number; result: unknown; options?: unknown }> = [];
 const jsonRpcHandlers = new Map<string, (params?: any) => any | Promise<any>>();
 
 class MockJsonRpcSocket {
@@ -10,6 +11,7 @@ class MockJsonRpcSocket {
   static deferClose = false;
   readonly readyPromise = Promise.resolve();
   closed = false;
+  connectCalls = 0;
   private closeDeferred = false;
 
   constructor(
@@ -28,6 +30,7 @@ class MockJsonRpcSocket {
   }
 
   connect() {
+    this.connectCalls += 1;
     this.opts.onOpen?.();
   }
 
@@ -40,7 +43,8 @@ class MockJsonRpcSocket {
     return await handler(params);
   }
 
-  respond() {
+  respond(id: string | number, result: unknown, options?: unknown) {
+    jsonRpcResponses.push({ id, result, options });
     return true;
   }
 
@@ -80,7 +84,9 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { createControlSocketHelpers } = await import("../src/app/store.helpers/controlSocket");
-const { ensureWorkspaceJsonRpcSocket } = await import("../src/app/store.helpers/jsonRpcSocket");
+const { ensureWorkspaceJsonRpcSocket, respondToJsonRpcRequest } = await import(
+  "../src/app/store.helpers/jsonRpcSocket"
+);
 const { RUNTIME, defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 
 let persistCalls = 0;
@@ -193,6 +199,7 @@ export function registerControlSocketLifecycleHooks() {
   beforeEach(() => {
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     jsonRpcRequests.length = 0;
+    jsonRpcResponses.length = 0;
     jsonRpcHandlers.clear();
     MockJsonRpcSocket.instances.length = 0;
     MockJsonRpcSocket.deferClose = false;
@@ -222,10 +229,12 @@ export {
   installFakeSocket,
   jsonRpcHandlers,
   jsonRpcRequests,
+  jsonRpcResponses,
   MockJsonRpcSocket,
   makeThread,
   makeThreadListEntry,
   persistCalls,
   RUNTIME,
+  respondToJsonRpcRequest,
   setJsonRpcSocketOverride,
 };

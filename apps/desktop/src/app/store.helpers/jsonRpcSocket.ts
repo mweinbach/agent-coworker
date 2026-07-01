@@ -53,6 +53,7 @@ export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
   connect: () => void;
   close?: () => void;
   __coworkOpened?: boolean;
+  __coworkReconnectPending?: boolean;
   __coworkUrl?: string;
   __coworkGeneration?: number;
 };
@@ -310,7 +311,7 @@ export function ensureWorkspaceJsonRpcSocket(
       const controlSessionId =
         (get() as { workspaceRuntimeById?: Record<string, { controlSessionId?: string | null }> })
           .workspaceRuntimeById?.[workspaceId]?.controlSessionId ?? null;
-      if (existing.__coworkOpened === false) {
+      if (existing.__coworkOpened === false && existing.__coworkReconnectPending !== true) {
         existing.connect();
       }
       if (set && existing.__coworkOpened === true && !controlSessionId) {
@@ -360,6 +361,7 @@ export function ensureWorkspaceJsonRpcSocket(
     },
     onOpen: () => {
       socket.__coworkOpened = true;
+      socket.__coworkReconnectPending = false;
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
@@ -378,6 +380,7 @@ export function ensureWorkspaceJsonRpcSocket(
       pendingRequestCount?: unknown;
     }) => {
       socket.__coworkOpened = false;
+      socket.__coworkReconnectPending = true;
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
@@ -398,6 +401,7 @@ export function ensureWorkspaceJsonRpcSocket(
     },
     onReconnectExhausted: (reason: string) => {
       socket.__coworkOpened = false;
+      socket.__coworkReconnectPending = false;
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
@@ -410,6 +414,7 @@ export function ensureWorkspaceJsonRpcSocket(
     },
     onClose: () => {
       socket.__coworkOpened = false;
+      socket.__coworkReconnectPending = false;
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
@@ -425,6 +430,7 @@ export function ensureWorkspaceJsonRpcSocket(
   socket.request ??= async () => ({});
   socket.respond ??= () => true;
   socket.__coworkOpened = false;
+  socket.__coworkReconnectPending = false;
   socket.__coworkUrl = url;
   socket.__coworkGeneration = socketGeneration;
 
@@ -470,12 +476,6 @@ function getJsonRpcRequestRetryOptions(
     return { retryable: true, retryOnDisconnect: true };
   }
   if (method === "thread/start" && hasStableStringKey(params, "clientThreadId")) {
-    return { retryable: true, retryOnDisconnect: true };
-  }
-  if (
-    (method === "turn/start" || method === "turn/steer") &&
-    hasStableStringKey(params, "clientMessageId")
-  ) {
     return { retryable: true, retryOnDisconnect: true };
   }
   return { retryable: false, retryOnDisconnect: false };
@@ -733,7 +733,7 @@ export function respondToJsonRpcRequest(
 ): boolean {
   const socket = RUNTIME.jsonRpcSockets.get(workspaceId);
   if (!socket) return false;
-  return socket.respond?.(requestId, result, { retryable: true }) ?? false;
+  return socket.respond?.(requestId, result) ?? false;
 }
 
 export function findThreadIdForJsonRpcNotification(

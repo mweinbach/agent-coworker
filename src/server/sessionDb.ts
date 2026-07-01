@@ -440,6 +440,10 @@ export class SessionDb {
     return this.readRepository.listThreadJournalEvents(threadId, opts);
   }
 
+  getThreadJournalTailSeq(threadId: string): number {
+    return this.readRepository.getThreadJournalTailSeq(threadId);
+  }
+
   getWriteLockDiagnostics(): SessionDbWriteLockDiagnostics {
     return this.writeCoordinator.getDiagnostics();
   }

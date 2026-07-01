@@ -1248,10 +1248,6 @@ export class ServerManager {
     assertSafeId(workspaceId, "workspaceId");
     await assertWorkspaceDirectory(workspacePath);
     const startedAt = Date.now();
-    this.startCountsByWorkspace.set(
-      workspaceId,
-      (this.startCountsByWorkspace.get(workspaceId) ?? 0) + 1,
-    );
     const productAnalyticsState =
       opts.productAnalyticsState ?? this.options.getProductAnalyticsState?.() ?? null;
 
@@ -1292,6 +1288,11 @@ export class ServerManager {
       this.pendingStarts.delete(workspaceId);
       pending.cleanup();
     }
+
+    this.startCountsByWorkspace.set(
+      workspaceId,
+      (this.startCountsByWorkspace.get(workspaceId) ?? 0) + 1,
+    );
 
     const useSource = !app.isPackaged || process.env.COWORK_DESKTOP_USE_SOURCE === "1";
     const spawnArgs = buildSpawnArgs(workspacePath, yolo, opts.mobileH3 === true);

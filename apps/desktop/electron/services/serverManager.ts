@@ -54,7 +54,7 @@ import {
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 import { writeWindowsSandboxReadiness } from "./windowsSandboxReadiness";
 
-const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 45_000;
+const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 120_000;
 const PACKAGED_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
 const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;

@@ -992,8 +992,8 @@ describe("desktop server manager startup mode", () => {
     expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
   });
 
-  test("packaged server startup leaves room for first-run runtime bootstrap", () => {
-    expect(__internal.getServerStartupTimeoutMs({}, false)).toBe(45_000);
+  test("server startup leaves room for cold source startup and first-run runtime bootstrap", () => {
+    expect(__internal.getServerStartupTimeoutMs({}, false)).toBe(120_000);
     expect(__internal.getServerStartupTimeoutMs({}, true)).toBe(300_000);
     expect(
       __internal.getServerStartupTimeoutMs({

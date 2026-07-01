@@ -473,7 +473,9 @@ function getJsonRpcRequestRetryOptions(
     method === "cowork/session/state/read" ||
     method === "cowork/provider/authMethods/read" ||
     method === "cowork/provider/status/refresh" ||
-    method === "cowork/runtime/libreoffice/check"
+    method === "cowork/runtime/libreoffice/check" ||
+    method === "cowork/workspace/spreadsheet/workbook" ||
+    method === "cowork/workspace/spreadsheet/version"
   ) {
     return { retryable: true, retryOnDisconnect: true };
   }

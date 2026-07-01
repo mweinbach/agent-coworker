@@ -36,6 +36,7 @@ describe("workspace IPC", () => {
       (event: unknown, args?: unknown) => Promise<unknown> | unknown
     >();
     let managerStartOptions: unknown;
+    let managerStatusWorkspaceId: string | null = null;
     const sentEvents: Array<{ channel: string; payload: unknown }> = [];
 
     registerWorkspaceIpc({
@@ -65,6 +66,15 @@ describe("workspace IPC", () => {
                 hostHints: ["127.0.0.1"],
                 port: 7338,
               },
+            };
+          },
+          async getWorkspaceServerStatus(workspaceId: string) {
+            managerStatusWorkspaceId = workspaceId;
+            return {
+              workspaceId,
+              running: true,
+              url: "ws://127.0.0.1:7337/ws",
+              reason: "running",
             };
           },
           async stopWorkspaceServer() {},
@@ -139,6 +149,16 @@ describe("workspace IPC", () => {
         },
       },
     ]);
+
+    const statusHandler = handlers.get(DESKTOP_IPC_CHANNELS.getWorkspaceServerStatus);
+    expect(statusHandler).toBeDefined();
+    await expect(statusHandler?.({}, { workspaceId: "ws-1" })).resolves.toEqual({
+      workspaceId: "ws-1",
+      running: true,
+      url: "ws://127.0.0.1:7337/ws",
+      reason: "running",
+    });
+    expect(managerStatusWorkspaceId).toBe("ws-1");
   });
 
   test("updates approved roots after saving workspace state", async () => {

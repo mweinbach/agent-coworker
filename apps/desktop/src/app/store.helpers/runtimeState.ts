@@ -58,6 +58,7 @@ export type RuntimeMaps = {
   pendingWorkspaceDefaultApplyByThread: Map<string, PendingWorkspaceDefaultApply>;
   workspaceStartPromises: Map<string, { generation: number; promise: Promise<void> }>;
   workspaceStartGenerations: Map<string, number>;
+  workspaceServerRestartAttempts: Map<string, number>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   sessionSnapshots: Map<string, CachedSessionSnapshot>;
   workspacePickerOpen: boolean;
@@ -82,6 +83,7 @@ export const RUNTIME: RuntimeMaps = {
   pendingWorkspaceDefaultApplyByThread: new Map(),
   workspaceStartPromises: new Map(),
   workspaceStartGenerations: new Map(),
+  workspaceServerRestartAttempts: new Map(),
   modelStreamByThread: new Map(),
   sessionSnapshots: new Map(),
   workspacePickerOpen: false,

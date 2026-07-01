@@ -15,6 +15,7 @@ import {
   onMenuCommand,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
+  onWorkspaceServerExited,
   onWorkspaceServerStartupProgress,
   setWindowAppearance,
   showCanvasWindow,
@@ -405,6 +406,7 @@ export default function App() {
   const view = useAppStore((s) => s.view);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
+  const handleWorkspaceServerExited = useAppStore((s) => s.handleWorkspaceServerExited);
   const setWorkspaceServerStartupProgress = useAppStore((s) => s.setWorkspaceServerStartupProgress);
   const seenNotificationIds = useRef(new Set<string>());
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -412,6 +414,11 @@ export default function App() {
   useEffect(
     () => onWorkspaceServerStartupProgress(setWorkspaceServerStartupProgress),
     [setWorkspaceServerStartupProgress],
+  );
+
+  useEffect(
+    () => onWorkspaceServerExited(handleWorkspaceServerExited),
+    [handleWorkspaceServerExited],
   );
 
   useEffect(() => {

@@ -144,6 +144,9 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
             );
           }
         }
+        if (req.method === "GET" && url.pathname === "/cowork/health") {
+          return Response.json({ ok: true });
+        }
         if (url.pathname === "/ws") {
           const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
           const resumeSessionId = resumeSessionIdRaw?.trim()

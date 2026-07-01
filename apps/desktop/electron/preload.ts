@@ -58,7 +58,9 @@ import {
   type UpdaterState,
   type UploadDiagnosticsBundleInput,
   type WindowDragPointInput,
+  type WorkspaceServerExitedEvent,
   type WorkspaceServerStartupProgress,
+  type WorkspaceServerStatus,
   type WriteFileInput,
 } from "../src/lib/desktopApi";
 import {
@@ -105,7 +107,9 @@ import {
   updaterStateSchema,
   uploadDiagnosticsBundleInputSchema,
   windowDragPointInputSchema,
+  workspaceServerExitedEventSchema,
   workspaceServerStartupProgressSchema,
+  workspaceServerStatusSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
 import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
@@ -143,6 +147,10 @@ function assertCreateOneOffChatWorkspaceInput(opts: CreateOneOffChatWorkspaceInp
 
 function assertStopWorkspaceServerInput(opts: StopWorkspaceServerInput): void {
   parseWithSchema(stopWorkspaceServerInputSchema, opts, "stopWorkspaceServer options");
+}
+
+function assertWorkspaceServerStatus(value: unknown): asserts value is WorkspaceServerStatus {
+  parseWithSchema(workspaceServerStatusSchema, value, "workspace server status");
 }
 
 function assertReadTranscriptInput(opts: ReadTranscriptInput): void {
@@ -273,6 +281,12 @@ function assertWorkspaceServerStartupProgress(
   value: unknown,
 ): asserts value is WorkspaceServerStartupProgress {
   parseWithSchema(workspaceServerStartupProgressSchema, value, "workspace server startup progress");
+}
+
+function assertWorkspaceServerExitedEvent(
+  value: unknown,
+): asserts value is WorkspaceServerExitedEvent {
+  parseWithSchema(workspaceServerExitedEventSchema, value, "workspace server exited event");
 }
 
 function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuCommand {
@@ -422,6 +436,13 @@ const desktopApi = Object.freeze<DesktopApi>({
   stopWorkspaceServer: (opts: StopWorkspaceServerInput) => {
     assertStopWorkspaceServerInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.stopWorkspaceServer, opts);
+  },
+
+  getWorkspaceServerStatus: async (opts: StopWorkspaceServerInput) => {
+    assertStopWorkspaceServerInput(opts);
+    const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getWorkspaceServerStatus, opts);
+    assertWorkspaceServerStatus(status);
+    return status;
   },
 
   startMobileRelay: async (opts: MobileRelayStartInput) => {
@@ -764,6 +785,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.workspaceServerStartupProgress, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.workspaceServerStartupProgress, wrapped);
+    };
+  },
+
+  onWorkspaceServerExited: (listener: (event: WorkspaceServerExitedEvent) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onWorkspaceServerExited listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertWorkspaceServerExitedEvent(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.workspaceServerExited, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.workspaceServerExited, wrapped);
     };
   },
 

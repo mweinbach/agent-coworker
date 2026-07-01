@@ -93,6 +93,9 @@ const cloudSync = new CloudSyncService({
 });
 const serverManager = new ServerManager({
   getProductAnalyticsState: () => productAnalytics.getPersistedState(),
+  onWorkspaceServerExited: (event) => {
+    emitDesktopEvent(DESKTOP_EVENT_CHANNELS.workspaceServerExited, event);
+  },
 });
 const mobileRelayBridge = new MobileRelayBridge({ serverManager });
 const persistence = new PersistenceService();

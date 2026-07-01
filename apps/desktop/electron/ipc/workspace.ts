@@ -217,6 +217,18 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     },
   );
 
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.getWorkspaceServerStatus,
+    async (_event, args: StopWorkspaceServerInput) => {
+      const input = parseWithSchema(
+        stopWorkspaceServerInputSchema,
+        args,
+        "getWorkspaceServerStatus options",
+      );
+      return await deps.serverManager.getWorkspaceServerStatus(input.workspaceId);
+    },
+  );
+
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async (_event) => {
     const state = await deps.persistence.loadState();
     if (resolveDesktopWindowMode(_event) === "main") {

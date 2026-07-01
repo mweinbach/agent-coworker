@@ -346,6 +346,10 @@ describe("webFetch tool", () => {
   test("keeps inline web fetch available when the shell sandbox forbids network", async () => {
     const dir = await tmpDir();
     const originalFetch = globalThis.fetch;
+    const oldExa = process.env.EXA_API_KEY;
+    const oldParallel = process.env.PARALLEL_API_KEY;
+    delete process.env.EXA_API_KEY;
+    delete process.env.PARALLEL_API_KEY;
     globalThis.fetch = mock(async () => {
       return new Response(
         "<html><body><article><h1>Sandbox-independent page</h1><p>Harness fetch still runs.</p></article></body></html>",
@@ -373,6 +377,10 @@ describe("webFetch tool", () => {
       await expect(fs.readdir(path.join(dir, "Downloads"))).rejects.toThrow();
     } finally {
       globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+      if (oldParallel) process.env.PARALLEL_API_KEY = oldParallel;
+      else delete process.env.PARALLEL_API_KEY;
     }
   });
 

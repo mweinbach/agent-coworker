@@ -29,6 +29,23 @@ export type WorkspaceServerStartupProgress = {
   progress: CoworkRuntimeBootstrapProgress;
 };
 
+export type WorkspaceServerStatusReason = "running" | "not_found" | "exited" | "health_failed";
+
+export type WorkspaceServerStatus = {
+  workspaceId: string;
+  running: boolean;
+  url: string | null;
+  reason: WorkspaceServerStatusReason;
+  error?: string;
+};
+
+export type WorkspaceServerExitedEvent = {
+  workspaceId: string;
+  url: string | null;
+  code: number | null;
+  signal: string | null;
+};
+
 export type CreateOneOffChatWorkspaceInput = {
   titleHint?: string;
 };
@@ -480,6 +497,7 @@ export interface DesktopApi {
     opts?: CreateOneOffChatWorkspaceInput,
   ): Promise<CreateOneOffChatWorkspaceOutput>;
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
+  getWorkspaceServerStatus(opts: StopWorkspaceServerInput): Promise<WorkspaceServerStatus>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
   startMobileRelay(opts: MobileRelayStartInput): Promise<MobileRelayBridgeState>;
   stopMobileRelay(): Promise<MobileRelayBridgeState>;
@@ -552,6 +570,7 @@ export interface DesktopApi {
   onWorkspaceServerStartupProgress(
     listener: (event: WorkspaceServerStartupProgress) => void,
   ): () => void;
+  onWorkspaceServerExited(listener: (event: WorkspaceServerExitedEvent) => void): () => void;
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
   onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
   onMobileRelayStateChanged(listener: (state: MobileRelayBridgeState) => void): () => void;
@@ -560,6 +579,7 @@ export interface DesktopApi {
 export const DESKTOP_IPC_CHANNELS = {
   createOneOffChatWorkspace: "desktop:createOneOffChatWorkspace",
   startWorkspaceServer: "desktop:startWorkspaceServer",
+  getWorkspaceServerStatus: "desktop:getWorkspaceServerStatus",
   stopWorkspaceServer: "desktop:stopWorkspaceServer",
   mobileRelayStart: "desktop:mobileRelayStart",
   mobileRelayStop: "desktop:mobileRelayStop",
@@ -627,6 +647,7 @@ export const DESKTOP_EVENT_CHANNELS = {
   menuCommand: "desktop:event:menuCommand",
   updateStateChanged: "desktop:event:updateState",
   workspaceServerStartupProgress: "desktop:event:workspaceServerStartupProgress",
+  workspaceServerExited: "desktop:event:workspaceServerExited",
   systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
   mobileRelayStateChanged: "desktop:event:mobileRelayStateChanged",
 } as const;

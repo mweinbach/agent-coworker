@@ -68,7 +68,9 @@ import type {
   UpdaterState,
   UploadDiagnosticsBundleInput,
   WindowDragPointInput,
+  WorkspaceServerExitedEvent,
   WorkspaceServerStartupProgress,
+  WorkspaceServerStatus,
   WriteFileInput,
 } from "./desktopApi";
 import { normalizeQuickChatShortcutAccelerator } from "./quickChatShortcut";
@@ -351,6 +353,25 @@ export const workspaceServerStartupProgressSchema: z.ZodType<WorkspaceServerStar
         percent: z.number().finite().min(0).max(100).nullable(),
       })
       .strict(),
+  })
+  .strict();
+
+export const workspaceServerStatusSchema: z.ZodType<WorkspaceServerStatus> = z
+  .object({
+    workspaceId: safeIdSchema,
+    running: z.boolean(),
+    url: z.string().min(1).nullable(),
+    reason: z.enum(["running", "not_found", "exited", "health_failed"]),
+    error: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const workspaceServerExitedEventSchema: z.ZodType<WorkspaceServerExitedEvent> = z
+  .object({
+    workspaceId: safeIdSchema,
+    url: z.string().min(1).nullable(),
+    code: z.number().int().nullable(),
+    signal: z.string().min(1).nullable(),
   })
   .strict();
 

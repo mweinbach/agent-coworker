@@ -18,6 +18,7 @@ import {
   ensureServerRunning,
   ensureWorkspaceRuntime,
   makeId,
+  markWorkspaceServerStale,
   nowIso,
   persistNow,
   RUNTIME,
@@ -25,6 +26,7 @@ import {
   type StoreGet,
   type StoreSet,
   sendThread,
+  waitForWorkspaceServerRestartBackoff,
 } from "../store.helpers";
 import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
 import { isStandardChatThread } from "../threadFilters";
@@ -43,6 +45,7 @@ export function createWorkspaceActions(
   | "reorderWorkspaces"
   | "setWorkspacesOrder"
   | "restartWorkspaceServer"
+  | "handleWorkspaceServerExited"
   | "setWorkspaceServerStartupProgress"
 > {
   const closeThreadSession = (threadId: string) => {
@@ -438,6 +441,19 @@ export function createWorkspaceActions(
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       void requestWorkspaceSessions(get, set, workspaceId);
+    },
+
+    handleWorkspaceServerExited: ({ workspaceId }) => {
+      if (!isWorkspaceLifecycleEnabled()) return;
+      const current = get();
+      if (!current.workspaces.some((workspace) => workspace.id === workspaceId)) return;
+      markWorkspaceServerStale(get, set, workspaceId, "Workspace server exited");
+      void (async () => {
+        await waitForWorkspaceServerRestartBackoff(workspaceId);
+        await ensureServerRunning(get, set, workspaceId);
+        ensureControlSocket(get, set, workspaceId);
+        void requestWorkspaceSessions(get, set, workspaceId);
+      })();
     },
   };
 }

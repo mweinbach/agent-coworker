@@ -619,6 +619,7 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
+    RUNTIME.workspaceServerRestartAttempts.clear();
     RUNTIME.modelStreamByThread.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
 

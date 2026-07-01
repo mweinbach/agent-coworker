@@ -1062,6 +1062,91 @@ describe("desktop server manager bun crash detection", () => {
     expect(child.exitCode).toBe(0);
   });
 
+  test("getWorkspaceServerStatus verifies the named health endpoint", async () => {
+    const child = createFakeChild();
+    const requestedUrls: string[] = [];
+    const manager = new ServerManager({
+      fetch: mock(async (url: string | URL | Request) => {
+        requestedUrls.push(String(url));
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }) as typeof fetch,
+    });
+    (manager as any).servers.set("ws-health", {
+      child,
+      url: "ws://127.0.0.1:7337/ws?coworkBrowserToken=token",
+      mobileH3: null,
+      cleanup: () => {},
+    });
+
+    await expect(manager.getWorkspaceServerStatus("ws-health")).resolves.toEqual({
+      workspaceId: "ws-health",
+      running: true,
+      url: "ws://127.0.0.1:7337/ws?coworkBrowserToken=token",
+      reason: "running",
+    });
+    expect(requestedUrls).toEqual(["http://127.0.0.1:7337/cowork/health?coworkBrowserToken=token"]);
+  });
+
+  test("getWorkspaceServerStatus reports failed health checks without reusing the handle", async () => {
+    const child = createFakeChild();
+    const manager = new ServerManager({
+      fetch: mock(async () => new Response("unavailable", { status: 503 })) as typeof fetch,
+    });
+    (manager as any).servers.set("ws-unhealthy", {
+      child,
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+      cleanup: () => {},
+    });
+
+    await expect(manager.getWorkspaceServerStatus("ws-unhealthy")).resolves.toEqual({
+      workspaceId: "ws-unhealthy",
+      running: false,
+      url: "ws://127.0.0.1:7337/ws",
+      reason: "health_failed",
+      error: "HTTP 503",
+    });
+  });
+
+  test("server exit cleanup emits a workspaceServerExited event", () => {
+    const child = createFakeChild();
+    const exits: unknown[] = [];
+    let cleaned = false;
+    const manager = new ServerManager({
+      onWorkspaceServerExited: (event) => exits.push(event),
+    });
+    (manager as any).servers.set("ws-exit", {
+      child,
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+      cleanup: () => {
+        cleaned = true;
+      },
+    });
+
+    (manager as any).finishWorkspaceServerExit(
+      "ws-exit",
+      child,
+      "ws://127.0.0.1:7337/ws",
+      () => {
+        cleaned = true;
+      },
+      1,
+      null,
+    );
+
+    expect((manager as any).servers.has("ws-exit")).toBe(false);
+    expect(cleaned).toBe(true);
+    expect(exits).toEqual([
+      {
+        workspaceId: "ws-exit",
+        url: "ws://127.0.0.1:7337/ws",
+        code: 1,
+        signal: null,
+      },
+    ]);
+  });
+
   test("stopAll concurrently kills and cleans up all active and pending servers", async () => {
     const manager = new ServerManager();
     const child1 = createFakeChild();

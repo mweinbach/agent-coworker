@@ -53,6 +53,7 @@ function resetConnectorState() {
   RUNTIME.workspaceJsonRpcSocketGenerations.clear();
   RUNTIME.workspaceStartPromises.clear();
   RUNTIME.workspaceStartGenerations.clear();
+  RUNTIME.workspaceServerRestartAttempts.clear();
   const actions = createOpenAiNativeConnectorActions(
     useAppStore.setState as unknown as StoreSet,
     useAppStore.getState as unknown as StoreGet,

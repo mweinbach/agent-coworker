@@ -29,7 +29,9 @@ import type {
   TelemetryStatusSnapshot,
   UpdaterState,
   UploadDiagnosticsBundleOutput,
+  WorkspaceServerExitedEvent,
   WorkspaceServerStartupProgress,
+  WorkspaceServerStatus,
 } from "./desktopApi";
 import { DESKTOP_API_OVERRIDE_KEY } from "./desktopApiOverride";
 
@@ -101,6 +103,21 @@ export async function startWorkspaceServer(opts: {
 
 export async function stopWorkspaceServer(opts: { workspaceId: string }): Promise<void> {
   await requireDesktopApi().stopWorkspaceServer(opts);
+}
+
+export async function getWorkspaceServerStatus(opts: {
+  workspaceId: string;
+}): Promise<WorkspaceServerStatus> {
+  const api = getDesktopApi();
+  if (!api) {
+    return {
+      workspaceId: opts.workspaceId,
+      running: true,
+      url: null,
+      reason: "running",
+    };
+  }
+  return await api.getWorkspaceServerStatus(opts);
 }
 
 export async function createOneOffChatWorkspace(
@@ -366,6 +383,12 @@ export function onWorkspaceServerStartupProgress(
   listener: (event: WorkspaceServerStartupProgress) => void,
 ): () => void {
   return getDesktopApi()?.onWorkspaceServerStartupProgress(listener) ?? noopUnsubscribe;
+}
+
+export function onWorkspaceServerExited(
+  listener: (event: WorkspaceServerExitedEvent) => void,
+): () => void {
+  return getDesktopApi()?.onWorkspaceServerExited(listener) ?? noopUnsubscribe;
 }
 
 export function onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void {

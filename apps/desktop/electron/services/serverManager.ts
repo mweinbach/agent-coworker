@@ -58,6 +58,7 @@ const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 45_000;
 const PACKAGED_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
 const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
+const SERVER_HEALTH_TIMEOUT_MS = 1_500;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const MIRROR_SERVER_OUTPUT_PREFIX = "[cowork-server";
@@ -148,6 +149,21 @@ type StartWorkspaceServerOptions = {
 
 type ServerManagerOptions = {
   getProductAnalyticsState?: () => PersistedProductAnalyticsState | null | undefined;
+  fetch?: typeof fetch;
+  onWorkspaceServerExited?: (event: {
+    workspaceId: string;
+    url: string | null;
+    code: number | null;
+    signal: string | null;
+  }) => void;
+};
+
+type WorkspaceServerStatus = {
+  workspaceId: string;
+  running: boolean;
+  url: string | null;
+  reason: "running" | "not_found" | "exited" | "health_failed";
+  error?: string;
 };
 
 const trustedDevicePermissionSchema = z.preprocess(
@@ -1024,6 +1040,13 @@ function toHttpServerUrl(websocketUrl: string): string {
   return url.origin;
 }
 
+function toHttpServerRequestUrl(websocketUrl: string, pathname: string): string {
+  const url = new URL(websocketUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.pathname = pathname;
+  return url.toString();
+}
+
 function getServerLogPath(): string {
   return getLocalLogPath(SERVER_LOG_FILE_NAME);
 }
@@ -1043,6 +1066,20 @@ function summarizeLogChunk(chunk: string): string {
 function withStderrTail(message: string, stderrTail: string): string {
   const summary = summarizeLogChunk(stderrTail);
   return summary ? `${message}; stderr=${summary}` : message;
+}
+
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  url: string,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function captureWorkspaceServerStartupFailure(input: {
@@ -1073,8 +1110,76 @@ function shouldReplaceForMobileH3Request(
 export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
+  private readonly suppressedExitNotifications = new WeakSet<ServerChildProcess>();
 
   constructor(private readonly options: ServerManagerOptions = {}) {}
+
+  private finishWorkspaceServerExit(
+    workspaceId: string,
+    child: ServerChildProcess,
+    url: string | null,
+    cleanup: () => void,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    const pendingExit = this.pendingStarts.get(workspaceId);
+    if (pendingExit?.child === child) {
+      this.pendingStarts.delete(workspaceId);
+    }
+    cleanup();
+    const handle = this.servers.get(workspaceId);
+    if (handle?.child === child) {
+      this.servers.delete(workspaceId);
+    }
+    if (!this.suppressedExitNotifications.has(child)) {
+      this.options.onWorkspaceServerExited?.({
+        workspaceId,
+        url,
+        code,
+        signal,
+      });
+    }
+  }
+
+  async getWorkspaceServerStatus(workspaceId: string): Promise<WorkspaceServerStatus> {
+    assertSafeId(workspaceId, "workspaceId");
+    const handle = this.servers.get(workspaceId);
+    if (!handle) {
+      return { workspaceId, running: false, url: null, reason: "not_found" };
+    }
+
+    if (handle.child.exitCode !== null || handle.child.signalCode !== null) {
+      this.servers.delete(workspaceId);
+      handle.cleanup();
+      return { workspaceId, running: false, url: handle.url, reason: "exited" };
+    }
+
+    try {
+      const response = await fetchWithTimeout(
+        this.options.fetch ?? fetch,
+        toHttpServerRequestUrl(handle.url, "/cowork/health"),
+        SERVER_HEALTH_TIMEOUT_MS,
+      );
+      if (!response.ok) {
+        return {
+          workspaceId,
+          running: false,
+          url: handle.url,
+          reason: "health_failed",
+          error: `HTTP ${response.status}`,
+        };
+      }
+      return { workspaceId, running: true, url: handle.url, reason: "running" };
+    } catch (error) {
+      return {
+        workspaceId,
+        running: false,
+        url: handle.url,
+        reason: "health_failed",
+        error: toErrorMessage(error),
+      };
+    }
+  }
 
   async startWorkspaceServer(
     opts: StartWorkspaceServerOptions,
@@ -1094,6 +1199,7 @@ export class ServerManager {
           const replacementPending = { child: existing.child, cleanup: existing.cleanup };
           this.pendingStarts.set(workspaceId, replacementPending);
           this.servers.delete(workspaceId);
+          this.suppressedExitNotifications.add(existing.child);
           await gracefulKill(existing.child);
           if (this.pendingStarts.get(workspaceId) === replacementPending) {
             this.pendingStarts.delete(workspaceId);
@@ -1254,17 +1360,9 @@ export class ServerManager {
           yoloEnabled: yolo,
         });
 
-        child.once("exit", () => {
+        child.once("exit", (code, signal) => {
           outputMirror?.flush();
-          const pendingExit = this.pendingStarts.get(workspaceId);
-          if (pendingExit?.child === child) {
-            this.pendingStarts.delete(workspaceId);
-          }
-          cleanupOnce();
-          const handle = this.servers.get(workspaceId);
-          if (handle?.child === child) {
-            this.servers.delete(workspaceId);
-          }
+          this.finishWorkspaceServerExit(workspaceId, child, url, cleanupOnce, code, signal);
         });
 
         return { url, mobileH3: listening.mobileH3 ?? null };
@@ -1355,6 +1453,7 @@ export class ServerManager {
     const pending = this.pendingStarts.get(workspaceId);
     if (pending) {
       this.pendingStarts.delete(workspaceId);
+      this.suppressedExitNotifications.add(pending.child);
       await gracefulKill(pending.child);
       pending.cleanup();
     }
@@ -1365,6 +1464,7 @@ export class ServerManager {
     }
 
     this.servers.delete(workspaceId);
+    this.suppressedExitNotifications.add(handle.child);
     await gracefulKill(handle.child);
     handle.cleanup();
   }
@@ -1500,10 +1600,12 @@ export class ServerManager {
 
     const killPromises = [
       ...entries.map(async ([, handle]) => {
+        this.suppressedExitNotifications.add(handle.child);
         await gracefulKill(handle.child);
         handle.cleanup();
       }),
       ...pendingEntries.map(async ([, handle]) => {
+        this.suppressedExitNotifications.add(handle.child);
         await gracefulKill(handle.child);
         handle.cleanup();
       }),

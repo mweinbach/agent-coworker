@@ -517,6 +517,15 @@ export function createWebAdapter(): DesktopApi {
       await maybePostWebJson<void>("/cowork/desktop/workspace/stop", opts);
     },
 
+    async getWorkspaceServerStatus(opts) {
+      return {
+        workspaceId: opts.workspaceId,
+        running: true,
+        url: getServerUrl(),
+        reason: "running" as const,
+      };
+    },
+
     async createOneOffChatWorkspace(opts): Promise<CreateOneOffChatWorkspaceOutput> {
       const workspace = await maybePostWebJson<CreateOneOffChatWorkspaceOutput>(
         "/cowork/desktop/one-off-chat/workspace",
@@ -782,6 +791,10 @@ export function createWebAdapter(): DesktopApi {
     },
 
     onWorkspaceServerStartupProgress(): () => void {
+      return () => {};
+    },
+
+    onWorkspaceServerExited(): () => void {
       return () => {};
     },
 

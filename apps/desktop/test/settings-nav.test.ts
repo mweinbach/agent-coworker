@@ -148,6 +148,7 @@ describe("settings nav (store)", () => {
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
+    RUNTIME.workspaceServerRestartAttempts.clear();
     RUNTIME.modelStreamByThread.clear();
     RUNTIME.sessionSnapshots.clear();
     RUNTIME.workspacePickerOpen = false;

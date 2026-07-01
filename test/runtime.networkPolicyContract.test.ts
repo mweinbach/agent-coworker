@@ -47,28 +47,34 @@ describe("network policy web-tool contract", () => {
     );
     webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
 
-    try {
-      globalThis.fetch = mock(
-        async () =>
-          new Response("<main><h1>Network policy contract</h1></main>", {
-            status: 200,
-            headers: { "Content-Type": "text/html" },
-          }),
-      ) as typeof fetch;
+    await withEnvValue("EXA_API_KEY", undefined, async () => {
+      await withEnvValue("PARALLEL_API_KEY", undefined, async () => {
+        try {
+          globalThis.fetch = mock(
+            async () =>
+              new Response("<main><h1>Network policy contract</h1></main>", {
+                status: 200,
+                headers: { "Content-Type": "text/html" },
+              }),
+          ) as typeof fetch;
 
-      const tool = createWebFetchTool(makeCtx(dir, { sandboxPolicy: disabledNetworkSandbox(dir) }));
-      const output = await tool.execute({
-        url: "https://example.com/policy",
-        maxLength: 10_000,
+          const tool = createWebFetchTool(
+            makeCtx(dir, { sandboxPolicy: disabledNetworkSandbox(dir) }),
+          );
+          const output = await tool.execute({
+            url: "https://example.com/policy",
+            maxLength: 10_000,
+          });
+
+          expect(output).toContain("Network policy contract");
+          expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        } finally {
+          globalThis.fetch = originalFetch;
+          webFetchInternal.resetHtmlToMarkdownForTests();
+          webSafetyInternal.resetDnsLookup();
+        }
       });
-
-      expect(output).toContain("Network policy contract");
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    } finally {
-      globalThis.fetch = originalFetch;
-      webFetchInternal.resetHtmlToMarkdownForTests();
-      webSafetyInternal.resetDnsLookup();
-    }
+    });
   });
 
   test("built-in webSearch still calls the configured provider when shell sandbox network is disabled", async () => {

@@ -58,6 +58,7 @@ export function resetSkillPluginActionRuntime() {
   RUNTIME.agentProfilesCatalogGenerations.clear();
   RUNTIME.workspaceStartPromises.clear();
   RUNTIME.workspaceStartGenerations.clear();
+  RUNTIME.workspaceServerRestartAttempts.clear();
   reactivateWorkspaceJsonRpcState(workspaceId);
   reactivateWorkspaceJsonRpcState(secondaryWorkspaceId);
 }

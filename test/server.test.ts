@@ -157,6 +157,18 @@ describe("Server Startup", () => {
     }
   });
 
+  test("serves explicit cowork health endpoint", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/cowork/health`);
+      await expect(response.json()).resolves.toEqual({ ok: true });
+      expect(response.status).toBe(200);
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("creates projectCoworkDir on startup", async () => {
     const tmpDir = await makeTmpProject();
     // Remove the .agent dir so startServer has to create it

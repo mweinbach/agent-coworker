@@ -21,9 +21,14 @@ import type { TaskCreationInput } from "../../../../src/shared/tasks";
 import {
   createDefaultUpdaterState,
   type UpdaterState,
+  type WorkspaceServerExitedEvent,
   type WorkspaceServerStartupProgress,
 } from "../lib/desktopApi";
-import { startWorkspaceServer } from "../lib/desktopCommands";
+import {
+  getWorkspaceServerStatus,
+  startWorkspaceServer,
+  stopWorkspaceServer,
+} from "../lib/desktopCommands";
 import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type {
@@ -156,6 +161,8 @@ function shouldAdoptServerTitle(opts: {
 }
 
 const MAX_NOTIFICATIONS = 50;
+const WORKSPACE_SERVER_RESTART_BACKOFF_BASE_MS = 250;
+const WORKSPACE_SERVER_RESTART_BACKOFF_MAX_MS = 5_000;
 
 type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
@@ -488,6 +495,7 @@ export type AppStoreState = {
     opts?: { scope?: "settings" | "target" },
   ) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
+  handleWorkspaceServerExited: (event: WorkspaceServerExitedEvent) => void;
   setWorkspaceServerStartupProgress: (event: WorkspaceServerStartupProgress) => void;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
   upsertWorkspaceMcpServer: (
@@ -752,6 +760,59 @@ function disposeWorkspaceJsonRpcState(get: StoreGet, workspaceId: string) {
   disposeWorkspaceJsonRpcSocketState(workspaceId);
 }
 
+function closeWorkspaceJsonRpcSocket(workspaceId: string) {
+  const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
+  try {
+    jsonRpcSocket?.close?.();
+  } catch {
+    // ignore stale socket cleanup failures
+  }
+  RUNTIME.jsonRpcSockets.delete(workspaceId);
+}
+
+function markWorkspaceServerStale(
+  get: StoreGet,
+  set: StoreSet,
+  workspaceId: string,
+  message?: string,
+) {
+  bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
+  closeWorkspaceJsonRpcSocket(workspaceId);
+  disposeWorkspaceJsonRpcState(get, workspaceId);
+  set((s) => {
+    const runtime = s.workspaceRuntimeById[workspaceId];
+    if (!runtime) return {};
+    return {
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...runtime,
+          serverUrl: null,
+          startupProgress: null,
+          error: message ?? null,
+          controlSessionId: null,
+          controlConfig: null,
+          controlSessionConfig: null,
+        },
+      },
+    };
+  });
+}
+
+function nextWorkspaceServerRestartBackoffMs(workspaceId: string): number {
+  const attempts = (RUNTIME.workspaceServerRestartAttempts.get(workspaceId) ?? 0) + 1;
+  RUNTIME.workspaceServerRestartAttempts.set(workspaceId, attempts);
+  return Math.min(
+    WORKSPACE_SERVER_RESTART_BACKOFF_MAX_MS,
+    WORKSPACE_SERVER_RESTART_BACKOFF_BASE_MS * 2 ** (attempts - 1),
+  );
+}
+
+async function waitForWorkspaceServerRestartBackoff(workspaceId: string): Promise<void> {
+  const delayMs = nextWorkspaceServerRestartBackoffMs(workspaceId);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 function reactivateWorkspaceJsonRpcState(workspaceId: string) {
   reactivateWorkspaceControlState(workspaceId);
   reactivateWorkspaceThreadEventState(workspaceId);
@@ -775,18 +836,41 @@ function disposeAllJsonRpcState() {
   disposeAllJsonRpcSocketState();
 }
 
-async function ensureServerRunning(
-  get: () => AppStoreState,
-  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
-  workspaceId: string,
-) {
+async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, workspaceId: string) {
   const ws = get().workspaces.find((workspace) => workspace.id === workspaceId);
   if (!ws) return;
   ensureWorkspaceRuntime(get, set, workspaceId);
   reactivateWorkspaceJsonRpcState(workspaceId);
   const rt = get().workspaceRuntimeById[workspaceId];
   if (!rt) return;
-  if (rt.serverUrl && !rt.error) return;
+  if (rt.serverUrl && !rt.error) {
+    const status = await getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
+      workspaceId,
+      running: false as const,
+      url: rt.serverUrl,
+      reason: "health_failed" as const,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    if (status.running) {
+      RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
+      return;
+    }
+    const message =
+      status.reason === "health_failed" && status.error
+        ? `Workspace server health check failed: ${status.error}`
+        : "Workspace server exited";
+    markWorkspaceServerStale(get, set, workspaceId, message);
+    bumpWorkspaceStartGeneration(workspaceId);
+    if (status.reason === "health_failed") {
+      try {
+        await stopWorkspaceServer({ workspaceId });
+      } catch {
+        // ignore; startup below will surface persistent failures
+      }
+    }
+    await waitForWorkspaceServerRestartBackoff(workspaceId);
+    reactivateWorkspaceJsonRpcState(workspaceId);
+  }
 
   const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
   const generation = getWorkspaceStartGeneration(workspaceId);
@@ -831,6 +915,7 @@ async function ensureServerRunning(
           },
         },
       }));
+      RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
     } catch (err) {
       if (getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;
@@ -894,6 +979,7 @@ export {
   isCurrentThreadSelectionRequest,
   isProviderName,
   makeId,
+  markWorkspaceServerStale,
   normalizeThreadTitleSource,
   nowIso,
   persistNow,
@@ -916,4 +1002,5 @@ export {
   syncDesktopStateCacheNow,
   truncateTitle,
   waitForControlSession,
+  waitForWorkspaceServerRestartBackoff,
 };

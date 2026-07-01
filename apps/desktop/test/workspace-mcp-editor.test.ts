@@ -206,6 +206,7 @@ describe("workspace MCP editor flow", () => {
     RUNTIME.sessionSnapshots.clear();
     RUNTIME.workspaceJsonRpcSocketGenerations.clear();
     RUNTIME.workspaceStartPromises.clear();
+    RUNTIME.workspaceServerRestartAttempts.clear();
     setDefaultHandlers();
     const workspaceMcpActions = createWorkspaceMcpActions(
       useAppStore.setState,

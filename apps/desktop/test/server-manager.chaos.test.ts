@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-
-import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 import { createFakeChild, type FakeChild } from "./helpers/fakeServerChild";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 // Chaos scenarios for the desktop supervisor (ServerManager): the workspace
 // server dies after announcing itself, the health probe stalls past the 1.5s

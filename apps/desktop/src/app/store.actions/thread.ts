@@ -5,6 +5,11 @@ import {
 } from "../../lib/composerAttachments";
 import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
+import {
+  googleProviderOptionsForReasoningEffort,
+  isGoogleReasoningEffortValue,
+  isOpenAiReasoningEffortValue,
+} from "../openaiCompatibleProviderOptions";
 import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
   type AppStoreActions,
@@ -44,11 +49,6 @@ import {
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
-import {
-  googleProviderOptionsForReasoningEffort,
-  isGoogleReasoningEffortValue,
-  isOpenAiReasoningEffortValue,
-} from "../openaiCompatibleProviderOptions";
 import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
@@ -1271,8 +1271,7 @@ export function createThreadActions(
 
     setThreadReasoningEffort: (threadId, provider, effort) => {
       const providerConfig =
-        (provider === "openai" || provider === "codex-cli") &&
-        isOpenAiReasoningEffortValue(effort)
+        (provider === "openai" || provider === "codex-cli") && isOpenAiReasoningEffortValue(effort)
           ? { [provider]: { reasoningEffort: effort } }
           : provider === "google" && isGoogleReasoningEffortValue(effort)
             ? { google: googleProviderOptionsForReasoningEffort(effort) }

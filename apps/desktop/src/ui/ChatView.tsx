@@ -423,7 +423,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     const resolveConfig = (provider: ProviderName, model: string) => {
       const reasoningConfig = reasoningConfigFromCatalog(providerCatalog, provider, model);
       if (!reasoningConfig) return { provider, model, reasoning: null };
-      const providerOptions = thread.draft ? workspace?.providerOptions : rt.sessionConfig?.providerOptions;
+      const providerOptions = thread.draft
+        ? workspace?.providerOptions
+        : rt.sessionConfig?.providerOptions;
       const configuredEffort =
         provider === "openai" || provider === "codex-cli"
           ? providerOptions?.[provider]?.reasoningEffort

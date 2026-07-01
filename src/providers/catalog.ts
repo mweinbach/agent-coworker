@@ -4,14 +4,14 @@ import {
   listSupportedModelIds,
 } from "../models/registry";
 import {
-  OPENAI_REASONING_EFFORT_VALUES,
-  type CatalogReasoningEffort,
-  isOpenAiReasoningEffort,
-} from "../shared/openaiCompatibleOptions";
-import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
 } from "../shared/googleThinking";
+import {
+  type CatalogReasoningEffort,
+  isOpenAiReasoningEffort,
+  OPENAI_REASONING_EFFORT_VALUES,
+} from "../shared/openaiCompatibleOptions";
 import type { ProviderName } from "../types";
 
 type ProviderModelDefinition = {

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { runTurn as runTurnFn } from "../../agent";
 import { loadConfig } from "../../config";
-import { resolveVersion } from "../../version";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../../connect";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
@@ -13,6 +12,7 @@ import type {
 } from "../../prompt";
 import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
+import { resolveVersion } from "../../version";
 import { decodeJsonRpcMessage } from "../jsonrpc/decodeJsonRpcMessage";
 import {
   buildJsonRpcErrorResponse,

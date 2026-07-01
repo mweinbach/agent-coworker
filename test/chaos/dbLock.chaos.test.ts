@@ -36,7 +36,10 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 2_000): Pr
 }
 
 /** Mirror of the db projection in ServerRuntime.getHealthSnapshot(). */
-function projectDbHealth(diagnostics: { maxWaitMs: number }, ok: boolean): {
+function projectDbHealth(
+  diagnostics: { maxWaitMs: number },
+  ok: boolean,
+): {
   ok: boolean;
   lockWaitMs?: number;
 } {
@@ -74,9 +77,9 @@ describe("chaos: session DB write-lock contention", () => {
       },
     });
 
-    await expect(
-      contender.runExclusive("contender", async () => "unreachable"),
-    ).rejects.toThrow(/Timed out acquiring session DB write lock/);
+    await expect(contender.runExclusive("contender", async () => "unreachable")).rejects.toThrow(
+      /Timed out acquiring session DB write lock/,
+    );
 
     const diagnostics = contender.getDiagnostics();
     expect(diagnostics.timeoutCount).toBe(1);
@@ -84,7 +87,10 @@ describe("chaos: session DB write-lock contention", () => {
     expect(diagnostics.maxWaitMs).toBeGreaterThanOrEqual(100);
 
     // The health endpoint surfaces the wait via db.lockWaitMs.
-    expect(projectDbHealth(diagnostics, true)).toEqual({ ok: true, lockWaitMs: diagnostics.maxWaitMs });
+    expect(projectDbHealth(diagnostics, true)).toEqual({
+      ok: true,
+      lockWaitMs: diagnostics.maxWaitMs,
+    });
 
     release();
     await holderPromise;

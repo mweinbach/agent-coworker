@@ -57,7 +57,10 @@ export function ChatComposer(props: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   handleFileSelect: (event: ChangeEvent<HTMLInputElement>) => void;
   threadModelConfig: { provider: ProviderName; model: string } | null;
-  reasoningSelector: { value: ReasoningEffortValue; options: readonly ReasoningEffortValue[] } | null;
+  reasoningSelector: {
+    value: ReasoningEffortValue;
+    options: readonly ReasoningEffortValue[];
+  } | null;
   onReasoningEffortChange: (value: ReasoningEffortValue) => void;
   threadDraft: boolean;
   selectedThreadId: string;

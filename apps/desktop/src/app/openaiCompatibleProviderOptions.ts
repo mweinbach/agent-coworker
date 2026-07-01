@@ -8,15 +8,16 @@ import {
   normalizeGoogleThinkingLevelForModel,
 } from "../../../../src/shared/googleThinking";
 import {
+  type CatalogReasoningEffort,
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
-  type CatalogReasoningEffort,
   type CodexWebSearchBackend,
   type CodexWebSearchMode,
   getCodexWebSearchBackendFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getGoogleThinkingLevelFromProviderOptions,
   getLocalWebSearchProviderFromProviderOptions,
+  isOpenAiReasoningEffort,
   LOCAL_WEB_SEARCH_PROVIDER_VALUES,
   type LocalWebSearchProvider,
   mergeEditableOpenAiCompatibleProviderOptions,
@@ -32,7 +33,6 @@ import {
   type GoogleProviderOptions as SharedGoogleProviderOptions,
   type OpenAiCompatibleProviderName as SharedOpenAiCompatibleProviderName,
   type OpenAiCompatibleProviderOptions as SharedOpenAiCompatibleProviderOptions,
-  isOpenAiReasoningEffort,
 } from "../../../../src/shared/openaiCompatibleOptions";
 
 export const REASONING_EFFORT_VALUES = OPENAI_REASONING_EFFORT_VALUES;
@@ -214,16 +214,15 @@ export function getGoogleReasoningEffortValuesForModel(
   return listGoogleReasoningEffortValuesForModel(modelId);
 }
 
-export function isOpenAiReasoningEffortValue(
-  value: unknown,
-): value is OpenAiReasoningEffortValue {
+export function isOpenAiReasoningEffortValue(value: unknown): value is OpenAiReasoningEffortValue {
   return isOpenAiReasoningEffort(value);
 }
 
 export function isGoogleReasoningEffortValue(value: unknown): value is GoogleReasoningEffortValue {
   return (
     value === GOOGLE_DYNAMIC_REASONING_EFFORT ||
-    (typeof value === "string" && (GOOGLE_THINKING_LEVEL_VALUES as readonly string[]).includes(value))
+    (typeof value === "string" &&
+      (GOOGLE_THINKING_LEVEL_VALUES as readonly string[]).includes(value))
   );
 }
 

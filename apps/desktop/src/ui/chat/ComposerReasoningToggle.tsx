@@ -52,7 +52,11 @@ export function ComposerReasoningSelector({
   const active = value !== "none";
 
   return (
-    <Select value={value} onValueChange={(next) => onChange(next as ReasoningEffortValue)} disabled={disabled}>
+    <Select
+      value={value}
+      onValueChange={(next) => onChange(next as ReasoningEffortValue)}
+      disabled={disabled}
+    >
       <SelectTrigger
         size="sm"
         aria-label="Reasoning effort"

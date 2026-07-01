@@ -50,6 +50,10 @@ export class ThreadJournal {
   }
 
   private scheduleFlush(threadId: string): void {
+    if (this.closed) {
+      return;
+    }
+
     if (this.scheduledFlushes.has(threadId)) {
       return;
     }
@@ -80,7 +84,7 @@ export class ThreadJournal {
             }
             this.scheduledFlushes.delete(threadId);
             this.writeQueues.delete(threadId);
-            if ((this.pendingEvents.get(threadId)?.length ?? 0) > 0) {
+            if (!this.closed && (this.pendingEvents.get(threadId)?.length ?? 0) > 0) {
               queueMicrotask(() => this.scheduleFlush(threadId));
             }
             throw error;

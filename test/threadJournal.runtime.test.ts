@@ -134,6 +134,56 @@ describe("ThreadJournal runtime", () => {
     expect(journal.list("thread-1").map((entry) => entry.eventType)).toEqual(["turn/started"]);
   });
 
+  test("close does not reschedule pending events after a failed append", async () => {
+    const stored: PersistedThreadJournalEvent[] = [];
+    let appendCalls = 0;
+    let releaseAppend!: () => void;
+    let markAppendStarted!: () => void;
+    const appendBlocked = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const appendStarted = new Promise<void>((resolve) => {
+      markAppendStarted = resolve;
+    });
+    const journal = new ThreadJournal({
+      appendThreadJournalEvents: async (batch: Array<Omit<PersistedThreadJournalEvent, "seq">>) => {
+        appendCalls += 1;
+        if (appendCalls === 1) {
+          markAppendStarted();
+          await appendBlocked;
+          throw new Error("database closed during shutdown");
+        }
+        for (const entry of batch) {
+          stored.push({ ...entry, seq: stored.length + 1 });
+        }
+        return batch.map((_, index) => stored.length - batch.length + index + 1);
+      },
+      listThreadJournalEvents: (threadId: string) =>
+        stored.filter((entry) => entry.threadId === threadId),
+      getThreadJournalTailSeq: (threadId: string) =>
+        stored.filter((entry) => entry.threadId === threadId).at(-1)?.seq ?? 0,
+    } as never);
+
+    const firstWrite = journal
+      .enqueue(event("thread-1", "turn/started"))
+      .catch((error: unknown) => error);
+    await appendStarted;
+    const pendingWrite = journal
+      .enqueue(event("thread-1", "turn/completed"))
+      .catch((error: unknown) => error);
+
+    const closed = journal.close();
+    releaseAppend();
+    await closed;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(await firstWrite).toBeInstanceOf(Error);
+    expect(await pendingWrite).toBeInstanceOf(Error);
+    expect(appendCalls).toBe(1);
+    expect(journal.list("thread-1")).toEqual([]);
+  });
+
   test("close ignores later sink events without touching the store", async () => {
     let appendCalls = 0;
     const binding = {

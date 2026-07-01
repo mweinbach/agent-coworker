@@ -447,6 +447,7 @@ export function createWorkspaceActions(
       if (!isWorkspaceLifecycleEnabled()) return;
       const current = get();
       if (!current.workspaces.some((workspace) => workspace.id === workspaceId)) return;
+      bumpWorkspaceStartGeneration(workspaceId);
       markWorkspaceServerStale(get, set, workspaceId, "Workspace server exited");
       void (async () => {
         await waitForWorkspaceServerRestartBackoff(workspaceId);

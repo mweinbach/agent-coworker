@@ -694,6 +694,46 @@ describe("workspace startup flow", () => {
     expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.error).toBeNull();
   });
 
+  test("workspaceServerExited supersedes an in-flight startup before restarting", async () => {
+    const workspaceId = "ws-exited-during-start";
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+    });
+
+    const pendingStart = useAppStore.getState().selectWorkspace(workspaceId);
+    await waitForCondition(() => startCalls.length === 1);
+
+    useAppStore.getState().handleWorkspaceServerExited({
+      workspaceId,
+      url: "ws://dead",
+      code: 1,
+      signal: null,
+    });
+
+    startDeferreds[0]?.resolve({ url: "ws://stale" });
+    await pendingStart;
+
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.serverUrl).toBeNull();
+
+    await waitForCondition(() => startCalls.length === 2);
+    startDeferreds[1]?.resolve({ url: "ws://fresh" });
+    await waitForCondition(() => !RUNTIME.workspaceStartPromises.has(workspaceId));
+    await waitForCondition(
+      () => useAppStore.getState().workspaceRuntimeById[workspaceId]?.serverUrl === "ws://fresh",
+    );
+  });
+
   test("selectWorkspace does not persist when the workspace is already selected", async () => {
     const workspaceId = "ws-existing";
     useAppStore.setState({

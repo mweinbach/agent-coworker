@@ -468,6 +468,7 @@ function getJsonRpcRequestRetryOptions(
     method === "thread/hydrate" ||
     method.endsWith("/read") ||
     method.endsWith("/list") ||
+    method.endsWith("/get") ||
     method.endsWith("/catalog/read") ||
     method === "cowork/session/state/read" ||
     method === "cowork/provider/authMethods/read" ||

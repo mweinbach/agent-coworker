@@ -115,7 +115,7 @@ function normalizePromptTemplateNewlines(value: string): string {
  */
 async function loadPromptTemplate(templatePath: string): Promise<string> {
   const resolvedTemplatePath = path.resolve(templatePath);
-  return normalizePromptTemplateNewlines(await fs.readFile(resolvedTemplatePath, "utf-8"));
+  return normalizePromptTemplateNewlines(await Bun.file(resolvedTemplatePath).text());
 }
 
 function stripPromptLine(prompt: string, matcher: RegExp): string {
@@ -565,7 +565,7 @@ async function _loadHotCache(config: AgentConfig): Promise<string> {
 
   for (const p of candidates) {
     try {
-      return await fs.readFile(p, "utf-8");
+      return await Bun.file(p).text();
     } catch {
       // ignore
     }
@@ -740,8 +740,8 @@ export async function loadAgentPrompt(
     AGENT_ROLE_DEFINITIONS[role].promptFile,
   );
   const [basePrompt, rolePrompt] = await Promise.all([
-    fs.readFile(basePath, "utf-8"),
-    fs.readFile(rolePath, "utf-8"),
+    Bun.file(basePath).text(),
+    Bun.file(rolePath).text(),
   ]);
   const profilePrompt = profile?.prompt.trim();
   const effectiveRolePrompt = profilePrompt || rolePrompt.trim();

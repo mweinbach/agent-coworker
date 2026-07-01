@@ -38,7 +38,7 @@ async function readIfExists(p: string): Promise<string | null> {
       return cached.content;
     }
 
-    const content = await fs.readFile(p, "utf-8");
+    const content = await Bun.file(p).text();
     loadedSkills.set(cacheKey, { content, mtimeMs: stat.mtimeMs, size: stat.size });
     return content;
   } catch {

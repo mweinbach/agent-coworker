@@ -49,7 +49,7 @@ export async function readPersistedSessionSnapshot(opts: {
 }): Promise<PersistedSessionSnapshot | null> {
   const filePath = getPersistedSessionFilePath(opts.paths, opts.sessionId);
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
+    const raw = await Bun.file(filePath).text();
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(raw);
@@ -117,7 +117,7 @@ export async function listPersistedSessionSnapshots(
 
     let raw: string;
     try {
-      raw = await fs.readFile(filePath, "utf-8");
+      raw = await Bun.file(filePath).text();
     } catch (error) {
       const parsedCode = errorWithCodeSchema.safeParse(error);
       const code = parsedCode.success ? parsedCode.data.code : undefined;

@@ -73,7 +73,7 @@ function nowIso(): string {
 
 async function readTextIfExists(filePath: string): Promise<string | null> {
   try {
-    return await fs.readFile(filePath, "utf-8");
+    return await Bun.file(filePath).text();
   } catch {
     return null;
   }

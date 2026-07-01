@@ -35,7 +35,7 @@ function getCliStateFilePath(): string {
 async function readCliState(): Promise<CliState> {
   const filePath = getCliStateFilePath();
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
+    const raw = await Bun.file(filePath).text();
     let parsedRaw: unknown;
     try {
       parsedRaw = JSON.parse(raw);

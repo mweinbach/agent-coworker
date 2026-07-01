@@ -56,7 +56,7 @@ async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> 
   });
 
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
+    const raw = await Bun.file(filePath).text();
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(raw);

@@ -74,7 +74,7 @@ export function createReadTool(ctx: ToolContext) {
         if (preReadSizeMessage) {
           throw new Error(preReadSizeMessage);
         }
-        const buffer = await fs.readFile(abs);
+        const buffer = Buffer.from(await Bun.file(abs).arrayBuffer());
         const sizeMessage = getAttachmentByteLengthValidationMessage([buffer.length]);
         if (sizeMessage) {
           throw new Error(sizeMessage);

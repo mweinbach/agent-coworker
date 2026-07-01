@@ -183,7 +183,7 @@ function mimeTypeForPath(targetPath: string): string {
 
 async function readFileAsDataUri(targetPath: string): Promise<string | null> {
   try {
-    const buf = await fs.readFile(targetPath);
+    const buf = await Bun.file(targetPath).arrayBuffer();
     return `data:${mimeTypeForPath(targetPath)};base64,${Buffer.from(buf).toString("base64")}`;
   } catch {
     return null;
@@ -278,7 +278,7 @@ async function readAgentInterface(skillRoot: string): Promise<SkillInterfaceMeta
   }
   let raw: string;
   try {
-    raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
+    raw = await Bun.file(path.join(agentsDir, primary)).text();
   } catch {
     return { agents: agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, "")) };
   }
@@ -432,7 +432,7 @@ async function buildPluginInstallationEntry(opts: {
 
   if (diagnostics.length === 0) {
     try {
-      const raw = await fs.readFile(opts.skill.skillPath, "utf-8");
+      const raw = await Bun.file(opts.skill.skillPath).text();
       const parsed = parseSkillFrontMatter(raw, opts.skill.rawName);
       if (!parsed) {
         diagnostics.push(
@@ -506,7 +506,7 @@ async function buildInstallationEntry(opts: {
 
   if (diagnostics.length === 0) {
     try {
-      const raw = await fs.readFile(skillPath, "utf-8");
+      const raw = await Bun.file(skillPath).text();
       const parsed = parseSkillFrontMatter(raw, opts.dirent.name);
       if (!parsed) {
         diagnostics.push(

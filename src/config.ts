@@ -230,7 +230,7 @@ async function resolveConfiguredModelMetadata(
 
 async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> {
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
+    const raw = await Bun.file(filePath).text();
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);

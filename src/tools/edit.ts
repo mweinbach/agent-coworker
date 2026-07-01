@@ -54,7 +54,7 @@ export function createEditTool(ctx: ToolContext) {
           `edit blocked: ${abs} is ${Number(stat.size)} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
         );
       }
-      let content = await fs.readFile(abs, "utf-8");
+      let content = await Bun.file(abs).text();
       if (!content.includes(oldString)) throw new Error(`oldString not found in ${abs}`);
 
       const occurrences = content.split(oldString).length - 1;
@@ -80,7 +80,7 @@ export function createEditTool(ctx: ToolContext) {
         ? content.replaceAll(oldString, newString)
         : content.replace(oldString, newString);
       await ctx.assertCanMutate?.("edit");
-      await fs.writeFile(abs, content, "utf-8");
+      await Bun.write(abs, content);
 
       ctx.log(`tool< edit ${JSON.stringify({ ok: true })}`);
       return "Edit applied.";

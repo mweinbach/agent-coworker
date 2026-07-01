@@ -15,7 +15,7 @@ const noCodexAccount = async () => ({
 });
 
 describe("providers/connectionCatalog", () => {
-  test("marks only models with toggleable reasoning effort", async () => {
+  test("marks models with selector-ready reasoning effort metadata", async () => {
     const entries = await listProviderCatalogEntries({ platform: "linux" });
     const openAiModel = entries
       .find((entry) => entry.id === "openai")
@@ -27,8 +27,14 @@ describe("providers/connectionCatalog", () => {
       .find((entry) => entry.id === "anthropic")
       ?.models.find((model) => model.id === "claude-opus-4-8");
 
-    expect(openAiModel?.reasoning).toEqual({ defaultEffort: "high" });
-    expect(googleModel?.reasoning).toBeUndefined();
+    expect(openAiModel?.reasoning).toEqual({
+      defaultEffort: "high",
+      availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    });
+    expect(googleModel?.reasoning).toEqual({
+      defaultEffort: "dynamic",
+      availableEfforts: ["dynamic", "low", "medium", "high"],
+    });
     expect(anthropicModel?.reasoning).toBeUndefined();
   });
 
@@ -764,6 +770,7 @@ describe("providers/connectionCatalog", () => {
           id: "gpt-5.5",
           model: "gpt-5.5",
           displayName: "GPT-5.5 from app-server",
+          reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
           isDefault: true,
         },
         {
@@ -827,6 +834,14 @@ describe("providers/connectionCatalog", () => {
     expect(codex?.models.find((model) => model.id === "gpt-5.4")).toMatchObject({
       knowledgeCutoff: "August 31, 2025",
       supportsImageInput: true,
+      reasoning: {
+        defaultEffort: "high",
+        availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      },
+    });
+    expect(codex?.models.find((model) => model.id === "gpt-5.5")?.reasoning).toEqual({
+      defaultEffort: "high",
+      availableEfforts: ["none", "low", "medium", "high", "xhigh"],
     });
     expect(codex?.models.find((model) => model.id === "future-model")).toEqual({
       id: "future-model",

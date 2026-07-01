@@ -8,6 +8,7 @@ import {
 } from "./agentProfiles";
 import { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
 import {
+  CATALOG_REASONING_EFFORT_VALUES,
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
@@ -197,7 +198,8 @@ const providerCatalogModelEntrySchema = z
     supportsImageInput: z.boolean(),
     reasoning: z
       .object({
-        defaultEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES),
+        defaultEffort: z.enum(CATALOG_REASONING_EFFORT_VALUES),
+        availableEfforts: z.array(z.enum(CATALOG_REASONING_EFFORT_VALUES)).min(1),
       })
       .strict()
       .optional(),

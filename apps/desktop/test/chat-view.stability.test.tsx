@@ -148,7 +148,10 @@ describe("desktop chat view stability", () => {
               displayName: "GPT-5.4",
               knowledgeCutoff: "Unknown",
               supportsImageInput: true,
-              reasoning: { defaultEffort: "high" },
+              reasoning: {
+                defaultEffort: "high",
+                availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+              },
             },
           ],
           defaultModel: "gpt-5.4",
@@ -174,14 +177,11 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).not.toContain("Let's build");
       expect(container.textContent).not.toContain("New thread");
       expect(container.querySelector('[data-slot="select-trigger"]')).not.toBeNull();
-      const reasoningToggle = container.querySelector<HTMLButtonElement>(
-        '[data-slot="composer-reasoning-toggle"]',
+      const reasoningSelector = container.querySelector<HTMLButtonElement>(
+        '[data-slot="composer-reasoning-selector"]',
       );
-      expect(reasoningToggle?.getAttribute("aria-pressed")).toBe("true");
-      await act(async () => {
-        reasoningToggle?.click();
-      });
-      expect(reasoningToggle?.getAttribute("aria-pressed")).toBe("false");
+      expect(reasoningSelector?.getAttribute("role")).toBe("combobox");
+      expect(reasoningSelector?.getAttribute("title")).toBe("Reasoning: High");
     } finally {
       if (root) {
         await act(async () => {
@@ -967,7 +967,10 @@ describe("desktop chat view stability", () => {
               displayName: "GPT-5.2 Draft Default",
               knowledgeCutoff: "Unknown",
               supportsImageInput: true,
-              reasoning: { defaultEffort: "high" },
+              reasoning: {
+                defaultEffort: "high",
+                availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+              },
             },
           ],
           defaultModel: "gpt-5.2-draft-default",
@@ -991,13 +994,11 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("Send a message to start.");
       const modelSelector = container.querySelector('[data-slot="select-trigger"]');
       expect(modelSelector).not.toBeNull();
-      const reasoningToggle = container.querySelector<HTMLButtonElement>(
-        '[data-slot="composer-reasoning-toggle"]',
+      const reasoningSelector = container.querySelector<HTMLButtonElement>(
+        '[data-slot="composer-reasoning-selector"]',
       );
-      expect(reasoningToggle?.getAttribute("aria-pressed")).toBe("true");
-      await act(async () => {
-        reasoningToggle?.click();
-      });
+      expect(reasoningSelector?.getAttribute("title")).toBe("Reasoning: High");
+      useAppStore.getState().setThreadReasoningEffort("thread-1", "openai", "none");
       expect(useAppStore.getState().threadRuntimeById["thread-1"]?.composerReasoningEffort).toBe(
         "none",
       );

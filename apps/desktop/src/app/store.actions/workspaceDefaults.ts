@@ -3,6 +3,9 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/o
 import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
+  googleProviderOptionsForReasoningEffort,
+  isGoogleReasoningEffortValue,
+  isOpenAiReasoningEffortValue,
   mergeWorkspaceProviderOptions,
   mergeWorkspaceProviderOptionsPreservingSearchSettings,
   normalizeWorkspaceProviderOptions,
@@ -713,15 +716,27 @@ export function createWorkspaceDefaultsActions(
       const allowedChildModelRefs = preserveSessionModel
         ? (rt.sessionConfig?.allowedChildModelRefs ?? [])
         : (ws.defaultAllowedChildModelRefs ?? rt.sessionConfig?.allowedChildModelRefs ?? []);
-      const providerOptions =
-        effectiveDraftModelSelection?.reasoningEffort &&
-        (provider === "openai" || provider === "codex-cli")
-          ? mergeWorkspaceProviderOptions(ws.providerOptions, {
-              [provider]: {
-                reasoningEffort: effectiveDraftModelSelection.reasoningEffort,
-              },
-            })
-          : ws.providerOptions;
+      let providerOptions = ws.providerOptions;
+      const draftReasoningEffort = effectiveDraftModelSelection?.reasoningEffort;
+      if (
+        draftReasoningEffort &&
+        (provider === "openai" || provider === "codex-cli") &&
+        isOpenAiReasoningEffortValue(draftReasoningEffort)
+      ) {
+        providerOptions = mergeWorkspaceProviderOptions(ws.providerOptions, {
+          [provider]: {
+            reasoningEffort: draftReasoningEffort,
+          },
+        });
+      } else if (
+        draftReasoningEffort &&
+        provider === "google" &&
+        isGoogleReasoningEffortValue(draftReasoningEffort)
+      ) {
+        providerOptions = mergeWorkspaceProviderOptions(ws.providerOptions, {
+          google: googleProviderOptionsForReasoningEffort(draftReasoningEffort),
+        });
+      }
       const userName = ws.userName;
       const memoryDefaults = resolveThreadApplyMemoryDefaults(
         ws,

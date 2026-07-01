@@ -11,7 +11,10 @@ import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAttachmentCountValidationMessage } from "../../../../../src/shared/attachments";
 import { buildAttachmentDisplayText } from "../../app/attachmentInputs";
-import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
+import {
+  getWorkspaceGoogleReasoningEffort,
+  type ReasoningEffortValue,
+} from "../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../app/store";
 import { ensureServerRunning } from "../../app/store.helpers";
 import type { FileAttachmentInput } from "../../app/store.helpers/jsonRpcSocket";
@@ -48,7 +51,7 @@ import {
 } from "../composer/MessageComposer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
 import { type ComposerModelSelection, ComposerModelSelector } from "./ComposerModelSelector";
-import { ComposerReasoningToggle } from "./ComposerReasoningToggle";
+import { ComposerReasoningSelector } from "./ComposerReasoningToggle";
 import { buildMentionCatalog, extractReferencesFromText } from "./composerMentions";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
 
@@ -137,17 +140,17 @@ export function NewChatLanding() {
   const workspaceReasoningEffort =
     modelSelection.provider === "openai" || modelSelection.provider === "codex-cli"
       ? fallbackModelWorkspace?.providerOptions?.[modelSelection.provider]?.reasoningEffort
-      : undefined;
+      : modelSelection.provider === "google"
+        ? getWorkspaceGoogleReasoningEffort(
+            fallbackModelWorkspace?.providerOptions,
+            modelSelection.model,
+          )
+        : undefined;
   const reasoningEffort: ReasoningEffortValue | null = reasoningConfig
     ? reasoningOverride?.provider === modelSelection.provider &&
       reasoningOverride.model === modelSelection.model
       ? reasoningOverride.effort
       : (workspaceReasoningEffort ?? reasoningConfig.defaultEffort)
-    : null;
-  const enabledReasoningEffort: ReasoningEffortValue | null = reasoningConfig
-    ? reasoningConfig.defaultEffort === "none"
-      ? "high"
-      : reasoningConfig.defaultEffort
     : null;
   useEffect(() => {
     if (!modelTouched) {
@@ -520,15 +523,16 @@ export function NewChatLanding() {
                         setModelSelection(selection);
                       }}
                     />
-                    {reasoningConfig && reasoningEffort && enabledReasoningEffort ? (
-                      <ComposerReasoningToggle
-                        enabled={reasoningEffort !== "none"}
+                    {reasoningConfig && reasoningEffort ? (
+                      <ComposerReasoningSelector
+                        value={reasoningEffort}
+                        options={reasoningConfig.availableEfforts}
                         disabled={submitting}
-                        onChange={(enabled) => {
+                        onChange={(effort) => {
                           setReasoningOverride({
                             provider: modelSelection.provider,
                             model: modelSelection.model,
-                            effort: enabled ? enabledReasoningEffort : "none",
+                            effort,
                           });
                         }}
                       />

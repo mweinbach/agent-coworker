@@ -4,9 +4,14 @@ import {
   listSupportedModelIds,
 } from "../models/registry";
 import {
+  OPENAI_REASONING_EFFORT_VALUES,
+  type CatalogReasoningEffort,
   isOpenAiReasoningEffort,
-  type OpenAiReasoningEffort,
 } from "../shared/openaiCompatibleOptions";
+import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  listGoogleReasoningEffortValuesForModel,
+} from "../shared/googleThinking";
 import type { ProviderName } from "../types";
 
 type ProviderModelDefinition = {
@@ -105,10 +110,18 @@ export function userFacingAvailableModelsForProvider(provider: ProviderName): re
 export function reasoningConfigForProviderModel(
   provider: ProviderName,
   modelId: string,
-): { defaultEffort: OpenAiReasoningEffort } | null {
+): { defaultEffort: CatalogReasoningEffort; availableEfforts: CatalogReasoningEffort[] } | null {
   const supportedModel = getSupportedModel(provider, modelId.trim());
+  if (supportedModel?.provider === "google") {
+    return {
+      defaultEffort: GOOGLE_DYNAMIC_REASONING_EFFORT,
+      availableEfforts: [...new Set(listGoogleReasoningEffortValuesForModel(supportedModel.id))],
+    };
+  }
   const defaultEffort = supportedModel?.providerOptionsDefaults.reasoningEffort;
-  return isOpenAiReasoningEffort(defaultEffort) ? { defaultEffort } : null;
+  return isOpenAiReasoningEffort(defaultEffort)
+    ? { defaultEffort, availableEfforts: [...OPENAI_REASONING_EFFORT_VALUES] }
+    : null;
 }
 
 export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {

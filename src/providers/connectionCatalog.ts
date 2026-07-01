@@ -8,9 +8,14 @@ import {
   type SupportedModel,
 } from "../models/registry";
 import {
+  OPENAI_REASONING_EFFORT_VALUES,
+  type CatalogReasoningEffort,
   isOpenAiReasoningEffort,
-  type OpenAiReasoningEffort,
 } from "../shared/openaiCompatibleOptions";
+import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  listGoogleReasoningEffortValuesForModel,
+} from "../shared/googleThinking";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { isAntigravitySupportedPlatform } from "./antigravitySupport";
@@ -43,7 +48,8 @@ export type ProviderCatalogModelEntry = Pick<
   "id" | "displayName" | "knowledgeCutoff" | "supportsImageInput"
 > & {
   reasoning?: {
-    defaultEffort: OpenAiReasoningEffort;
+    defaultEffort: CatalogReasoningEffort;
+    availableEfforts: CatalogReasoningEffort[];
   };
 };
 
@@ -84,11 +90,29 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   antigravity: "Antigravity",
 };
 
+function uniqueCatalogEfforts(
+  values: readonly CatalogReasoningEffort[],
+): CatalogReasoningEffort[] {
+  return [...new Set(values)];
+}
+
 function reasoningConfigForModel(
-  model: Pick<SupportedModel, "providerOptionsDefaults">,
+  model: Pick<SupportedModel, "id" | "provider" | "providerOptionsDefaults">,
+  opts: { liveEfforts?: readonly CatalogReasoningEffort[] } = {},
 ): ProviderCatalogModelEntry["reasoning"] {
+  if (model.provider === "google") {
+    return {
+      defaultEffort: GOOGLE_DYNAMIC_REASONING_EFFORT,
+      availableEfforts: uniqueCatalogEfforts(listGoogleReasoningEffortValuesForModel(model.id)),
+    };
+  }
+
   const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
-  return isOpenAiReasoningEffort(defaultEffort) ? { defaultEffort } : undefined;
+  if (!isOpenAiReasoningEffort(defaultEffort)) return undefined;
+  return {
+    defaultEffort,
+    availableEfforts: uniqueCatalogEfforts(opts.liveEfforts ?? OPENAI_REASONING_EFFORT_VALUES),
+  };
 }
 
 function staticCatalogModelEntry(model: SupportedModel): ProviderCatalogModelEntry {
@@ -140,7 +164,9 @@ async function codexCatalogEntry(opts: {
   for (const model of appServerModels) {
     const live = resolveLiveModel(model);
     if (modelsById.has(live.id)) continue;
-    const reasoning = live.supported ? reasoningConfigForModel(live.supported) : undefined;
+    const reasoning = live.supported
+      ? reasoningConfigForModel(live.supported, { liveEfforts: model.reasoningEfforts })
+      : undefined;
     modelsById.set(live.id, {
       id: live.id,
       displayName: model.displayName || live.supported?.displayName || live.id,

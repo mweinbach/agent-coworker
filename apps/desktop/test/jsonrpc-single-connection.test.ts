@@ -1300,6 +1300,41 @@ describe("desktop JSON-RPC single connection path", () => {
     });
   });
 
+  test("Gemini reasoning selection applies before its first turn", async () => {
+    await useAppStore.getState().selectWorkspace("ws-jsonrpc");
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      scope: "project",
+      titleHint: "Gemini reasoning",
+      firstMessage: "start with Gemini reasoning",
+      mode: "session",
+      provider: "google",
+      model: "gemini-3.5-flash",
+      reasoningEffort: "high",
+    });
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+      cwd: "/tmp/jsonrpc-workspace",
+      provider: "google",
+      model: "gemini-3.5-flash",
+    });
+    expect(
+      jsonRpcRequests.find((entry) => entry.method === "cowork/session/defaults/apply")?.params,
+    ).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      provider: "google",
+      model: "gemini-3.5-flash",
+      config: {
+        providerOptions: {
+          google: { thinkingConfig: { thinkingLevel: "high" } },
+        },
+      },
+    });
+  });
+
   test("delayed thread/read does not clobber optimistic first-message feed items", async () => {
     let resolveThreadRead: ((value: unknown) => void) | null = null;
     jsonRpcRequestHandlers.set(

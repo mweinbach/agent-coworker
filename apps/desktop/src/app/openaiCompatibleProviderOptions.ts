@@ -1,12 +1,16 @@
 import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  GOOGLE_THINKING_LEVEL_VALUES,
   type GoogleReasoningEffort,
   googleReasoningEffortFromThinkingLevel,
+  googleThinkingLevelFromReasoningEffort,
   listGoogleReasoningEffortValuesForModel,
   normalizeGoogleThinkingLevelForModel,
 } from "../../../../src/shared/googleThinking";
 import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
+  type CatalogReasoningEffort,
   type CodexWebSearchBackend,
   type CodexWebSearchMode,
   getCodexWebSearchBackendFromProviderOptions,
@@ -28,6 +32,7 @@ import {
   type GoogleProviderOptions as SharedGoogleProviderOptions,
   type OpenAiCompatibleProviderName as SharedOpenAiCompatibleProviderName,
   type OpenAiCompatibleProviderOptions as SharedOpenAiCompatibleProviderOptions,
+  isOpenAiReasoningEffort,
 } from "../../../../src/shared/openaiCompatibleOptions";
 
 export const REASONING_EFFORT_VALUES = OPENAI_REASONING_EFFORT_VALUES;
@@ -41,7 +46,8 @@ const DEFAULT_CODEX_WEB_SEARCH_MODE: CodexWebSearchMode = "live";
 const DEFAULT_LOCAL_WEB_SEARCH_PROVIDER: LocalWebSearchProvider = "exa";
 
 export type OpenAICompatibleProviderName = SharedOpenAiCompatibleProviderName;
-export type ReasoningEffortValue = OpenAiReasoningEffort;
+export type ReasoningEffortValue = CatalogReasoningEffort;
+export type OpenAiReasoningEffortValue = OpenAiReasoningEffort;
 export type ReasoningSummaryValue = OpenAiReasoningSummary;
 export type TextVerbosityValue = OpenAiTextVerbosity;
 export type WebSearchBackendValue = CodexWebSearchBackend;
@@ -206,4 +212,28 @@ export function getGoogleReasoningEffortValuesForModel(
   modelId: string,
 ): readonly GoogleReasoningEffortValue[] {
   return listGoogleReasoningEffortValuesForModel(modelId);
+}
+
+export function isOpenAiReasoningEffortValue(
+  value: unknown,
+): value is OpenAiReasoningEffortValue {
+  return isOpenAiReasoningEffort(value);
+}
+
+export function isGoogleReasoningEffortValue(value: unknown): value is GoogleReasoningEffortValue {
+  return (
+    value === GOOGLE_DYNAMIC_REASONING_EFFORT ||
+    (typeof value === "string" && (GOOGLE_THINKING_LEVEL_VALUES as readonly string[]).includes(value))
+  );
+}
+
+export function googleProviderOptionsForReasoningEffort(
+  effort: GoogleReasoningEffortValue,
+): Pick<GoogleProviderOptions, "thinkingConfig"> {
+  return {
+    thinkingConfig:
+      effort === GOOGLE_DYNAMIC_REASONING_EFFORT
+        ? {}
+        : { thinkingLevel: googleThinkingLevelFromReasoningEffort(effort) },
+  };
 }

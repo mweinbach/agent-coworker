@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { asRecord, asString } from "../shared/recordParsing";
+import { isCatalogReasoningEffort, type CatalogReasoningEffort } from "../shared/openaiCompatibleOptions";
+import { asArray, asRecord, asString } from "../shared/recordParsing";
 import { openExternalUrl, type UrlOpener } from "../utils/browser";
 import {
   type CodexAppServerClient,
@@ -41,6 +42,7 @@ export type CodexAppServerModel = {
   displayName: string;
   description?: string;
   supportsImageInput?: boolean;
+  reasoningEfforts?: CatalogReasoningEffort[];
   isDefault: boolean;
 };
 
@@ -139,8 +141,34 @@ function normalizeAccount(value: unknown): CodexAppServerAccount | null {
   return null;
 }
 
+function normalizeReasoningEfforts(value: unknown): CatalogReasoningEffort[] | undefined {
+  const out: CatalogReasoningEffort[] = [];
+  for (const entry of asArray(value)) {
+    const normalized = asString(entry)?.trim().toLowerCase();
+    if (!isCatalogReasoningEffort(normalized) || out.includes(normalized)) continue;
+    out.push(normalized);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function modelReasoningEfforts(model: Record<string, unknown>): CatalogReasoningEffort[] | undefined {
+  const reasoning = asRecord(model.reasoning);
+  return (
+    normalizeReasoningEfforts(model.reasoningEfforts) ??
+    normalizeReasoningEfforts(model.reasoning_efforts) ??
+    normalizeReasoningEfforts(model.availableEfforts) ??
+    normalizeReasoningEfforts(model.available_efforts) ??
+    normalizeReasoningEfforts(model.supportedReasoningEfforts) ??
+    normalizeReasoningEfforts(model.supported_reasoning_efforts) ??
+    normalizeReasoningEfforts(reasoning?.availableEfforts) ??
+    normalizeReasoningEfforts(reasoning?.available_efforts) ??
+    normalizeReasoningEfforts(reasoning?.efforts)
+  );
+}
+
 function normalizeModel(value: unknown): CodexAppServerModel | null {
   const model = asRecord(value);
+  if (!model) return null;
   const id = asString(model?.id);
   const modelId = asString(model?.model);
   const canonicalId = modelId || id;
@@ -152,12 +180,14 @@ function normalizeModel(value: unknown): CodexAppServerModel | null {
       : typeof model?.supports_image_input === "boolean"
         ? model.supports_image_input
         : undefined;
+  const reasoningEfforts = modelReasoningEfforts(model);
   return {
     id: canonicalId,
     model: modelId || canonicalId,
     displayName: asString(model?.displayName) || canonicalId,
     ...(description ? { description } : {}),
     ...(supportsImageInput !== undefined ? { supportsImageInput } : {}),
+    ...(reasoningEfforts ? { reasoningEfforts } : {}),
     isDefault: model?.isDefault === true,
   };
 }

@@ -1,4 +1,8 @@
-import { type GoogleThinkingLevel, isGoogleThinkingLevel } from "./googleThinking";
+import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  type GoogleThinkingLevel,
+  isGoogleThinkingLevel,
+} from "./googleThinking";
 
 export { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
 
@@ -14,8 +18,26 @@ export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
 // "none" and "xhigh" are client-side sentinel values used to represent "disable reasoning"
 // and "maximum effort" respectively. They are mapped to API-specific parameters before
 // being sent to the provider and are not passed to the OpenAI API verbatim.
-export const OPENAI_REASONING_EFFORT_VALUES = ["none", "low", "medium", "high", "xhigh"] as const;
+export const OPENAI_REASONING_EFFORT_VALUES = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 export type OpenAiReasoningEffort = (typeof OPENAI_REASONING_EFFORT_VALUES)[number];
+
+export const CATALOG_REASONING_EFFORT_VALUES = [
+  "none",
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export type CatalogReasoningEffort = (typeof CATALOG_REASONING_EFFORT_VALUES)[number];
 
 export const OPENAI_REASONING_SUMMARY_VALUES = ["auto", "concise", "detailed"] as const;
 export type OpenAiReasoningSummary = (typeof OPENAI_REASONING_SUMMARY_VALUES)[number];
@@ -108,6 +130,13 @@ export function isOpenAiReasoningEffort(value: unknown): value is OpenAiReasonin
   return (
     typeof value === "string" &&
     (OPENAI_REASONING_EFFORT_VALUES as readonly string[]).includes(value)
+  );
+}
+
+export function isCatalogReasoningEffort(value: unknown): value is CatalogReasoningEffort {
+  return (
+    typeof value === "string" &&
+    (CATALOG_REASONING_EFFORT_VALUES as readonly string[]).includes(value)
   );
 }
 

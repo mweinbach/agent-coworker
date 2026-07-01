@@ -1124,7 +1124,11 @@ Returned in `server_hello` and `config_updated`:
       "id": "local/qwen-2.5",
       "displayName": "Qwen 2.5 Local",
       "knowledgeCutoff": "Unknown",
-      "supportsImageInput": false
+      "supportsImageInput": false,
+      "reasoning": {
+        "defaultEffort": "dynamic",
+        "availableEfforts": ["dynamic", "low", "medium", "high"]
+      }
     }
   ],
   "defaultModel": "local/qwen-2.5",
@@ -1136,6 +1140,11 @@ Returned in `server_hello` and `config_updated`:
 For `codex-cli`, a connected Codex app-server account uses live `model/list` results for
 `models` and `defaultModel`. Models known to Cowork's bundled registry are enriched with static
 metadata; newly available app-server model ids may appear with conservative fallback metadata.
+When `reasoning` is present, `defaultEffort` is the model's default composer effort and
+`availableEfforts` is the ordered list the UI should present. Codex app-server models use live
+reasoning tiers from `model/list` when reported, with static metadata as the fallback. Gemini
+models expose Cowork's hardcoded model-aware tiers, where `dynamic` means no explicit
+`thinking_level` override.
 
 ### ProviderAuthMethod
 
@@ -3616,10 +3625,10 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.userProfile.instructions` | `string` | Effective profile instructions |
 | `config.userProfile.work` | `string` | Effective profile work/job context |
 | `config.userProfile.details` | `string` | Effective profile details |
-| `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable OpenAI reasoning effort |
+| `config.providerOptions.openai.reasoningEffort` | `"none" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable OpenAI reasoning effort |
 | `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable OpenAI reasoning summary |
 | `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable OpenAI verbosity |
-| `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
+| `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity forwarded to Codex app-server as `model_verbosity` |
 | `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa" \| "parallel"` | Legacy Codex web search backend preference. Hybrid Codex app-server turns use Codex-native web search/fetch; local Exa/Parallel tools are reserved for non-Codex providers |

@@ -71,7 +71,10 @@ describe("reasoningConfigFromCatalog", () => {
           displayName: "GPT-5.4",
           knowledgeCutoff: "Unknown",
           supportsImageInput: true,
-          reasoning: { defaultEffort: "high" as const },
+          reasoning: {
+            defaultEffort: "high" as const,
+            availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"] as const,
+          },
         },
         {
           id: "gpt-4.1",
@@ -87,19 +90,24 @@ describe("reasoningConfigFromCatalog", () => {
   test("returns reasoning metadata for the exact selected model", () => {
     expect(reasoningConfigFromCatalog(catalog, "openai", "gpt-5.4")).toEqual({
       defaultEffort: "high",
+      availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
     });
   });
 
   test("returns null for models without reasoning configuration", () => {
     expect(reasoningConfigFromCatalog(catalog, "openai", "gpt-4.1")).toBeNull();
-    expect(reasoningConfigFromCatalog(catalog, "google", "gemini-3.1-pro-preview")).toBeNull();
+    expect(reasoningConfigFromCatalog(catalog, "anthropic", "claude-opus-4-8")).toBeNull();
   });
 
   test("uses exact static model metadata while the live catalog is loading", () => {
     expect(reasoningConfigFromCatalog([], "codex-cli", "gpt-5.4")).toEqual({
       defaultEffort: "high",
+      availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
     });
-    expect(reasoningConfigFromCatalog([], "google", "gemini-3.5-flash")).toBeNull();
+    expect(reasoningConfigFromCatalog([], "google", "gemini-3.5-flash")).toEqual({
+      defaultEffort: "dynamic",
+      availableEfforts: ["dynamic", "minimal", "low", "medium", "high"],
+    });
     expect(reasoningConfigFromCatalog([], "codex-cli", "future-model")).toBeNull();
   });
 });

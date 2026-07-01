@@ -1,54 +1,33 @@
-import { describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ComposerReasoningToggle } from "../src/ui/chat/ComposerReasoningToggle";
-import { setupJsdom } from "./jsdomHarness";
+import { ComposerReasoningSelector } from "../src/ui/chat/ComposerReasoningToggle";
 
-describe("composer reasoning toggle", () => {
-  test("renders a compact pressed state beside composer tools", () => {
+describe("composer reasoning selector", () => {
+  test("renders a compact effort selector beside composer tools", () => {
     const html = renderToStaticMarkup(
-      createElement(ComposerReasoningToggle, {
-        enabled: true,
+      createElement(ComposerReasoningSelector, {
+        value: "high",
+        options: ["none", "low", "medium", "high"],
         onChange: () => {},
       }),
     );
 
-    expect(html).toContain('data-slot="composer-reasoning-toggle"');
-    expect(html).toContain('aria-pressed="true"');
-    expect(html).toContain('aria-label="Reasoning on"');
-    expect(html).toContain("Reasoning");
+    expect(html).toContain('data-slot="composer-reasoning-selector"');
+    expect(html).toContain('aria-label="Reasoning effort"');
+    expect(html).toContain('title="Reasoning: High"');
   });
 
-  test("toggles the enabled value", async () => {
-    const harness = setupJsdom();
-    const onChange = mock((_enabled: boolean) => {});
-    const container = harness.dom.window.document.getElementById("root");
-    if (!container) throw new Error("missing root");
-    const root = createRoot(container);
+  test("renders a stale current value even when it is not in the available option list", () => {
+    const html = renderToStaticMarkup(
+      createElement(ComposerReasoningSelector, {
+        value: "xhigh",
+        options: ["none", "low", "medium", "high"],
+        onChange: () => {},
+      }),
+    );
 
-    try {
-      await act(async () => {
-        root.render(
-          createElement(ComposerReasoningToggle, {
-            enabled: false,
-            onChange,
-          }),
-        );
-      });
-
-      const toggle = container.querySelector<HTMLButtonElement>(
-        '[data-slot="composer-reasoning-toggle"]',
-      );
-      expect(toggle?.getAttribute("aria-pressed")).toBe("false");
-      await act(async () => {
-        toggle?.click();
-      });
-      expect(onChange).toHaveBeenCalledWith(true);
-    } finally {
-      await act(async () => root.unmount());
-      harness.restore();
-    }
+    expect(html).toContain('title="Reasoning: Max"');
   });
 });

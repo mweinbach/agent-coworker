@@ -24,7 +24,7 @@ import {
 } from "../composer/MessageComposer";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
-import { ComposerReasoningToggle } from "./ComposerReasoningToggle";
+import { ComposerReasoningSelector } from "./ComposerReasoningToggle";
 import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
 
@@ -57,8 +57,8 @@ export function ChatComposer(props: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   handleFileSelect: (event: ChangeEvent<HTMLInputElement>) => void;
   threadModelConfig: { provider: ProviderName; model: string } | null;
-  reasoningToggle: { enabled: boolean; enabledEffort: ReasoningEffortValue } | null;
-  onReasoningEnabledChange: (enabled: boolean) => void;
+  reasoningSelector: { value: ReasoningEffortValue; options: readonly ReasoningEffortValue[] } | null;
+  onReasoningEffortChange: (value: ReasoningEffortValue) => void;
   threadDraft: boolean;
   selectedThreadId: string;
   modelDisplayNames: Record<ProviderName, Record<string, string>>;
@@ -89,8 +89,8 @@ export function ChatComposer(props: {
     fileInputRef,
     handleFileSelect,
     threadModelConfig,
-    reasoningToggle,
-    onReasoningEnabledChange,
+    reasoningSelector,
+    onReasoningEffortChange,
     threadDraft,
     selectedThreadId,
     modelDisplayNames,
@@ -203,11 +203,12 @@ export function ChatComposer(props: {
                     />
                   )
                 ) : null}
-                {reasoningToggle ? (
-                  <ComposerReasoningToggle
-                    enabled={reasoningToggle.enabled}
+                {reasoningSelector ? (
+                  <ComposerReasoningSelector
+                    value={reasoningSelector.value}
+                    options={reasoningSelector.options}
                     disabled={inputDisabled || busy}
-                    onChange={onReasoningEnabledChange}
+                    onChange={onReasoningEffortChange}
                   />
                 ) : null}
               </MessageComposerTools>

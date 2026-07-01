@@ -44,6 +44,11 @@ import {
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import {
+  googleProviderOptionsForReasoningEffort,
+  isGoogleReasoningEffortValue,
+  isOpenAiReasoningEffortValue,
+} from "../openaiCompatibleProviderOptions";
 import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
@@ -1265,7 +1270,14 @@ export function createThreadActions(
     },
 
     setThreadReasoningEffort: (threadId, provider, effort) => {
-      if (provider !== "openai" && provider !== "codex-cli") return;
+      const providerConfig =
+        (provider === "openai" || provider === "codex-cli") &&
+        isOpenAiReasoningEffortValue(effort)
+          ? { [provider]: { reasoningEffort: effort } }
+          : provider === "google" && isGoogleReasoningEffortValue(effort)
+            ? { google: googleProviderOptionsForReasoningEffort(effort) }
+            : null;
+      if (!providerConfig) return;
       const thread = get().threads.find((candidate) => candidate.id === threadId);
       if (!thread) return;
       ensureThreadRuntime(get, set, threadId);
@@ -1286,9 +1298,7 @@ export function createThreadActions(
       const rt = currentRuntime;
       if (!rt?.sessionId) return;
       const config = {
-        providerOptions: {
-          [provider]: { reasoningEffort: effort },
-        },
+        providerOptions: providerConfig,
       };
       const ok = sendThread(get, threadId, (sessionId) => ({
         type: "set_config",

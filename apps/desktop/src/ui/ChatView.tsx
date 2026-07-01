@@ -12,7 +12,10 @@ import {
   buildAttachmentSignature,
   getAttachmentPickerValidationMessage,
 } from "../app/attachmentInputs";
-import type { ReasoningEffortValue } from "../app/openaiCompatibleProviderOptions";
+import {
+  getWorkspaceGoogleReasoningEffort,
+  type ReasoningEffortValue,
+} from "../app/openaiCompatibleProviderOptions";
 import {
   isSandboxApprovalThreadVisible,
   resolveSandboxApprovalThreadTarget,
@@ -420,22 +423,21 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     const resolveConfig = (provider: ProviderName, model: string) => {
       const reasoningConfig = reasoningConfigFromCatalog(providerCatalog, provider, model);
       if (!reasoningConfig) return { provider, model, reasoning: null };
+      const providerOptions = thread.draft ? workspace?.providerOptions : rt.sessionConfig?.providerOptions;
       const configuredEffort =
         provider === "openai" || provider === "codex-cli"
-          ? thread.draft
-            ? workspace?.providerOptions?.[provider]?.reasoningEffort
-            : rt.sessionConfig?.providerOptions?.[provider]?.reasoningEffort
-          : undefined;
+          ? providerOptions?.[provider]?.reasoningEffort
+          : provider === "google"
+            ? getWorkspaceGoogleReasoningEffort(providerOptions, model)
+            : undefined;
       const currentEffort =
         rt.composerReasoningEffort ?? configuredEffort ?? reasoningConfig.defaultEffort;
-      const enabledEffort: ReasoningEffortValue =
-        reasoningConfig.defaultEffort === "none" ? "high" : reasoningConfig.defaultEffort;
       return {
         provider,
         model,
         reasoning: {
-          enabled: currentEffort !== "none",
-          enabledEffort,
+          value: currentEffort as ReasoningEffortValue,
+          options: reasoningConfig.availableEfforts,
         },
       };
     };
@@ -464,14 +466,10 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     return null;
   }, [providerCatalog, selectedThreadId, thread, rt, workspace]);
 
-  const handleReasoningEnabledChange = useCallback(
-    (enabled: boolean) => {
+  const handleReasoningEffortChange = useCallback(
+    (effort: ReasoningEffortValue) => {
       if (!selectedThreadId || !threadModelConfig?.reasoning) return;
-      setThreadReasoningEffort(
-        selectedThreadId,
-        threadModelConfig.provider,
-        enabled ? threadModelConfig.reasoning.enabledEffort : "none",
-      );
+      setThreadReasoningEffort(selectedThreadId, threadModelConfig.provider, effort);
     },
     [selectedThreadId, setThreadReasoningEffort, threadModelConfig],
   );
@@ -822,8 +820,8 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             fileInputRef={fileInputRef}
             handleFileSelect={handleFileSelect}
             threadModelConfig={threadModelConfig}
-            reasoningToggle={threadModelConfig?.reasoning ?? null}
-            onReasoningEnabledChange={handleReasoningEnabledChange}
+            reasoningSelector={threadModelConfig?.reasoning ?? null}
+            onReasoningEffortChange={handleReasoningEffortChange}
             threadDraft={thread.draft === true}
             selectedThreadId={selectedThreadId}
             modelDisplayNames={modelDisplayNames}

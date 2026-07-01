@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +23,7 @@ export function installedRuntimeDir(version: string, home = os.homedir()): strin
 
 async function writeCurrentPointer(root: string, pointer: InstalledRuntimePointer): Promise<void> {
   const destination = path.join(root, CURRENT_RUNTIME_FILE);
-  const temporary = `${destination}.tmp-${randomUUID()}`;
+  const temporary = `${destination}.tmp-${crypto.randomUUID()}`;
   await fs.writeFile(temporary, `${JSON.stringify(pointer, null, 2)}\n`, "utf8");
   await fs.rm(destination, { force: true });
   await fs.rename(temporary, destination);
@@ -140,7 +139,7 @@ export async function installRuntimeArchive(opts: {
   const home = path.resolve(opts.home ?? os.homedir());
   const root = coworkRuntimeRoot(home);
   await fs.mkdir(root, { recursive: true });
-  const staging = path.join(root, `.staging-${randomUUID()}`);
+  const staging = path.join(root, `.staging-${crypto.randomUUID()}`);
   opts.log?.(`Extracting ${archivePath} into ${staging}`);
   await extractRuntimeArchive({ archivePath, destinationDir: staging });
 
@@ -176,7 +175,7 @@ export async function installRuntimeArchive(opts: {
       throw new Error(`Runtime ${manifest.version} is already installed at ${destination}.`);
     }
     if (existing) {
-      backup = `${destination}.replaced-${randomUUID()}`;
+      backup = `${destination}.replaced-${crypto.randomUUID()}`;
       releaseRuntimeTrust(destination);
       await fs.rename(destination, backup);
     }

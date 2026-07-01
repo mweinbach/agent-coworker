@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -129,7 +128,7 @@ function executeOps(
 
 async function writeFileAtomic(filePath: string, data: Buffer | string): Promise<void> {
   const dir = path.dirname(filePath);
-  const tmp = path.join(dir, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+  const tmp = path.join(dir, `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   try {
     await fs.writeFile(tmp, data);
     await fs.rename(tmp, filePath);

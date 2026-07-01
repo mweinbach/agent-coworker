@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -84,7 +83,7 @@ export async function withCoworkRuntimeBootstrapLock<T>(
       await new Promise((resolve) => setTimeout(resolve, ms));
     });
   const processAlive = opts.processAlive ?? defaultProcessAlive;
-  const token = randomUUID();
+  const token = crypto.randomUUID();
   const acquireStartedAt = now();
   let reportedWait = false;
 

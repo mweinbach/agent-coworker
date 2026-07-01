@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { resolveCloudSyncConfig } from "../telemetry/config";
 import type { CloudSyncProvider } from "./CloudSyncProvider";
 import { createCustomHttpCloudSyncProvider } from "./providers/customHttp";
@@ -144,7 +142,7 @@ export class CloudSyncService {
       }
       const patch: CloudSyncPatch = {
         version: CLOUD_SYNC_PAYLOAD_VERSION,
-        id: randomUUID(),
+        id: crypto.randomUUID(),
         scope: "settings",
         dedupeKey: CLOUD_SYNC_SETTINGS_DEDUPE_KEY,
         createdAt: this.now().toISOString(),

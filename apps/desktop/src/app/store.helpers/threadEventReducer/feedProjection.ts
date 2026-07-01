@@ -350,6 +350,7 @@ export function createFeedProjectionModule(
     set: StoreSet,
     threadId: string,
     snapshot: SessionSnapshot,
+    opts?: { forceFeed?: boolean },
   ) {
     set((s) => {
       const runtime = s.threadRuntimeById[threadId];
@@ -357,13 +358,16 @@ export function createFeedProjectionModule(
       if (!runtime || !thread) {
         return {};
       }
-      const preserveCurrentFeed = shouldPreserveCurrentFeed(
-        threadId,
-        runtime.busy,
-        thread.lastEventSeq,
-        runtime.feed,
-        snapshot,
-      );
+      const preserveCurrentFeed =
+        opts?.forceFeed === true
+          ? false
+          : shouldPreserveCurrentFeed(
+              threadId,
+              runtime.busy,
+              thread.lastEventSeq,
+              runtime.feed,
+              snapshot,
+            );
       const nextLastEventSeq = preserveCurrentFeed
         ? Math.max(normalizeEventSeq(thread.lastEventSeq), normalizeEventSeq(snapshot.lastEventSeq))
         : normalizeEventSeq(snapshot.lastEventSeq);

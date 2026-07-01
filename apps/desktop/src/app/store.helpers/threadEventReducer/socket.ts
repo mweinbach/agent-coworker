@@ -177,13 +177,20 @@ export function createSocketModule(
           ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
           sessionId: thread.id,
         } as SessionEvent);
-        if (opts?.refreshSnapshot !== false || response?.replayHealth?.snapshotRequired === true) {
+        const forceSnapshotFeed = response?.replayHealth?.snapshotRequired === true;
+        if (opts?.refreshSnapshot !== false || forceSnapshotFeed) {
           const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
           if (isWorkspaceDisposed(workspaceId)) {
             return;
           }
           if (snapshot) {
-            applyJsonRpcThreadSnapshot(get, set, activeThreadId, snapshot);
+            applyJsonRpcThreadSnapshot(
+              get,
+              set,
+              activeThreadId,
+              snapshot,
+              forceSnapshotFeed ? { forceFeed: true } : undefined,
+            );
           }
         }
       } catch (error) {

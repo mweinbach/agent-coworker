@@ -171,6 +171,35 @@ describe("mcp oauth provider", () => {
     expect(consumed).toBe("captured-code");
   });
 
+  test("auto oauth advertises a 127.0.0.1 redirect URI and answers on ::1 too", async () => {
+    registrationCount = 0;
+    lastRegistrationRequest = undefined;
+    const server = makeOAuthServer({
+      transport: { type: "http", url: `${tokenServerUrl}/mcp` },
+      auth: { type: "oauth", oauthMode: "auto", scope: "tools.read" },
+    });
+    const result = await authorizeMCPServerOAuth(server, undefined, {
+      openUrl: async () => true,
+    });
+
+    // The advertised redirect URI is pinned to the IdP-registered IPv4 host.
+    const advertised = new URL(result.pending.redirectUri);
+    expect(advertised.hostname).toBe("127.0.0.1");
+    expect(advertised.pathname).toBe("/oauth/callback");
+
+    // But browsers resolving loopback to ::1 must still reach the listener.
+    const ipv6Url = new URL(result.pending.redirectUri);
+    ipv6Url.hostname = "[::1]";
+    ipv6Url.searchParams.set("state", result.pending.state);
+    ipv6Url.searchParams.set("code", "captured-over-ipv6");
+
+    const response = await fetch(ipv6Url.toString());
+    expect(response.status).toBe(200);
+
+    const consumed = await consumeCapturedOAuthCode(result.pending.challengeId);
+    expect(consumed).toBe("captured-over-ipv6");
+  });
+
   test("authorizeMCPServerOAuth re-registers when stored client redirect URIs do not match the current auto callback", async () => {
     registrationCount = 0;
     lastRegistrationRequest = undefined;

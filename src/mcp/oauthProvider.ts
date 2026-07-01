@@ -1,6 +1,3 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import { createServer } from "node:http";
-
 import {
   discoverAuthorizationServerMetadata,
   discoverOAuthProtectedResourceMetadata,
@@ -59,7 +56,7 @@ type CallbackCapture = {
   state: string;
   redirectUri: string;
   expiresAt: string;
-  server: ReturnType<typeof createServer>;
+  servers: Array<ReturnType<typeof Bun.serve>>;
   code?: string;
   closed: boolean;
 };
@@ -70,12 +67,16 @@ function addMinutesIso(minutes: number): string {
   return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
-function toBase64Url(value: Buffer): string {
-  return value.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function toBase64Url(value: Uint8Array): string {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 function generateOpaqueValue(bytes: number): string {
-  return toBase64Url(randomBytes(bytes));
+  return toBase64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
 function isHttpLikeServer(server: MCPRegistryServer): server is MCPRegistryServer & {
@@ -97,10 +98,13 @@ function closeCapture(capture: CallbackCapture, opts: { keepEntry?: boolean } = 
   }
   if (capture.closed) return;
   capture.closed = true;
-  try {
-    capture.server.close();
-  } catch {
-    // best effort
+  for (const server of capture.servers) {
+    try {
+      // Graceful stop: in-flight callback responses still complete.
+      server.stop();
+    } catch {
+      // best effort
+    }
   }
 }
 
@@ -109,64 +113,61 @@ async function createCallbackCapture(
   state: string,
   expiresAt: string,
 ): Promise<CallbackCapture> {
-  const server = createServer((req, res) => {
-    const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+  const handleRequest = (req: Request): Response => {
+    const requestUrl = new URL(req.url);
     if (requestUrl.pathname !== "/oauth/callback") {
-      res.statusCode = 404;
-      res.end("Not found");
-      return;
+      return new Response("Not found", { status: 404 });
     }
 
     const capture = callbackCaptures.get(challengeId);
     if (!capture) {
-      res.statusCode = 410;
-      res.end("Authorization flow expired");
-      return;
+      return new Response("Authorization flow expired", { status: 410 });
     }
 
     const incomingState = requestUrl.searchParams.get("state") ?? "";
     const code = requestUrl.searchParams.get("code") ?? "";
     if (!incomingState || incomingState !== capture.state) {
-      res.statusCode = 400;
-      res.end("Invalid OAuth state");
-      return;
+      return new Response("Invalid OAuth state", { status: 400 });
     }
     if (!code) {
-      res.statusCode = 400;
-      res.end("Missing OAuth code");
-      return;
+      return new Response("Missing OAuth code", { status: 400 });
     }
 
     capture.code = code;
-    res.statusCode = 200;
-    res.setHeader("content-type", "text/html; charset=utf-8");
-    res.end(
-      "<html><body><h1>Authorization complete</h1><p>You can close this window.</p></body></html>",
-    );
     closeCapture(capture, { keepEntry: true });
-  });
+    return new Response(
+      "<html><body><h1>Authorization complete</h1><p>You can close this window.</p></body></html>",
+      { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+    );
+  };
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    try {
-      server.close();
-    } catch {
-      // ignore
-    }
-    throw new Error("Failed to allocate OAuth callback listener.");
+  const servers: Array<ReturnType<typeof Bun.serve>> = [];
+  let port: number;
+  try {
+    const ipv4 = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handleRequest });
+    servers.push(ipv4);
+    port = ipv4.port;
+  } catch (error) {
+    throw new Error(
+      `Failed to allocate OAuth callback listener: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  // Bind IPv6 loopback on the same port too: some browsers resolve loopback
+  // redirects to ::1 first. The advertised redirect URI stays pinned to
+  // 127.0.0.1 (the host registered with the IdP). Best effort — IPv6 loopback
+  // may be unavailable on this machine.
+  try {
+    servers.push(Bun.serve({ hostname: "::1", port, fetch: handleRequest }));
+  } catch {
+    // IPv4-only environments keep working with the single listener.
   }
 
   const capture: CallbackCapture = {
     challengeId,
     state,
-    redirectUri: `http://127.0.0.1:${address.port}/oauth/callback`,
+    redirectUri: `http://127.0.0.1:${port}/oauth/callback`,
     expiresAt,
-    server,
+    servers,
     closed: false,
   };
   callbackCaptures.set(challengeId, capture);
@@ -344,7 +345,7 @@ export async function authorizeMCPServerOAuth(
   const createdAt = nowIso();
   const expiresAt = addMinutesIso(10);
   const state = generateOpaqueValue(24);
-  const challengeId = randomUUID();
+  const challengeId = crypto.randomUUID();
 
   // 1. Set up redirect URI (callback server or OOB).
   let redirectUri = "urn:ietf:wg:oauth:2.0:oob";

@@ -46,6 +46,7 @@ const startCalls: Array<{
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
+  forceRestart?: boolean;
   featureFlags?: Record<string, boolean>;
   privacyTelemetrySettings?: Record<string, boolean>;
 }> = [];
@@ -619,6 +620,7 @@ describe("workspace startup flow", () => {
 
     expect(statusCalls).toEqual([workspaceId]);
     expect(stopCalls).toEqual([workspaceId]);
+    expect(startCalls[0]?.forceRestart).toBe(true);
     expect(closeCount).toBe(1);
     expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(false);
     expect(RUNTIME.workspaceJsonRpcSocketGenerations.get(workspaceId)).toBe(

@@ -334,6 +334,7 @@ export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInpu
   workspaceId: safeIdSchema,
   workspacePath: nonEmptyStringSchema,
   yolo: z.boolean(),
+  forceRestart: z.boolean().optional(),
   featureFlags: desktopFeatureFlagOverridesSchema.optional(),
   privacyTelemetrySettings: persistedPrivacyTelemetrySettingsSchema.optional(),
 });

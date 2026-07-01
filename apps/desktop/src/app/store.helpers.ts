@@ -843,6 +843,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
   reactivateWorkspaceJsonRpcState(workspaceId);
   const rt = get().workspaceRuntimeById[workspaceId];
   if (!rt) return;
+  let forceRestart = false;
   if (rt.serverUrl && !rt.error) {
     const status = await getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
       workspaceId,
@@ -870,6 +871,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
     }
     await waitForWorkspaceServerRestartBackoff(workspaceId);
     reactivateWorkspaceJsonRpcState(workspaceId);
+    forceRestart = status.reason === "health_failed";
   }
 
   const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
@@ -897,6 +899,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
         workspaceId,
         workspacePath: ws.path,
         yolo: ws.yolo,
+        forceRestart,
         featureFlags: get().desktopFeatureFlags,
         privacyTelemetrySettings: get().privacyTelemetrySettings,
       });

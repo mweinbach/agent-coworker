@@ -20,6 +20,7 @@ export type StartWorkspaceServerInput = {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
+  forceRestart?: boolean;
   featureFlags?: DesktopFeatureFlagOverrides;
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings;
 };

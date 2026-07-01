@@ -117,6 +117,7 @@ describe("workspace IPC", () => {
         workspaceId: "ws-1",
         workspacePath: "/tmp/ws-1",
         yolo: false,
+        forceRestart: true,
         privacyTelemetrySettings: {
           aiTraceTelemetryEnabled: true,
           aiTracePayloadsEnabled: false,
@@ -129,6 +130,7 @@ describe("workspace IPC", () => {
       workspaceId: "ws-1",
       workspacePath: "/tmp/ws-1",
       yolo: false,
+      forceRestart: true,
       privacyTelemetrySettings: {
         aiTraceTelemetryEnabled: true,
         aiTracePayloadsEnabled: false,

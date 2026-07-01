@@ -139,6 +139,7 @@ type StartWorkspaceServerOptions = {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
+  forceRestart?: boolean;
   featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean };
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
   productAnalyticsState?: PersistedProductAnalyticsState | null;
@@ -1107,6 +1108,15 @@ function shouldReplaceForMobileH3Request(
   return requestedMobileH3 !== undefined && requestedMobileH3 !== Boolean(existingMobileH3);
 }
 
+function shouldReuseExistingWorkspaceServer(
+  opts: Pick<StartWorkspaceServerOptions, "forceRestart" | "mobileH3">,
+  existing: ServerHandle,
+): boolean {
+  return (
+    opts.forceRestart !== true && !shouldReplaceForMobileH3Request(opts.mobileH3, existing.mobileH3)
+  );
+}
+
 export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
@@ -1195,7 +1205,7 @@ export class ServerManager {
     const existing = this.servers.get(workspaceId);
     if (existing) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {
-        if (shouldReplaceForMobileH3Request(opts.mobileH3, existing.mobileH3)) {
+        if (!shouldReuseExistingWorkspaceServer(opts, existing)) {
           const replacementPending = { child: existing.child, cleanup: existing.cleanup };
           this.pendingStarts.set(workspaceId, replacementPending);
           this.servers.delete(workspaceId);
@@ -1641,6 +1651,7 @@ export const __internal = {
   resolveSourceStartup,
   shouldMirrorServerOutput,
   shouldReplaceForMobileH3Request,
+  shouldReuseExistingWorkspaceServer,
   summarizeLogChunk,
   withStderrTail,
   waitForServerListening,

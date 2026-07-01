@@ -1108,6 +1108,20 @@ describe("desktop server manager bun crash detection", () => {
     });
   });
 
+  test("forceRestart skips the existing workspace server reuse branch", () => {
+    const existing = {
+      child: createFakeChild(),
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+      cleanup: () => {},
+    };
+
+    expect(__internal.shouldReuseExistingWorkspaceServer({}, existing as never)).toBe(true);
+    expect(
+      __internal.shouldReuseExistingWorkspaceServer({ forceRestart: true }, existing as never),
+    ).toBe(false);
+  });
+
   test("server exit cleanup emits a workspaceServerExited event", () => {
     const child = createFakeChild();
     const exits: unknown[] = [];

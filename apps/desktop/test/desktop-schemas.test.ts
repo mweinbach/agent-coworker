@@ -263,18 +263,22 @@ describe("desktop persisted-state schema defaults", () => {
         workspaceId: "ws_1",
         workspacePath: "/tmp/workspace",
         yolo: false,
+        forceRestart: true,
         privacyTelemetrySettings: {
           aiTraceTelemetryEnabled: false,
           aiTracePayloadsEnabled: true,
         },
-      }).privacyTelemetrySettings,
-    ).toEqual({
-      crashReportsEnabled: false,
-      productAnalyticsEnabled: false,
-      aiTraceTelemetryEnabled: false,
-      aiTracePayloadsEnabled: false,
-      diagnosticsUploadEnabled: false,
-      cloudSyncEnabled: false,
+      }),
+    ).toMatchObject({
+      forceRestart: true,
+      privacyTelemetrySettings: {
+        crashReportsEnabled: false,
+        productAnalyticsEnabled: false,
+        aiTraceTelemetryEnabled: false,
+        aiTracePayloadsEnabled: false,
+        diagnosticsUploadEnabled: false,
+        cloudSyncEnabled: false,
+      },
     });
 
     expect(pickDirectoryInputSchema.parse({ title: "Choose workspace" })).toEqual({

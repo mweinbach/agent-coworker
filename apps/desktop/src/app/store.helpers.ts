@@ -803,6 +803,41 @@ function markWorkspaceServerStale(
   });
 }
 
+function syncWorkspaceServerRunningUrl(
+  get: StoreGet,
+  set: StoreSet,
+  workspaceId: string,
+  serverUrl: string | null,
+) {
+  if (!serverUrl) {
+    return;
+  }
+  const runtime = get().workspaceRuntimeById[workspaceId];
+  if (!runtime || runtime.serverUrl === serverUrl) {
+    return;
+  }
+  markWorkspaceThreadsDisconnected(get, set, workspaceId);
+  bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
+  closeWorkspaceJsonRpcSocket(workspaceId);
+  set((s) => {
+    const current = s.workspaceRuntimeById[workspaceId];
+    if (!current || current.serverUrl === serverUrl) return {};
+    return {
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...current,
+          serverUrl,
+          starting: false,
+          startupProgress: null,
+          error: null,
+          controlSessionId: null,
+        },
+      },
+    };
+  });
+}
+
 function workspaceServerRestartStableMs(): number {
   const raw =
     typeof process !== "undefined"
@@ -884,6 +919,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
       error: error instanceof Error ? error.message : String(error),
     }));
     if (status.running) {
+      syncWorkspaceServerRunningUrl(get, set, workspaceId, status.url);
       scheduleWorkspaceServerRestartBackoffReset(workspaceId);
       return;
     }

@@ -650,6 +650,58 @@ describe("workspace startup flow", () => {
     expect(RUNTIME.workspaceServerRestartStabilityTimers.has(workspaceId)).toBe(true);
   });
 
+  test("selectWorkspace syncs a cached server URL when main reports a healthy replacement", async () => {
+    const workspaceId = "ws-stale-healthy-url";
+    let closeCount = 0;
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...useAppStore.getState().workspaceRuntimeById[workspaceId],
+          serverUrl: "ws://old",
+          starting: false,
+          startupProgress: null,
+          error: null,
+        } as never,
+      },
+    });
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      close: () => {
+        closeCount += 1;
+      },
+    } as never);
+    const initialSocketGeneration = RUNTIME.workspaceJsonRpcSocketGenerations.get(workspaceId) ?? 0;
+    workspaceServerStatusById.set(workspaceId, {
+      workspaceId,
+      running: true,
+      url: "ws://fresh",
+      reason: "running",
+    });
+
+    await useAppStore.getState().selectWorkspace(workspaceId);
+
+    expect(statusCalls).toContain(workspaceId);
+    expect(stopCalls).toEqual([]);
+    expect(startCalls).toEqual([]);
+    expect(closeCount).toBe(1);
+    expect(RUNTIME.workspaceJsonRpcSocketGenerations.get(workspaceId)).toBe(
+      initialSocketGeneration + 1,
+    );
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.serverUrl).toBe("ws://fresh");
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.error).toBeNull();
+  });
+
   test("selectWorkspace waits when main reports a pending workspace server start", async () => {
     const workspaceId = "ws-pending-start";
     useAppStore.setState({

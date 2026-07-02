@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.6 - 2026-07-02
+
+### Fixed
+
+- **Task notifications on unsupported app-server builds** — Stopped refreshing
+  desktop task summaries unless the tasks feature flag is enabled, so packaged
+  builds connected to app-servers without `task/list` no longer raise repeated
+  `Unknown method: task/list` notifications.
+- **Codex app-server OAuth handoff** — Armed the ChatGPT login completion
+  listener before opening the browser URL and cancel it cleanly on open failure,
+  preventing fast website callbacks from racing ahead of Cowork's wait path.
+- **Model picker popover styling** — Replaced the desktop composer model
+  picker's hard black outline with softer popover chrome while preserving the
+  searchable model list behavior.
+
+## 1.2.5 - 2026-07-02
+
+### Fixed
+
+- **Windows release smoke stability** — Stabilized Windows desktop release smoke
+  validation, including ARM64 runtime bootstrap, release-cache handling, and
+  sidecar diagnostic output.
+- **Exec-file buffering** — Stabilized buffered subprocess execution and timeout
+  handling so command output is captured consistently in the compatibility
+  helper.
+
+### Changed
+
+- **Desktop release version** — Bumped the desktop release manifests to 1.2.5.
+
 ## 1.2.4 - 2026-07-02
 
 ### Changed

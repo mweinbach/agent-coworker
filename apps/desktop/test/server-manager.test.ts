@@ -912,6 +912,63 @@ describe("desktop server manager startup mode", () => {
     }
   });
 
+  test("skips one-time Windows sandbox setup when disabled for release smoke", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-sandbox-readiness-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    const actions: string[] = [];
+    __internal.resetWindowsSandboxSetupAttemptForTests();
+
+    try {
+      await __internal.ensureWindowsSandboxReady(workspace, {
+        platform: "win32",
+        env: { COWORK_DESKTOP_SKIP_WINDOWS_SANDBOX_SETUP: "1" } as NodeJS.ProcessEnv,
+        userDataDir: root,
+        resolveBundle: () => ({
+          helperPath: "C:\\trusted\\cowork-win-sandbox.exe",
+          helperSha256: "a".repeat(64),
+          setupPath: "C:\\trusted\\codex-windows-sandbox-setup.exe",
+          setupSha256: "b".repeat(64),
+          commandRunnerPath: "C:\\trusted\\codex-command-runner.exe",
+          commandRunnerSha256: "c".repeat(64),
+        }),
+        runHelper: async (_helperPath: string, args: string[]) => {
+          actions.push(args[0]!);
+          return {
+            code: 3,
+            stdout:
+              '{"ready":false,"filesystem":false,"network":false,"process":false,"integrity":true,"setup_required":true}',
+            stderr: "",
+          };
+        },
+      });
+
+      const readiness = JSON.parse(
+        await fs.readFile(path.join(root, "windows-sandbox", "readiness.json"), "utf8"),
+      );
+      expect(actions).toEqual(["probe"]);
+      expect(readiness).toMatchObject({
+        state: "setup-required",
+        bundleTrusted: true,
+        setupRequired: true,
+      });
+    } finally {
+      __internal.resetWindowsSandboxSetupAttemptForTests();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("times out a hung Windows sandbox helper invocation", async () => {
+    const result = await __internal.runWindowsSandboxHelper(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 1000)"],
+      10,
+    );
+
+    expect(result.code).toBeNull();
+    expect(result.stderr).toContain("Timed out after 10 ms");
+  });
+
   test("records a stale sandbox setup upgrade only after every native probe passes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-sandbox-readiness-"));
     const workspace = path.join(root, "workspace");

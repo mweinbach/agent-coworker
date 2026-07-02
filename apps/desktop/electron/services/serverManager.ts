@@ -59,9 +59,12 @@ const PACKAGED_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
 const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const SERVER_HEALTH_TIMEOUT_MS = 1_500;
+const WINDOWS_SANDBOX_PROBE_TIMEOUT_MS = 15_000;
+const WINDOWS_SANDBOX_SETUP_TIMEOUT_MS = 60_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const MIRROR_SERVER_OUTPUT_PREFIX = "[cowork-server";
+const SKIP_WINDOWS_SANDBOX_SETUP_ENV = "COWORK_DESKTOP_SKIP_WINDOWS_SANDBOX_SETUP";
 let windowsSandboxSetupAttempted = false;
 
 const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
@@ -403,6 +406,7 @@ function findBundledWindowsSandboxBundle(): {
 function runWindowsSandboxHelper(
   helperPath: string,
   args: string[],
+  timeoutMs = WINDOWS_SANDBOX_PROBE_TIMEOUT_MS,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(helperPath, args, {
@@ -411,19 +415,47 @@ function runWindowsSandboxHelper(
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const settle = (result: { code: number | null; stdout: string; stderr: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+    const timeout = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The helper may have exited between the timeout and the kill attempt.
+      }
+      settle({
+        code: null,
+        stdout,
+        stderr: stderr
+          ? `${stderr}\nTimed out after ${timeoutMs} ms`
+          : `Timed out after ${timeoutMs} ms`,
+      });
+    }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => (stdout += chunk));
     child.stderr.on("data", (chunk: string) => (stderr += chunk));
-    child.once("error", (error) => resolve({ code: null, stdout, stderr: error.message }));
-    child.once("exit", (code) => resolve({ code, stdout, stderr }));
+    child.once("error", (error) => settle({ code: null, stdout, stderr: error.message }));
+    child.once("exit", (code) => settle({ code, stdout, stderr }));
   });
+}
+
+function shouldSkipWindowsSandboxSetup(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[SKIP_WINDOWS_SANDBOX_SETUP_ENV]?.trim() === "1";
 }
 
 async function ensureWindowsSandboxReady(
   workspacePath: string,
   overrides: {
     platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
     userDataDir?: string;
     resolveBundle?: typeof findBundledWindowsSandboxBundle;
     runHelper?: typeof runWindowsSandboxHelper;
@@ -490,16 +522,26 @@ async function ensureWindowsSandboxReady(
     probeCode: probe.code,
     probeError: probe.stderr.trim().slice(0, 500),
   });
+  if (shouldSkipWindowsSandboxSetup(overrides.env)) {
+    logServerManagerEvent("windows sandbox setup skipped by environment", {
+      env: SKIP_WINDOWS_SANDBOX_SETUP_ENV,
+    });
+    return;
+  }
   if (windowsSandboxSetupAttempted) return;
   windowsSandboxSetupAttempted = true;
-  const setup = await runHelper(bundle.helperPath, [
-    "setup",
-    ...commonArgs,
-    "--mode",
-    "workspace-write",
-    "--writable-root",
-    path.resolve(workspacePath),
-  ]);
+  const setup = await runHelper(
+    bundle.helperPath,
+    [
+      "setup",
+      ...commonArgs,
+      "--mode",
+      "workspace-write",
+      "--writable-root",
+      path.resolve(workspacePath),
+    ],
+    WINDOWS_SANDBOX_SETUP_TIMEOUT_MS,
+  );
   if (setup.code !== 0) {
     logServerManagerEvent("windows sandbox setup was cancelled or failed", {
       setupCode: setup.code,
@@ -1722,6 +1764,8 @@ export const __internal = {
   buildHarnessTerminalLogsEnv,
   createServerOutputMirror,
   ensureWindowsSandboxReady,
+  runWindowsSandboxHelper,
+  shouldSkipWindowsSandboxSetup,
   resetWindowsSandboxSetupAttemptForTests: () => {
     windowsSandboxSetupAttempted = false;
   },

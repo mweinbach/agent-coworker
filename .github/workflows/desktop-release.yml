@@ -452,6 +452,39 @@ jobs:
           New-Item -ItemType Directory -Force -Path $workspace | Out-Null
           New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
+          function Write-CoworkSmokeDiagnostics {
+            param([string]$Label)
+
+            Write-Host "=== Cowork ARM64 desktop smoke diagnostics: $Label ==="
+            $candidateLogRoots = @()
+            if ($env:APPDATA) {
+              $candidateLogRoots += (Join-Path $env:APPDATA "Cowork\logs")
+            }
+            if ($env:LOCALAPPDATA) {
+              $candidateLogRoots += (Join-Path $env:LOCALAPPDATA "Cowork\logs")
+            }
+
+            $logRoots = $candidateLogRoots |
+              Where-Object { $_ -and (Test-Path -LiteralPath $_) } |
+              Select-Object -Unique
+
+            if (-not $logRoots) {
+              Write-Host "No Cowork log directory found under APPDATA or LOCALAPPDATA."
+              return
+            }
+
+            foreach ($root in $logRoots) {
+              Write-Host "--- Log root: $root ---"
+              Get-ChildItem -LiteralPath $root -Filter "*.log" -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime |
+                ForEach-Object {
+                  Write-Host "--- Tail: $($_.FullName) ---"
+                  Get-Content -LiteralPath $_.FullName -Tail 200 -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Host $_ }
+                }
+            }
+          }
+
           $appExe = Get-ChildItem "release-assets" -Recurse -Filter "Cowork.exe" |
             Where-Object { $_.FullName -match "unpacked" -and $_.FullName -notmatch "\\resources\\" } |
             Select-Object -First 1
@@ -462,6 +495,9 @@ jobs:
 
           $env:COWORK_DESKTOP_SMOKE_WORKSPACE = $workspace
           $env:COWORK_DESKTOP_SMOKE_OUTPUT = $outputPath
+          $env:COWORK_DESKTOP_SKIP_WINDOWS_SANDBOX_SETUP = "1"
+          $env:COWORK_DESKTOP_MIRROR_SERVER_LOGS = "1"
+          $env:COWORK_HARNESS_TERMINAL_LOGS = "1"
 
           $process = Start-Process -FilePath $appExe.FullName -WorkingDirectory $appExe.DirectoryName -PassThru
           $deadline = (Get-Date).Add($startupTimeout)
@@ -481,6 +517,7 @@ jobs:
 
           if (-not (Test-Path $outputPath)) {
             $process.Refresh()
+            Write-CoworkSmokeDiagnostics "missing output"
 
             if (-not $process.HasExited) {
               Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -491,6 +528,7 @@ jobs:
           }
 
           if (-not $process.WaitForExit($shutdownWaitMs)) {
+            Write-CoworkSmokeDiagnostics "shutdown timeout"
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             throw "Packaged ARM64 desktop smoke run wrote output but did not exit within $shutdownWaitMs ms"
           }
@@ -499,10 +537,12 @@ jobs:
           $result | ConvertTo-Json -Depth 5 | Write-Host
 
           if ($process.ExitCode -ne 0) {
+            Write-CoworkSmokeDiagnostics "nonzero exit"
             throw "Packaged ARM64 desktop smoke run failed with exit code $($process.ExitCode)"
           }
 
           if (-not $result.ok) {
+            Write-CoworkSmokeDiagnostics "reported failure"
             throw "Desktop smoke output reported failure"
           }
 

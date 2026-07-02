@@ -201,6 +201,9 @@ export class SessionRegistry {
       this.addBindingSink(sinkBinding, sinkId, sink),
     );
     this.sessionBindings.set(built.runtime.id, binding);
+    // Warm first-turn resources (system prompt, MCP cache, lazy modules) in
+    // the background so the first user message does not pay that setup cost.
+    built.session.warmSessionResources();
     return built.runtime;
   }
 
@@ -227,6 +230,9 @@ export class SessionRegistry {
       this.addBindingSink(sinkBinding, sinkId, sink),
     );
     this.sessionBindings.set(built.session.id, binding);
+    // Resumed threads warm the same first-turn resources (the persisted
+    // system prompt makes that part a no-op; MCP cache warm is the main win).
+    built.session.warmSessionResources();
     return binding;
   }
 

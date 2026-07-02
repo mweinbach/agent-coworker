@@ -272,6 +272,11 @@ export function makeSession(
       prompt: string;
       discoveredSkills: Array<{ name: string; description: string }>;
     }>;
+    getOrLoadMCPToolsCachedImpl: (
+      config: AgentConfig,
+      sessionId: string,
+      opts?: Record<string, unknown>,
+    ) => Promise<{ tools: Record<string, unknown>; errors: string[] }>;
     generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
       title: string;
       source: "default" | "model" | "heuristic";
@@ -315,6 +320,7 @@ export function makeSession(
     connectProviderImpl: overrides?.connectProviderImpl,
     getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
     loadSystemPromptWithSkillsImpl: overrides?.loadSystemPromptWithSkillsImpl,
+    getOrLoadMCPToolsCachedImpl: overrides?.getOrLoadMCPToolsCachedImpl,
     getProviderCatalogImpl: overrides?.getProviderCatalogImpl as any,
     getProviderStatusesImpl,
     logoutProviderAuthImpl: overrides?.logoutProviderAuthImpl,

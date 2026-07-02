@@ -11,6 +11,10 @@ type TurnStreamTracker = {
   streamPartIndex: number;
   rawStreamEventIndex: number;
   lastStreamError: unknown;
+  /** Set when `session_busy { busy: true }` is emitted; anchors time-to-first-output. */
+  turnAnnouncedAtMs: number | null;
+  /** True once the first visible output delta (text or reasoning) was observed. */
+  firstOutputObserved: boolean;
 };
 
 export type RunTurnInvocationDeps = {
@@ -314,6 +318,26 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         });
         if (normalized.partType === "error") {
           tracker.lastStreamError = normalized.part.error;
+        }
+        if (
+          !tracker.firstOutputObserved &&
+          (normalized.partType === "text_delta" || normalized.partType === "reasoning_delta")
+        ) {
+          tracker.firstOutputObserved = true;
+          if (tracker.turnAnnouncedAtMs !== null) {
+            context.emitTelemetry(
+              "agent.turn.first_output",
+              "ok",
+              {
+                sessionId: context.id,
+                turnId,
+                provider: context.state.config.provider,
+                model: context.state.config.model,
+                partType: normalized.partType,
+              },
+              Date.now() - tracker.turnAnnouncedAtMs,
+            );
+          }
         }
         context.emit({
           type: "model_stream_chunk",

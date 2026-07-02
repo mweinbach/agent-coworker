@@ -4,6 +4,7 @@ import type {
   connectProvider as connectModelProvider,
   getAiCoworkerPaths,
 } from "../../connect";
+import type { getOrLoadMCPToolsCached } from "../../mcp";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
@@ -190,6 +191,7 @@ export type SessionDependencies = {
   connectProviderImpl: typeof connectModelProvider;
   getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
   loadSystemPromptWithSkillsImpl: typeof loadSystemPromptWithSkills;
+  getOrLoadMCPToolsCachedImpl: typeof getOrLoadMCPToolsCached;
   getProviderCatalogImpl: typeof getProviderCatalog;
   getProviderStatusesImpl: typeof getProviderStatuses;
   logoutProviderAuthImpl?: typeof logoutProviderAuth;

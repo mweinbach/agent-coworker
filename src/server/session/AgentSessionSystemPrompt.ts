@@ -29,11 +29,18 @@ export async function ensureAgentSessionSystemPromptReady(
       const result = await promptState.context.deps.loadSystemPromptWithSkillsImpl(
         promptState.state.config,
       );
-      if (!hasSystemPrompt) {
-        promptState.state.system = result.prompt;
+      // Re-check state at completion: an eager warm-up load can race with a
+      // config mutation that refreshed the prompt while this load was in
+      // flight. The refreshed prompt is newer, so never clobber it.
+      const promptRefreshedConcurrently =
+        promptState.state.systemPromptMetadataLoaded && promptState.state.system.trim().length > 0;
+      if (!promptRefreshedConcurrently) {
+        if (promptState.state.system.trim().length === 0) {
+          promptState.state.system = result.prompt;
+        }
+        promptState.state.discoveredSkills = result.discoveredSkills;
+        promptState.state.systemPromptMetadataLoaded = true;
       }
-      promptState.state.discoveredSkills = result.discoveredSkills;
-      promptState.state.systemPromptMetadataLoaded = true;
       await recordAgentSessionSkillCatalogMtimeSnapshot(promptState);
       return true;
     } catch (err) {

@@ -235,6 +235,8 @@ export function createUserMessageTurnRunner(
       streamPartIndex: 0,
       rawStreamEventIndex: 0,
       lastStreamError: null as unknown,
+      turnAnnouncedAtMs: null as number | null,
+      firstOutputObserved: false,
     };
     const usageAggregator = createTurnUsageAggregator({
       turnId,
@@ -325,6 +327,7 @@ export function createUserMessageTurnRunner(
         cause,
       });
       turnAnnounced = true;
+      tracker.turnAnnouncedAtMs = Date.now();
       updateSessionExecutionState("running");
       context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: context.id,

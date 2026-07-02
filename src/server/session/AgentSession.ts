@@ -10,7 +10,7 @@ import {
 } from "../../advancedMemory/store";
 import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
-import { closeMcpServersForSession } from "../../mcp";
+import { closeMcpServersForSession, getOrLoadMCPToolsCached } from "../../mcp";
 import type { EditableMCPServerConfigSource, MCPRegistryServer } from "../../mcp/configRegistry";
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
@@ -88,6 +88,7 @@ import {
   lazyGetProviderStatuses,
   lazyLoadSystemPromptWithSkills,
   lazyRunTurn,
+  warmLazyTurnModules,
 } from "./AgentSessionLazyImports";
 import {
   type AgentSessionManagerHost,
@@ -169,6 +170,7 @@ export class AgentSession {
     connectProviderImpl?: typeof connectModelProvider;
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
     loadSystemPromptWithSkillsImpl?: typeof loadSystemPromptWithSkills;
+    getOrLoadMCPToolsCachedImpl?: typeof getOrLoadMCPToolsCached;
     getProviderCatalogImpl?: typeof getProviderCatalog;
     getProviderStatusesImpl?: typeof getProviderStatuses;
     logoutProviderAuthImpl?: typeof logoutProviderAuth;
@@ -339,6 +341,7 @@ export class AgentSession {
       getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths,
       loadSystemPromptWithSkillsImpl:
         opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills,
+      getOrLoadMCPToolsCachedImpl: opts.getOrLoadMCPToolsCachedImpl ?? getOrLoadMCPToolsCached,
       getProviderCatalogImpl: opts.getProviderCatalogImpl ?? lazyGetProviderCatalog,
       getProviderStatusesImpl: opts.getProviderStatusesImpl ?? lazyGetProviderStatuses,
       logoutProviderAuthImpl: opts.logoutProviderAuthImpl,
@@ -1271,6 +1274,25 @@ export class AgentSession {
 
   private async ensureSystemPromptReady(): Promise<boolean> {
     return await ensureAgentSessionSystemPromptReady(this.createSystemPromptState());
+  }
+
+  /**
+   * Fire-and-forget warm-up of the resources the first turn needs: the system
+   * prompt (skills scan, workspace context, memory), the workspace MCP tool
+   * cache, and the lazily imported turn modules. Kicking this off at session
+   * creation overlaps the expensive first-turn setup with client round trips
+   * so the first user message streams sooner. MCP warm failures are swallowed
+   * here (the turn path reloads and surfaces them via onMcpLoadErrors); system
+   * prompt failures surface through the normal session error channel.
+   */
+  warmSessionResources(): void {
+    warmLazyTurnModules();
+    void this.ensureSystemPromptReady().catch(() => undefined);
+    if (this.getEnableMcp()) {
+      void this.deps
+        .getOrLoadMCPToolsCachedImpl(this.state.config, this.id, {})
+        .catch(() => undefined);
+    }
   }
 
   async refreshSystemPromptWithSkills(reason = "session.refresh_system_prompt") {

@@ -64,5 +64,14 @@ export const lazyGetProviderStatuses: typeof getProviderStatuses = async (...arg
 export const lazyRunTurn: typeof runTurn = async (...args) =>
   await (await loadAgentModule()).runTurn(...args);
 
+/**
+ * Kick off the heavy lazy module imports used by the first turn so a brand-new
+ * session does not pay module-load cost on its first user message.
+ */
+export const warmLazyTurnModules = (): void => {
+  void loadAgentModule().catch(() => undefined);
+  void loadPromptModule().catch(() => undefined);
+};
+
 export const lazyGenerateSessionTitle: typeof generateSessionTitle = async (...args) =>
   await (await loadSessionTitleServiceModule()).generateSessionTitle(...args);

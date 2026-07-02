@@ -610,14 +610,26 @@ export async function loginCodexAppServerChatGpt(
       if (!authUrl || !loginId) {
         throw new Error("codex app-server did not return a ChatGPT login URL.");
       }
+      const loginAbort = new AbortController();
+      const loginPromise = waitForLogin(client, loginId, { signal: loginAbort.signal });
+      void loginPromise.catch(() => {});
       opts.log?.("[auth] opening Codex app-server ChatGPT login URL.");
-      const opened = await (opts.openUrl ?? openExternalUrl)(authUrl);
+      let opened = false;
+      try {
+        opened = await (opts.openUrl ?? openExternalUrl)(authUrl);
+      } catch (error) {
+        loginAbort.abort();
+        await loginPromise.catch(() => {});
+        throw error;
+      }
       if (!opened) {
+        loginAbort.abort();
+        await loginPromise.catch(() => {});
         throw new Error(
           "Unable to open the Codex app-server ChatGPT login URL. Open a browser and try again.",
         );
       }
-      await waitForLogin(client, loginId);
+      await loginPromise;
       const result = asRecord(
         await client.request("account/read", { refreshToken: true }, CODEX_AUTH_RPC_TIMEOUT_MS),
       );
@@ -707,8 +719,16 @@ export const __internal = {
   },
 } as const;
 
-async function waitForLogin(client: CodexAppServerClient, loginId: string): Promise<void> {
+async function waitForLogin(
+  client: CodexAppServerClient,
+  loginId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(new Error("Codex app-server login was cancelled."));
+      return;
+    }
     const timeout = setTimeout(
       () => {
         cleanup();
@@ -720,7 +740,13 @@ async function waitForLogin(client: CodexAppServerClient, loginId: string): Prom
       cleanup();
       reject(new Error("Codex client exited during authentication"));
     });
-    const disposeNotification = client.onNotification((notification) => {
+    let disposeNotification: (() => void) | undefined;
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("Codex app-server login was cancelled."));
+    };
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    disposeNotification = client.onNotification((notification) => {
       if (notification.method !== "account/login/completed") return;
       const params = asRecord(notification.params);
       if (asString(params?.loginId) !== loginId) return;
@@ -733,8 +759,9 @@ async function waitForLogin(client: CodexAppServerClient, loginId: string): Prom
     });
     function cleanup() {
       clearTimeout(timeout);
+      opts.signal?.removeEventListener("abort", onAbort);
       disposeClose?.();
-      disposeNotification();
+      disposeNotification?.();
     }
   });
 }

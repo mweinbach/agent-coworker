@@ -237,6 +237,94 @@ describe("codex app-server auth", () => {
     expect(clients).toHaveLength(2);
   });
 
+  test("login subscribes before the browser opener can complete the handoff", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-login-fast-callback-"));
+    const notificationListeners = new Set<Parameters<CodexAppServerClient["onNotification"]>[0]>();
+    const closeListeners = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>();
+    let accountReadCount = 0;
+
+    clientInternal.setClientFactoryForTests(async () => {
+      const client: CodexAppServerClient = {
+        command: { command: "node", args: [], source: "system" },
+        isClosed: () => false,
+        request: async (method) => {
+          if (method === "initialize") return {};
+          if (method === "account/login/start") {
+            return { authUrl: "https://example.test/login", loginId: "login-fast" };
+          }
+          if (method === "account/read") {
+            accountReadCount += 1;
+            return {
+              account: { type: "chatgpt", email: "fast@example.com", planType: "Pro" },
+              requiresOpenaiAuth: false,
+            };
+          }
+          return {};
+        },
+        notify: () => {},
+        interruptTurn: async () => {},
+        onNotification: (listener) => {
+          notificationListeners.add(listener);
+          return () => {
+            notificationListeners.delete(listener);
+          };
+        },
+        onServerRequest: () => () => {},
+        onJsonRpcMessage: () => () => {},
+        onClose: (listener) => {
+          closeListeners.add(listener);
+          return () => {
+            closeListeners.delete(listener);
+          };
+        },
+        close: async () => {},
+      };
+      return client;
+    });
+
+    type LoginOutcome =
+      | {
+          kind: "login";
+          account: Awaited<ReturnType<typeof loginCodexAppServerChatGpt>>["account"];
+        }
+      | { kind: "error"; error: unknown }
+      | { kind: "timeout" };
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const loginPromise = loginCodexAppServerChatGpt({
+      codexHome,
+      openUrl: async (url) => {
+        expect(url).toBe("https://example.test/login");
+        for (const listener of notificationListeners) {
+          listener({
+            method: "account/login/completed",
+            params: { loginId: "login-fast", success: true },
+          });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return true;
+      },
+    });
+    const outcome = await Promise.race<LoginOutcome>([
+      loginPromise.then(
+        (login) => ({ kind: "login", account: login.account }),
+        (error: unknown) => ({ kind: "error", error }),
+      ),
+      new Promise<LoginOutcome>((resolve) => {
+        watchdog = setTimeout(() => {
+          for (const listener of closeListeners) listener(1, null);
+          resolve({ kind: "timeout" });
+        }, 100);
+      }),
+    ]);
+    if (watchdog) clearTimeout(watchdog);
+
+    expect(outcome).toEqual({
+      kind: "login",
+      account: { type: "chatgpt", email: "fast@example.com", planType: "Pro" },
+    });
+    expect(accountReadCount).toBe(1);
+  });
+
   test("logoutCodexAppServer deletes auth.json and closes pooled clients", async () => {
     const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-logout-"));
     const authFile = path.join(codexHome, "auth.json");

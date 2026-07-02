@@ -62,6 +62,23 @@ describe("diagnostics redaction", () => {
     expect(rendered).toContain("[redacted-json-body]");
   });
 
+  test("keeps sanitized sidecar diagnostic previews while redacting raw stderr fields", () => {
+    const redacted = sanitizeLogMeta(
+      {
+        stderrPreview: "Error: Cannot find module from C:\\Users\\runneradmin\\project\\index.js",
+        sidecarDiagnosticPreview:
+          "Error: Cannot find module from C:\\Users\\runneradmin\\project\\index.js",
+      },
+      { homeDir: "C:\\Users\\runneradmin" },
+    );
+
+    expect(redacted).toMatchObject({
+      stderrPreview: "[redacted-body]",
+      sidecarDiagnosticPreview: expect.stringContaining("Cannot find module"),
+    });
+    expect(JSON.stringify(redacted)).not.toContain("runneradmin");
+  });
+
   test("redacts body-like assignment fields from legacy log lines", () => {
     const redacted = redactDiagnosticText(
       [

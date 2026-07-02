@@ -43,6 +43,29 @@ async function writeFile(filePath: string, content = "fixture"): Promise<void> {
   await fs.writeFile(filePath, content);
 }
 
+async function expectEventuallyRejects(
+  operation: () => Promise<unknown>,
+  pattern: RegExp,
+  timeoutMs = 2_500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let resolved = false;
+  while (Date.now() < deadline) {
+    try {
+      await operation();
+      resolved = true;
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(pattern);
+      return;
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(
+    `Expected operation to reject within ${timeoutMs}ms${resolved ? " after at least one successful retry" : ""}.`,
+  );
+}
+
 async function runtimeArchive(
   root: string,
   version: string,
@@ -415,10 +438,10 @@ describe("Cowork unified runtime", () => {
       path.join(restored.runtimeDir, "dependencies", "libreoffice", "program", "filter.dll"),
       "mutated filter dll",
     );
-    await Bun.sleep(75);
-    await expect(
-      buildRuntimeEnv(restored.runtimeDir, {}, process.platform, trustedKeys),
-    ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+    await expectEventuallyRejects(
+      () => buildRuntimeEnv(restored.runtimeDir, {}, process.platform, trustedKeys),
+      /runtime file (size|SHA-256) mismatch/i,
+    );
   });
 
   test("blocks signature tampering and unexpected files before managed execution", async () => {

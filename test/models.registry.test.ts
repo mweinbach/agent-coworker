@@ -15,7 +15,10 @@ import {
   providerOptionsDefaultsForModel,
   supportsImageInput,
 } from "../src/models/registry";
-import { isUserFacingProviderEnabled } from "../src/providers/catalog";
+import {
+  isUserFacingProviderEnabled,
+  reasoningConfigForProviderModel,
+} from "../src/providers/catalog";
 import type { ProviderName } from "../src/types";
 
 function repoRoot(): string {
@@ -88,6 +91,45 @@ describe("model registry invariants", () => {
         fs.existsSync(path.join(root, "prompts", model.promptTemplate)),
         `${model.provider}:${model.id} -> prompts/${model.promptTemplate}`,
       ).toBe(true);
+    }
+  });
+
+  test("declared reasoning efforts always include the model's default effort", () => {
+    for (const model of MODEL_REGISTRY_ENTRIES) {
+      const efforts = model.supportedReasoningEfforts;
+      if (!efforts) continue;
+      const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
+      expect(
+        typeof defaultEffort === "string" && efforts.includes(defaultEffort as (typeof efforts)[number]),
+        `${model.provider}:${model.id} default effort ${String(defaultEffort)} must be listed in supportedReasoningEfforts`,
+      ).toBe(true);
+    }
+  });
+
+  test("per-model reasoning efforts flow through the provider catalog", () => {
+    // GPT-5.5 does not accept "minimal" (vendor docs: none/low/medium/high/xhigh).
+    expect(reasoningConfigForProviderModel("openai", "gpt-5.5")).toEqual({
+      defaultEffort: "high",
+      availableEfforts: ["none", "low", "medium", "high", "xhigh"],
+    });
+    expect(reasoningConfigForProviderModel("openai", "gpt-5-mini")).toEqual({
+      defaultEffort: "high",
+      availableEfforts: ["none", "minimal", "low", "medium", "high"],
+    });
+    expect(reasoningConfigForProviderModel("codex-cli", "gpt-5.4")).toEqual({
+      defaultEffort: "high",
+      availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    });
+  });
+
+  test("light and max efforts are opt-in, never assumed by the fallback list", () => {
+    for (const model of MODEL_REGISTRY_ENTRIES) {
+      const config = reasoningConfigForProviderModel(model.provider, model.id);
+      if (!config) continue;
+      if (model.supportedReasoningEfforts?.includes("light")) continue;
+      expect(config.availableEfforts).not.toContain("light");
+      if (model.supportedReasoningEfforts?.includes("max")) continue;
+      expect(config.availableEfforts).not.toContain("max");
     }
   });
 

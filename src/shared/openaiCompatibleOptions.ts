@@ -15,27 +15,46 @@ export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "lmstudio",
 ] as const;
 
-// "none" and "xhigh" are client-side sentinel values used to represent "disable reasoning"
-// and "maximum effort" respectively. They are mapped to API-specific parameters before
-// being sent to the provider and are not passed to the OpenAI API verbatim.
+// Canonical effort ladder shared by OpenAI-compatible providers and Codex.
+// Not every provider accepts every value verbatim: "none" disables reasoning,
+// "light" and "max" are only honored where a model advertises them, and each
+// runtime downgrades unsupported values to the nearest level it can send.
 export const OPENAI_REASONING_EFFORT_VALUES = [
+  "none",
+  "minimal",
+  "light",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type OpenAiReasoningEffort = (typeof OPENAI_REASONING_EFFORT_VALUES)[number];
+
+/**
+ * Effort values every OpenAI-compatible model is assumed to accept when it
+ * does not declare `supportedReasoningEfforts`. "light" and "max" are opt-in:
+ * a model (or live discovery) must advertise them explicitly.
+ */
+export const DEFAULT_OPENAI_REASONING_EFFORT_VALUES = [
   "none",
   "minimal",
   "low",
   "medium",
   "high",
   "xhigh",
-] as const;
-export type OpenAiReasoningEffort = (typeof OPENAI_REASONING_EFFORT_VALUES)[number];
+] as const satisfies readonly OpenAiReasoningEffort[];
 
 export const CATALOG_REASONING_EFFORT_VALUES = [
   "none",
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   "minimal",
+  "light",
   "low",
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 export type CatalogReasoningEffort = (typeof CATALOG_REASONING_EFFORT_VALUES)[number];
 

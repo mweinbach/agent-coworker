@@ -623,6 +623,48 @@ describe("openai responses runtime", () => {
       },
     });
     expect(noneRequest.reasoning).toBeUndefined();
+
+    // The Responses API has no "max" tier; downgrade to the model's ceiling.
+    const maxRequest = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "openai",
+      model,
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [],
+      streamOptions: {
+        reasoningEffort: "max",
+      },
+    });
+    expect(maxRequest.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+
+    const maxOnLegacyRequest = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "openai",
+      model: {
+        ...model,
+        id: "gpt-5",
+        name: "gpt-5",
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [],
+      streamOptions: {
+        reasoningEffort: "max",
+      },
+    });
+    expect(maxOnLegacyRequest.reasoning).toEqual({ effort: "high", summary: "auto" });
+
+    // "light" maps to the nearest API-native level.
+    const lightRequest = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "openai",
+      model,
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [],
+      streamOptions: {
+        reasoningEffort: "light",
+      },
+    });
+    expect(lightRequest.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
   test("records and attaches usage to thrown error when turn fails mid-way", async () => {

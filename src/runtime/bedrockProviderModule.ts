@@ -431,6 +431,7 @@ function supportsAdaptiveThinking(modelId) {
 function mapThinkingLevelToEffort(level, modelId) {
   switch (level) {
     case "minimal":
+    case "light":
     case "low":
       return "low";
     case "medium":
@@ -443,6 +444,16 @@ function mapThinkingLevelToEffort(level, modelId) {
       }
       if (modelId.includes("opus-4-7") || modelId.includes("opus-4.7")) {
         return "xhigh";
+      }
+      return "high";
+    case "max":
+      if (
+        modelId.includes("opus-4-6") ||
+        modelId.includes("opus-4.6") ||
+        modelId.includes("opus-4-7") ||
+        modelId.includes("opus-4.7")
+      ) {
+        return "max";
       }
       return "high";
     default:
@@ -735,12 +746,19 @@ function buildAdditionalModelRequestFields(model, options) {
       : (() => {
           const defaultBudgets = {
             minimal: 1024,
+            light: 2048,
             low: 2048,
             medium: 8192,
             high: 16384,
             xhigh: 16384,
+            max: 16384,
           };
-          const level = options.reasoning === "xhigh" ? "high" : options.reasoning;
+          const level =
+            options.reasoning === "xhigh" || options.reasoning === "max"
+              ? "high"
+              : options.reasoning === "light"
+                ? "low"
+                : options.reasoning;
           const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
           return {
             thinking: {

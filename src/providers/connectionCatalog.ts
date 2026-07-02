@@ -11,16 +11,13 @@ import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
 } from "../shared/googleThinking";
-import {
-  type CatalogReasoningEffort,
-  isOpenAiReasoningEffort,
-  OPENAI_REASONING_EFFORT_VALUES,
-} from "../shared/openaiCompatibleOptions";
+import type { CatalogReasoningEffort } from "../shared/openaiCompatibleOptions";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { isAntigravitySupportedPlatform } from "./antigravitySupport";
 import { BASETEN_BASE_URL, resolveBasetenApiKey } from "./basetenShared";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
+import { openAiReasoningConfigForSupportedModel } from "./catalog";
 import { type listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
@@ -184,7 +181,7 @@ function uniqueCatalogEfforts(values: readonly CatalogReasoningEffort[]): Catalo
 }
 
 function reasoningConfigForModel(
-  model: Pick<SupportedModel, "id" | "provider" | "providerOptionsDefaults">,
+  model: Pick<SupportedModel, "id" | "provider" | "providerOptionsDefaults" | "supportedReasoningEfforts">,
   opts: { liveEfforts?: readonly CatalogReasoningEffort[] } = {},
 ): ProviderCatalogModelEntry["reasoning"] {
   if (model.provider === "google") {
@@ -194,11 +191,11 @@ function reasoningConfigForModel(
     };
   }
 
-  const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
-  if (!isOpenAiReasoningEffort(defaultEffort)) return undefined;
+  const openAiConfig = openAiReasoningConfigForSupportedModel(model);
+  if (!openAiConfig) return undefined;
   return {
-    defaultEffort,
-    availableEfforts: uniqueCatalogEfforts(opts.liveEfforts ?? OPENAI_REASONING_EFFORT_VALUES),
+    defaultEffort: openAiConfig.defaultEffort,
+    availableEfforts: uniqueCatalogEfforts(opts.liveEfforts ?? openAiConfig.availableEfforts),
   };
 }
 

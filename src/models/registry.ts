@@ -107,6 +107,7 @@ import opencodeZenQwen36PlusFree from "../../config/models/opencode-zen/qwen3.6-
 import togetherMoonshotAiKimiK25 from "../../config/models/together/moonshotai-kimi-k2.5.json";
 import togetherQwenQwen35397bA17b from "../../config/models/together/qwen-qwen3.5-397b-a17b.json";
 import togetherZaiOrgGlm5 from "../../config/models/together/zai-org-glm-5.json";
+import { OPENAI_REASONING_EFFORT_VALUES } from "../shared/openaiCompatibleOptions";
 import type { ProviderName } from "../types";
 
 const STATIC_MODEL_PROVIDER_NAMES = [
@@ -140,6 +141,12 @@ const supportedModelSchema = z
     supportsImageInput: z.boolean(),
     promptTemplate: z.string().trim().min(1),
     providerOptionsDefaults: z.record(z.string(), z.unknown()),
+    /**
+     * Reasoning efforts the runtime actually honors for this model. Omit for
+     * models without configurable reasoning; consumers fall back to the full
+     * OpenAI effort list when absent.
+     */
+    supportedReasoningEfforts: z.array(z.enum(OPENAI_REASONING_EFFORT_VALUES)).min(1).optional(),
     isDefault: z.boolean(),
   })
   .strict();

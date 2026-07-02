@@ -1,13 +1,14 @@
-import { defaultSupportedModel, listSupportedModels } from "../models/registry";
+import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
 } from "../shared/googleThinking";
-import { OPENAI_REASONING_EFFORT_VALUES } from "../shared/openaiCompatibleOptions";
+import { DEFAULT_OPENAI_REASONING_EFFORT_VALUES } from "../shared/openaiCompatibleOptions";
 import { asArray, asFiniteNumber, asNonEmptyString, asRecord } from "../shared/recordParsing";
 import type { AiCoworkerPaths } from "../store/connections";
 import type { ProviderName } from "../types";
 import { readBedrockCatalogSnapshot, refreshBedrockDiscoveryCache } from "./bedrockShared";
+import { openAiReasoningConfigForSupportedModel } from "./catalog";
 import { type CodexAppServerModel, listCodexAppServerModels } from "./codexAppServerAuth";
 import {
   listLmStudioLlms,
@@ -248,6 +249,7 @@ function isOpenAiReasoningModel(modelId: string): boolean {
 function reasoningForLiveModel(
   provider: ProviderName,
   modelId: string,
+  supported?: SupportedModel,
 ): CachedModelDiscoveryModel["reasoning"] {
   if (provider === "google") {
     return {
@@ -256,9 +258,16 @@ function reasoningForLiveModel(
     };
   }
   if (provider === "openai" && isOpenAiReasoningModel(modelId)) {
+    const registryConfig = supported ? openAiReasoningConfigForSupportedModel(supported) : null;
+    if (registryConfig) {
+      return {
+        defaultEffort: registryConfig.defaultEffort,
+        availableEfforts: [...registryConfig.availableEfforts],
+      };
+    }
     return {
       defaultEffort: "high",
-      availableEfforts: [...OPENAI_REASONING_EFFORT_VALUES],
+      availableEfforts: [...DEFAULT_OPENAI_REASONING_EFFORT_VALUES],
     };
   }
   return undefined;
@@ -278,7 +287,7 @@ function cachedModelFromLiveFields(
   const supported = listSupportedModels(provider).length
     ? listSupportedModels(provider).find((model) => model.id === modelId)
     : undefined;
-  const reasoning = fields.reasoning ?? reasoningForLiveModel(provider, modelId);
+  const reasoning = fields.reasoning ?? reasoningForLiveModel(provider, modelId, supported);
   return {
     id: modelId,
     displayName: fields.displayName ?? supported?.displayName ?? humanizeModelId(modelId),

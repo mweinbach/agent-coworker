@@ -306,7 +306,7 @@ export async function runCliRepl(
     console.log(`  /provider <name>      Set provider (${UI_PROVIDER_NAMES.join("|")})`);
     console.log("  /verbosity <level>    Set active-provider verbosity (low|medium|high)");
     console.log(
-      "  /reasoning-effort <level>  Set active-provider reasoning effort (none|low|medium|high|xhigh)",
+      "  /reasoning-effort <level>  Set active-provider reasoning effort (none|minimal|light|low|medium|high|xhigh|max)",
     );
     console.log("  /effort <level>       Alias for /reasoning-effort");
     console.log(

@@ -176,7 +176,7 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("Workspace 1");
       expect(container.textContent).not.toContain("Let's build");
       expect(container.textContent).not.toContain("New thread");
-      expect(container.querySelector('[data-slot="select-trigger"]')).not.toBeNull();
+      expect(container.querySelector('[data-slot="composer-model-selector"]')).not.toBeNull();
       const reasoningSelector = container.querySelector<HTMLButtonElement>(
         '[data-slot="composer-reasoning-selector"]',
       );
@@ -992,7 +992,7 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.textContent).toContain("Send a message to start.");
-      const modelSelector = container.querySelector('[data-slot="select-trigger"]');
+      const modelSelector = container.querySelector('[data-slot="composer-model-selector"]');
       expect(modelSelector).not.toBeNull();
       const reasoningSelector = container.querySelector<HTMLButtonElement>(
         '[data-slot="composer-reasoning-selector"]',

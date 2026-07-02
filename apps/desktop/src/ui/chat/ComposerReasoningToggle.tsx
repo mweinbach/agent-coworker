@@ -1,4 +1,5 @@
 import { BrainCircuitIcon } from "lucide-react";
+import { CATALOG_REASONING_EFFORT_VALUES } from "../../../../../src/shared/openaiCompatibleOptions";
 import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
 import {
   Select,
@@ -16,6 +17,8 @@ function reasoningEffortLabel(value: ReasoningEffortValue): string {
     case "dynamic":
       return "Dynamic";
     case "xhigh":
+      return "XHigh";
+    case "max":
       return "Max";
     default:
       return value.charAt(0).toUpperCase() + value.slice(1);
@@ -26,15 +29,16 @@ function reasoningEffortTitle(value: ReasoningEffortValue): string {
   return `Reasoning: ${reasoningEffortLabel(value)}`;
 }
 
-function reasoningEffortOptions(
+/**
+ * Canonically ordered effort choices (Off → Max). The current value stays
+ * selectable even when the model no longer advertises it.
+ */
+export function reasoningEffortOptions(
   value: ReasoningEffortValue,
   options: readonly ReasoningEffortValue[],
 ): ReasoningEffortValue[] {
-  const out: ReasoningEffortValue[] = [];
-  for (const entry of [value, ...options]) {
-    if (!out.includes(entry)) out.push(entry);
-  }
-  return out;
+  const present = new Set<ReasoningEffortValue>([value, ...options]);
+  return CATALOG_REASONING_EFFORT_VALUES.filter((entry) => present.has(entry));
 }
 
 export function ComposerReasoningSelector({
@@ -64,13 +68,13 @@ export function ComposerReasoningSelector({
         data-state={active ? "on" : "off"}
         title={reasoningEffortTitle(value)}
         className={cn(
-          "h-7 gap-1.5 rounded-md border-transparent px-2 text-xs font-medium shadow-none",
+          "h-7 gap-1 rounded-md border-transparent px-2 text-xs font-medium shadow-none [&_svg:not([class*='size-'])]:size-3",
           active
-            ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+            ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary [&_svg:not([class*='text-'])]:text-primary"
             : "text-muted-foreground/85 hover:bg-muted/30 hover:text-foreground",
         )}
       >
-        <BrainCircuitIcon aria-hidden />
+        <BrainCircuitIcon className="size-3.5" aria-hidden />
         <SelectValue />
       </SelectTrigger>
       <SelectContent align="start" position="popper">

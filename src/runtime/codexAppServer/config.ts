@@ -59,8 +59,12 @@ function codexProviderOptions(
 export function normalizeEffort(value: string | undefined): string | undefined {
   const normalized = value?.trim().toLowerCase();
   if (!normalized || normalized === "none") return undefined;
-  if (normalized === "xhigh") return "high";
-  return ["minimal", "low", "medium", "high"].includes(normalized) ? normalized : undefined;
+  // Codex app-server accepts model-defined efforts (its protocol enum covers
+  // xhigh/max plus custom strings), so pass the shared ladder through verbatim
+  // and let the server clamp values a model does not support.
+  return ["minimal", "light", "low", "medium", "high", "xhigh", "max"].includes(normalized)
+    ? normalized
+    : undefined;
 }
 
 export function normalizeSummary(value: string | undefined): string | undefined {

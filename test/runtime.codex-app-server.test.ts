@@ -476,9 +476,10 @@ describe("codex app-server runtime", () => {
       maxSteps: 1,
     });
 
+    // Codex app-server understands model-defined efforts, so xhigh passes through.
     const xhighRequests = await readCapturedRequests(capturePath);
     expect(xhighRequests.find((entry) => entry.method === "turn/start")?.params.effort).toBe(
-      "high",
+      "xhigh",
     );
 
     await fs.writeFile(capturePath, "", "utf-8");

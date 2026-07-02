@@ -115,9 +115,13 @@ function openAiModelSupportsXhighReasoning(modelId: string | undefined): boolean
 function normalizeOpenAiReasoningEffort(value: unknown, modelId?: string): string | undefined {
   const normalized = asNonEmptyString(value)?.toLowerCase();
   if (!normalized || normalized === "none") return undefined;
-  if (normalized === "xhigh") {
+  // The OpenAI Responses API has no "max" tier; downgrade to the strongest
+  // effort the model accepts. "light" is likewise mapped to the nearest
+  // API-native level.
+  if (normalized === "xhigh" || normalized === "max") {
     return openAiModelSupportsXhighReasoning(modelId) ? "xhigh" : "high";
   }
+  if (normalized === "light") return "low";
   return ["minimal", "low", "medium", "high"].includes(normalized) ? normalized : undefined;
 }
 

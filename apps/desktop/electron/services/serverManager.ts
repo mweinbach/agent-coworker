@@ -1426,10 +1426,12 @@ export class ServerManager {
           stderrTail = stderrTail.slice(-STDERR_TAIL_LIMIT);
         }
         outputMirror?.writeChunk("stderr", text);
+        const stderrPreview = outputMirror ? summarizeLogChunk(text) : "";
         logServerManagerEvent("workspace server stderr emitted", {
           workspaceId,
           bytes: Buffer.byteLength(text),
           bunCrash: isLikelyBunSegfault(text),
+          ...(stderrPreview ? { stderrPreview } : {}),
         });
       });
 

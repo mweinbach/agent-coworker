@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import type { FeedItem } from "../src/app/types";
-import { buildChatRenderItems, summarizeActivityGroup } from "../src/ui/chat/activityGroups";
+import {
+  buildChatRenderItems,
+  shouldShowWorkingPlaceholder,
+  summarizeActivityGroup,
+} from "../src/ui/chat/activityGroups";
 
 describe("desktop chat activity groups", () => {
   test("groups consecutive reasoning and tool items into one activity block", () => {
@@ -638,5 +642,92 @@ describe("desktop chat activity groups", () => {
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
     expect(toolEntries).toHaveLength(2);
     expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
+  });
+});
+
+describe("shouldShowWorkingPlaceholder", () => {
+  const userMessage: FeedItem = {
+    id: "m1",
+    kind: "message",
+    role: "user",
+    ts: "2024-01-01T00:00:00.000Z",
+    text: "hello",
+  };
+  const assistantMessage: FeedItem = {
+    id: "m2",
+    kind: "message",
+    role: "assistant",
+    ts: "2024-01-01T00:00:01.000Z",
+    text: "Hi!",
+  };
+  const reasoningItem: FeedItem = {
+    id: "r1",
+    kind: "reasoning",
+    mode: "summary",
+    ts: "2024-01-01T00:00:01.000Z",
+    text: "Thinking about it.",
+  };
+
+  test("shows while a busy turn has produced no output after the user message", () => {
+    const renderItems = buildChatRenderItems([userMessage]);
+    expect(shouldShowWorkingPlaceholder({ busy: true, turnStartPending: false, renderItems })).toBe(
+      true,
+    );
+  });
+
+  test("shows while the turn start is still pending", () => {
+    const renderItems = buildChatRenderItems([userMessage]);
+    expect(shouldShowWorkingPlaceholder({ busy: false, turnStartPending: true, renderItems })).toBe(
+      true,
+    );
+  });
+
+  test("hides once a reasoning/tool activity group exists", () => {
+    const renderItems = buildChatRenderItems([userMessage, reasoningItem]);
+    expect(shouldShowWorkingPlaceholder({ busy: true, turnStartPending: false, renderItems })).toBe(
+      false,
+    );
+  });
+
+  test("hides once assistant text starts streaming", () => {
+    const renderItems = buildChatRenderItems([userMessage, assistantMessage]);
+    expect(shouldShowWorkingPlaceholder({ busy: true, turnStartPending: false, renderItems })).toBe(
+      false,
+    );
+  });
+
+  test("hides when the thread is idle", () => {
+    const renderItems = buildChatRenderItems([userMessage]);
+    expect(
+      shouldShowWorkingPlaceholder({ busy: false, turnStartPending: false, renderItems }),
+    ).toBe(false);
+  });
+
+  test("hides on an empty feed", () => {
+    expect(
+      shouldShowWorkingPlaceholder({ busy: true, turnStartPending: false, renderItems: [] }),
+    ).toBe(false);
+  });
+
+  test("skips log and system lines when deciding", () => {
+    const renderItems = buildChatRenderItems([
+      userMessage,
+      { id: "l1", kind: "log", ts: "2024-01-01T00:00:01.000Z", line: "[MCP] server connected" },
+      { id: "s1", kind: "system", ts: "2024-01-01T00:00:02.000Z", line: "Model changed" },
+    ]);
+    expect(shouldShowWorkingPlaceholder({ busy: true, turnStartPending: false, renderItems })).toBe(
+      true,
+    );
+  });
+
+  test("shows again for a steer message sent mid-turn", () => {
+    const renderItems = buildChatRenderItems([
+      userMessage,
+      assistantMessage,
+      { ...userMessage, id: "m3", ts: "2024-01-01T00:00:02.000Z", text: "also do this" },
+    ]);
+    expect(shouldShowWorkingPlaceholder({ busy: true, turnStartPending: false, renderItems })).toBe(
+      true,
+    );
   });
 });

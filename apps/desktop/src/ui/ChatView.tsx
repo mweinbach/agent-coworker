@@ -32,7 +32,7 @@ import {
 } from "../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
-import { buildChatRenderItems } from "./chat/activityGroups";
+import { buildChatRenderItems, shouldShowWorkingPlaceholder } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
 import { ChatFeed, type VisibleSandboxApproval } from "./chat/ChatFeed";
@@ -391,6 +391,15 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     }
     return null;
   }, [renderItems, rt?.busy]);
+  const workingPlaceholderVisible = useMemo(
+    () =>
+      shouldShowWorkingPlaceholder({
+        busy: rt?.busy === true,
+        turnStartPending: rt?.pendingTurnStart != null,
+        renderItems,
+      }),
+    [renderItems, rt?.busy, rt?.pendingTurnStart],
+  );
   const activeChildAgentCount = useMemo(
     () => countActiveChildAgents(rt?.agents ?? []),
     [rt?.agents],
@@ -733,6 +742,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           renderItems={renderItems}
           liveActivityGroupId={liveActivityGroupId}
           liveStartedAt={rt?.busySince ?? null}
+          showWorkingPlaceholder={workingPlaceholderVisible}
           citationUrlsByMessageId={citationUrlsByMessageId}
           citationSourcesByMessageId={citationSourcesByMessageId}
           desktopBasePath={workspace?.path ?? null}

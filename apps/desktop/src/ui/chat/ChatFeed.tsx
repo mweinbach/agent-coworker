@@ -16,6 +16,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "../../components/ui/empty";
+import { Marker, MarkerContent } from "../../components/ui/marker";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -63,6 +64,30 @@ function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string |
     if (item.item.kind === "message") return null;
   }
   return null;
+}
+
+/**
+ * Placeholder shown from the moment a turn is pending/running until the first
+ * reasoning, tool, or assistant item lands, so the transcript never looks
+ * frozen while the model is starting up. Styled to match the compact live
+ * activity header it hands off to.
+ */
+function WorkingPlaceholderRow() {
+  return (
+    <div className="flex w-full max-w-3xl items-center" data-slot="working-placeholder">
+      <Marker variant="border" className="pb-2.5 pt-1.5">
+        <MarkerContent className="font-mono tracking-tight">
+          <span
+            role="status"
+            aria-live="polite"
+            className="activity-thinking-shimmer inline-flex items-center"
+          >
+            Working
+          </span>
+        </MarkerContent>
+      </Marker>
+    </div>
+  );
 }
 
 function InitialTurnRestore({ messageId }: { messageId: string | null }) {
@@ -119,6 +144,7 @@ export function ChatFeed(props: {
   renderItems: ChatRenderItem[];
   liveActivityGroupId: string | null;
   liveStartedAt: string | null;
+  showWorkingPlaceholder: boolean;
   citationUrlsByMessageId: Map<string, Map<number, string>>;
   citationSourcesByMessageId: Map<string, CitationSource[]>;
   desktopBasePath: string | null;
@@ -141,6 +167,7 @@ export function ChatFeed(props: {
     renderItems,
     liveActivityGroupId,
     liveStartedAt,
+    showWorkingPlaceholder,
     citationUrlsByMessageId,
     citationSourcesByMessageId,
     desktopBasePath,
@@ -257,6 +284,12 @@ export function ChatFeed(props: {
                 );
               })
             )}
+
+            {showWorkingPlaceholder ? (
+              <MessageScrollerItem messageId="status:working-placeholder">
+                <WorkingPlaceholderRow />
+              </MessageScrollerItem>
+            ) : null}
 
             {sandboxApprovals.map(({ threadId, prompt }) => (
               <MessageScrollerItem

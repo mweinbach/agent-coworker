@@ -383,6 +383,29 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   return items;
 }
 
+/**
+ * True while a pending or running turn has produced no visible output yet —
+ * the window where the transcript ends with the user's message and would
+ * otherwise look frozen. Log/system lines are skipped because they are not
+ * model output.
+ */
+export function shouldShowWorkingPlaceholder(opts: {
+  busy: boolean;
+  turnStartPending: boolean;
+  renderItems: ChatRenderItem[];
+}): boolean {
+  if (!opts.busy && !opts.turnStartPending) return false;
+  for (let i = opts.renderItems.length - 1; i >= 0; i--) {
+    const entry = opts.renderItems[i];
+    if (!entry) continue;
+    if (entry.kind === "activity-group") return false;
+    const item = entry.item;
+    if (item.kind === "log" || item.kind === "system") continue;
+    return item.kind === "message" && item.role === "user";
+  }
+  return false;
+}
+
 export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroupSummary {
   const entries = buildActivityTraceEntries(items);
   const hasPendingReasoning =

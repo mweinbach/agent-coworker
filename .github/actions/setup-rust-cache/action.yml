@@ -6,6 +6,10 @@ inputs:
     description: Extra cache scope for jobs that build different Rust targets.
     required: false
     default: root
+  save-cache:
+    description: Save a new Cargo cache on miss. Set to false for release validation legs where cache upload can block downstream smoke jobs.
+    required: false
+    default: "true"
   cache-dependency-path:
     description: Newline-separated files or globs that should invalidate the Rust dependency cache.
     required: false
@@ -49,8 +53,22 @@ runs:
 
         echo "value=$digest" >> "$GITHUB_OUTPUT"
 
-    - name: Restore Cargo caches
+    - name: Restore and save Cargo caches
+      if: ${{ inputs.save-cache == 'true' }}
       uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          crates/cowork-win-sandbox/target
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-
+          ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+    - name: Restore Cargo caches
+      if: ${{ inputs.save-cache != 'true' }}
+      uses: actions/cache/restore@v4
       with:
         path: |
           ~/.cargo/registry

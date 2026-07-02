@@ -82,6 +82,7 @@ jobs:
         uses: ./.github/actions/setup-rust-cache
         with:
           cache-scope: desktop-${{ matrix.build_arch }}
+          save-cache: ${{ matrix.build_arch != 'arm64' }}
 
       - name: Validate public telemetry build variables
         shell: bash

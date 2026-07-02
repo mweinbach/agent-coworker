@@ -4,7 +4,7 @@ import { execFileCompat } from "../src/utils/execFileCompat";
 
 const isWindows = process.platform === "win32";
 const sh = (script: string): [string, string[]] =>
-  isWindows ? ["cmd", ["/c", script]] : ["sh", ["-c", script]];
+  isWindows ? ["cmd", ["/c", script]] : ["/bin/sh", ["-c", script]];
 
 describe("execFileCompat", () => {
   test("captures stdout, stderr and the exit code", async () => {
@@ -79,7 +79,7 @@ describe("execFileCompat", () => {
   });
 
   test("cwd is honored", async () => {
-    const [file, args] = isWindows ? ["cmd", ["/c", "cd"]] : ["pwd", []];
+    const [file, args] = isWindows ? ["cmd", ["/c", "cd"]] : ["/bin/pwd", []];
     const result = await execFileCompat(file, args, { cwd: "/tmp" });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim().length).toBeGreaterThan(0);

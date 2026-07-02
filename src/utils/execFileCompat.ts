@@ -1,5 +1,8 @@
+import { type ChildProcessByStdio, spawn } from "node:child_process";
+import type { Readable } from "node:stream";
+
 /**
- * Bun-native replacement for the Node `child_process.execFile` contract the
+ * Small replacement for the Node `child_process.execFile` contract the
  * harness tools rely on: fully buffered stdout/stderr with a byte cap, a
  * timeout that SIGTERMs the direct child, AbortSignal support, and stable
  * error codes instead of thrown errors.
@@ -53,22 +56,19 @@ export async function execFileCompat(
 ): Promise<ExecFileCompatResult> {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
 
-  let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  let proc: ChildProcessByStdio<null, Readable, Readable>;
   try {
-    proc = Bun.spawn([file, ...args], {
+    proc = spawn(file, args, {
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
-      ...(opts.env ? { env: opts.env } : {}),
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
+      ...(opts.env ? { env: opts.env as NodeJS.ProcessEnv } : {}),
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
   } catch (error) {
     return { stdout: "", stderr: "", exitCode: 1, errorCode: spawnErrorCode(error) };
   }
-
+  let spawnError: unknown;
   let cause: KillCause | null = null;
-  const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
   const terminate = (nextCause: KillCause) => {
     if (cause) return;
     cause = nextCause;
@@ -77,15 +77,19 @@ export async function execFileCompat(
     } catch {
       // already exited
     }
+  };
+
+  proc.once("error", (error) => {
+    spawnError = error;
+  });
+  proc.once("exit", () => {
+    if (!cause) return;
     // Grandchildren can keep the stdio pipes open after the direct child dies
     // (e.g. `sh -c "sleep 99"`). Node's exec destroyed the pipes on kill; do
     // the equivalent so buffered output resolves promptly.
-    void proc.exited.finally(() => {
-      for (const reader of readers) {
-        void reader.cancel().catch(() => {});
-      }
-    });
-  };
+    proc.stdout.destroy();
+    proc.stderr.destroy();
+  });
 
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   if (typeof opts.timeoutMs === "number" && opts.timeoutMs > 0) {
@@ -101,40 +105,49 @@ export async function execFileCompat(
     }
   }
 
-  const readCapped = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
-    const reader = stream.getReader();
-    readers.push(reader);
-    const chunks: Uint8Array[] = [];
+  const readCapped = async (stream: Readable): Promise<string> => {
+    const chunks: Buffer[] = [];
     let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (total < maxBuffer) {
-        chunks.push(value);
-        total += value.byteLength;
-      }
-      if (total > maxBuffer) {
-        terminate("overflow");
-      }
-    }
-    const merged = new Uint8Array(Math.min(total, maxBuffer));
-    let offset = 0;
-    for (const chunk of chunks) {
-      const remaining = merged.byteLength - offset;
-      if (remaining <= 0) break;
-      merged.set(remaining >= chunk.byteLength ? chunk : chunk.subarray(0, remaining), offset);
-      offset += Math.min(chunk.byteLength, remaining);
-    }
-    return new TextDecoder().decode(merged);
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve(Buffer.concat(chunks, Math.min(total, maxBuffer)).toString("utf8"));
+      };
+      stream.on("data", (value: Buffer | string) => {
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        if (total < maxBuffer) {
+          chunks.push(chunk.subarray(0, maxBuffer - total));
+        }
+        total += chunk.byteLength;
+        if (total > maxBuffer) terminate("overflow");
+      });
+      stream.once("end", finish);
+      stream.once("close", finish);
+      stream.once("error", (error) => {
+        if (cause) finish();
+        else reject(error);
+      });
+    });
   };
 
+  const exited = new Promise<{ exitCode: number; signalCode: NodeJS.Signals | null }>((resolve) => {
+    proc.once("close", (code, signal) => {
+      resolve({ exitCode: typeof code === "number" ? code : 1, signalCode: signal });
+    });
+  });
+
   try {
-    const [stdout, stderr, exitCode] = await Promise.all([
+    const [stdout, stderr, exit] = await Promise.all([
       readCapped(proc.stdout),
       readCapped(proc.stderr),
-      proc.exited,
+      exited,
     ]);
 
+    if (spawnError) {
+      return { stdout, stderr, exitCode: 1, errorCode: spawnErrorCode(spawnError) };
+    }
     if (cause === "timeout") {
       return { stdout, stderr, exitCode: 124, errorCode: "TIMEOUT" };
     }
@@ -144,12 +157,12 @@ export async function execFileCompat(
     if (cause === "overflow") {
       return { stdout, stderr, exitCode: 1, errorCode: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" };
     }
-    if (proc.signalCode) {
+    if (exit.signalCode) {
       // Terminated by an external signal: Node execFile surfaced this as a
       // generic failure with no numeric exit code.
       return { stdout, stderr, exitCode: 1 };
     }
-    return { stdout, stderr, exitCode };
+    return { stdout, stderr, exitCode: exit.exitCode };
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer);
     opts.signal?.removeEventListener("abort", onAbort);

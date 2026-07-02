@@ -24,7 +24,7 @@ describe("desktop pending thread references", () => {
 
     queuePendingThreadMessage("thread-1", " use docs ", attachments, references);
 
-    expect(shiftPendingThreadMessage("thread-1")).toBe("use docs");
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "use docs" });
     expect(shiftPendingThreadAttachments("thread-1")).toEqual(attachments);
     expect(shiftPendingThreadReferences("thread-1")).toEqual(references);
     expect(RUNTIME.pendingThreadReferences.has("thread-1")).toBe(false);
@@ -42,9 +42,9 @@ describe("desktop pending thread references", () => {
       restoredReferences,
     );
 
-    expect(shiftPendingThreadMessage("thread-1")).toBe("restored");
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "restored" });
     expect(shiftPendingThreadReferences("thread-1")).toEqual(restoredReferences);
-    expect(shiftPendingThreadMessage("thread-1")).toBe("first");
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "first" });
     expect(shiftPendingThreadReferences("thread-1")).toEqual(firstReferences);
   });
 });

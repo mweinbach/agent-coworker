@@ -4,6 +4,106 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.3 - 2026-07-02
+
+### Added
+
+- **First-message optimistic user bubble** — Queued the first message of a new
+  chat with a pre-generated `clientMessageId` and pushed its optimistic user
+  bubble plus a pending turn-start state before the workspace socket or thread
+  session exists, so the transcript responds at send click instead of after
+  multiple round trips. The id travels through the pending-message queue into
+  `turn/start` so the server echo dedups against the optimistic bubble.
+  Thread-start failures and workspace disconnects now clear the pending
+  turn-start so the composer never sticks in Sending.
+- **Working shimmer placeholder** — Rendered a shimmering "Working" placeholder
+  row in the chat feed from the moment a turn is pending or running until the
+  first reasoning, tool, or assistant item lands, so the transcript no longer
+  looks frozen between send and first token. Decision logic lives in
+  `shouldShowWorkingPlaceholder` with unit coverage for busy, pending, steer,
+  log-line, and empty-feed cases.
+- **Provider model discovery cache** — Added an on-disk model discovery cache
+  so runtime-discovered models (LM Studio, Bedrock, Codex CLI) can be selected
+  and validated alongside the static catalog without passthrough eroding
+  config-startup resilience or persisted-session migration.
+- **Expanded `/cowork/health` diagnostics** — Expanded the liveness endpoint to
+  return `version`, `uptimeMs`, `cwd`, `activeSessions`, `db`, `journal`,
+  `sendQueue`, and `startup.ready` while keeping it HTTP 200 / `ok: true`.
+  Added `SessionDb.ping()`, an in-memory `ThreadJournal.getAggregateHealth()`,
+  a `HealthSnapshot` on the runtime, and a `startupReady` flag owned by
+  `startAgentServer`.
+- **Chaos harness** — Added a deterministic chaos harness covering server
+  death after `server_listening`, kill during `turn/start`, slow handshake,
+  reconnect during approval, health 503, send-queue overflow, and DB lock
+  contention — driven through injectable seams (fake WebSocket, fake child,
+  injected fetch, paired coordinators) with no spawned processes.
+- **Bun-native migration plan** — Added `docs/bun-native-migration.md` audit
+  and phased plan documenting the migration from `node:child_process`,
+  `node:http`, and `node:crypto` to Bun-native equivalents.
+
+### Changed
+
+- **First-turn session warm-up** — Fired-and-forgot warm-up of the system
+  prompt (skills scan, workspace context, memory), the workspace MCP tool
+  cache, and lazily imported turn modules when a thread session is created or
+  cold-loaded, so the first user message no longer pays that setup cost before
+  streaming. Guarded the system prompt load against clobbering a concurrent
+  config refresh and added `agent.turn.first_output` telemetry measuring time
+  from turn start to the first visible text/reasoning delta.
+- **Bun-native migration (Phases 1–6)** — Migrated scripts, the harness test
+  runner, buffered child processes, long-lived streaming subprocesses, the
+  Codex app-server, hot-path file reads, the MCP OAuth callback listener, and
+  hashing helpers from `node:child_process` / `node:http` / `node:crypto` /
+  `node:readline` / `fast-glob` to `Bun.spawn`, `Bun.serve`, `Bun.file`,
+  `Bun.Glob`, `Bun.CryptoHasher`, and Web Crypto. Shared Electron/renderer
+  modules are guarded against Bun-only APIs so desktop portability is
+  preserved.
+- **Desktop message send performance** — Stopped blocking message send on task
+  summary refresh so sending a message no longer waits for the summary
+  round trip.
+- **Desktop server startup timeout** — Raised the default source startup
+  timeout to 120s to accommodate cold starts.
+- **Biome formatting and import sorting** — Applied biome import sorting and
+  formatting fixes across the codebase.
+
+### Fixed
+
+- **Model validation guardrails** — Restored strict model validation alongside
+  the provider model discovery cache. Sync paths keep discovery passthrough but
+  reject ids provably registered to a different provider family. Async
+  selection paths are strict (static registry plus on-disk discovery cache).
+  Config load falls back to the provider default with a warning for unknown,
+  non-discovered models. Persisted sessions migrate unsupported/aliased ids
+  for static-catalog providers. `gemini-*` joins the model/provider mismatch
+  heuristic with Google guidance. Pinned env in the connection-catalog
+  `oauth_pending` test so ambient provider API keys cannot flip providers.
+- **Desktop JSON-RPC reconnect hardening** — Hardened reconnect retry safety,
+  preserved control bootstrap and pending mutation waiters during transient
+  reconnect backoff, retried read-only JSON-RPC get routes, persisted thread
+  start retry keys, persisted journal replay failure health, drained journal
+  writes on runtime shutdown, ignored shutdown journal events after close,
+  forced snapshots for untrusted replay, preserved optimistic messages in
+  forced snapshots, stopped journal flush rescheduling after close, and
+  retried spreadsheet reads during reconnect.
+- **Workspace sidecar restart hardening** — Restarted stale workspace sidecars,
+  invalidated workspace starts on sidecar exit, hardened restart counting
+  (delayed until startup succeeds), synced healthy workspace server URLs, and
+  added `forceRestart` for workspace server restarts.
+- **OAuth callback listener port typing** — Guarded the OAuth callback
+  listener port typing against incorrect type coercion.
+- **Cross-file mock leak in skill/plugin action tests** — Pinned
+  `desktopCommands` in the skill/plugin action harness against cross-file mock
+  leaks from earlier test files (e.g. `backup-page.test.ts`) that persisted in
+  the shared Bun test process and caused `ensureServerRunning` to treat fake
+  per-workspace server URLs as stale.
+
+### Removed
+
+- **A2UI experimental feature** — Fully removed and stripped the A2UI
+  experimental feature across server, desktop, mobile, docs, config, prompts,
+  tools, session, projection, runtime, and tests. All references removed
+  (zero matches outside CHANGELOG).
+
 ## 1.2.0 - 2026-06-26
 
 ### Added

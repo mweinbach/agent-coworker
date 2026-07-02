@@ -134,6 +134,21 @@ describe("ComposerModelSelector", () => {
     expect(items.some((text) => text?.includes("GPT-5.4"))).toBe(true);
   });
 
+  test("model popover uses soft chrome instead of the default hard outline", async () => {
+    await renderSelector({ defaultOpen: true });
+
+    const body = harness.dom.window.document.body;
+    const popover = body.querySelector('[data-slot="popover-content"]');
+    const command = body.querySelector('[data-slot="command"]');
+
+    expect(popover?.className).toContain("border-border/45");
+    expect(popover?.className).toContain("shadow-foreground/10");
+    expect(popover?.className).toContain("outline-none");
+    expect(command?.className).toContain(
+      "[&_[data-slot=command-input-wrapper]]:border-b-border/50",
+    );
+  });
+
   test("selecting a model fires onChange with the provider/model pair", async () => {
     const selections: ComposerModelSelection[] = [];
     await renderSelector({

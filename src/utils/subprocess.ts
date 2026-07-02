@@ -4,7 +4,7 @@
  * stderr, liveness checks, graceful kill escalation, stdin writes).
  */
 
-export type SubprocessExit = {
+type SubprocessExit = {
   exitCode: number | null;
   signalCode: string | null;
 };

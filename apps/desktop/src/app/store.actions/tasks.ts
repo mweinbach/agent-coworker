@@ -536,6 +536,7 @@ export function createTaskActions(
     },
 
     refreshTasks: async (workspaceId) => {
+      if (get().desktopFeatureFlags.tasks !== true) return;
       const resolvedWorkspaceId = workspaceId ?? get().selectedWorkspaceId;
       const workspace = resolvedWorkspaceId
         ? get().workspaces.find((item) => item.id === resolvedWorkspaceId)

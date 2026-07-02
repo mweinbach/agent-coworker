@@ -329,6 +329,19 @@ describe("desktop task actions", () => {
     );
   });
 
+  test("does not refresh tasks when the tasks feature is disabled", async () => {
+    const harness = createHarness();
+    harness.state.desktopFeatureFlags.tasks = false;
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+
+    await actions.refreshTasks("ws-1");
+
+    expect(requestJsonRpc).not.toHaveBeenCalled();
+    expect(harness.state.taskListLoadingByWorkspaceId).toEqual({});
+    expect(harness.state.notifications).toEqual([]);
+  });
+
   test("promotes a one-off chat workspace and takes over on model-created tasks", async () => {
     const harness = createHarness();
     harness.state.workspaces[0] = {

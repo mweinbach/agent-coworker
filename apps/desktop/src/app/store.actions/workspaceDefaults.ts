@@ -597,17 +597,19 @@ export function createWorkspaceDefaultsActions(
       get,
       set,
       threadId,
-      next,
+      next.text,
       undefined,
       queuedAttachments,
       queuedReferences,
+      next.clientMessageId,
     );
     if (!accepted) {
       prependPendingThreadMessageWithAttachments(
         threadId,
-        next,
+        next.text,
         queuedAttachments,
         queuedReferences,
+        next.clientMessageId,
       );
     }
     return accepted;

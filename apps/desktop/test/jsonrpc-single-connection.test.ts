@@ -730,6 +730,58 @@ describe("desktop JSON-RPC single connection path", () => {
     });
   });
 
+  test("renders the optimistic first-message bubble before the thread session exists", async () => {
+    let releaseThreadStart: (() => void) | undefined;
+    jsonRpcRequestHandlers.set("thread/start", async () => {
+      await new Promise<void>((resolve) => {
+        releaseThreadStart = resolve;
+      });
+      return {
+        thread: {
+          id: "jsonrpc-thread-1",
+          title: "New session",
+          modelProvider: "google",
+          model: "gemini-3.1-pro-preview",
+          cwd: "/tmp/jsonrpc-workspace",
+          createdAt: "2026-03-21T00:00:00.000Z",
+          updatedAt: "2026-03-21T00:00:00.000Z",
+          status: { type: "loaded" },
+        },
+      };
+    });
+
+    const created = await useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      titleHint: "Instant bubble",
+      firstMessage: "instant bubble message",
+    });
+    expect(created).toBe(true);
+
+    const localThreadId = useAppStore.getState().selectedThreadId;
+    expect(localThreadId).toEqual(expect.any(String));
+    const rtBefore = useAppStore.getState().threadRuntimeById[localThreadId ?? ""];
+    const bubblesBefore = rtBefore?.feed.filter(
+      (item) => item.kind === "message" && item.role === "user",
+    );
+    expect(bubblesBefore).toHaveLength(1);
+    expect(bubblesBefore?.[0]?.text).toBe("instant bubble message");
+    expect(rtBefore?.pendingTurnStart?.status).toBe("sending");
+    expect(jsonRpcRequests.map((entry) => entry.method)).not.toContain("turn/start");
+
+    releaseThreadStart?.();
+    await flushAsyncWork();
+
+    const rtAfter = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    const bubblesAfter = rtAfter?.feed.filter(
+      (item) => item.kind === "message" && item.role === "user",
+    );
+    expect(bubblesAfter).toHaveLength(1);
+    expect(bubblesAfter?.[0]?.text).toBe("instant bubble message");
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")
+      ?.params as { clientMessageId?: string } | undefined;
+    expect(turnStartParams?.clientMessageId).toBe(bubblesAfter?.[0]?.id ?? "");
+  });
+
   test("surfaces first-message thread start failures in the chat feed", async () => {
     jsonRpcRequestFailures.set("thread/start", "thread/start failed");
 

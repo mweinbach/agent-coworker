@@ -38,6 +38,16 @@ type SkillInstallWaiter = {
   reject: (err: Error) => void;
 };
 
+export type PendingThreadMessage = {
+  text: string;
+  /**
+   * Present when the message was already rendered as an optimistic user bubble
+   * at queue time; the eventual send reuses it so the bubble is not duplicated
+   * and the server echo dedups against it.
+   */
+  clientMessageId?: string;
+};
+
 export type RuntimeMaps = {
   jsonRpcSockets: Map<string, JsonRpcSocket>;
   workspaceJsonRpcSocketGenerations: Map<string, number>;
@@ -46,7 +56,7 @@ export type RuntimeMaps = {
   /** Latest in-flight plugin install per workspace; resolved when `plugins_catalog` completes the matching pending key. */
   pluginInstallWaiters: Map<string, SkillInstallWaiter>;
   optimisticUserMessageIds: Map<string, Set<string>>;
-  pendingThreadMessages: Map<string, string[]>;
+  pendingThreadMessages: Map<string, PendingThreadMessage[]>;
   pendingThreadAttachments: Map<
     string,
     Array<import("./jsonRpcSocket").FileAttachmentInput[] | undefined>
@@ -125,11 +135,12 @@ export function queuePendingThreadMessage(
   text: string,
   attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
   references?: TurnReference[],
+  clientMessageId?: string,
 ) {
   const trimmed = text.trim();
   if (!trimmed && (!attachments || attachments.length === 0)) return;
   const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-  existing.push(trimmed);
+  existing.push({ text: trimmed, ...(clientMessageId ? { clientMessageId } : {}) });
   RUNTIME.pendingThreadMessages.set(threadId, existing);
   const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
   existingAttachments.push(attachments && attachments.length > 0 ? attachments : undefined);
@@ -165,7 +176,7 @@ export function shiftPendingThreadReferences(threadId: string): TurnReference[] 
   return next;
 }
 
-export function shiftPendingThreadMessage(threadId: string): string | undefined {
+export function shiftPendingThreadMessage(threadId: string): PendingThreadMessage | undefined {
   const existing = RUNTIME.pendingThreadMessages.get(threadId);
   if (!existing || existing.length === 0) return undefined;
   const next = existing.shift();
@@ -182,11 +193,12 @@ export function prependPendingThreadMessageWithAttachments(
   text: string,
   attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
   references?: TurnReference[],
+  clientMessageId?: string,
 ) {
   const trimmed = text.trim();
   if (!trimmed && (!attachments || attachments.length === 0)) return;
   const existingMessages = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-  existingMessages.unshift(trimmed);
+  existingMessages.unshift({ text: trimmed, ...(clientMessageId ? { clientMessageId } : {}) });
   RUNTIME.pendingThreadMessages.set(threadId, existingMessages);
   const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
   existingAttachments.unshift(attachments && attachments.length > 0 ? attachments : undefined);

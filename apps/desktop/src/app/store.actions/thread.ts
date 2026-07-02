@@ -5,6 +5,7 @@ import {
 } from "../../lib/composerAttachments";
 import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
+import { buildAttachmentSignature, buildUserInputDisplayText } from "../attachmentInputs";
 import {
   googleProviderOptionsForReasoningEffort,
   isGoogleReasoningEffortValue,
@@ -46,12 +47,15 @@ import {
   syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
+import type { FileAttachmentInput } from "../store.helpers/jsonRpcSocket";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import { MAX_FEED_ITEMS } from "../store.helpers/threadEventReducerContext";
 import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
+  type FeedItem,
   isOneOffChatWorkspace,
   type SandboxApprovalPrompt,
   type SessionSnapshot,
@@ -66,6 +70,59 @@ type HydrateThreadSelectionOptions = {
   reconnectAfterHydration?: boolean;
   skipWorkspaceSelectOnReconnect?: boolean;
 };
+
+/**
+ * Queue the first message of a brand-new chat AND render its user bubble
+ * immediately, before the workspace socket/thread session exist. The
+ * pre-generated clientMessageId travels with the queued message so the
+ * eventual `turn/start` reuses it and the server echo dedups against the
+ * optimistic bubble instead of rendering a duplicate.
+ */
+function queueOptimisticFirstThreadMessage(
+  set: StoreSet,
+  threadId: string,
+  text: string,
+  attachments?: FileAttachmentInput[],
+  references?: import("../../lib/wsProtocol").TurnReference[],
+): void {
+  const trimmed = text.trim();
+  const hasAttachments = (attachments?.length ?? 0) > 0;
+  if (!trimmed && !hasAttachments) return;
+
+  const clientMessageId = makeId();
+  queuePendingThreadMessage(threadId, trimmed, attachments, references, clientMessageId);
+
+  const optimisticSeen = RUNTIME.optimisticUserMessageIds.get(threadId) ?? new Set<string>();
+  optimisticSeen.add(clientMessageId);
+  RUNTIME.optimisticUserMessageIds.set(threadId, optimisticSeen);
+
+  const bubble: FeedItem = {
+    id: clientMessageId,
+    kind: "message",
+    role: "user",
+    ts: nowIso(),
+    text: buildUserInputDisplayText(trimmed, attachments),
+  };
+  set((s) => {
+    const rt = s.threadRuntimeById[threadId];
+    if (!rt) return {};
+    return {
+      threadRuntimeById: {
+        ...s.threadRuntimeById,
+        [threadId]: {
+          ...rt,
+          feed: [...rt.feed, bubble].slice(-MAX_FEED_ITEMS),
+          pendingTurnStart: {
+            clientMessageId,
+            text: trimmed,
+            attachmentSignature: buildAttachmentSignature(attachments),
+            status: "sending",
+          },
+        },
+      },
+    };
+  });
+}
 
 function findLatestSandboxApprovalPrompt(
   state: AppStoreState,
@@ -956,7 +1013,13 @@ export function createThreadActions(
       const hasFirstMessage = Boolean(firstMessage.trim());
       const hasResolvedAttachments = Boolean(resolvedAttachments && resolvedAttachments.length > 0);
       if (hasFirstMessage || hasResolvedAttachments) {
-        queuePendingThreadMessage(threadId, firstMessage, resolvedAttachments, opts?.references);
+        queueOptimisticFirstThreadMessage(
+          set,
+          threadId,
+          firstMessage,
+          resolvedAttachments,
+          opts?.references,
+        );
       }
       ensureThreadSocket(
         get,

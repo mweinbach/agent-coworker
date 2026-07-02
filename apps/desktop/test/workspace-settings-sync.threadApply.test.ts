@@ -90,7 +90,10 @@ describe("workspace settings sync", () => {
   test("applyWorkspaceDefaultsToThread flushes the oldest queued message after defaults apply", async () => {
     primeWorkspaceConnection();
     const { threadId, sessionId } = seedConnectedThread();
-    RUNTIME.pendingThreadMessages.set(threadId, ["first queued", "second queued"]);
+    RUNTIME.pendingThreadMessages.set(threadId, [
+      { text: "first queued" },
+      { text: "second queued" },
+    ]);
     jsonRpcRequests.length = 0;
 
     await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
@@ -101,7 +104,7 @@ describe("workspace settings sync", () => {
       threadId: sessionId,
       input: [{ type: "text", text: "first queued" }],
     });
-    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual(["second queued"]);
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual([{ text: "second queued" }]);
   });
 
   test("applyWorkspaceDefaultsToThread flushes queued attachment-only sends after defaults apply", async () => {
@@ -112,7 +115,7 @@ describe("workspace settings sync", () => {
       contentBase64: "aGVsbG8=",
       mimeType: "image/png",
     };
-    RUNTIME.pendingThreadMessages.set(threadId, ["", "second queued"]);
+    RUNTIME.pendingThreadMessages.set(threadId, [{ text: "" }, { text: "second queued" }]);
     RUNTIME.pendingThreadAttachments.set(threadId, [[attachment], undefined]);
     jsonRpcRequests.length = 0;
 
@@ -124,7 +127,7 @@ describe("workspace settings sync", () => {
       threadId: sessionId,
       input: [{ type: "file", ...attachment }],
     });
-    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual(["second queued"]);
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual([{ text: "second queued" }]);
     expect(RUNTIME.pendingThreadAttachments.get(threadId)).toEqual([undefined]);
   });
 

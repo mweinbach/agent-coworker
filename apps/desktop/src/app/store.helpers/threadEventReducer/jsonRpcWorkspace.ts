@@ -280,6 +280,7 @@ export function createJsonRpcWorkspaceModule(
           busy: false,
           busySince: null,
           activeTurnId: null,
+          pendingTurnStart: null,
           pendingSteer: null,
         };
       }

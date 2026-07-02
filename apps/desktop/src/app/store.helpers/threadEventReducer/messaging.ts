@@ -129,6 +129,18 @@ export function createMessagingModule(
     }
 
     surfaceJsonRpcTurnSendFailure(set, threadId);
+    // A queued first message may have set an optimistic pendingTurnStart; clear
+    // it so the composer does not stay stuck in the "Sending" state.
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt?.pendingTurnStart) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...rt, pendingTurnStart: null },
+        },
+      };
+    });
     set((s) => ({
       notifications: ctx.deps.pushNotification(s.notifications, {
         id: ctx.deps.makeId(),
@@ -292,6 +304,7 @@ export function createMessagingModule(
     busyPolicy: ThreadBusyPolicy = "reject",
     attachments?: FileAttachmentInput[],
     references?: TurnReference[],
+    presetClientMessageId?: string,
   ): boolean {
     const trimmed = text.trim();
     const hasAttachments = attachments && attachments.length > 0;
@@ -305,7 +318,14 @@ export function createMessagingModule(
 
     const rt = get().threadRuntimeById[threadId];
     if (!rt?.sessionId) return false;
-    if (rt.pendingTurnStart?.status === "sending") return false;
+    // A pending turn start blocks new sends, except when it is the optimistic
+    // placeholder for this very message (queued at new-chat send time).
+    if (
+      rt.pendingTurnStart?.status === "sending" &&
+      rt.pendingTurnStart.clientMessageId !== presetClientMessageId
+    ) {
+      return false;
+    }
 
     if (rt.busy) {
       if (busyPolicy === "queue") {
@@ -376,7 +396,7 @@ export function createMessagingModule(
       return false;
     }
 
-    const clientMessageId = ctx.deps.makeId();
+    const clientMessageId = presetClientMessageId ?? ctx.deps.makeId();
     const optimisticSeen = RUNTIME.optimisticUserMessageIds.get(threadId) ?? new Set<string>();
     optimisticSeen.add(clientMessageId);
     RUNTIME.optimisticUserMessageIds.set(threadId, optimisticSeen);
@@ -400,13 +420,16 @@ export function createMessagingModule(
       };
     });
 
-    pushFeedItem(set, threadId, {
-      id: clientMessageId,
-      kind: "message",
-      role: "user",
-      ts: ctx.deps.nowIso(),
-      text: displayText,
-    });
+    const alreadyInFeed = rt.feed.some((item) => item.id === clientMessageId);
+    if (!alreadyInFeed) {
+      pushFeedItem(set, threadId, {
+        id: clientMessageId,
+        kind: "message",
+        role: "user",
+        ts: ctx.deps.nowIso(),
+        text: displayText,
+      });
+    }
 
     ctx.deps.appendThreadTranscript(threadId, "client", {
       type: "user_message",
@@ -441,17 +464,19 @@ export function createMessagingModule(
       get,
       set,
       threadId,
-      next,
+      next.text,
       undefined,
       queuedAttachments,
       queuedReferences,
+      next.clientMessageId,
     );
     if (!accepted) {
       prependPendingThreadMessageWithAttachments(
         threadId,
-        next,
+        next.text,
         queuedAttachments,
         queuedReferences,
+        next.clientMessageId,
       );
     }
     return accepted;

@@ -18,13 +18,32 @@ describe("runtimeState pending thread message queue", () => {
     queuePendingThreadMessage("thread-1", "first");
     queuePendingThreadMessage("thread-1", "second");
 
-    expect(shiftPendingThreadMessage("thread-1")).toBe("first");
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "first" });
 
     prependPendingThreadMessageWithAttachments("thread-1", "first");
 
-    expect(shiftPendingThreadMessage("thread-1")).toBe("first");
-    expect(shiftPendingThreadMessage("thread-1")).toBe("second");
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "first" });
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "second" });
     expect(shiftPendingThreadMessage("thread-1")).toBeUndefined();
+  });
+
+  test("carries a pre-generated clientMessageId through queue, shift, and prepend", () => {
+    queuePendingThreadMessage("thread-1", "optimistic", undefined, undefined, "client-1");
+
+    const shifted = shiftPendingThreadMessage("thread-1");
+    expect(shifted).toEqual({ text: "optimistic", clientMessageId: "client-1" });
+
+    prependPendingThreadMessageWithAttachments(
+      "thread-1",
+      "optimistic",
+      undefined,
+      undefined,
+      "client-1",
+    );
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({
+      text: "optimistic",
+      clientMessageId: "client-1",
+    });
   });
 
   test("prepends attachment-only retries without desynchronizing the attachment FIFO", () => {
@@ -38,9 +57,9 @@ describe("runtimeState pending thread message queue", () => {
     queuePendingThreadMessage("thread-1", "", secondAttachment);
     prependPendingThreadMessageWithAttachments("thread-1", "", firstAttachment);
 
-    expect(shiftPendingThreadMessage("thread-1")).toBe("");
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "" });
     expect(shiftPendingThreadAttachments("thread-1")).toEqual(firstAttachment);
-    expect(shiftPendingThreadMessage("thread-1")).toBe("");
+    expect(shiftPendingThreadMessage("thread-1")).toEqual({ text: "" });
     expect(shiftPendingThreadAttachments("thread-1")).toEqual(secondAttachment);
     expect(shiftPendingThreadMessage("thread-1")).toBeUndefined();
     expect(shiftPendingThreadAttachments("thread-1")).toBeUndefined();

@@ -181,7 +181,10 @@ function uniqueCatalogEfforts(values: readonly CatalogReasoningEffort[]): Catalo
 }
 
 function reasoningConfigForModel(
-  model: Pick<SupportedModel, "id" | "provider" | "providerOptionsDefaults" | "supportedReasoningEfforts">,
+  model: Pick<
+    SupportedModel,
+    "id" | "provider" | "providerOptionsDefaults" | "supportedReasoningEfforts"
+  >,
   opts: { liveEfforts?: readonly CatalogReasoningEffort[] } = {},
 ): ProviderCatalogModelEntry["reasoning"] {
   if (model.provider === "google") {

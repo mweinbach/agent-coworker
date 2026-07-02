@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  spawnStreamingSubprocess,
-  subscribeLines,
-} from "../src/utils/subprocess";
+import { spawnStreamingSubprocess, subscribeLines } from "../src/utils/subprocess";
 
 const encoder = new TextEncoder();
 
@@ -18,9 +15,7 @@ function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   });
 }
 
-async function collectLines(
-  stream: ReadableStream<Uint8Array>,
-): Promise<string[]> {
+async function collectLines(stream: ReadableStream<Uint8Array>): Promise<string[]> {
   const lines: string[] = [];
   const subscription = subscribeLines(stream, (line) => {
     lines.push(line);
@@ -42,10 +37,7 @@ async function waitForLineCount(lines: string[], expected: number): Promise<void
 describe("subscribeLines", () => {
   test("splits LF and CRLF lines across chunks and flushes trailing text", async () => {
     const lines = await collectLines(
-      streamFromChunks([
-        encoder.encode("alpha\r\nbr"),
-        encoder.encode("avo\ncharlie"),
-      ]),
+      streamFromChunks([encoder.encode("alpha\r\nbr"), encoder.encode("avo\ncharlie")]),
     );
 
     expect(lines).toEqual(["alpha", "bravo", "charlie"]);
@@ -53,17 +45,13 @@ describe("subscribeLines", () => {
 
   test("preserves UTF-8 characters split across chunk boundaries", async () => {
     const bytes = encoder.encode("snowman: \u2603\n");
-    const lines = await collectLines(
-      streamFromChunks([bytes.slice(0, 10), bytes.slice(10)]),
-    );
+    const lines = await collectLines(streamFromChunks([bytes.slice(0, 10), bytes.slice(10)]));
 
     expect(lines).toEqual(["snowman: \u2603"]);
   });
 
   test("close stops callbacks and resolves the subscription", async () => {
-    let streamController:
-      | ReadableStreamDefaultController<Uint8Array>
-      | undefined;
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         streamController = controller;
@@ -135,11 +123,7 @@ describe("spawnStreamingSubprocess", () => {
   });
 
   test("kill is safe before and after exit", async () => {
-    const child = spawnStreamingSubprocess([
-      process.execPath,
-      "-e",
-      "setTimeout(() => {}, 10000)",
-    ]);
+    const child = spawnStreamingSubprocess([process.execPath, "-e", "setTimeout(() => {}, 10000)"]);
 
     child.kill("SIGTERM");
     const exit = await child.exited;
@@ -150,9 +134,7 @@ describe("spawnStreamingSubprocess", () => {
 
   test("throws when the executable cannot be spawned", () => {
     expect(() =>
-      spawnStreamingSubprocess([
-        "/definitely/not/a/real/binary/agent-coworker-subprocess-test",
-      ]),
+      spawnStreamingSubprocess(["/definitely/not/a/real/binary/agent-coworker-subprocess-test"]),
     ).toThrow();
   });
 });

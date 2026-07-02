@@ -100,7 +100,8 @@ describe("model registry invariants", () => {
       if (!efforts) continue;
       const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
       expect(
-        typeof defaultEffort === "string" && efforts.includes(defaultEffort as (typeof efforts)[number]),
+        typeof defaultEffort === "string" &&
+          efforts.includes(defaultEffort as (typeof efforts)[number]),
         `${model.provider}:${model.id} default effort ${String(defaultEffort)} must be listed in supportedReasoningEfforts`,
       ).toBe(true);
     }

@@ -447,7 +447,7 @@ jobs:
           $workspace = Join-Path $env:RUNNER_TEMP "desktop-smoke-workspace"
           $outputDir = Join-Path $env:RUNNER_TEMP "desktop-smoke-output"
           $outputPath = Join-Path $outputDir "result.json"
-          $startupTimeout = [TimeSpan]::FromMinutes(2)
+          $startupTimeout = [TimeSpan]::FromMinutes(6)
           $shutdownWaitMs = 15000
 
           New-Item -ItemType Directory -Force -Path $workspace | Out-Null

@@ -137,6 +137,7 @@ describe("desktop release workflow", () => {
     expect(workflow).not.toContain("managed-soffice-helper.mjs");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_OUTPUT");
+    expect(workflow).toContain("$startupTimeout = [TimeSpan]::FromMinutes(6)");
     expect(workflow).toContain(
       "Start-Process -FilePath $appExe.FullName -WorkingDirectory $appExe.DirectoryName -PassThru",
     );

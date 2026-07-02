@@ -89,23 +89,23 @@ describe("desktop release workflow", () => {
     expect(workflow).toMatch(
       /- name: Stage Windows desktop release assets[\s\S]*?apps\/desktop\/release\/\*-win-\$\{\{ matrix\.build_arch \}\}\.exe[\s\S]*?Copy-Item "apps\/desktop\/release\/latest\.yml" -Destination \(Join-Path \$stagingDir "\$\{\{ matrix\.updater_metadata_name \}\}"\)/,
     );
-    expect(workflow).toContain("- name: Validate Windows signing inputs");
-    expect(workflow).toContain("Unsigned Windows production releases are forbidden");
-    expect(workflow).toContain(
-      "Publishing Authenticode-signed installer, trusted helpers, and updater metadata.",
-    );
-    expect(workflow).not.toContain("publishing unsigned installer");
+    expect(workflow).toContain("- name: Configure Windows signing");
+    expect(workflow).toContain("COWORK_WIN_SIGN_RELEASE=true");
+    expect(workflow).toContain("building unsigned release artifacts");
+    expect(workflow).toContain("Publishing unsigned installer, trusted helpers, and updater metadata.");
+    expect(workflow).not.toContain("Unsigned Windows production releases are forbidden");
   });
 
-  test("verifies Authenticode and post-signing hashes for every sandbox helper", () => {
+  test("verifies Authenticode and post-signing hashes for every sandbox helper when signing is enabled", () => {
     expect(workflow).toContain("cowork-win-sandbox.exe");
     expect(workflow).toContain("codex-windows-sandbox-setup.exe");
     expect(workflow).toContain("codex-command-runner.exe");
     expect(workflow).toContain("Get-AuthenticodeSignature -LiteralPath $filePath");
     expect(workflow).toContain("cowork-win-sandbox.sha256.json");
     expect(workflow).toContain("Post-signing sandbox hash mismatch");
+    expect(workflow).toContain("- name: Verify Windows release artifacts");
     expect(builderConfig).toContain("afterPack: scripts/afterPack.cjs");
-    expect(builderConfig).toContain("forceCodeSigning: true");
+    expect(builderConfig).toContain("forceCodeSigning: false");
     expect(builderConfig).toContain("verifyUpdateCodeSignature: true");
   });
 

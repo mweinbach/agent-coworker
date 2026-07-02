@@ -52,7 +52,7 @@ mac:
 win:
   icon: build/icon.ico
   artifactName: ${productName}-${version}-${os}-${arch}.${ext}
-  forceCodeSigning: true
+  forceCodeSigning: false
   verifyUpdateCodeSignature: true
   target:
     - nsis

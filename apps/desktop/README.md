@@ -70,10 +70,10 @@ Required for signed and notarized macOS releases:
 - either `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` for App Store Connect API-key notarization
 - or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` for Apple ID notarization
 
-Windows release secrets:
-- `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` for Windows-only signing
+Windows release secrets (optional):
+- `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` for Windows Authenticode signing when available
 
-If `WIN_CSC_LINK` is not configured, the Windows CI job still publishes the platform-specific updater metadata (`latest.yml` for x64, `latest-arm64.yml` for ARM64) and the installer `.blockmap` alongside the unsigned `.exe`, so GitHub Releases remain usable as the Windows auto-update feed. This keeps updater-driven installs working without Windows signing, but new installs should still expect SmartScreen warnings and there is no signature-based trust check on the downloaded update payload.
+If `WIN_CSC_LINK` is not configured, the Windows CI job builds unsigned installers and still publishes the platform-specific updater metadata (`latest.yml` for x64, `latest-arm64.yml` for ARM64) and the installer `.blockmap` alongside the unsigned `.exe`, so GitHub Releases remain usable as the Windows auto-update feed. This keeps updater-driven installs working without Windows signing, but new installs should still expect SmartScreen warnings and there is no signature-based trust check on the downloaded update payload.
 
 In GitHub Actions, store `APPLE_API_KEY` as the raw `.p8` file contents. The workflow writes it to a temporary file before packaging.
 The macOS job now fails before upload if those signing/notarization inputs are missing, and it validates the packaged `.app` with `codesign`, `stapler`, and `spctl`.

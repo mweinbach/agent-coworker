@@ -59,6 +59,22 @@ export function resolveNativeElectronDist(
   return installedElectronDist;
 }
 
+export function resolveWindowsSigningConfig(
+  args: string[],
+  env: BuildEnvironment = process.env,
+  host: BuildHost = { platform: process.platform, arch: process.arch },
+): string[] {
+  if (targetPlatform(args, env, host.platform) !== "win32") {
+    return [];
+  }
+
+  if (env.CSC_LINK && env.CSC_KEY_PASSWORD) {
+    return [];
+  }
+
+  return ["--config.win.verifyUpdateCodeSignature=false"];
+}
+
 async function main(): Promise<void> {
   const forwardedArgs = process.argv.slice(2);
   const electronDist = resolveNativeElectronDist(forwardedArgs);
@@ -68,6 +84,7 @@ async function main(): Promise<void> {
     "--config",
     "electron-builder.yml",
     ...forwardedArgs,
+    ...resolveWindowsSigningConfig(forwardedArgs),
     ...(electronDist ? [`--config.electronDist=${electronDist}`] : []),
   ];
   const child = Bun.spawn([process.execPath, ...args], {

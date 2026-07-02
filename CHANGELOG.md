@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.4 - 2026-07-02
+
+### Changed
+
+- **Optional Windows release signing** — Desktop release builds now sign Windows
+  installers and sandbox helpers only when `WIN_CSC_LINK` and
+  `WIN_CSC_KEY_PASSWORD` are configured. Unsigned releases still publish
+  updater metadata and pass sandbox hash verification, with auto-update signature
+  checks disabled for those builds.
+
 ## 1.2.3 - 2026-07-02
 
 ### Added

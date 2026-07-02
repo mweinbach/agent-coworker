@@ -152,9 +152,9 @@ filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
   Desktop resources contain `cowork-win-sandbox.exe`,
   `codex-windows-sandbox-setup.exe`, `codex-command-runner.exe`, and a SHA-256
   manifest. Development rebuilds the bundle and passes absolute paths plus all
-  three hashes to the source server. Packaged builds additionally require valid
-  Authenticode signatures; the release workflow refuses unsigned Windows
-  artifacts. A missing helper, hash/signature mismatch, cancelled UAC prompt, or
+  Packaged builds additionally require valid Authenticode signatures when the
+  release is signed; unsigned releases skip signature checks but still verify
+  the bundled helper hashes. A missing helper, hash/signature mismatch, cancelled UAC prompt, or
   failed/stale probe leaves restricted commands fail-closed and records repair
   diagnostics. Only the setup/health path runs automatically in that state;
   free-form shell execution still requires the explicit sandbox-escape approval

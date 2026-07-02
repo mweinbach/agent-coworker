@@ -1151,7 +1151,9 @@ export function createThreadActions(
       if (!thread) return false;
 
       if (!(thread.workspaceId in get().taskSummariesByWorkspaceId)) {
-        await get().refreshTasks(thread.workspaceId);
+        // Warm task summaries without blocking the send; the server enforces
+        // task locks authoritatively and the UI catches up when this resolves.
+        void get().refreshTasks(thread.workspaceId);
       }
 
       const rt = get().threadRuntimeById[activeThreadId];

@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import { type HTMLAttributes, type ReactNode, useMemo, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { cn } from "../../lib/utils";
@@ -140,6 +140,132 @@ export function SettingsEmptyState({
       </div>
       {action ? <div className="pt-1">{action}</div> : null}
     </div>
+  );
+}
+
+export function SettingsStatTile({
+  label,
+  value,
+  hint,
+  className,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  hint?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "settings-stat-tile min-w-0 rounded-lg border border-border/60 bg-card/80 px-4 py-3",
+        className,
+      )}
+    >
+      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        {label}
+      </div>
+      <div className="pt-1 text-lg font-semibold tabular-nums leading-tight text-foreground">
+        {value}
+      </div>
+      {hint ? <div className="pt-0.5 text-xs text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}
+
+const ENTITY_ICON_PALETTE = [
+  "bg-accent/12 text-accent",
+  "bg-success/12 text-success",
+  "bg-warning/15 text-warning-foreground",
+  "bg-foreground/[0.07] text-foreground/75",
+  "bg-accent/20 text-accent",
+] as const;
+
+function entityIconPaletteClass(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  }
+  return ENTITY_ICON_PALETTE[Math.abs(hash) % ENTITY_ICON_PALETTE.length] as string;
+}
+
+function isRenderableImageSource(src: string): boolean {
+  return src.startsWith("data:") || src.startsWith("http://") || src.startsWith("https://");
+}
+
+/**
+ * Icon for providers, plugins, skills, and MCP servers. Renders an image when
+ * `src` is a data URI or URL, a raw glyph (e.g. emoji) when `src` is short
+ * text, and otherwise a deterministic letter avatar derived from `name`.
+ */
+export function EntityIcon({
+  src,
+  name,
+  size = "md",
+  className,
+}: {
+  src?: string | null;
+  name: string;
+  size?: "sm" | "md" | "lg";
+  className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const sizeClass = size === "sm" ? "size-6" : size === "lg" ? "size-10" : "size-8";
+  const textClass = size === "sm" ? "text-[10px]" : size === "lg" ? "text-base" : "text-xs";
+  const paletteClass = useMemo(() => entityIconPaletteClass(name), [name]);
+  const trimmed = src?.trim() ?? "";
+
+  if (trimmed && !failed && isRenderableImageSource(trimmed)) {
+    return (
+      <img
+        src={trimmed}
+        alt=""
+        aria-hidden="true"
+        onError={() => setFailed(true)}
+        className={cn(
+          "shrink-0 rounded-md border border-border/45 bg-background object-contain",
+          sizeClass,
+          className,
+        )}
+      />
+    );
+  }
+
+  if (trimmed && !failed && trimmed.length <= 3) {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex shrink-0 items-center justify-center rounded-md",
+          sizeClass,
+          size === "lg" ? "text-xl" : "text-sm",
+          className,
+        )}
+      >
+        {trimmed}
+      </span>
+    );
+  }
+
+  const initials = name
+    .split(/[\s\-_/]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => (part[0] ?? "").toUpperCase())
+    .join("");
+
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "flex shrink-0 select-none items-center justify-center rounded-md font-semibold",
+        sizeClass,
+        textClass,
+        paletteClass,
+        className,
+      )}
+    >
+      {initials || "?"}
+    </span>
   );
 }
 

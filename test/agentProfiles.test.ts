@@ -454,6 +454,35 @@ describe("agent profile catalog", () => {
     await expect(fs.access(overridesPath)).rejects.toThrow();
   });
 
+  test("rejects the reserved workspace overrides profile id", async () => {
+    const config = await makeConfig();
+    await upsertAgentProfile(config, profile());
+    const overridesPath = path.join(
+      getAgentProfileDir(config, "workspace"),
+      "workspace-overrides.json",
+    );
+    await setAgentProfileWorkspaceAvailability(config, "research", true);
+
+    await expect(
+      upsertAgentProfile(config, profile({ scope: "workspace", id: "workspace-overrides" })),
+    ).rejects.toThrow("Reserved subagent profile id: workspace-overrides");
+    await expect(
+      copyAgentProfile(config, {
+        sourceRef: "global:qa-reviewer",
+        targetScope: "workspace",
+        targetId: "workspace-overrides",
+      }),
+    ).rejects.toThrow("Reserved subagent profile id: workspace-overrides");
+    await expect(deleteAgentProfile(config, "workspace", "workspace-overrides")).rejects.toThrow(
+      "Reserved subagent profile id: workspace-overrides",
+    );
+
+    expect(JSON.parse(await fs.readFile(overridesPath, "utf-8"))).toEqual({
+      version: 1,
+      disabledGlobalProfileIds: ["research"],
+    });
+  });
+
   test("workspace availability rejects the locked main profile and unknown ids", async () => {
     const config = await makeConfig();
 

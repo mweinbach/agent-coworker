@@ -680,10 +680,63 @@ describe("settings nav (store)", () => {
   });
 
   test("openSkills routes to Settings > Tool Access", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          workspaceKind: "project",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+    });
+
     await useAppStore.getState().openSkills();
     const state = useAppStore.getState();
     expect(state.view).toBe("settings");
     expect(state.settingsPage).toBe("toolAccess");
+  });
+
+  test("openSkills asks for a workspace instead of opening empty Tool Access", async () => {
+    await useAppStore.getState().openSkills();
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.settingsPage).toBe("providers");
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "info",
+      title: "Skills need a workspace",
+      detail: "Add or select a workspace first.",
+    });
+  });
+
+  test("openSkills preserves the disabled workspace lifecycle notice", async () => {
+    useAppStore.setState({
+      desktopFeatureFlags: {
+        menuBar: true,
+        remoteAccess: true,
+        workspacePicker: true,
+        workspaceLifecycle: false,
+        openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
+      },
+    });
+
+    await useAppStore.getState().openSkills();
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "info",
+      title: "Workspace management is disabled",
+    });
   });
 
   test("openResearch requires a saved Google API key", async () => {

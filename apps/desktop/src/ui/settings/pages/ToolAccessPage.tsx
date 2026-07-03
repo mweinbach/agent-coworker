@@ -2,6 +2,7 @@ import { DownloadIcon, PackageIcon, RefreshCwIcon, SparklesIcon, StoreIcon } fro
 import { useEffect, useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { resolveProjectWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { Switch } from "../../../components/ui/switch";
@@ -435,7 +436,8 @@ export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string
 export function useToolAccessCatalogWorkspaceId(): string | null {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  return workspaces.some((workspace) => workspace.id === selectedWorkspaceId)
-    ? selectedWorkspaceId
-    : (workspaces[0]?.id ?? null);
+  return useMemo(
+    () => resolveProjectWorkspaceId(workspaces, selectedWorkspaceId),
+    [workspaces, selectedWorkspaceId],
+  );
 }

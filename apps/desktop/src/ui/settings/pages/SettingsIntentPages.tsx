@@ -26,12 +26,14 @@ export function ToolAccessSettingsPage() {
   );
   const catalogWorkspaceId = useToolAccessCatalogWorkspaceId();
   const workspaces = useAppStore((s) => s.workspaces);
-  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const workspace = useMemo(
-    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
-    [workspaces, selectedWorkspaceId],
+    () =>
+      catalogWorkspaceId
+        ? (workspaces.find((entry) => entry.id === catalogWorkspaceId) ?? null)
+        : null,
+    [workspaces, catalogWorkspaceId],
   );
 
   return (

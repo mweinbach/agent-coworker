@@ -59,7 +59,40 @@ export function createSkillActions(
 
   return {
     openSkills: async () => {
-      // Plugins/skills management lives in Settings > Tool Access.
+      let workspaceId = managementWorkspaceId();
+      if (!workspaceId) {
+        if (get().desktopFeatureFlags.workspaceLifecycle === false) {
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "info",
+              title: "Workspace management is disabled",
+              detail:
+                "Enable Workspace lifecycle actions in Settings -> Feature Flags to add a workspace.",
+            }),
+          }));
+          return;
+        }
+        await get().addWorkspace();
+        workspaceId = managementWorkspaceId();
+        if (!workspaceId) {
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "info",
+              title: "Skills need a workspace",
+              detail: "Add or select a workspace first.",
+            }),
+          }));
+          return;
+        }
+      }
+
+      if (get().selectedWorkspaceId !== workspaceId) {
+        set({ selectedWorkspaceId: workspaceId });
+      }
       get().openSettings("toolAccess");
     },
 

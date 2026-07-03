@@ -27,6 +27,7 @@ import { AGENT_ROLE_DEFINITIONS } from "./roles";
 
 const PROFILE_DIR_NAME = "agent-profiles";
 const WORKSPACE_OVERRIDES_FILE_NAME = "workspace-overrides.json";
+const WORKSPACE_OVERRIDES_PROFILE_ID = "workspace-overrides";
 const MAIN_AGENT_PROFILE_ID = "default";
 
 const BUILT_IN_PROFILE_DISPLAY_NAMES: Record<AgentRole, string> = {
@@ -284,6 +285,7 @@ export async function deleteAgentProfile(
 ): Promise<AgentProfilesCatalog> {
   const scope = agentProfileScopeSchema.parse(scopeRaw);
   const id = agentProfileIdSchema.parse(idRaw);
+  assertWritableProfileId(id);
   const filePath = profilePathForId(config, scope, id);
   try {
     await fs.unlink(filePath);
@@ -352,10 +354,17 @@ async function writeProfileFile(
   profile: AgentProfileDefinition,
 ): Promise<void> {
   const normalized = applyAgentProfileInvariants(normalizeAgentProfileDefinition(profile));
+  assertWritableProfileId(normalized.id);
   const dir = getAgentProfileDir(config, scope);
   await fs.mkdir(dir, { recursive: true });
   const filePath = profilePathForId(config, scope, normalized.id);
   await fs.writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
+}
+
+function assertWritableProfileId(id: string): void {
+  if (id === WORKSPACE_OVERRIDES_PROFILE_ID) {
+    throw new Error(`Reserved subagent profile id: ${id}`);
+  }
 }
 
 async function buildBuiltInProfileEntries(

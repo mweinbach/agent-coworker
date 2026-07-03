@@ -10,6 +10,7 @@ import {
   type StoreSet,
 } from "../store.helpers";
 import type { WorkspaceRuntime } from "../types";
+import { resolveProjectWorkspaceId } from "../workspaceDisplayTargets";
 
 export type MutationDomain = "skill" | "plugin";
 
@@ -85,10 +86,7 @@ export const workspacePathFor = (get: StoreGet, workspaceId: string): string | u
 
 export const managementWorkspaceIdFor = (get: StoreGet): string | null => {
   const state = get();
-  const workspaces = state.workspaces ?? [];
-  return workspaces.some((workspace) => workspace.id === state.selectedWorkspaceId)
-    ? state.selectedWorkspaceId
-    : (workspaces[0]?.id ?? null);
+  return resolveProjectWorkspaceId(state.workspaces ?? [], state.selectedWorkspaceId);
 };
 
 export function clearFailedMutationSend(

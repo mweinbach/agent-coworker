@@ -1015,11 +1015,8 @@ describe("desktop server manager startup mode", () => {
     }
   });
 
-  test("buildServerEnv enables OpenAI native connectors only from the desktop feature flag", () => {
-    const previous = process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
-    delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
-
-    try {
+  test("buildServerEnv enables OpenAI native connectors only from the desktop feature flag", async () => {
+    await withProcessEnv({ COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }, () => {
       expect(__internal.buildServerEnv().COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS).toBe(
         undefined,
       );
@@ -1031,13 +1028,15 @@ describe("desktop server manager startup mode", () => {
         __internal.buildServerEnv({ openAiNativeConnectors: true })
           .COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS,
       ).toBe("1");
-    } finally {
-      if (typeof previous === "string") {
-        process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS = previous;
-      } else {
-        delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
-      }
-    }
+    });
+  });
+
+  test("buildServerEnv enables tasks only from the desktop feature flag", async () => {
+    await withProcessEnv({ COWORK_ENABLE_TASKS: "1" }, () => {
+      expect(__internal.buildServerEnv().COWORK_ENABLE_TASKS).toBe(undefined);
+      expect(__internal.buildServerEnv({ tasks: false }).COWORK_ENABLE_TASKS).toBe(undefined);
+      expect(__internal.buildServerEnv({ tasks: true }).COWORK_ENABLE_TASKS).toBe("1");
+    });
   });
 
   test("only retries source startup automatically on Windows", () => {

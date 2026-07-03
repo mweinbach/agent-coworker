@@ -921,6 +921,8 @@ function buildServerEnv(
     withoutInheritedCrashReportingEnv(inheritedEnv),
   );
   delete processEnv.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP;
+  delete processEnv.COWORK_ENABLE_TASKS;
+  delete processEnv.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
   return {
     ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",

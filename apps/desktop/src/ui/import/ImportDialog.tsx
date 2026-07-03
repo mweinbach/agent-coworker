@@ -301,7 +301,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
 
   const homeSource: ImportSource | null = tab === "folder" ? null : tab;
   const state = homeSource
-    ? (runtime?.importItemsByKey[importKey(homeSource, kind)] ?? null)
+    ? (runtime?.importItemsByKey?.[importKey(homeSource, kind)] ?? null)
     : null;
   const pendingKeys = runtime?.importPendingKeys ?? {};
   const noun = kind === "plugin" ? "plugin" : "skill";

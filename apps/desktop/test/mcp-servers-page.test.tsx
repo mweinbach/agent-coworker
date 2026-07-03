@@ -113,7 +113,9 @@ describe("MCP servers settings page", () => {
       });
       expect(container.textContent).not.toContain("Command");
 
-      expect(container.textContent).not.toContain("builtin");
+      // All config layers are listed now, including system servers.
+      expect(container.textContent).toContain("builtin");
+      expect(container.textContent).toContain("system");
     } finally {
       if (root) {
         await act(async () => {

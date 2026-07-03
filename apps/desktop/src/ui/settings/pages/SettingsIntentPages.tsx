@@ -1,11 +1,15 @@
+import { PackageIcon } from "lucide-react";
+import { useMemo } from "react";
+
 import { useAppStore } from "../../../app/store";
-import { SettingsPage } from "../SettingsPrimitives";
+import { SettingsEmptyState, SettingsPage } from "../SettingsPrimitives";
 import { ArchivedChatsPage } from "./ArchivedChatsPage";
 import { McpServersPage } from "./McpServersPage";
 import { MemoryPage } from "./MemoryPage";
 import { OpenAiNativeConnectorsPage } from "./OpenAiNativeConnectorsPage";
 import { ProvidersPage } from "./ProvidersPage";
-import { WorkspacesPage } from "./WorkspacesPage";
+import { ToolAccessCatalogSections, useToolAccessCatalogWorkspaceId } from "./ToolAccessPage";
+import { SearchSettingsCard, WorkspacesPage } from "./WorkspacesPage";
 
 export function ModelsSettingsPage() {
   return (
@@ -20,12 +24,37 @@ export function ToolAccessSettingsPage() {
   const openAiNativeConnectorsAvailable = useAppStore(
     (s) => s.desktopFeatureFlags.openAiNativeConnectors === true,
   );
+  const catalogWorkspaceId = useToolAccessCatalogWorkspaceId();
+  const workspaces = useAppStore((s) => s.workspaces);
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const workspace = useMemo(
+    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
+    [workspaces, selectedWorkspaceId],
+  );
 
   return (
     <SettingsPage>
-      <ProvidersPage surface="tools" />
+      {catalogWorkspaceId ? (
+        <ToolAccessCatalogSections workspaceId={catalogWorkspaceId} />
+      ) : (
+        <SettingsEmptyState
+          icon={<PackageIcon />}
+          title="Pick a workspace"
+          description="Select a workspace to load plugin, skill, and MCP server catalogs."
+        />
+      )}
       <McpServersPage />
       {openAiNativeConnectorsAvailable ? <OpenAiNativeConnectorsPage /> : null}
+      {workspace ? (
+        <SearchSettingsCard
+          workspace={workspace}
+          updateWorkspaceDefaults={updateWorkspaceDefaults}
+          providerStatusByName={providerStatusByName}
+        />
+      ) : null}
+      <ProvidersPage surface="tools" />
     </SettingsPage>
   );
 }

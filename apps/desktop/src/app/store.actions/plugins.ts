@@ -138,6 +138,7 @@ export function createPluginActions(
     refreshPluginsCatalog: async () => {
       const workspaceId = managementWorkspaceIdFor(get);
       if (!workspaceId) return;
+      ensureWorkspaceRuntime(get, set, workspaceId);
       const cwd = workspacePathFor(get, workspaceId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -149,6 +150,22 @@ export function createPluginActions(
           },
         },
       }));
+      await ensureServerRunning(get, set, workspaceId);
+      const readyRuntime = get().workspaceRuntimeById[workspaceId];
+      if (!readyRuntime?.serverUrl || readyRuntime.error) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              pluginsLoading: false,
+              pluginsError: "Unable to refresh plugins catalog.",
+            },
+          },
+        }));
+        return;
+      }
+      ensureControlSocket(get, set, workspaceId);
       const ok = await requestJsonRpcControlEvent(
         get,
         set,

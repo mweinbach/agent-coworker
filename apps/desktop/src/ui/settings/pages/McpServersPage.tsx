@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import type { WorkspaceRuntime } from "../../../app/types";
+import { resolveProjectWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -87,10 +88,10 @@ export function McpServersPage() {
   const callbackWorkspaceMcpServerAuth = useAppStore((s) => s.callbackWorkspaceMcpServerAuth);
   const setWorkspaceMcpServerApiKey = useAppStore((s) => s.setWorkspaceMcpServerApiKey);
 
-  const workspace = useMemo(
-    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
-    [workspaces, selectedWorkspaceId],
-  );
+  const workspace = useMemo(() => {
+    const workspaceId = resolveProjectWorkspaceId(workspaces, selectedWorkspaceId);
+    return workspaceId ? (workspaces.find((entry) => entry.id === workspaceId) ?? null) : null;
+  }, [workspaces, selectedWorkspaceId]);
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
 
   const [editorState, setEditorState] = useState<EditorState | null>(null);
@@ -98,6 +99,9 @@ export function McpServersPage() {
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
   const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
+  const [validationServerKeyByName, setValidationServerKeyByName] = useState<
+    Record<string, string>
+  >({});
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const autoValidateSchedulerRef = useRef(
     createMcpAutoValidateScheduler((workspaceId: string, name: string) => {
@@ -116,6 +120,7 @@ export function McpServersPage() {
     clearAutoValidateTimer();
     setEditorState(null);
     setDraft(defaultDraftState());
+    setValidationServerKeyByName({});
     void requestWorkspaceMcpServers(workspace.id);
   }, [workspace?.id, requestWorkspaceMcpServers, workspace, clearAutoValidateTimer]);
 
@@ -131,6 +136,26 @@ export function McpServersPage() {
   const files = runtime?.mcpFiles ?? [];
   const warnings = runtime?.mcpWarnings ?? [];
   const validationByName = runtime?.mcpValidationByName ?? {};
+  const validationByServerKey = useMemo(() => {
+    const serversByName = new Map<string, RuntimeMcpServer[]>();
+    for (const server of servers) {
+      serversByName.set(server.name, [...(serversByName.get(server.name) ?? []), server]);
+    }
+
+    const next: typeof validationByName = {};
+    for (const [name, validation] of Object.entries(validationByName)) {
+      const matchingServers = serversByName.get(name) ?? [];
+      if (matchingServers.length === 1) {
+        next[serverIdentityKey(matchingServers[0])] = validation;
+        continue;
+      }
+      const serverKey = validationServerKeyByName[name];
+      if (serverKey && matchingServers.some((server) => serverIdentityKey(server) === serverKey)) {
+        next[serverKey] = validation;
+      }
+    }
+    return next;
+  }, [servers, validationByName, validationServerKeyByName]);
 
   const resetDraft = ({ clearAutoValidate = true }: { clearAutoValidate?: boolean } = {}) => {
     if (clearAutoValidate) clearAutoValidateTimer();
@@ -156,6 +181,14 @@ export function McpServersPage() {
 
   const toggleExpand = (key: string) => {
     setExpandedServers((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const validateServer = (workspaceId: string, server: RuntimeMcpServer) => {
+    setValidationServerKeyByName((prev) => ({
+      ...prev,
+      [server.name]: serverIdentityKey(server),
+    }));
+    void validateWorkspaceMcpServer(workspaceId, server.name);
   };
 
   const [parent] = useAutoAnimate();
@@ -399,6 +432,10 @@ export function McpServersPage() {
                     const workspaceId = workspace.id;
                     const previousName = getPreviousNameForUpsert(editorState);
                     void upsertWorkspaceMcpServer(workspaceId, next, previousName, "user");
+                    setValidationServerKeyByName((prev) => ({
+                      ...prev,
+                      [next.name]: serverIdentityKey({ name: next.name, source: "user" }),
+                    }));
                     autoValidateSchedulerRef.current.schedule(workspaceId, next.name);
                     resetDraft({ clearAutoValidate: false });
                   }}
@@ -435,7 +472,7 @@ export function McpServersPage() {
         {servers.map((server) => {
           const serverKey = serverIdentityKey(server);
           const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;
-          const validation = validationByName[server.name];
+          const validation = validationByServerKey[serverKey];
           const canEdit = server.source === "user";
           const apiKeyDraft = apiKeyByName[draftKey] ?? "";
           const oauthCode = oauthCodeByName[draftKey] ?? "";
@@ -597,9 +634,7 @@ export function McpServersPage() {
                       variant="secondary"
                       size="sm"
                       className="h-7 border-transparent bg-muted/40 text-xs text-foreground shadow-none hover:bg-muted/60"
-                      onClick={() =>
-                        workspace && void validateWorkspaceMcpServer(workspace.id, server.name)
-                      }
+                      onClick={() => workspace && validateServer(workspace.id, server)}
                     >
                       Validate Connection
                     </Button>

@@ -350,6 +350,9 @@ export function SubagentsPage() {
   const upsertAgentProfile = useAppStore((s) => s.upsertAgentProfile);
   const deleteAgentProfile = useAppStore((s) => s.deleteAgentProfile);
   const copyAgentProfile = useAppStore((s) => s.copyAgentProfile);
+  const setAgentProfileWorkspaceAvailability = useAppStore(
+    (s) => s.setAgentProfileWorkspaceAvailability,
+  );
   const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
@@ -429,6 +432,13 @@ export function SubagentsPage() {
         .filter((entry) => entry.scope === scope)
         .sort((left, right) => left.profile.displayName.localeCompare(right.profile.displayName)),
     [catalog?.profiles, scope],
+  );
+  const globalAvailabilityRows = useMemo(
+    () =>
+      (catalog?.profiles ?? [])
+        .filter((entry) => entry.scope === "global")
+        .sort((left, right) => left.profile.displayName.localeCompare(right.profile.displayName)),
+    [catalog?.profiles],
   );
 
   const mcpServerNames = useMemo(
@@ -615,6 +625,35 @@ export function SubagentsPage() {
             ))}
           </div>
         )}
+
+        {scope === "workspace" && globalAvailabilityRows.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            <div>
+              <div className="text-sm font-semibold text-foreground">
+                Global subagents in this workspace
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                Turn off global subagents you don't want available in this workspace. This only
+                affects the selected workspace.
+              </div>
+            </div>
+            <div className="app-shadow-surface divide-y divide-border/50 overflow-hidden rounded-xl border border-border/75 bg-card/85">
+              {globalAvailabilityRows.map((entry) => (
+                <GlobalAvailabilityRow
+                  key={`availability:${entry.profile.id}`}
+                  entry={entry}
+                  onAvailabilityChange={(available) =>
+                    void setAgentProfileWorkspaceAvailability(
+                      entry.profile.id,
+                      !available,
+                      workspace.id,
+                    )
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <ProfileDialog
@@ -723,6 +762,43 @@ function ProfileRow({
           <Trash2Icon />
         </Button>
       </div>
+    </div>
+  );
+}
+
+function GlobalAvailabilityRow({
+  entry,
+  onAvailabilityChange,
+}: {
+  entry: AgentProfileCatalogEntry;
+  onAvailabilityChange: (available: boolean) => void;
+}) {
+  const available = entry.workspaceDisabled !== true;
+  const overriddenByWorkspaceProfile = entry.shadowed === true;
+  const description =
+    entry.profile.description.trim() || `${ROLE_LABELS[entry.profile.baseRole]} template`;
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <EntityIcon name={entry.profile.displayName} />
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
+          {entry.locked ? <SettingsStatusPill>Always available</SettingsStatusPill> : null}
+          {overriddenByWorkspaceProfile ? (
+            <SettingsStatusPill tone="warning">Overridden by workspace subagent</SettingsStatusPill>
+          ) : null}
+          {!available && !overriddenByWorkspaceProfile ? (
+            <SettingsStatusPill tone="neutral">Off in this workspace</SettingsStatusPill>
+          ) : null}
+        </div>
+        <div className="line-clamp-1 text-xs text-muted-foreground">{description}</div>
+      </div>
+      <Switch
+        checked={available}
+        disabled={entry.locked === true || overriddenByWorkspaceProfile}
+        aria-label={`Toggle ${entry.profile.displayName} availability in this workspace`}
+        onCheckedChange={onAvailabilityChange}
+      />
     </div>
   );
 }

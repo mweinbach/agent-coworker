@@ -1380,6 +1380,14 @@ const agentProfilesCopyRequestSchema = z
   })
   .strict();
 
+const agentProfilesWorkspaceAvailabilitySetRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    id: nonEmptyTrimmedStringSchema,
+    disabled: z.boolean(),
+  })
+  .strict();
+
 const skillsCatalogReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1698,6 +1706,8 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/agentProfiles/upsert": agentProfilesUpsertRequestSchema,
   "cowork/agentProfiles/delete": agentProfilesDeleteRequestSchema,
   "cowork/agentProfiles/copy": agentProfilesCopyRequestSchema,
+  "cowork/agentProfiles/workspaceAvailability/set":
+    agentProfilesWorkspaceAvailabilitySetRequestSchema,
   "cowork/connectors/openai-native/list": cwdRequestSchema,
   "cowork/connectors/openai-native/refresh": cwdRequestSchema,
   "cowork/connectors/openai-native/setEnabled": cwdRequestSchema
@@ -1783,6 +1793,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/agentProfiles/upsert": sessionEventEnvelope(agentProfilesCatalogEventSchema),
   "cowork/agentProfiles/delete": sessionEventEnvelope(agentProfilesCatalogEventSchema),
   "cowork/agentProfiles/copy": sessionEventEnvelope(agentProfilesCatalogEventSchema),
+  "cowork/agentProfiles/workspaceAvailability/set": sessionEventEnvelope(
+    agentProfilesCatalogEventSchema,
+  ),
   "cowork/connectors/openai-native/list": sessionEventEnvelope(openAiNativeConnectorsEventSchema),
   "cowork/connectors/openai-native/refresh": sessionEventEnvelope(
     openAiNativeConnectorsEventSchema,

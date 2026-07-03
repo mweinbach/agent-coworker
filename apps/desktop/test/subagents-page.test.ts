@@ -741,7 +741,11 @@ describe("subagents settings page", () => {
         await flushUi();
       });
 
-      expect(container.textContent).not.toContain("Main Agent");
+      // Global profiles no longer render as workspace profile rows, but they
+      // do surface in the per-workspace availability list.
+      expect(container.textContent).toContain("No subagents in Project");
+      expect(container.textContent).toContain("Global subagents in this workspace");
+      expect(container.textContent).toContain("Always available");
 
       const globalTab = [...container.querySelectorAll("button")].find(
         (button) => button.textContent === "Global",
@@ -763,6 +767,92 @@ describe("subagents settings page", () => {
         throw new Error("missing delete profile button");
       }
       expect(deleteButton.disabled).toBe(true);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
+  test("workspace tab exposes per-workspace availability toggles for global subagents", async () => {
+    const project = workspaceRecord("project-1", "Project", "project");
+    const setAgentProfileWorkspaceAvailability = mock(async () => true);
+    const researchEntry = {
+      ...catalogEntry("global", "research", "Research"),
+      builtIn: true,
+    } satisfies AgentProfileCatalogEntry;
+    const explorerEntry = {
+      ...catalogEntry("global", "explorer", "Explorer"),
+      builtIn: true,
+      effective: false,
+      workspaceDisabled: true,
+    } satisfies AgentProfileCatalogEntry;
+
+    resetSubagentsStore({
+      refreshAgentProfilesCatalog: mock(async () => {}),
+      refreshSkillsCatalog: mock(async () => {}),
+      requestWorkspaceMcpServers: mock(async () => {}),
+      setAgentProfileWorkspaceAvailability,
+      selectedWorkspaceId: "project-1",
+      workspaces: [project],
+      workspaceRuntimeById: {
+        "project-1": {
+          ...defaultWorkspaceRuntime(),
+          agentProfilesCatalog: profilesCatalog([researchEntry, explorerEntry]),
+        },
+      },
+    });
+
+    const { harness, container, root } = await renderSubagentsPage();
+    try {
+      const workspaceTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Workspace",
+      );
+      if (!(workspaceTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing workspace scope tab");
+      }
+      await act(async () => {
+        workspaceTab.click();
+        await flushUi();
+      });
+
+      expect(container.textContent).toContain("Global subagents in this workspace");
+      expect(container.textContent).toContain("Off in this workspace");
+
+      const researchToggle = container.querySelector(
+        '[aria-label="Toggle Research availability in this workspace"]',
+      );
+      if (!(researchToggle instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing research availability toggle");
+      }
+      expect(researchToggle.getAttribute("aria-checked")).toBe("true");
+      await act(async () => {
+        researchToggle.click();
+        await flushUi();
+      });
+      expect(setAgentProfileWorkspaceAvailability).toHaveBeenCalledWith(
+        "research",
+        true,
+        "project-1",
+      );
+
+      const explorerToggle = container.querySelector(
+        '[aria-label="Toggle Explorer availability in this workspace"]',
+      );
+      if (!(explorerToggle instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing explorer availability toggle");
+      }
+      expect(explorerToggle.getAttribute("aria-checked")).toBe("false");
+      await act(async () => {
+        explorerToggle.click();
+        await flushUi();
+      });
+      expect(setAgentProfileWorkspaceAvailability).toHaveBeenCalledWith(
+        "explorer",
+        false,
+        "project-1",
+      );
     } finally {
       await act(async () => {
         root.unmount();
@@ -994,7 +1084,12 @@ describe("subagents settings page", () => {
       });
 
       expect(container.textContent).toContain("Workspace Reviewer");
-      expect(container.textContent).not.toContain("Global Reviewer");
+      // Global profiles appear only in the availability list on this tab.
+      expect(
+        container.querySelector(
+          '[aria-label="Toggle Global Reviewer availability in this workspace"]',
+        ),
+      ).not.toBeNull();
 
       const copyButton = container.querySelector('[aria-label="Copy profile"]');
       if (!(copyButton instanceof harness.dom.window.HTMLButtonElement)) {

@@ -10,10 +10,12 @@ import {
   type AgentProfileSnapshot,
   type AgentProfilesCatalog,
   type AgentProfileUpsertInput,
+  type AgentProfileWorkspaceOverrides,
   agentProfileCopyInputSchema,
   agentProfileIdSchema,
   agentProfileScopeSchema,
   agentProfileUpsertInputSchema,
+  agentProfileWorkspaceOverridesSchema,
   buildAgentProfileRef,
   createAgentProfileSnapshot,
   normalizeAgentProfileDefinition,
@@ -24,6 +26,7 @@ import type { AgentConfig } from "../../types";
 import { AGENT_ROLE_DEFINITIONS } from "./roles";
 
 const PROFILE_DIR_NAME = "agent-profiles";
+const WORKSPACE_OVERRIDES_FILE_NAME = "workspace-overrides.json";
 const MAIN_AGENT_PROFILE_ID = "default";
 
 const BUILT_IN_PROFILE_DISPLAY_NAMES: Record<AgentRole, string> = {
@@ -79,7 +82,7 @@ async function readScope(config: AgentConfig, scope: AgentProfileScope): Promise
   const entries: AgentProfileCatalogEntry[] = [];
   const diagnostics: AgentProfileDiagnostic[] = [];
   for (const file of files.sort((left, right) => left.localeCompare(right))) {
-    if (!file.endsWith(".json")) continue;
+    if (!file.endsWith(".json") || file === WORKSPACE_OVERRIDES_FILE_NAME) continue;
     const filePath = path.join(dir, file);
     try {
       const raw = await fs.readFile(filePath, "utf-8");
@@ -110,13 +113,17 @@ async function readScope(config: AgentConfig, scope: AgentProfileScope): Promise
 }
 
 export async function readAgentProfilesCatalog(config: AgentConfig): Promise<AgentProfilesCatalog> {
-  const [globalProfiles, workspaceProfiles] = await Promise.all([
+  const [globalProfiles, workspaceProfiles, workspaceOverrides] = await Promise.all([
     readScope(config, "global"),
     readScope(config, "workspace"),
+    readWorkspaceOverrides(config),
   ]);
 
   const workspaceIds = new Set(workspaceProfiles.entries.map((entry) => entry.profile.id));
   const globalIds = new Set(globalProfiles.entries.map((entry) => entry.profile.id));
+  const disabledGlobalIds = new Set(
+    workspaceOverrides.overrides.disabledGlobalProfileIds.filter((id) => !isLockedProfile(id)),
+  );
   const builtInProfiles = await buildBuiltInProfileEntries(config, globalIds);
   const profiles = [
     ...workspaceProfiles.entries,
@@ -124,10 +131,12 @@ export async function readAgentProfilesCatalog(config: AgentConfig): Promise<Age
     ...builtInProfiles,
   ].map((entry) => {
     const shadowed = entry.scope === "global" && workspaceIds.has(entry.profile.id);
+    const workspaceDisabled = entry.scope === "global" && disabledGlobalIds.has(entry.profile.id);
     return {
       ...entry,
       shadowed,
-      effective: entry.scope === "workspace" || !shadowed,
+      workspaceDisabled,
+      effective: entry.scope === "workspace" || (!shadowed && !workspaceDisabled),
     };
   });
 
@@ -135,12 +144,107 @@ export async function readAgentProfilesCatalog(config: AgentConfig): Promise<Age
   return {
     profiles,
     effectiveProfiles,
-    diagnostics: [...workspaceProfiles.diagnostics, ...globalProfiles.diagnostics],
+    diagnostics: [
+      ...workspaceProfiles.diagnostics,
+      ...globalProfiles.diagnostics,
+      ...workspaceOverrides.diagnostics,
+    ],
     roots: {
       globalDir: getAgentProfileDir(config, "global"),
       workspaceDir: getAgentProfileDir(config, "workspace"),
     },
   };
+}
+
+function workspaceOverridesPath(config: AgentConfig): string {
+  return path.join(getAgentProfileDir(config, "workspace"), WORKSPACE_OVERRIDES_FILE_NAME);
+}
+
+async function readWorkspaceOverrides(config: AgentConfig): Promise<{
+  overrides: AgentProfileWorkspaceOverrides;
+  diagnostics: AgentProfileDiagnostic[];
+}> {
+  const filePath = workspaceOverridesPath(config);
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf-8");
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return { overrides: { version: 1, disabledGlobalProfileIds: [] }, diagnostics: [] };
+    }
+    return {
+      overrides: { version: 1, disabledGlobalProfileIds: [] },
+      diagnostics: [
+        {
+          scope: "workspace",
+          path: filePath,
+          severity: "error",
+          message: `Unable to read workspace subagent overrides: ${formatError(error)}`,
+        },
+      ],
+    };
+  }
+  try {
+    return {
+      overrides: agentProfileWorkspaceOverridesSchema.parse(JSON.parse(raw)),
+      diagnostics: [],
+    };
+  } catch (error) {
+    return {
+      overrides: { version: 1, disabledGlobalProfileIds: [] },
+      diagnostics: [
+        {
+          scope: "workspace",
+          path: filePath,
+          severity: "error",
+          message: `Invalid workspace subagent overrides: ${formatError(error)}`,
+        },
+      ],
+    };
+  }
+}
+
+export async function setAgentProfileWorkspaceAvailability(
+  config: AgentConfig,
+  idRaw: string,
+  disabled: boolean,
+): Promise<AgentProfilesCatalog> {
+  const id = agentProfileIdSchema.parse(idRaw);
+  if (isLockedProfile(id)) {
+    throw new Error("The main agent profile is always available and cannot be disabled.");
+  }
+  const catalog = await readAgentProfilesCatalog(config);
+  const globalEntry = catalog.profiles.find(
+    (entry) => entry.scope === "global" && entry.profile.id === id,
+  );
+  if (!globalEntry) {
+    throw new Error(`Unknown global subagent profile: ${id}`);
+  }
+  const { overrides } = await readWorkspaceOverrides(config);
+  const disabledIds = new Set(overrides.disabledGlobalProfileIds);
+  if (disabled) {
+    disabledIds.add(id);
+  } else {
+    disabledIds.delete(id);
+  }
+  const next: AgentProfileWorkspaceOverrides = {
+    version: 1,
+    disabledGlobalProfileIds: [...disabledIds].sort((left, right) => left.localeCompare(right)),
+  };
+  const filePath = workspaceOverridesPath(config);
+  if (next.disabledGlobalProfileIds.length === 0) {
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  } else {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+  }
+  return await readAgentProfilesCatalog(config);
 }
 
 export async function resolveAgentProfileSnapshot(
@@ -154,6 +258,11 @@ export async function resolveAgentProfileSnapshot(
   }
   if (!match.profile.enabled) {
     throw new Error(`Subagent profile is disabled: ${match.scope}:${match.profile.id}`);
+  }
+  if (match.workspaceDisabled) {
+    throw new Error(
+      `Subagent profile is disabled in this workspace: ${match.scope}:${match.profile.id}`,
+    );
   }
   return createAgentProfileSnapshot(match.scope, match.profile);
 }
@@ -222,11 +331,19 @@ function findAgentProfileEntry(
   profileRefRaw: string,
 ): AgentProfileCatalogEntry | null {
   const ref = parseAgentProfileRef(profileRefRaw);
-  const candidates =
-    ref.kind === "scoped"
-      ? catalog.profiles.filter((entry) => entry.scope === ref.scope && entry.profile.id === ref.id)
-      : catalog.profiles.filter((entry) => entry.effective && entry.profile.id === ref.id);
-  return candidates[0] ?? null;
+  if (ref.kind === "scoped") {
+    return (
+      catalog.profiles.find((entry) => entry.scope === ref.scope && entry.profile.id === ref.id) ??
+      null
+    );
+  }
+  const effective = catalog.profiles.find(
+    (entry) => entry.effective && entry.profile.id === ref.id,
+  );
+  if (effective) return effective;
+  // Fall back to non-effective matches so refs to workspace-disabled or
+  // shadowed profiles fail with a precise reason instead of "unknown".
+  return catalog.profiles.find((entry) => entry.profile.id === ref.id) ?? null;
 }
 
 async function writeProfileFile(

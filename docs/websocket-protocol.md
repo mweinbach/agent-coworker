@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.40`
+- Current protocol version: `7.41`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -268,6 +268,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/agentProfiles/upsert`
   - `cowork/agentProfiles/delete`
   - `cowork/agentProfiles/copy`
+  - `cowork/agentProfiles/workspaceAvailability/set`
 - provider controls
   - `cowork/provider/catalog/read`
   - `cowork/provider/authMethods/read`
@@ -390,6 +391,7 @@ Agent profile controls let clients manage user-created subagent profiles without
 - `cowork/agentProfiles/upsert` — params `{ cwd?, profile }`, where `profile` includes `id`, `scope: "global" | "workspace"`, `displayName`, optional `description`, `enabled`, `baseRole: "default" | "explorer" | "research" | "worker" | "reviewer"`, optional `prompt`, `allowedBuiltInTools`, `allowedMcpServers`, `skillNames`, `model`, `reasoningEffort`, `defaultTaskType`, and `defaultContextMode`. The result returns the updated `agent_profiles_catalog` event.
 - `cowork/agentProfiles/delete` — params `{ cwd?, scope, id }`. Deletes the profile file in the requested scope and returns the updated catalog. Deleting a workspace profile may reveal a shadowed global profile with the same id.
 - `cowork/agentProfiles/copy` — params `{ cwd?, copy: { sourceRef, targetScope, targetId?, targetDisplayName? } }`. `sourceRef` accepts either a bare profile id or a scoped ref. The result returns the updated catalog.
+- `cowork/agentProfiles/workspaceAvailability/set` — params `{ cwd?, id, disabled }`. Disables (or re-enables) a global profile — including built-in templates — for the current workspace only, without editing the global profile itself. Overrides persist in `<workspaceDir>/workspace-overrides.json` (`{ version: 1, disabledGlobalProfileIds: [] }`); the file is removed when the list empties. Workspace-disabled global entries are reported with `workspaceDisabled: true`, drop out of `effectiveProfiles`, and reject spawn resolution with a workspace-specific error. The locked `default` (Main Agent) profile cannot be workspace-disabled.
 
 Profile ids resolve with workspace-over-global precedence. Bare refs such as `"qa-reviewer"` resolve the effective profile for the active workspace. Scoped refs use `"workspace:qa-reviewer"` or `"global:qa-reviewer"`.
 
@@ -789,6 +791,10 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.41`:
+
+- Added `cowork/agentProfiles/workspaceAvailability/set` to disable or re-enable a global subagent profile for a single workspace. Catalog entries expose the per-workspace state as `workspaceDisabled`, and workspace-disabled profiles are excluded from `effectiveProfiles` and spawn resolution for that workspace.
 
 Changes in `7.40`:
 

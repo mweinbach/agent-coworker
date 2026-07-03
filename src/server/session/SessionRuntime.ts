@@ -482,6 +482,10 @@ export class SessionAgentProfileService {
   async copy(input: AgentProfileCopyInput): Promise<void> {
     await this.session.copyAgentProfile(input);
   }
+
+  async setWorkspaceAvailability(id: string, disabled: boolean): Promise<void> {
+    await this.session.setAgentProfileWorkspaceAvailability(id, disabled);
+  }
 }
 
 export class SessionPluginService {

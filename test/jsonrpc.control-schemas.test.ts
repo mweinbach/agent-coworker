@@ -623,6 +623,62 @@ describe("shared JSON-RPC control schemas", () => {
     expect(result.event.catalog.effectiveProfiles[0]?.profile.id).toBe("qa-reviewer");
   });
 
+  test("parses agent profile workspace availability control schemas", () => {
+    const request = jsonRpcControlRequestSchemas[
+      "cowork/agentProfiles/workspaceAvailability/set"
+    ].parse({
+      cwd: "/tmp/project",
+      id: "research",
+      disabled: true,
+    });
+    expect(request).toEqual({ cwd: "/tmp/project", id: "research", disabled: true });
+
+    const result = jsonRpcControlResultSchemas[
+      "cowork/agentProfiles/workspaceAvailability/set"
+    ].parse({
+      event: {
+        type: "agent_profiles_catalog",
+        sessionId: "thread-1",
+        catalog: {
+          profiles: [
+            {
+              scope: "global",
+              builtIn: true,
+              effective: false,
+              shadowed: false,
+              workspaceDisabled: true,
+              profile: {
+                version: 1,
+                id: "research",
+                displayName: "Research",
+                description: "Web research.",
+                enabled: true,
+                baseRole: "research",
+                prompt: "",
+                allowedBuiltInTools: ["read"],
+                allowedMcpServers: [],
+                skillNames: [],
+              },
+            },
+          ],
+          effectiveProfiles: [],
+          diagnostics: [],
+          roots: {
+            globalDir: "/tmp/home/.cowork/agent-profiles",
+            workspaceDir: "/tmp/project/.cowork/agent-profiles",
+          },
+        },
+      },
+    });
+    expect(result.event.catalog.profiles[0]?.workspaceDisabled).toBe(true);
+
+    expect(() =>
+      jsonRpcControlRequestSchemas["cowork/agentProfiles/workspaceAvailability/set"].parse({
+        id: "research",
+      }),
+    ).toThrow();
+  });
+
   test("parses waitForAgent any/all request modes and wait-result notifications", () => {
     const waitRequest = jsonRpcAgentRequestSchemas["cowork/session/agent/wait"].parse({
       threadId: "thread-1",

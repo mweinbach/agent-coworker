@@ -49,6 +49,7 @@ import {
   copyAgentProfile,
   deleteAgentProfile,
   readAgentProfilesCatalog,
+  setAgentProfileWorkspaceAvailability,
   upsertAgentProfile,
 } from "../agents/profiles";
 import type { AgentWaitMode } from "../agents/types";
@@ -835,6 +836,12 @@ export class AgentSession {
     const catalog = await copyAgentProfile(this.state.config, input);
     this.context.emit({ type: "agent_profiles_catalog", sessionId: this.id, catalog });
     await this.refreshSystemPromptWithSkills("agent_profiles.copy");
+  }
+
+  async setAgentProfileWorkspaceAvailability(id: string, disabled: boolean) {
+    const catalog = await setAgentProfileWorkspaceAvailability(this.state.config, id, disabled);
+    this.context.emit({ type: "agent_profiles_catalog", sessionId: this.id, catalog });
+    await this.refreshSystemPromptWithSkills("agent_profiles.workspace_availability");
   }
 
   async getPluginsCatalog() {

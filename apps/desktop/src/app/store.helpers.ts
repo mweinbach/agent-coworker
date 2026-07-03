@@ -426,6 +426,11 @@ export type AppStoreState = {
   upsertAgentProfile: (profile: AgentProfileUpsertInput, workspaceId?: string) => Promise<boolean>;
   deleteAgentProfile: (scope: AgentProfileScope, id: string, workspaceId?: string) => Promise<void>;
   copyAgentProfile: (copy: AgentProfileCopyInput, workspaceId?: string) => Promise<boolean>;
+  setAgentProfileWorkspaceAvailability: (
+    id: string,
+    disabled: boolean,
+    workspaceId?: string,
+  ) => Promise<boolean>;
   refreshPluginsCatalog: () => Promise<void>;
   selectPlugin: (pluginId: string | null, scope?: "workspace" | "user" | null) => Promise<void>;
   previewPluginInstall: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;

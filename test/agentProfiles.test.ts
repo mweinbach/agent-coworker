@@ -9,6 +9,7 @@ import {
   getAgentProfileDir,
   readAgentProfilesCatalog,
   resolveAgentProfileSnapshot,
+  setAgentProfileWorkspaceAvailability,
   upsertAgentProfile,
 } from "../src/server/agents/profiles";
 import type { AgentProfileUpsertInput } from "../src/shared/agentProfiles";
@@ -364,6 +365,103 @@ describe("agent profile catalog", () => {
     });
     await expect(resolveAgentProfileSnapshot(config, "global:qa-reviewer")).rejects.toThrow(
       "Subagent profile is disabled: global:qa-reviewer",
+    );
+  });
+
+  test("workspace availability overrides disable global profiles for one workspace", async () => {
+    const config = await makeConfig();
+    await upsertAgentProfile(config, profile());
+
+    let catalog = await setAgentProfileWorkspaceAvailability(config, "qa-reviewer", true);
+    expect(
+      catalog.profiles.find(
+        (entry) => entry.scope === "global" && entry.profile.id === "qa-reviewer",
+      ),
+    ).toMatchObject({
+      workspaceDisabled: true,
+      shadowed: false,
+      effective: false,
+    });
+    expect(catalog.effectiveProfiles.some((entry) => entry.profile.id === "qa-reviewer")).toBe(
+      false,
+    );
+
+    await expect(resolveAgentProfileSnapshot(config, "qa-reviewer")).rejects.toThrow(
+      "Subagent profile is disabled in this workspace: global:qa-reviewer",
+    );
+    await expect(resolveAgentProfileSnapshot(config, "global:qa-reviewer")).rejects.toThrow(
+      "Subagent profile is disabled in this workspace: global:qa-reviewer",
+    );
+
+    catalog = await setAgentProfileWorkspaceAvailability(config, "qa-reviewer", false);
+    expect(
+      catalog.profiles.find(
+        (entry) => entry.scope === "global" && entry.profile.id === "qa-reviewer",
+      ),
+    ).toMatchObject({
+      workspaceDisabled: false,
+      effective: true,
+    });
+    await expect(resolveAgentProfileSnapshot(config, "qa-reviewer")).resolves.toMatchObject({
+      id: "qa-reviewer",
+      ref: "global:qa-reviewer",
+    });
+  });
+
+  test("workspace availability overrides apply to built-in profiles", async () => {
+    const config = await makeConfig();
+
+    const catalog = await setAgentProfileWorkspaceAvailability(config, "research", true);
+    expect(catalog.profiles.find((entry) => entry.profile.id === "research")).toMatchObject({
+      builtIn: true,
+      workspaceDisabled: true,
+      effective: false,
+    });
+    expect(catalog.effectiveProfiles.map((entry) => entry.profile.id)).toEqual([
+      "default",
+      "explorer",
+      "worker",
+      "reviewer",
+    ]);
+    await expect(resolveAgentProfileSnapshot(config, "research")).rejects.toThrow(
+      "Subagent profile is disabled in this workspace: global:research",
+    );
+  });
+
+  test("workspace availability override file round-trips and clears when empty", async () => {
+    const config = await makeConfig();
+    const overridesPath = path.join(
+      getAgentProfileDir(config, "workspace"),
+      "workspace-overrides.json",
+    );
+
+    await setAgentProfileWorkspaceAvailability(config, "research", true);
+    await setAgentProfileWorkspaceAvailability(config, "explorer", true);
+    expect(JSON.parse(await fs.readFile(overridesPath, "utf-8"))).toEqual({
+      version: 1,
+      disabledGlobalProfileIds: ["explorer", "research"],
+    });
+
+    // The overrides file must not surface as a broken profile.
+    const catalog = await readAgentProfilesCatalog(config);
+    expect(catalog.diagnostics).toEqual([]);
+    expect(catalog.profiles.some((entry) => entry.path?.endsWith("workspace-overrides.json"))).toBe(
+      false,
+    );
+
+    await setAgentProfileWorkspaceAvailability(config, "research", false);
+    await setAgentProfileWorkspaceAvailability(config, "explorer", false);
+    await expect(fs.access(overridesPath)).rejects.toThrow();
+  });
+
+  test("workspace availability rejects the locked main profile and unknown ids", async () => {
+    const config = await makeConfig();
+
+    await expect(setAgentProfileWorkspaceAvailability(config, "default", true)).rejects.toThrow(
+      "The main agent profile is always available and cannot be disabled.",
+    );
+    await expect(setAgentProfileWorkspaceAvailability(config, "missing", true)).rejects.toThrow(
+      "Unknown global subagent profile: missing",
     );
   });
 

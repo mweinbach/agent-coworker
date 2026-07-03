@@ -34,6 +34,10 @@ export const jsonRpcAgentProfilesRequestSchemas = {
   "cowork/agentProfiles/copy": cwdRequestSchema.extend({
     copy: agentProfileCopyInputSchema,
   }),
+  "cowork/agentProfiles/workspaceAvailability/set": cwdRequestSchema.extend({
+    id: nonEmptyTrimmedStringSchema,
+    disabled: z.boolean(),
+  }),
 } as const;
 
 export const jsonRpcAgentProfilesResultSchemas = {
@@ -41,6 +45,9 @@ export const jsonRpcAgentProfilesResultSchemas = {
   "cowork/agentProfiles/upsert": sessionEventEnvelope(agentProfilesCatalogEventSchema),
   "cowork/agentProfiles/delete": sessionEventEnvelope(agentProfilesCatalogEventSchema),
   "cowork/agentProfiles/copy": sessionEventEnvelope(agentProfilesCatalogEventSchema),
+  "cowork/agentProfiles/workspaceAvailability/set": sessionEventEnvelope(
+    agentProfilesCatalogEventSchema,
+  ),
 } as const;
 
 export const jsonRpcAgentProfilesNotificationSchemas = {

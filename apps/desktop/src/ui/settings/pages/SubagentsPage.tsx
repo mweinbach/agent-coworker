@@ -392,7 +392,7 @@ export function SubagentsPage() {
     [configuredModelProviders, modelSelectorVisibility],
   );
   const profilesLoading = runtime?.agentProfilesLoading ?? false;
-  const [scope, setScope] = useState<AgentProfileScope>("workspace");
+  const [scope, setScope] = useState<AgentProfileScope>("global");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
 
   useEffect(() => {
@@ -513,7 +513,7 @@ export function SubagentsPage() {
         <div className="flex flex-col gap-4 px-4 py-4">
           <div className="flex flex-col gap-2">
             <div className="grid w-full max-w-sm grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
-              {(["workspace", "global"] as const).map((value) => (
+              {(["global", "workspace"] as const).map((value) => (
                 <Button
                   key={value}
                   variant={scope === value ? "secondary" : "ghost"}
@@ -530,11 +530,13 @@ export function SubagentsPage() {
             </p>
           </div>
 
-          <WorkspaceTargetPicker
-            workspaces={workspaceChoices}
-            value={workspace?.id ?? ""}
-            onValueChange={setProfileWorkspaceId}
-          />
+          {scope === "workspace" ? (
+            <WorkspaceTargetPicker
+              workspaces={workspaceChoices}
+              value={workspace?.id ?? ""}
+              onValueChange={setProfileWorkspaceId}
+            />
+          ) : null}
 
           {runtime?.agentProfilesError ? (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">

@@ -726,6 +726,21 @@ describe("subagents settings page", () => {
 
     const { harness, container, root } = await renderSubagentsPage();
     try {
+      // Global is the default scope, so built-in profiles are visible immediately.
+      expect(container.textContent).toContain("Main Agent");
+
+      const workspaceTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Workspace",
+      );
+      if (!(workspaceTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing workspace scope tab");
+      }
+
+      await act(async () => {
+        workspaceTab.click();
+        await flushUi();
+      });
+
       expect(container.textContent).not.toContain("Main Agent");
 
       const globalTab = [...container.querySelectorAll("button")].find(
@@ -795,6 +810,18 @@ describe("subagents settings page", () => {
       expect(refreshAgentProfilesCatalog).toHaveBeenCalledWith("project-1");
       expect(requestWorkspaceMcpServers).toHaveBeenCalledWith("project-1");
       expect(refreshSkillsCatalog).toHaveBeenCalledWith("project-1");
+
+      const workspaceTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Workspace",
+      );
+      if (!(workspaceTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing workspace scope tab");
+      }
+      await act(async () => {
+        workspaceTab.click();
+        await flushUi();
+      });
+
       expect(container.textContent).toContain("Workspace");
       expect(container.textContent).toContain(ONE_OFF_CHAT_GLOBAL_NOTE);
       expect(container.textContent).toContain("Project");
@@ -955,6 +982,17 @@ describe("subagents settings page", () => {
 
     const { harness, container, root } = await renderSubagentsPage();
     try {
+      const workspaceTab = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Workspace",
+      );
+      if (!(workspaceTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing workspace scope tab");
+      }
+      await act(async () => {
+        workspaceTab.click();
+        await flushUi();
+      });
+
       expect(container.textContent).toContain("Workspace Reviewer");
       expect(container.textContent).not.toContain("Global Reviewer");
 

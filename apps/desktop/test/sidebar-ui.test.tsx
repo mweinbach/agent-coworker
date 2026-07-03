@@ -1081,5 +1081,4 @@ describe("desktop sidebar", () => {
       }
     },
   );
-
 });

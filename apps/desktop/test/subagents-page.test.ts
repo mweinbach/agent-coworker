@@ -823,7 +823,7 @@ describe("subagents settings page", () => {
       });
 
       expect(container.textContent).toContain("Workspace");
-      expect(container.textContent).toContain(ONE_OFF_CHAT_GLOBAL_NOTE);
+      expect(container.textContent).toContain("One-off chats always use global subagents");
       expect(container.textContent).toContain("Project");
       expect(container.textContent).toContain("/tmp/project-1");
       expect(container.textContent).toContain("Project Reviewer");
@@ -949,7 +949,7 @@ describe("subagents settings page", () => {
 
     const { harness, container, root } = await renderSubagentsPage();
     try {
-      expect(container.textContent).toContain("Loading profiles");
+      expect(container.textContent).toContain("Loading subagents");
       expect(container.textContent).not.toContain("No workspace profiles");
     } finally {
       await act(async () => {

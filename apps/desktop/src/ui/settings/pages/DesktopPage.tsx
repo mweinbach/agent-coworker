@@ -88,7 +88,12 @@ export function DesktopPage() {
         title="Quick chat"
         description="Open the lighter-weight floating chat surface without bringing the full app window forward."
         action={
-          <Button type="button" variant="outline" size="sm" onClick={() => void showQuickChatWindow()}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void showQuickChatWindow()}
+          >
             Open quick chat
           </Button>
         }

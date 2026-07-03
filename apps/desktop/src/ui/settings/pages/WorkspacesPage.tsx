@@ -83,6 +83,7 @@ import {
 import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
+import { SettingsSection } from "../SettingsPrimitives";
 
 function ToggleChip({
   pressed,
@@ -309,7 +310,7 @@ export function OpenAiCompatibleModelSettingsCard({
         <Button
           type="button"
           variant="ghost"
-          className="group h-auto w-full justify-between rounded-none px-6 py-3.5 text-left hover:bg-muted/30"
+          className="group h-auto w-full justify-between rounded-none px-4 py-3.5 text-left hover:bg-muted/30"
         >
           <span>
             <span className="block text-sm font-medium text-foreground">OpenAI &amp; ChatGPT</span>
@@ -321,7 +322,7 @@ export function OpenAiCompatibleModelSettingsCard({
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="space-y-4 px-6 pb-5">
+        <div className="space-y-4 px-4 pb-5">
           {sections.map((section) => (
             <div
               key={section.key}
@@ -680,7 +681,7 @@ export function GeminiApiSettingsCard({
         <Button
           type="button"
           variant="ghost"
-          className="group h-auto w-full justify-between rounded-none px-6 py-3.5 text-left hover:bg-muted/30"
+          className="group h-auto w-full justify-between rounded-none px-4 py-3.5 text-left hover:bg-muted/30"
         >
           <span>
             <span className="block text-sm font-medium text-foreground">Gemini API</span>
@@ -692,7 +693,7 @@ export function GeminiApiSettingsCard({
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="space-y-4 px-6 pb-5">
+        <div className="space-y-4 px-4 pb-5">
           <div className="rounded-lg border border-border/60 px-4 py-4">
             <div className="space-y-3">
               <div className="space-y-1">
@@ -1391,12 +1392,11 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
               visibleTab !== "models" && "hidden",
             )}
           >
-            <Card className="border-border/80 bg-card/85">
-              <CardHeader>
-                <CardTitle>Defaults</CardTitle>
-                <CardDescription>The provider and model Cowork uses for new chats.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
+            <SettingsSection
+              title="Defaults"
+              description="The provider and model Cowork uses for new chats."
+            >
+              <div className="space-y-4 px-4 py-4">
                 {availableProviders.length === 0 ? (
                   <div className={MODEL_CARD_PANEL_CLASS}>
                     <div className="text-sm font-medium text-foreground">
@@ -1743,20 +1743,17 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     </div>
                   </>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </SettingsSection>
 
             {hasConfiguredProviderStatus(providerStatusByName["codex-cli"]) ||
             hasConfiguredProviderStatus(providerStatusByName.openai) ||
             hasConfiguredProviderStatus(providerStatusByName.google) ? (
-              <Card className="gap-3 overflow-hidden border-border/80 bg-card/85 pb-0">
-                <CardHeader>
-                  <CardTitle>Provider Settings</CardTitle>
-                  <CardDescription>
-                    Extra tuning options for your connected providers.
-                  </CardDescription>
-                </CardHeader>
-                <div className="border-t border-border/60">
+              <SettingsSection
+                title="Provider Settings"
+                description="Extra tuning options for your connected providers."
+              >
+                <div>
                   <OpenAiCompatibleModelSettingsCard
                     workspace={ws}
                     updateWorkspaceDefaults={updateWorkspaceDefaults}
@@ -1772,7 +1769,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     }
                   />
                 </div>
-              </Card>
+              </SettingsSection>
             ) : null}
           </div>
 

@@ -1200,7 +1200,7 @@ describe("desktop workspaces page", () => {
       const subagentModelsToggle = [...container.querySelectorAll("button")].find(
         (button) =>
           button.textContent?.trim() === "Show" &&
-          button.closest('[data-slot="card-content"]')?.textContent?.includes("Subagent Models"),
+          button.closest(".settings-section")?.textContent?.includes("Subagent Models"),
       );
       if (!(subagentModelsToggle instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing Subagent Models toggle");

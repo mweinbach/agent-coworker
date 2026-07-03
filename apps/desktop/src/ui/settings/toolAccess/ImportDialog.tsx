@@ -332,14 +332,8 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
 
   return (
     <>
-      <Button
-        variant="outline"
-        size="sm"
-        className="rounded-full px-4"
-        type="button"
-        onClick={openDialog}
-      >
-        <DownloadIcon className="mr-1.5 h-4 w-4" />
+      <Button variant="outline" size="sm" type="button" onClick={openDialog}>
+        <DownloadIcon data-icon="inline-start" />
         Import
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>

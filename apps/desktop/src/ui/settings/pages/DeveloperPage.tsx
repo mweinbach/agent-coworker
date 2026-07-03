@@ -410,6 +410,7 @@ export function DeveloperPage() {
             <Button
               type="button"
               variant="outline"
+              size="sm"
               disabled={libreOfficeChecking || !workspace}
               onClick={() => void runLibreOfficeCheck()}
             >

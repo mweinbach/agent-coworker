@@ -1,3 +1,4 @@
+import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -202,13 +203,14 @@ export function InstallPluginDialog({
   return (
     <>
       <Button
+        variant="outline"
         size="sm"
-        className="rounded-full px-4"
         type="button"
         onPointerDown={openDialog}
         onClick={openDialog}
       >
-        + New plugin
+        <PlusIcon data-icon="inline-start" />
+        New plugin
       </Button>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent className="sm:max-w-[520px]">

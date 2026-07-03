@@ -101,23 +101,25 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() => void checkForUpdates()}
               disabled={!canCheck}
             >
               {busy ? (
-                <LoaderCircleIcon className="h-4 w-4 animate-spin" />
+                <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />
               ) : (
-                <RefreshCwIcon className="h-4 w-4" />
+                <RefreshCwIcon data-icon="inline-start" />
               )}
               Check now
             </Button>
             <Button
               type="button"
-              variant="secondary"
+              variant="outline"
+              size="sm"
               onClick={() => void quitAndInstallUpdate()}
               disabled={!canInstall}
             >
-              <RotateCcwIcon className="h-4 w-4" />
+              <RotateCcwIcon data-icon="inline-start" />
               Restart to update
             </Button>
           </>
@@ -193,12 +195,13 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={() => {
                   if (!updateState.release?.releasePageUrl) return;
                   window.open(updateState.release.releasePageUrl, "_blank", "noopener,noreferrer");
                 }}
               >
-                <DownloadIcon className="h-4 w-4" />
+                <DownloadIcon data-icon="inline-start" />
                 Open release notes
               </Button>
             ) : null

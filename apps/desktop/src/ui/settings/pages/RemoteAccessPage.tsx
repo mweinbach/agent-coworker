@@ -180,6 +180,7 @@ export function RemoteAccessPage() {
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button
             type="button"
+            variant="outline"
             size="sm"
             onClick={() =>
               selectedWorkspace &&

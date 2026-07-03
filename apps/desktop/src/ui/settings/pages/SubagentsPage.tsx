@@ -493,20 +493,21 @@ export function SubagentsPage() {
         title="Subagents"
         description="Create reusable child-agent profiles for focused work."
         action={
-          <div className="flex items-center gap-2">
+          <>
             <Button
-              variant="ghost"
-              size="icon"
+              variant="outline"
+              size="sm"
               onClick={() => void refreshAgentProfilesCatalog(workspace.id)}
               aria-label="Refresh profiles"
             >
-              <RefreshCcwIcon />
+              <RefreshCcwIcon data-icon="inline-start" />
+              Refresh
             </Button>
-            <Button size="sm" onClick={startCreate}>
+            <Button variant="outline" size="sm" onClick={startCreate}>
               <PlusIcon data-icon="inline-start" />
               New
             </Button>
-          </div>
+          </>
         }
       >
         <div className="flex flex-col gap-4 px-4 py-4">

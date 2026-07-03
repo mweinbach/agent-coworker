@@ -203,4 +203,93 @@ describe("MCP servers settings page", () => {
       harness.restore();
     }
   });
+
+  test("keeps duplicate server names expanded independently by source", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace",
+              path: "/tmp/workspace",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              ...useAppStore.getState().workspaceRuntimeById["ws-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [
+                {
+                  name: "grep",
+                  transport: { type: "http", url: "https://mcp.grep.app" },
+                  enabled: true,
+                  source: "user",
+                  inherited: true,
+                  authMode: "none",
+                  authScope: "user",
+                  authMessage: "",
+                },
+                {
+                  name: "grep",
+                  transport: { type: "stdio", command: "plugin-grep" },
+                  enabled: true,
+                  source: "plugin",
+                  inherited: true,
+                  authMode: "none",
+                  authScope: "user",
+                  authMessage: "",
+                  pluginId: "search-plugin",
+                  pluginScope: "user",
+                },
+              ],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      const rowButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
+        button.textContent?.includes("grep"),
+      );
+      expect(rowButtons).toHaveLength(2);
+
+      await act(async () => {
+        rowButtons[0]?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent?.match(/Command/g) ?? []).toHaveLength(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
 });

@@ -106,6 +106,18 @@ const normalizedLastEventSeqSchema = z.preprocess(
     typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0,
   z.number().int().nonnegative(),
 );
+
+function normalizeLegacyUiSurface(value: unknown): unknown {
+  if (!isRecord(value) || value.view !== "skills") {
+    return value;
+  }
+
+  return {
+    ...value,
+    settingsPage: "toolAccess",
+  };
+}
+
 const normalizedViewSchema = z.preprocess(
   (value) => {
     // The standalone skills/plugins view moved into Settings > Tool Access.
@@ -337,42 +349,45 @@ const persistedThreadSchema = z
     };
   });
 
-const persistedUiSchema = z
-  .object({
-    selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
-    selectedThreadId: normalizedNullableSelectionSchema.optional(),
-    selectedTaskId: normalizedNullableSelectionSchema.optional(),
-    view: normalizedViewSchema.optional(),
-    settingsPage: normalizedSettingsPageSchema.optional(),
-    lastNonSettingsView: normalizedViewSchema.optional(),
-    sidebarCollapsed: z
-      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
-      .optional(),
-    sidebarWidth: normalizedUiWidthSchema(160, 440, 248).optional(),
-    contextSidebarCollapsed: z
-      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
-      .optional(),
-    contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
-    canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
-    messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
-  })
-  .passthrough()
-  .transform(
-    (ui): CachedDesktopUiState => ({
-      selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
-      selectedThreadId: ui.selectedThreadId ?? null,
-      selectedTaskId: ui.selectedTaskId ?? null,
-      view: ui.view ?? "chat",
-      settingsPage: ui.settingsPage ?? "models",
-      lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
-      sidebarCollapsed: ui.sidebarCollapsed ?? false,
-      sidebarWidth: ui.sidebarWidth ?? 248,
-      contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
-      contextSidebarWidth: ui.contextSidebarWidth ?? 300,
-      canvasSidebarWidth: ui.canvasSidebarWidth ?? 500,
-      messageBarHeight: ui.messageBarHeight ?? 96,
-    }),
-  );
+const persistedUiSchema = z.preprocess(
+  normalizeLegacyUiSurface,
+  z
+    .object({
+      selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
+      selectedThreadId: normalizedNullableSelectionSchema.optional(),
+      selectedTaskId: normalizedNullableSelectionSchema.optional(),
+      view: normalizedViewSchema.optional(),
+      settingsPage: normalizedSettingsPageSchema.optional(),
+      lastNonSettingsView: normalizedViewSchema.optional(),
+      sidebarCollapsed: z
+        .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+        .optional(),
+      sidebarWidth: normalizedUiWidthSchema(160, 440, 248).optional(),
+      contextSidebarCollapsed: z
+        .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+        .optional(),
+      contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
+      canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
+      messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
+    })
+    .passthrough()
+    .transform(
+      (ui): CachedDesktopUiState => ({
+        selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
+        selectedThreadId: ui.selectedThreadId ?? null,
+        selectedTaskId: ui.selectedTaskId ?? null,
+        view: ui.view ?? "chat",
+        settingsPage: ui.settingsPage ?? "models",
+        lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
+        sidebarCollapsed: ui.sidebarCollapsed ?? false,
+        sidebarWidth: ui.sidebarWidth ?? 248,
+        contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
+        contextSidebarWidth: ui.contextSidebarWidth ?? 300,
+        canvasSidebarWidth: ui.canvasSidebarWidth ?? 500,
+        messageBarHeight: ui.messageBarHeight ?? 96,
+      }),
+    ),
+);
 
 const privacyTelemetrySettingsSchema = z.preprocess(
   (value) =>

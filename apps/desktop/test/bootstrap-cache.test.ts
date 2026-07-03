@@ -638,6 +638,7 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.selectedWorkspaceId).toBe("ws-cached");
     expect(seed?.selectedThreadId).toBe("thread-cached");
     expect(seed?.view).toBe("settings");
+    expect(seed?.settingsPage).toBe("toolAccess");
     expect(seed?.sidebarCollapsed).toBe(true);
     expect(seed?.sidebarWidth).toBe(320);
     expect(seed?.contextSidebarCollapsed).toBe(true);
@@ -960,6 +961,7 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.selectedWorkspaceId).toBe("ws-cached");
     expect(seed?.selectedThreadId).toBe("thread-cached");
     expect(seed?.view).toBe("settings");
+    expect(seed?.settingsPage).toBe("toolAccess");
     expect(seed?.workspaces?.[0]?.wsProtocol).toBe("jsonrpc");
   });
 

@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import type { WorkspaceRuntime } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -51,8 +52,14 @@ import {
   getPreviousNameForUpsert,
 } from "./mcpServerEditorState";
 
+type RuntimeMcpServer = WorkspaceRuntime["mcpServers"][number];
+
 function credentialDraftKey(workspaceId: string, serverName: string): string {
   return `${workspaceId}::${serverName}`;
+}
+
+function serverIdentityKey(server: Pick<RuntimeMcpServer, "name" | "source">): string {
+  return `${server.source}:${server.name}`;
 }
 
 const SOURCE_ORDER: Record<string, number> = {
@@ -147,8 +154,8 @@ export function McpServersPage() {
     setDraft(draftFromServer(server));
   };
 
-  const toggleExpand = (name: string) => {
-    setExpandedServers((prev) => ({ ...prev, [name]: !prev[name] }));
+  const toggleExpand = (key: string) => {
+    setExpandedServers((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const [parent] = useAutoAnimate();
@@ -426,12 +433,13 @@ export function McpServersPage() {
           </div>
         ) : null}
         {servers.map((server) => {
+          const serverKey = serverIdentityKey(server);
           const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;
           const validation = validationByName[server.name];
           const canEdit = server.source === "user";
           const apiKeyDraft = apiKeyByName[draftKey] ?? "";
           const oauthCode = oauthCodeByName[draftKey] ?? "";
-          const isExpanded = expandedServers[server.name] ?? false;
+          const isExpanded = expandedServers[serverKey] ?? false;
           const serverEnabled = server.enabled !== false;
           const canToggle =
             server.source !== "system" &&
@@ -440,7 +448,7 @@ export function McpServersPage() {
 
           return (
             <div
-              key={`${server.source}:${server.name}`}
+              key={serverKey}
               className={cn(
                 "border-b border-border/45 last:border-b-0",
                 isExpanded && "bg-card/40",
@@ -450,7 +458,7 @@ export function McpServersPage() {
                 <button
                   type="button"
                   className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  onClick={() => toggleExpand(server.name)}
+                  onClick={() => toggleExpand(serverKey)}
                 >
                   {isExpanded ? (
                     <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />

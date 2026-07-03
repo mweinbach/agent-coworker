@@ -73,7 +73,7 @@ mock.module("../src/lib/desktopCommands", () =>
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
-const { PluginDetailDialog } = await import("../src/ui/plugins/PluginDetailDialog");
+const { PluginDetailDialog } = await import("../src/ui/settings/toolAccess/PluginDetailDialog");
 mock.restore();
 
 describe("plugin detail dialog", () => {

@@ -288,8 +288,6 @@ describe("workspace startup flow", () => {
       workspaces: [],
       threads: [],
       selectedWorkspaceId: null,
-      pluginManagementWorkspaceId: null,
-      pluginManagementMode: "auto",
       selectedThreadId: null,
       workspaceRuntimeById: {},
       threadRuntimeById: {},

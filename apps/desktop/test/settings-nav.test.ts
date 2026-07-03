@@ -210,10 +210,10 @@ describe("settings nav (store)", () => {
   });
 
   test("openSettings records lastNonSettingsView and enters settings", () => {
-    useAppStore.setState({ view: "skills" });
+    useAppStore.setState({ view: "research" });
     useAppStore.getState().openSettings();
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().lastNonSettingsView).toBe("skills");
+    expect(useAppStore.getState().lastNonSettingsView).toBe("research");
   });
 
   test("openSettings optionally selects a settings page", () => {
@@ -223,10 +223,10 @@ describe("settings nav (store)", () => {
   });
 
   test("closeSettings restores the prior view", () => {
-    useAppStore.setState({ view: "skills" });
+    useAppStore.setState({ view: "research" });
     useAppStore.getState().openSettings();
     useAppStore.getState().closeSettings();
-    expect(useAppStore.getState().view).toBe("skills");
+    expect(useAppStore.getState().view).toBe("research");
   });
 
   test("setSettingsPage updates settingsPage", () => {
@@ -679,11 +679,11 @@ describe("settings nav (store)", () => {
     expect(thread?.archivedAt).toBeUndefined();
   });
 
-  test("openSkills shows guidance when no workspace is available", async () => {
+  test("openSkills routes to Settings > Tool Access", async () => {
     await useAppStore.getState().openSkills();
-    expect(useAppStore.getState().view).toBe("chat");
-    const last = useAppStore.getState().notifications.at(-1);
-    expect(last?.title).toBe("Skills need a workspace");
+    const state = useAppStore.getState();
+    expect(state.view).toBe("settings");
+    expect(state.settingsPage).toBe("toolAccess");
   });
 
   test("openResearch requires a saved Google API key", async () => {

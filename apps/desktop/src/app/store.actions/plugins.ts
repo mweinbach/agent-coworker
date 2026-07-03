@@ -11,7 +11,6 @@ import {
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  syncDesktopStateCache,
 } from "../store.helpers";
 import {
   clearFailedMutationSend,
@@ -19,7 +18,6 @@ import {
   managementWorkspaceIdFor,
   mutationPendingKey,
   refreshSharedWorkspaceState,
-  resolvePluginManagementWorkspace,
   setMutationPending,
   workspacePathFor,
 } from "./skillPluginHelpers";
@@ -41,10 +39,8 @@ export function createPluginActions(
   AppStoreActions,
   | "refreshPluginsCatalog"
   | "selectPlugin"
-  | "setPluginManagementWorkspace"
   | "previewPluginInstall"
   | "installPlugins"
-  | "setPluginViewMode"
   | "enablePlugin"
   | "disablePlugin"
   | "deletePlugin"
@@ -246,22 +242,6 @@ export function createPluginActions(
       }
     },
 
-    setPluginManagementWorkspace: async (workspaceId: string | null) => {
-      set({
-        pluginManagementWorkspaceId: resolvePluginManagementWorkspace(get, workspaceId),
-        pluginManagementMode: workspaceId === null ? "global" : "workspace",
-      });
-      syncDesktopStateCache(get);
-      const targetWorkspaceId = managementWorkspaceIdFor(get);
-      if (!targetWorkspaceId) {
-        return;
-      }
-      ensureWorkspaceRuntime(get, set, targetWorkspaceId);
-      await ensureServerRunning(get, set, targetWorkspaceId);
-      ensureControlSocket(get, set, targetWorkspaceId);
-      await Promise.all([get().refreshPluginsCatalog(), get().refreshSkillsCatalog()]);
-    },
-
     previewPluginInstall: async (sourceInput: string, targetScope: "workspace" | "user") => {
       const workspaceId = managementWorkspaceIdFor(get);
       if (!workspaceId) return;
@@ -361,20 +341,6 @@ export function createPluginActions(
         await refreshSharedWorkspaceState(get, set, workspaceId);
       }
       return result;
-    },
-
-    setPluginViewMode: async (mode: "plugins" | "skills") => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      if (!workspaceId) return;
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            pluginViewMode: mode,
-          },
-        },
-      }));
     },
 
     enablePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {

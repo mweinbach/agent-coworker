@@ -89,7 +89,6 @@ import type {
   PersistedOnboardingState,
   PersistedPrivacyTelemetrySettings,
   PersistedProviderUiState,
-  PluginManagementMode,
   PrivacyTelemetrySettings,
   PromptModalState,
   ResearchCard,
@@ -207,8 +206,6 @@ export type AppStoreState = {
   threads: ThreadRecord[];
 
   selectedWorkspaceId: string | null;
-  pluginManagementWorkspaceId: string | null;
-  pluginManagementMode: PluginManagementMode;
   selectedThreadId: string | null;
   selectedTaskId: string | null;
   newTaskWorkspaceId: string | null;
@@ -431,7 +428,6 @@ export type AppStoreState = {
   copyAgentProfile: (copy: AgentProfileCopyInput, workspaceId?: string) => Promise<boolean>;
   refreshPluginsCatalog: () => Promise<void>;
   selectPlugin: (pluginId: string | null, scope?: "workspace" | "user" | null) => Promise<void>;
-  setPluginManagementWorkspace: (workspaceId: string | null) => Promise<void>;
   previewPluginInstall: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
   installPlugins: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
   enablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
@@ -439,7 +435,6 @@ export type AppStoreState = {
   deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   checkPluginUpdate: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   updatePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
-  setPluginViewMode: (mode: "plugins" | "skills") => void;
   listImportable: (source: ImportSource, kind: ImportableKind) => Promise<void>;
   importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
   importSkill: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;

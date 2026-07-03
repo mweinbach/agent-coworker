@@ -231,12 +231,6 @@ export function createWorkspaceActions(
           s.selectedWorkspaceId === workspaceId
             ? (remainingWorkspaces[0]?.id ?? null)
             : s.selectedWorkspaceId;
-        const pluginManagementWorkspaceId =
-          s.pluginManagementWorkspaceId === workspaceId ? null : s.pluginManagementWorkspaceId;
-        const pluginManagementMode =
-          s.pluginManagementWorkspaceId === workspaceId && s.pluginManagementMode === "workspace"
-            ? "auto"
-            : s.pluginManagementMode;
         const selectedTaskId =
           selectedWorkspaceId && taskBelongsToWorkspace(s.selectedTaskId, selectedWorkspaceId)
             ? s.selectedTaskId
@@ -268,8 +262,6 @@ export function createWorkspaceActions(
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
-          pluginManagementWorkspaceId,
-          pluginManagementMode,
           selectedWorkspaceId,
           selectedThreadId,
           selectedTaskId,

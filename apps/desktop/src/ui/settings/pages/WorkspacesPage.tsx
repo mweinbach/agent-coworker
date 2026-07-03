@@ -1,5 +1,4 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
-import { motion } from "framer-motion";
 import { ChevronDownIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -972,9 +971,9 @@ function WorkspaceDefaultsSummary({
   );
 }
 
-type WorkspacesPageSurface = "all" | "defaults" | "models" | "profile";
+type WorkspacesPageSurface = "defaults" | "models" | "profile";
 
-export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSurface } = {}) {
+export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesPageSurface } = {}) {
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
@@ -1145,19 +1144,8 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     return preferredChildModelRef ? [preferredChildModelRef] : [];
   }, [childModelRoutingMode, preferredChildModelRef, visibleAllowedChildModelRefs]);
 
-  const initialTab: "general" | "models" | "profile" | "advanced" =
+  const visibleTab: "general" | "models" | "profile" =
     surface === "models" ? "models" : surface === "profile" ? "profile" : "general";
-  const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">(
-    initialTab,
-  );
-  const visibleTab =
-    surface === "all"
-      ? activeTab
-      : surface === "models"
-        ? "models"
-        : surface === "profile"
-          ? "profile"
-          : "general";
   const [subagentModelsOpen, setSubagentModelsOpen] = useState(false);
   const subagentModelsOpenSeedKey = useRef<string | null>(null);
 
@@ -1203,37 +1191,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                   : friendlyModelRef(preferredChildModelRef)
               }
             />
-          ) : null}
-
-          {surface === "all" ? (
-            <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
-              {(["general", "models", "profile", "advanced"] as const).map((tab) => (
-                <Button
-                  key={tab}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setActiveTab(tab)}
-                  className={cn(
-                    "relative h-auto rounded-md px-3 py-1.5 text-sm font-medium shadow-none transition-colors",
-                    activeTab === tab
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {activeTab === tab && (
-                    <motion.div
-                      layoutId="workspaces-active-tab"
-                      className="app-shadow-surface pointer-events-none absolute inset-0 -z-10 rounded-md border border-border/50 bg-background"
-                      transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                    />
-                  )}
-                  <span className="relative z-10">
-                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                  </span>
-                </Button>
-              ))}
-            </div>
           ) : null}
 
           <div
@@ -1413,6 +1370,39 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <CardContent className="space-y-4 border-t border-border/70 pt-4">
+                      <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                        <div>
+                          <div className="text-sm font-medium">
+                            Configure settings per folder or chat
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            When enabled, each folder or one-off chat can keep different provider,
+                            model, and behavior settings.
+                          </div>
+                        </div>
+                        <Switch
+                          checked={perWorkspaceSettings}
+                          aria-label="Configure settings per folder or chat"
+                          onCheckedChange={async (checked) => {
+                            if (!checked && workspaces.length > 1) {
+                              const confirmed = await confirmAction({
+                                title: "Share settings everywhere",
+                                message:
+                                  "All folders and chats will be synced to the current settings.",
+                                detail:
+                                  "This will overwrite provider, model, and behavior settings on other folders and chats.",
+                                confirmLabel: "Share settings",
+                                cancelLabel: "Cancel",
+                                kind: "warning",
+                                defaultAction: "cancel",
+                              });
+                              if (!confirmed) return;
+                            }
+                            setPerWorkspaceSettings(checked);
+                          }}
+                        />
+                      </div>
+
                       {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                         <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>
@@ -1872,100 +1862,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
             />
-          </div>
-
-          <div
-            className={cn(
-              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
-              visibleTab !== "advanced" && "hidden",
-            )}
-          >
-            <Card className="border-border/80 bg-card/85">
-              <CardHeader>
-                <CardTitle>Advanced</CardTitle>
-                <CardDescription>Maintenance and destructive actions.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                  <div>
-                    <div className="text-sm font-medium">Configure settings per folder or chat</div>
-                    <div className="text-xs text-muted-foreground">
-                      When enabled, each folder or one-off chat can keep different provider, model,
-                      and behavior settings.
-                    </div>
-                  </div>
-                  <Switch
-                    checked={perWorkspaceSettings}
-                    aria-label="Configure settings per folder or chat"
-                    onCheckedChange={async (checked) => {
-                      if (!checked && workspaces.length > 1) {
-                        const confirmed = await confirmAction({
-                          title: "Share settings everywhere",
-                          message: "All folders and chats will be synced to the current settings.",
-                          detail:
-                            "This will overwrite provider, model, and behavior settings on other folders and chats.",
-                          confirmLabel: "Share settings",
-                          cancelLabel: "Cancel",
-                          kind: "warning",
-                          defaultAction: "cancel",
-                        });
-                        if (!confirmed) return;
-                      }
-                      setPerWorkspaceSettings(checked);
-                    }}
-                  />
-                </div>
-
-                {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
-                  <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
-                    <div>
-                      <div className="text-sm font-medium">Restart server</div>
-                      <div className="text-xs text-muted-foreground">
-                        Restart the agent server for this folder or chat if unresponsive.
-                      </div>
-                    </div>
-                    <Button
-                      variant="outline"
-                      type="button"
-                      onClick={() => void restartWorkspaceServer(ws.id)}
-                    >
-                      Restart
-                    </Button>
-                  </div>
-                ) : null}
-
-                {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
-                  <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
-                    <div>
-                      <div className="text-sm font-medium">Remove from Cowork</div>
-                      <div className="text-xs text-muted-foreground">
-                        Remove this folder or chat from the app. Files on disk are not affected.
-                      </div>
-                    </div>
-                    <Button
-                      variant="destructive"
-                      type="button"
-                      onClick={async () => {
-                        const confirmed = await confirmAction({
-                          title: "Remove from Cowork",
-                          message: `Remove "${ws.name}" from Cowork?`,
-                          detail: "Files on disk will not be affected.",
-                          confirmLabel: "Remove",
-                          cancelLabel: "Cancel",
-                          kind: "warning",
-                          defaultAction: "cancel",
-                        });
-                        if (confirmed) {
-                          void removeWorkspace(ws.id);
-                        }
-                      }}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
           </div>
         </>
       )}

@@ -298,7 +298,7 @@ export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null
 }
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
-export type ViewId = "chat" | "task" | "skills" | "research" | "settings";
+export type ViewId = "chat" | "task" | "research" | "settings";
 
 export type {
   TaskArtifact,
@@ -312,7 +312,6 @@ export type {
   TaskSummary,
 };
 
-type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
   | "models"
   | "subagents"
@@ -339,8 +338,6 @@ export type SettingsPageId =
 
 export type CachedDesktopUiState = {
   selectedWorkspaceId?: string | null;
-  pluginManagementWorkspaceId?: string | null;
-  pluginManagementMode?: PluginManagementMode;
   selectedThreadId?: string | null;
   selectedTaskId?: string | null;
   view?: ViewId;
@@ -371,8 +368,6 @@ export const DEFAULT_RESEARCH_SETTINGS: ResearchSettingsState = {
   thinkingSummaries: "auto",
   visualization: "auto",
 };
-
-export type PluginManagementMode = "auto" | "global" | "workspace";
 
 export type PersistedState = {
   version: number;
@@ -508,7 +503,6 @@ export type WorkspaceRuntime = {
   selectedPluginPreview: PluginInstallPreview | null;
   pluginsLoading: boolean;
   pluginsError: string | null;
-  pluginViewMode: PluginViewMode;
   skills: SkillEntry[];
   skillsCatalog: SkillCatalogSnapshot | null;
   selectedSkillName: string | null;

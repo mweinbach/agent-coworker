@@ -1,17 +1,17 @@
 import { ExternalLinkIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Streamdown } from "streamdown";
-import { useAppStore } from "../../app/store";
-import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { confirmAction, revealPath } from "../../lib/desktopCommands";
+} from "../../../components/ui/dialog";
+import { confirmAction, revealPath } from "../../../lib/desktopCommands";
 import {
   actionPending,
   normalizeDisplayContent,
@@ -19,7 +19,7 @@ import {
   scopeLabel,
   skillSourceLabel,
   stateTone,
-} from "./utils";
+} from "./skillUtils";
 
 export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
   const [dismissedInstallationId, setDismissedInstallationId] = useState<string | null>(null);

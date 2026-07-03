@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
-import { useAppStore } from "../../app/store";
-import { Button } from "../../components/ui/button";
+import { useAppStore } from "../../../app/store";
+import { Button } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { Textarea } from "../../components/ui/textarea";
-import type { SkillMutationTargetScope } from "../../lib/wsProtocol";
+} from "../../../components/ui/dialog";
+import { Textarea } from "../../../components/ui/textarea";
+import type { SkillMutationTargetScope } from "../../../lib/wsProtocol";
 
 type SkillPreviewState = NonNullable<
   ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedSkillPreview"]

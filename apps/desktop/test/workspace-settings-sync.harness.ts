@@ -648,7 +648,6 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
       ],
       threads: [],
       selectedWorkspaceId: workspaceId,
-      pluginManagementWorkspaceId: null,
       selectedThreadId: null,
       workspaceRuntimeById: {},
       threadRuntimeById: {},

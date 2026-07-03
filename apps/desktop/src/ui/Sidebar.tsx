@@ -20,7 +20,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
@@ -57,8 +56,6 @@ export const Sidebar = memo(function Sidebar() {
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
-  const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedTaskId = useAppStore((s) => s.selectedTaskId);
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
@@ -74,7 +71,6 @@ export const Sidebar = memo(function Sidebar() {
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const setWorkspacesOrder = useAppStore((s) => s.setWorkspacesOrder);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
-  const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const newThread = useAppStore((s) => s.newThread);
   const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const openNewTask = useAppStore((s) => s.openNewTask);
@@ -113,16 +109,6 @@ export const Sidebar = memo(function Sidebar() {
     () => workspaces.filter((workspace) => isOneOffChatWorkspace(workspace)),
     [workspaces],
   );
-  const pluginSelection = useMemo(
-    () =>
-      resolvePluginCatalogWorkspaceSelection({
-        workspaces: projectWorkspaces,
-        selectedWorkspaceId,
-        pluginManagementWorkspaceId,
-        pluginManagementMode,
-      }),
-    [pluginManagementMode, pluginManagementWorkspaceId, projectWorkspaces, selectedWorkspaceId],
-  );
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
   const tasksEnabled = desktopFeatures.tasks === true;
@@ -140,13 +126,11 @@ export const Sidebar = memo(function Sidebar() {
     [isOnNewChatLanding, newChatLandingTarget, projectWorkspaces, selectedWorkspaceId],
   );
   const activeWorkspaceId =
-    effectiveView === "skills"
-      ? pluginSelection.displayWorkspaceId
-      : effectiveView === "research"
-        ? null
-        : isOnNewChatLanding
-          ? landingProjectWorkspaceId
-          : selectedWorkspaceId;
+    effectiveView === "research"
+      ? null
+      : isOnNewChatLanding
+        ? landingProjectWorkspaceId
+        : selectedWorkspaceId;
   const activeProjectWorkspaceId = projectWorkspaces.some(
     (workspace) => workspace.id === activeWorkspaceId,
   )
@@ -296,11 +280,9 @@ export const Sidebar = memo(function Sidebar() {
 
   const handleSelectWorkspace = useCallback(
     (workspaceId: string) => {
-      void (effectiveView === "skills"
-        ? setPluginManagementWorkspace(workspaceId)
-        : selectWorkspace(workspaceId));
+      void selectWorkspace(workspaceId);
     },
-    [effectiveView, selectWorkspace, setPluginManagementWorkspace],
+    [selectWorkspace],
   );
 
   const handleNewWorkspaceChat = useCallback(
@@ -368,9 +350,7 @@ export const Sidebar = memo(function Sidebar() {
     } else if (result === "new_project_task") {
       void openNewTask(wsId);
     } else if (result === "select") {
-      void (effectiveView === "skills"
-        ? setPluginManagementWorkspace(wsId)
-        : selectWorkspace(wsId));
+      void selectWorkspace(wsId);
     } else if (result === "remove") {
       const confirmed = await confirmAction({
         title: "Remove project",
@@ -772,11 +752,9 @@ export const Sidebar = memo(function Sidebar() {
         <Button
           variant="ghost"
           size="sm"
-          aria-current={effectiveView === "skills" ? "page" : undefined}
           className={cn(
             "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
             "hover:bg-foreground/[0.045] hover:text-foreground",
-            effectiveView === "skills" && "bg-foreground/[0.055] text-foreground",
           )}
           onClick={() => void openSkills()}
         >

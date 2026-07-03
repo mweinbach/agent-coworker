@@ -1,7 +1,6 @@
 import { DownloadIcon, PackageIcon, RefreshCwIcon, SparklesIcon, StoreIcon } from "lucide-react";
 import { useEffect, useMemo } from "react";
 
-import { resolvePluginCatalogWorkspaceSelection } from "../../../app/pluginManagement";
 import { useAppStore } from "../../../app/store";
 import { Button } from "../../../components/ui/button";
 import { Skeleton } from "../../../components/ui/skeleton";
@@ -12,18 +11,18 @@ import type {
   SkillInstallationEntry,
 } from "../../../lib/wsProtocol";
 import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
-import { ImportDialog } from "../../import/ImportDialog";
-import { InstallPluginDialog } from "../../plugins/InstallPluginDialog";
-import { PluginDetailDialog } from "../../plugins/PluginDetailDialog";
-import { InstallSkillDialog } from "../../skills/InstallSkillDialog";
-import { SkillDetailDialog } from "../../skills/SkillDetailDialog";
-import { scopeLabel } from "../../skills/utils";
 import {
   EntityIcon,
   SettingsEmptyState,
   SettingsSection,
   SettingsStatusPill,
 } from "../SettingsPrimitives";
+import { ImportDialog } from "../toolAccess/ImportDialog";
+import { InstallPluginDialog } from "../toolAccess/InstallPluginDialog";
+import { InstallSkillDialog } from "../toolAccess/InstallSkillDialog";
+import { PluginDetailDialog } from "../toolAccess/PluginDetailDialog";
+import { SkillDetailDialog } from "../toolAccess/SkillDetailDialog";
+import { scopeLabel } from "../toolAccess/skillUtils";
 
 type InstalledPluginEntry = Extract<PluginCatalogEntry, { installed: true }>;
 type MarketplacePluginEntry = Extract<PluginCatalogEntry, { installed: false }>;
@@ -436,12 +435,7 @@ export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string
 export function useToolAccessCatalogWorkspaceId(): string | null {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
-  const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
-  return resolvePluginCatalogWorkspaceSelection({
-    workspaces,
-    selectedWorkspaceId,
-    pluginManagementWorkspaceId,
-    pluginManagementMode,
-  }).catalogWorkspaceId;
+  return workspaces.some((workspace) => workspace.id === selectedWorkspaceId)
+    ? selectedWorkspaceId
+    : (workspaces[0]?.id ?? null);
 }

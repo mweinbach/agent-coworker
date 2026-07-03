@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
 
-import { useAppStore } from "../../app/store";
-import { Button } from "../../components/ui/button";
+import { useAppStore } from "../../../app/store";
+import { Button } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { Textarea } from "../../components/ui/textarea";
+} from "../../../components/ui/dialog";
+import { Textarea } from "../../../components/ui/textarea";
 
 type PluginPreviewScope = "workspace" | "user";
 type PluginPreviewState = NonNullable<

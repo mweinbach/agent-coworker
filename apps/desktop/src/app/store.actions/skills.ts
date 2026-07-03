@@ -1,4 +1,3 @@
-import { resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import {
   type AppStoreActions,
   ensureControlSocket,
@@ -11,7 +10,6 @@ import {
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  syncDesktopStateCache,
 } from "../store.helpers";
 import {
   clearFailedMutationSend,
@@ -61,49 +59,8 @@ export function createSkillActions(
 
   return {
     openSkills: async () => {
-      let workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        if (get().desktopFeatureFlags.workspaceLifecycle === false) {
-          set((s) => ({
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "info",
-              title: "Workspace management is disabled",
-              detail:
-                "Enable Workspace lifecycle actions in Settings -> Feature Flags to add a workspace.",
-            }),
-          }));
-          return;
-        }
-        await get().addWorkspace();
-        workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-        if (!workspaceId) {
-          set((s) => ({
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "info",
-              title: "Skills need a workspace",
-              detail: "Add or select a workspace first.",
-            }),
-          }));
-          return;
-        }
-      }
-
-      const targetWorkspaceId =
-        resolvePluginManagementWorkspaceId(
-          get().workspaces ?? [],
-          get().pluginManagementWorkspaceId,
-        ) ?? workspaceId;
-
-      set({ view: "skills", selectedWorkspaceId: workspaceId });
-      syncDesktopStateCache(get);
-      ensureWorkspaceRuntime(get, set, targetWorkspaceId);
-      await ensureServerRunning(get, set, targetWorkspaceId);
-      ensureControlSocket(get, set, targetWorkspaceId);
-      await Promise.all([get().refreshPluginsCatalog(), get().refreshSkillsCatalog()]);
+      // Plugins/skills management lives in Settings > Tool Access.
+      get().openSettings("toolAccess");
     },
 
     refreshSkillsCatalog: async (targetWorkspaceId?: string) => {

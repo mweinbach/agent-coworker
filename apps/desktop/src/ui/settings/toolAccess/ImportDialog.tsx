@@ -8,20 +8,20 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import { useAppStore } from "../../app/store";
-import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { Spinner } from "../../components/ui/spinner";
-import { pickDirectory } from "../../lib/desktopCommands";
-import { cn } from "../../lib/utils";
-import type { ImportableItem, ImportableKind, ImportSource } from "../../lib/wsProtocol";
+} from "../../../components/ui/dialog";
+import { Spinner } from "../../../components/ui/spinner";
+import { pickDirectory } from "../../../lib/desktopCommands";
+import { cn } from "../../../lib/utils";
+import type { ImportableItem, ImportableKind, ImportSource } from "../../../lib/wsProtocol";
 
 type ImportTab = ImportSource | "folder";
 

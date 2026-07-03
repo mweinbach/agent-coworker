@@ -1,8 +1,4 @@
 import {
-  resolvePluginCatalogWorkspaceSelection,
-  resolvePluginManagementWorkspaceId,
-} from "../pluginManagement";
-import {
   ensureControlSocket,
   ensureServerRunning,
   ensureWorkspaceRuntime,
@@ -89,12 +85,10 @@ export const workspacePathFor = (get: StoreGet, workspaceId: string): string | u
 
 export const managementWorkspaceIdFor = (get: StoreGet): string | null => {
   const state = get();
-  return resolvePluginCatalogWorkspaceSelection({
-    workspaces: state.workspaces ?? [],
-    selectedWorkspaceId: state.selectedWorkspaceId,
-    pluginManagementWorkspaceId: state.pluginManagementWorkspaceId,
-    pluginManagementMode: state.pluginManagementMode,
-  }).catalogWorkspaceId;
+  const workspaces = state.workspaces ?? [];
+  return workspaces.some((workspace) => workspace.id === state.selectedWorkspaceId)
+    ? state.selectedWorkspaceId
+    : (workspaces[0]?.id ?? null);
 };
 
 export function clearFailedMutationSend(
@@ -161,11 +155,4 @@ export async function refreshSharedWorkspaceState(
       ]);
     }),
   );
-}
-
-export function resolvePluginManagementWorkspace(
-  get: StoreGet,
-  workspaceId: string | null,
-): string | null {
-  return resolvePluginManagementWorkspaceId(get().workspaces ?? [], workspaceId);
 }

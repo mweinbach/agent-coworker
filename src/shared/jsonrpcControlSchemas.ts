@@ -467,6 +467,7 @@ const mcpServerConfigSchema = z
     required: z.boolean().optional(),
     retries: z.number().int().nonnegative().optional(),
     auth: mcpServerAuthConfigSchema.optional(),
+    icon: z.string().optional(),
   })
   .passthrough();
 

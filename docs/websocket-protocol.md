@@ -375,6 +375,8 @@ A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>
 
 A marketplace `marketplace.json` may also declare a `skills` array (same entry shape as `plugins`) for standalone skills. These surface in skill catalog snapshots under `availableSkills` (`installed: false`, each with an `installSource` GitHub URL); installed skills stay in `installations`. The `skills_catalog` event sets `availableSkillsPartial: true` whenever the remote marketplace was not fetched (local-only refresh) or the fetch failed, so clients keep their cached available-skill rows instead of clearing them. Install an available skill by passing its `installSource` to `cowork/skills/install` (no new method is required).
 
+Marketplace entries (plugins and skills) may carry optional icon metadata in `interface`: `icon` or `logo` (an image URL or `data:` URI) and `brandColor`. Parsed plugin entries expose them as `availablePlugins[].interface.logo` / `interface.brandColor`; parsed skill entries expose them as `availableSkills[].interface.iconSmall` / `interface.iconLarge`. Installed plugin skills additionally embed `iconSmall` / `iconLarge` `data:` URIs when the skill's `agents/*.yaml` declares `icon_small` / `icon_large` file paths, matching standalone skill catalog behavior.
+
 The import controls let a client browse and copy plugins/skills that already exist on disk from other agent tools:
 
 - `cowork/import/list` — params `{ cwd?, source: "claude" | "codex", kind: "plugin" | "skill" }`. Returns an `import_list` event `{ source, kind, homeExists, items }`. Each `ImportableItem` has `{ kind, source, id, displayName, description, version?, sourcePath, alreadyInstalledGlobal, alreadyInstalledWorkspace, diagnostics, conversionRequired? }`. A non-empty `diagnostics` array means the item is surfaced but not importable. `conversionRequired` marks Claude `.claude-plugin` bundles that are converted on import. Discovery scans only `~/.claude/plugins/{cache,marketplaces}` + `~/.codex/plugins/cache` for plugin manifests, and `~/.{claude,codex}/skills` for `SKILL.md` bundles.
@@ -2021,7 +2023,7 @@ Layered MCP server snapshot with auth status, source attribution, and file diagn
 |-------|------|-------------|
 | `type` | `"mcp_servers"` | — |
 | `sessionId` | `string` | Session identifier |
-| `servers` | `Array<MCPServerConfig & { source, inherited, authMode, authScope, authMessage }>` | Effective servers with layer/auth metadata. `enabled: false` servers remain listed but are skipped when agent turns load MCP tools. |
+| `servers` | `Array<MCPServerConfig & { source, inherited, authMode, authScope, authMessage }>` | Effective servers with layer/auth metadata. `enabled: false` servers remain listed but are skipped when agent turns load MCP tools. `MCPServerConfig` accepts an optional `icon` (image URL or `data:` URI) that round-trips through `cowork/mcp/server/upsert`; plugin-provided servers fall back to the owning plugin's `composerIcon`/`logo` when no explicit icon is set. |
 | `files` | `Array<{ source, path, exists, editable, legacy, parseError?, serverCount }>` | File-level diagnostics per layer |
 | `warnings` | `string[]` | Optional non-fatal parse warnings |
 

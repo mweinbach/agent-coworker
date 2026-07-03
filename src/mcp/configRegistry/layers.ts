@@ -180,6 +180,7 @@ async function readPluginLayers(
     if (!plugin.mcpPath) continue;
     if (!plugin.enabled) continue;
     const filePath = path.resolve(plugin.mcpPath);
+    const pluginIcon = plugin.interface?.composerIcon ?? plugin.interface?.logo;
     let servers: MCPServerConfig[] = [];
     let parseError: string | undefined;
     try {
@@ -187,6 +188,7 @@ async function readPluginLayers(
         rebasePluginLocalTransport(
           {
             ...server,
+            ...((server.icon ?? pluginIcon) ? { icon: server.icon ?? pluginIcon } : {}),
             enabled: isPluginMcpServerEnabled(
               plugin.id,
               plugin.scope,

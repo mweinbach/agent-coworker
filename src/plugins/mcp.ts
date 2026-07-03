@@ -53,6 +53,7 @@ const wrappedMcpServerConfigSchema = z
     required: z.boolean().optional(),
     retries: z.number().finite().optional(),
     auth: authSchema.optional(),
+    icon: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -63,6 +64,7 @@ const shorthandMcpServerConfigSchema = z.union([
       required: z.boolean().optional(),
       retries: z.number().finite().optional(),
       auth: authSchema.optional(),
+      icon: z.string().trim().min(1).optional(),
     })
     .strict(),
   httpTransportSchema
@@ -71,6 +73,7 @@ const shorthandMcpServerConfigSchema = z.union([
       required: z.boolean().optional(),
       retries: z.number().finite().optional(),
       auth: authSchema.optional(),
+      icon: z.string().trim().min(1).optional(),
     })
     .strict(),
 ]);
@@ -128,6 +131,7 @@ function parsePluginMcpDocument(
                 ...(config.required !== undefined ? { required: config.required } : {}),
                 ...(config.retries !== undefined ? { retries: config.retries } : {}),
                 ...(config.auth ? { auth: config.auth } : {}),
+                ...(config.icon ? { icon: config.icon } : {}),
               }
             : {
                 name,
@@ -140,6 +144,7 @@ function parsePluginMcpDocument(
                 ...(config.required !== undefined ? { required: config.required } : {}),
                 ...(config.retries !== undefined ? { retries: config.retries } : {}),
                 ...(config.auth ? { auth: config.auth } : {}),
+                ...(config.icon ? { icon: config.icon } : {}),
               };
       return normalized;
     })

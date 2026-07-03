@@ -2086,6 +2086,51 @@ describe("plugin catalog and install operations", () => {
     expect(workspacePlugin.plugin?.rootDir).toBe("/tmp/workspace/.agents/plugins/figma-toolkit");
   });
 
+  test("plugin skills embed icon data URIs declared in agents yaml", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-icons-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-icons-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-skill-icons-builtin-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      await writePlugin(pluginRoot, "Workspace Figma Toolkit", "Workspace override");
+      const skillRoot = path.join(pluginRoot, "skills", "import-frame");
+      await fs.mkdir(path.join(skillRoot, "agents"), { recursive: true });
+      // 1x1 transparent PNG
+      const pngBytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      await fs.writeFile(path.join(skillRoot, "icon.png"), pngBytes);
+      await fs.writeFile(
+        path.join(skillRoot, "agents", "openai.yaml"),
+        [
+          "interface:",
+          '  display_name: "Import Frame"',
+          '  short_description: "Import a Figma frame"',
+          '  icon_small: "./icon.png"',
+          '  icon_large: "./icon.png"',
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      const plugin = catalog.plugins.find((entry) => entry.id === "figma-toolkit");
+      const skill = plugin?.skills.find((entry) => entry.rawName === "import-frame");
+
+      expect(skill?.interface?.displayName).toBe("Import Frame");
+      expect(skill?.interface?.iconSmall).toStartWith("data:image/png;base64,");
+      expect(skill?.interface?.iconLarge).toStartWith("data:image/png;base64,");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("surfaces warnings for malformed bundled plugin skills", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-malformed-skills-workspace-"),

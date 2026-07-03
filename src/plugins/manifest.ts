@@ -16,6 +16,7 @@ import { isRecord } from "../utils/typeGuards";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalStringArraySchema = z.array(nonEmptyStringSchema).optional();
+const MAX_SKILL_ICON_BYTES = 256 * 1024;
 
 const pluginInterfaceSchema = z
   .object({
@@ -271,6 +272,11 @@ async function readSkillIconAsDataUri(
       fs.realpath(resolvedPath),
     ]);
     if (!isPathInside(canonicalSkillRoot, canonicalTarget)) {
+      return null;
+    }
+    const stat = await fs.stat(canonicalTarget);
+    // Catalog payloads inline icons, so cap files before base64 encoding.
+    if (!stat.isFile() || stat.size > MAX_SKILL_ICON_BYTES) {
       return null;
     }
     const buf = await fs.readFile(canonicalTarget);

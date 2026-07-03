@@ -2,7 +2,7 @@
   "mcpServers": {
     "chrome-devtools": {
       "command": "bunx",
-      "args": ["chrome-devtools-mcp@latest", "--browser-url=http://localhost:9322"]
+      "args": ["chrome-devtools-mcp@latest", "--browser-url=http://127.0.0.1:9322"]
     }
   }
 }

@@ -2131,6 +2131,49 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("plugin skills skip oversized icons declared in agents yaml", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-skill-icons-large-workspace-"),
+    );
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-icons-large-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-skill-icons-large-builtin-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      await writePlugin(pluginRoot, "Workspace Figma Toolkit", "Workspace override");
+      const skillRoot = path.join(pluginRoot, "skills", "import-frame");
+      await fs.mkdir(path.join(skillRoot, "agents"), { recursive: true });
+      await fs.writeFile(path.join(skillRoot, "huge.png"), Buffer.alloc(256 * 1024 + 1, 1));
+      await fs.writeFile(
+        path.join(skillRoot, "agents", "openai.yaml"),
+        [
+          "interface:",
+          '  display_name: "Import Frame"',
+          '  short_description: "Import a Figma frame"',
+          '  icon_small: "./huge.png"',
+          '  icon_large: "./huge.png"',
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      const plugin = catalog.plugins.find((entry) => entry.id === "figma-toolkit");
+      const skill = plugin?.skills.find((entry) => entry.rawName === "import-frame");
+
+      expect(skill?.interface?.displayName).toBe("Import Frame");
+      expect(skill?.interface?.shortDescription).toBe("Import a Figma frame");
+      expect(skill?.interface?.iconSmall).toBeUndefined();
+      expect(skill?.interface?.iconLarge).toBeUndefined();
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("surfaces warnings for malformed bundled plugin skills", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "plugins-malformed-skills-workspace-"),

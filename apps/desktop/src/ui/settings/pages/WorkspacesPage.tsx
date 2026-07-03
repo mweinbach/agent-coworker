@@ -83,7 +83,6 @@ import {
 import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
-import { SettingsSection } from "../SettingsPrimitives";
 
 function ToggleChip({
   pressed,
@@ -305,7 +304,7 @@ export function OpenAiCompatibleModelSettingsCard({
   if (sections.length === 0) return null;
 
   return (
-    <Collapsible className="border-t border-border/60 first:border-t-0">
+    <Collapsible>
       <CollapsibleTrigger asChild>
         <Button
           type="button"
@@ -676,7 +675,7 @@ export function GeminiApiSettingsCard({
   const googleReasoningEffortOptions = getGoogleReasoningEffortValuesForModel(selectedGoogleModel);
 
   return (
-    <Collapsible className="border-t border-border/60 first:border-t-0">
+    <Collapsible>
       <CollapsibleTrigger asChild>
         <Button
           type="button"
@@ -1392,11 +1391,14 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
               visibleTab !== "models" && "hidden",
             )}
           >
-            <SettingsSection
-              title="Defaults"
-              description="The provider and model Cowork uses for new chats."
-            >
-              <div className="space-y-4 px-4 py-4">
+            <div className="space-y-3">
+              <div>
+                <div className="text-sm font-semibold text-foreground">Defaults</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  The provider and model Cowork uses for new chats.
+                </div>
+              </div>
+              <div className="app-shadow-surface space-y-4 rounded-xl border border-border/75 bg-card/85 px-4 py-4">
                 {availableProviders.length === 0 ? (
                   <div className={MODEL_CARD_PANEL_CLASS}>
                     <div className="text-sm font-medium text-foreground">
@@ -1744,16 +1746,19 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                   </>
                 )}
               </div>
-            </SettingsSection>
+            </div>
 
             {hasConfiguredProviderStatus(providerStatusByName["codex-cli"]) ||
             hasConfiguredProviderStatus(providerStatusByName.openai) ||
             hasConfiguredProviderStatus(providerStatusByName.google) ? (
-              <SettingsSection
-                title="Provider Settings"
-                description="Extra tuning options for your connected providers."
-              >
+              <div className="space-y-3">
                 <div>
+                  <div className="text-sm font-semibold text-foreground">Provider Settings</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    Extra tuning options for your connected providers.
+                  </div>
+                </div>
+                <div className="app-shadow-surface divide-y divide-border/60 overflow-hidden rounded-xl border border-border/75 bg-card/85">
                   <OpenAiCompatibleModelSettingsCard
                     workspace={ws}
                     updateWorkspaceDefaults={updateWorkspaceDefaults}
@@ -1769,7 +1774,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     }
                   />
                 </div>
-              </SettingsSection>
+              </div>
             ) : null}
           </div>
 

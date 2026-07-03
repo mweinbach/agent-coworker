@@ -11,6 +11,15 @@ const savedStates: any[] = [];
 const jsonRpcRequests: Array<{ method: string; params?: unknown; options?: unknown }> = [];
 const jsonRpcRequestHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 const jsonRpcRequestFailures = new Map<string, string>();
+const JSONRPC_TEST_FEATURE_FLAGS = {
+  menuBar: true,
+  remoteAccess: false,
+  workspacePicker: true,
+  workspaceLifecycle: true,
+  openAiNativeConnectors: false,
+  canvas: false,
+  tasks: false,
+};
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -470,6 +479,8 @@ describe("desktop JSON-RPC single connection path", () => {
       ready: true,
       startupError: null,
       view: "chat",
+      settingsPage: "models",
+      lastNonSettingsView: "chat",
       workspaces: [
         {
           id: "ws-jsonrpc",
@@ -486,6 +497,14 @@ describe("desktop JSON-RPC single connection path", () => {
       threads: [],
       selectedWorkspaceId: null,
       selectedThreadId: null,
+      selectedTaskId: null,
+      newTaskWorkspaceId: null,
+      newTaskWorkspaceRequestId: 0,
+      taskSummariesByWorkspaceId: {},
+      tasksById: {},
+      taskListLoadingByWorkspaceId: {},
+      taskLifecycleRequestByTaskId: {},
+      taskError: null,
       workspaceRuntimeById: {},
       threadRuntimeById: {},
       latestTodosByThreadId: {},
@@ -506,6 +525,8 @@ describe("desktop JSON-RPC single connection path", () => {
       developerMode: false,
       showHiddenFiles: false,
       perWorkspaceSettings: false,
+      desktopFeatureFlags: JSONRPC_TEST_FEATURE_FLAGS,
+      desktopFeatureFlagOverrides: {},
     } as any);
   });
 

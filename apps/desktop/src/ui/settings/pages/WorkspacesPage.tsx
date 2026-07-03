@@ -44,13 +44,7 @@ import {
 import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
+import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Collapsible,
@@ -83,6 +77,7 @@ import {
 import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
+import { SettingsSection } from "../SettingsPrimitives";
 
 function ToggleChip({
   pressed,
@@ -501,14 +496,11 @@ export function SearchSettingsCard({
   };
 
   return (
-    <Card className="border-border/80 bg-card/85">
-      <CardHeader>
-        <CardTitle>Search</CardTitle>
-        <CardDescription>
-          Choose provider-native search or a local search tool for models that need one.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <SettingsSection
+      title="Search"
+      description="Choose provider-native search or a local search tool for models that need one."
+    >
+      <div className="space-y-4 px-4 py-4">
         <div className="rounded-lg border border-border/60 px-4 py-4">
           <div className="space-y-3">
             <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
@@ -639,8 +631,8 @@ export function SearchSettingsCard({
             </div>
           ) : null}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -843,12 +835,11 @@ export function WorkspaceUserProfileCard({
   };
 
   return (
-    <Card className="border-border/80 bg-card/85">
-      <CardHeader>
-        <CardTitle>How Cowork should understand you</CardTitle>
-        <CardDescription>Identity and prompt context for new sessions.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <SettingsSection
+      title="How Cowork should understand you"
+      description="Identity and prompt context for new sessions."
+    >
+      <div className="space-y-4 px-4 py-4">
         <div className="space-y-2">
           <div className="text-sm font-medium text-foreground">Name</div>
           <Input
@@ -927,8 +918,8 @@ export function WorkspaceUserProfileCard({
             </span>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -1147,21 +1138,23 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
             )}
           >
             {perWorkspaceSettings && (
-              <Card className="border-border/80 bg-card/85">
-                <CardHeader className="flex-row items-center justify-between space-y-0">
-                  <div>
-                    <CardTitle>Settings target</CardTitle>
-                    <CardDescription>
-                      Selected project or chat group for this settings mode.
-                    </CardDescription>
-                  </div>
-                  {workspaceLifecycleEnabled ? (
-                    <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
+              <SettingsSection
+                title="Settings target"
+                description="Selected project or chat group for this settings mode."
+                action={
+                  workspaceLifecycleEnabled ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={() => void addWorkspace()}
+                    >
                       Add
                     </Button>
-                  ) : null}
-                </CardHeader>
-                <CardContent className="space-y-3">
+                  ) : undefined
+                }
+              >
+                <div className="space-y-3 px-4 py-4">
                   <div>
                     <div className="text-sm font-medium text-foreground">
                       {selectedSettingsTarget?.label ?? ws.name}
@@ -1189,18 +1182,15 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                       </SelectContent>
                     </Select>
                   ) : null}
-                </CardContent>
-              </Card>
+                </div>
+              </SettingsSection>
             )}
 
-            <Card className="border-border/80 bg-card/85">
-              <CardHeader>
-                <CardTitle>Behavior</CardTitle>
-                <CardDescription>
-                  Execution and visibility options for all folders and chats.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
+            <SettingsSection
+              title="Behavior"
+              description="Execution and visibility options for all folders and chats."
+            >
+              <div className="space-y-4 px-4 py-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div className="grid gap-1.5">
                     <Label
@@ -1269,17 +1259,17 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     }}
                   />
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </SettingsSection>
 
             {surface === "defaults" ? (
               <Collapsible>
-                <Card className="border-border/80 bg-card/85">
+                <SettingsSection>
                   <CollapsibleTrigger asChild>
                     <Button
                       type="button"
                       variant="ghost"
-                      className="h-auto w-full justify-between rounded-none px-6 py-4 text-left hover:bg-muted/30"
+                      className="h-auto w-full justify-between rounded-none px-4 py-4 text-left hover:bg-muted/30"
                     >
                       <span>
                         <span className="block text-sm font-semibold text-foreground">
@@ -1293,7 +1283,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     </Button>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <CardContent className="space-y-4 border-t border-border/70 pt-4">
+                    <div className="space-y-4 border-t border-border/70 px-4 py-4">
                       <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                         <div>
                           <div className="text-sm font-medium">
@@ -1378,9 +1368,9 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                           </Button>
                         </div>
                       ) : null}
-                    </CardContent>
+                    </div>
                   </CollapsibleContent>
-                </Card>
+                </SettingsSection>
               </Collapsible>
             ) : null}
           </div>

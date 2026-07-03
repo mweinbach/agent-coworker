@@ -32,17 +32,12 @@ export function SettingsSection({
   className?: string;
 }) {
   return (
-    <section
-      className={cn(
-        "settings-section overflow-hidden rounded-lg border border-border/60 bg-card/80",
-        className,
-      )}
-    >
+    <section className={cn("settings-section space-y-3", className)}>
       {title || description || action ? (
-        <div className="grid gap-3 border-b border-border/45 px-4 py-3.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-          <div className="min-w-0 space-y-1">
+        <div className="flex items-end justify-between gap-3">
+          <div className="min-w-0 space-y-0.5">
             {title ? (
-              <h2 className="text-[15px] font-semibold leading-tight text-foreground">{title}</h2>
+              <h2 className="text-sm font-semibold leading-tight text-foreground">{title}</h2>
             ) : null}
             {description ? (
               <p className="max-w-[68ch] text-xs leading-relaxed text-muted-foreground">
@@ -55,7 +50,9 @@ export function SettingsSection({
           ) : null}
         </div>
       ) : null}
-      <div className="divide-y divide-border/45">{children}</div>
+      <div className="app-shadow-surface divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85">
+        {children}
+      </div>
     </section>
   );
 }

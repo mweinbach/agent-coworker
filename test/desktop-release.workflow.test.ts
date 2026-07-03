@@ -92,7 +92,9 @@ describe("desktop release workflow", () => {
     expect(workflow).toContain("- name: Configure Windows signing");
     expect(workflow).toContain("COWORK_WIN_SIGN_RELEASE=true");
     expect(workflow).toContain("building unsigned release artifacts");
-    expect(workflow).toContain("Publishing unsigned installer, trusted helpers, and updater metadata.");
+    expect(workflow).toContain(
+      "Publishing unsigned installer, trusted helpers, and updater metadata.",
+    );
     expect(workflow).not.toContain("Unsigned Windows production releases are forbidden");
   });
 

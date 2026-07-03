@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveNativeElectronDist, resolveWindowsSigningConfig } from "../scripts/runElectronBuilder";
+import {
+  resolveNativeElectronDist,
+  resolveWindowsSigningConfig,
+} from "../scripts/runElectronBuilder";
 
 const desktopRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -61,9 +64,9 @@ describe("Electron builder native distribution selection", () => {
   });
 
   test("disables updater signature verification for unsigned Windows builds", () => {
-    expect(
-      resolveWindowsSigningConfig(["--win"], {}, { platform: "win32", arch: "x64" }),
-    ).toEqual(["--config.win.verifyUpdateCodeSignature=false"]);
+    expect(resolveWindowsSigningConfig(["--win"], {}, { platform: "win32", arch: "x64" })).toEqual([
+      "--config.win.verifyUpdateCodeSignature=false",
+    ]);
     expect(
       resolveWindowsSigningConfig(
         ["--win"],
@@ -71,8 +74,8 @@ describe("Electron builder native distribution selection", () => {
         { platform: "win32", arch: "x64" },
       ),
     ).toEqual([]);
-    expect(resolveWindowsSigningConfig(["--mac"], {}, { platform: "darwin", arch: "arm64" })).toEqual(
-      [],
-    );
+    expect(
+      resolveWindowsSigningConfig(["--mac"], {}, { platform: "darwin", arch: "arm64" }),
+    ).toEqual([]);
   });
 });

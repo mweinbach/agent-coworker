@@ -216,10 +216,6 @@ function friendlyModelRef(ref: string): string {
   return `${displayProviderName(providerKey)} | ${model}`;
 }
 
-function subagentRoutingModeLabel(mode: "same-provider" | "cross-provider-allowlist"): string {
-  return mode === "same-provider" ? "Same provider as chat" : "Any connected provider";
-}
-
 function providerFromModelRef(ref: string): ProviderName | null {
   const colonIndex = ref.indexOf(":");
   if (colonIndex <= 0) return null;
@@ -936,41 +932,6 @@ export function WorkspaceUserProfileCard({
   );
 }
 
-type WorkspaceDefaultsSummaryProps = {
-  provider: ProviderName;
-  model: string;
-  childModelRoutingMode: "same-provider" | "cross-provider-allowlist";
-  preferredChildLabel: string;
-};
-
-function WorkspaceDefaultsSummary({
-  provider,
-  model,
-  childModelRoutingMode,
-  preferredChildLabel,
-}: WorkspaceDefaultsSummaryProps) {
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-border/60 bg-card/70 px-3 py-2 text-xs text-muted-foreground">
-      <span>Current provider:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {displayProviderName(provider)}
-      </Badge>
-      <span>Model:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {model}
-      </Badge>
-      <span>Subagent routing:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {subagentRoutingModeLabel(childModelRoutingMode)}
-      </Badge>
-      <span>Preferred subagent model:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {preferredChildLabel}
-      </Badge>
-    </div>
-  );
-}
-
 type WorkspacesPageSurface = "defaults" | "models" | "profile";
 
 export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesPageSurface } = {}) {
@@ -1067,7 +1028,6 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
   ).trim();
   const allowedChildModelRefs = ws?.defaultAllowedChildModelRefs ?? [];
   const enableMcp = ws?.defaultEnableMcp ?? true;
-  const backupsEnabled = ws?.defaultBackupsEnabled ?? false;
   const yolo = ws?.yolo ?? false;
 
   const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(
@@ -1180,19 +1140,6 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
         </Card>
       ) : (
         <>
-          {surface !== "models" ? (
-            <WorkspaceDefaultsSummary
-              provider={provider}
-              model={model}
-              childModelRoutingMode={childModelRoutingMode}
-              preferredChildLabel={
-                childModelRoutingMode === "same-provider"
-                  ? preferredChildModel || model
-                  : friendlyModelRef(preferredChildModelRef)
-              }
-            />
-          ) : null}
-
           <div
             className={cn(
               "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
@@ -1275,29 +1222,6 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     onPressedChange={(next) => {
                       if (!ws) return;
                       void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: next });
-                    }}
-                  />
-                </div>
-
-                <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                  <div className="grid gap-1.5">
-                    <Label
-                      htmlFor="backups-toggle"
-                      className="text-sm font-medium leading-none cursor-pointer"
-                    >
-                      Workspace backups
-                    </Label>
-                    <div className="text-xs text-muted-foreground">
-                      Opt into Cowork-managed recovery snapshots for future sessions.
-                    </div>
-                  </div>
-                  <ToggleChip
-                    id="backups-toggle"
-                    pressed={backupsEnabled}
-                    aria-label="Enable workspace backups"
-                    onPressedChange={(next) => {
-                      if (!ws) return;
-                      void updateWorkspaceDefaults(ws.id, { defaultBackupsEnabled: next });
                     }}
                   />
                 </div>

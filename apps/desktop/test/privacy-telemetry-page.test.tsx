@@ -84,7 +84,7 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain(
         "Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompts, responses, commands, logs, file paths or names, and other content.",
       );
-      expect(container.textContent).toContain("Telemetry status");
+      expect(container.textContent).not.toContain("Telemetry status");
       expect(container.textContent).not.toContain("Diagnostic log uploads");
       expect(container.textContent).not.toContain("Diagnostics upload");
       expect(container.textContent).not.toContain("Cloud sync");

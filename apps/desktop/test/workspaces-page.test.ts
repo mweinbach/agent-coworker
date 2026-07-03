@@ -792,9 +792,13 @@ describe("desktop workspaces page", () => {
   });
 
   test("uses project defaults in shared mode and the selected chat in per-target mode", async () => {
+    const updateDefaultsCalls: string[] = [];
     useAppStore.setState((state) => ({
       ...state,
       perWorkspaceSettings: false,
+      updateWorkspaceDefaults: (async (workspaceId: string) => {
+        updateDefaultsCalls.push(workspaceId);
+      }) as unknown as ReturnType<typeof useAppStore.getState>["updateWorkspaceDefaults"],
       workspaces: [
         {
           id: "project-1",
@@ -870,13 +874,24 @@ describe("desktop workspaces page", () => {
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
+      const clickMcpToggle = async () => {
+        const toggle = container.querySelector('[aria-label="Enable MCP tools"]');
+        if (!(toggle instanceof harness.dom.window.HTMLElement)) {
+          throw new Error("missing MCP tools toggle");
+        }
+        await act(async () => {
+          toggle.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+          await flushUi();
+        });
+      };
+
       await act(async () => {
         root.render(createElement(WorkspacesPage));
       });
 
-      expect(container.textContent).toContain("gemini-3-flash-preview");
       expect(container.textContent).not.toContain("One-off chat");
-      expect(container.textContent).not.toContain("ajax");
+      await clickMcpToggle();
+      expect(updateDefaultsCalls).toEqual(["project-1"]);
 
       await act(async () => {
         useAppStore.setState({ perWorkspaceSettings: true });
@@ -885,7 +900,8 @@ describe("desktop workspaces page", () => {
 
       expect(container.textContent).toContain("Chats");
       expect(container.textContent).not.toContain("One-off chat");
-      expect(container.textContent).toContain("ajax");
+      await clickMcpToggle();
+      expect(updateDefaultsCalls).toEqual(["project-1", "chat-1"]);
     } finally {
       if (root) {
         await act(async () => {

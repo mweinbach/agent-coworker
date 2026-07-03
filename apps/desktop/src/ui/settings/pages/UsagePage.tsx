@@ -1,6 +1,6 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 
-import { AlertTriangleIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { AlertTriangleIcon, BarChart3Icon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
 import { useAppStore } from "../../../app/store";
@@ -16,6 +16,12 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
+import {
+  SettingsEmptyState,
+  SettingsPage,
+  SettingsSection,
+  SettingsStatTile,
+} from "../SettingsPrimitives";
 
 // ── Aggregation types ────────────────────────────────────────────────
 
@@ -188,20 +194,6 @@ function formatEstimatedCost(value: number | null, available: boolean): string {
   return "—";
 }
 
-function UsageStat(props: { label: string; value: string; detail?: string }) {
-  return (
-    <div className="rounded-xl border border-border/70 bg-background/70 p-4">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-        {props.label}
-      </div>
-      <div className="mt-2 text-lg font-semibold text-foreground">{props.value}</div>
-      {props.detail ? (
-        <div className="mt-1 text-xs text-muted-foreground">{props.detail}</div>
-      ) : null}
-    </div>
-  );
-}
-
 // ── Component ────────────────────────────────────────────────────────
 
 export type UsagePageProps = {
@@ -295,17 +287,17 @@ export function UsagePage(props: UsagePageProps = {}) {
   }, [settingsChrome, handleEstimateNoticeOpenChange]);
 
   return (
-    <div className="space-y-5" data-usage-page="true">
+    <SettingsPage data-usage-page="true">
       {/* ── Overview stats ──────────────────────────────────────────── */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <UsageStat
+        <SettingsStatTile
           label="Estimated total cost"
           value={
             hasUsage
               ? formatEstimatedCost(aggregate.totalCostUsd, aggregate.costTrackingAvailable)
               : "—"
           }
-          detail={
+          hint={
             hasUsage && aggregate.costTrackingAvailable
               ? "Based on local pricing data"
               : hasUsage
@@ -313,28 +305,28 @@ export function UsagePage(props: UsagePageProps = {}) {
                 : "No usage recorded yet"
           }
         />
-        <UsageStat
+        <SettingsStatTile
           label="Total tokens"
           value={hasUsage ? formatTokenCount(aggregate.totalTokens) : "0"}
-          detail={
+          hint={
             hasUsage
               ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out${aggregate.totalCachedPromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCachedPromptTokens)} cache read` : ""}${aggregate.totalCacheWritePromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCacheWritePromptTokens)} cache write` : ""}${aggregate.totalReasoningOutputTokens > 0 ? ` · ${formatTokenCount(aggregate.totalReasoningOutputTokens)} reasoning` : ""}`
               : "No usage recorded yet"
           }
         />
-        <UsageStat
+        <SettingsStatTile
           label="Total turns"
           value={hasUsage ? String(aggregate.totalTurns) : "0"}
-          detail={
+          hint={
             hasUsage
               ? `Across ${aggregate.totalSessions} session${aggregate.totalSessions === 1 ? "" : "s"}`
               : "No sessions yet"
           }
         />
-        <UsageStat
+        <SettingsStatTile
           label="Providers"
           value={hasUsage ? String(aggregate.providers.length) : "0"}
-          detail={
+          hint={
             hasUsage
               ? `${aggregate.providers.reduce((n, p) => n + p.models.length, 0)} model${aggregate.providers.reduce((n, p) => n + p.models.length, 0) === 1 ? "" : "s"} used`
               : "No models used yet"
@@ -344,17 +336,19 @@ export function UsagePage(props: UsagePageProps = {}) {
 
       {/* ── Provider / model breakdown ──────────────────────────────── */}
       {hasUsage && aggregate.providers.length > 0 ? (
-        <div className="space-y-3" ref={parent}>
-          <h2 className="text-lg font-medium text-foreground">By provider</h2>
-          <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50">
+        <SettingsSection
+          title="By provider"
+          description="Aggregated token and cost totals per provider and model."
+        >
+          <div ref={parent} className="divide-y divide-border/45">
             {aggregate.providers.map((group) => {
               const isExpanded = expandedProviders[group.provider] ?? true;
               return (
-                <div key={group.provider} className="border-b border-border/70 last:border-b-0">
+                <div key={group.provider}>
                   {/* Provider header */}
                   <button
                     type="button"
-                    className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
+                    className="flex w-full items-center justify-between px-4 py-3.5 text-left transition-colors hover:bg-card/60"
                     onClick={() => toggleProvider(group.provider)}
                   >
                     <div className="flex items-center gap-3">
@@ -462,11 +456,13 @@ export function UsagePage(props: UsagePageProps = {}) {
               );
             })}
           </div>
-        </div>
+        </SettingsSection>
       ) : (
-        <div className="rounded-xl border border-dashed border-border/70 bg-background/60 p-8 text-center text-sm text-muted-foreground">
-          No usage data recorded yet. Usage will appear here as you use models across sessions.
-        </div>
+        <SettingsEmptyState
+          icon={<BarChart3Icon />}
+          title="No usage data recorded yet"
+          description="Usage will appear here as you use models across sessions."
+        />
       )}
 
       {!settingsChrome ? (
@@ -484,6 +480,6 @@ export function UsagePage(props: UsagePageProps = {}) {
         </div>
       ) : null}
       {estimateNoticeDialog}
-    </div>
+    </SettingsPage>
   );
 }

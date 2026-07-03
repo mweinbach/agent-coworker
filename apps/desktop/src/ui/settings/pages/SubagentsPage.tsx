@@ -59,7 +59,12 @@ import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
 import type { ProviderName, SessionEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
-import { SettingsEmptyState, SettingsSection, SettingsStatusPill } from "../SettingsPrimitives";
+import {
+  SettingsEmptyState,
+  SettingsPage,
+  SettingsSection,
+  SettingsStatusPill,
+} from "../SettingsPrimitives";
 
 export type DraftProfile = AgentProfileDefinition & {
   scope: AgentProfileScope;
@@ -483,7 +488,7 @@ export function SubagentsPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <SettingsPage>
       <SettingsSection
         title="Subagents"
         description="Create reusable child-agent profiles for focused work."
@@ -613,7 +618,7 @@ export function SubagentsPage() {
         onWorkspaceChange={setProfileWorkspaceId}
         onSave={() => void saveDraft()}
       />
-    </div>
+    </SettingsPage>
   );
 }
 

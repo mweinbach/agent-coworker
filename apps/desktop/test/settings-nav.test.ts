@@ -754,6 +754,81 @@ describe("settings nav (store)", () => {
     expect(state.selectedThreadId).toBe("chat-thread-1");
   });
 
+  test("openSkills does not add a workspace for ambiguous one-off chat targets", async () => {
+    const addWorkspace = mock(async () => {});
+    useAppStore.setState({
+      desktopFeatureFlags: {
+        menuBar: true,
+        remoteAccess: true,
+        workspacePicker: true,
+        workspaceLifecycle: false,
+        openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
+      },
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          workspaceKind: "project",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws-2",
+          name: "Workspace 2",
+          path: "/tmp/ws-2",
+          workspaceKind: "project",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "chat-ws-1",
+          name: "Chat",
+          path: "/tmp/chat-ws-1",
+          workspaceKind: "oneOffChat",
+          createdAt: "2024-01-02T00:00:00.000Z",
+          lastOpenedAt: "2024-01-02T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "chat-thread-1",
+          workspaceId: "chat-ws-1",
+          title: "Chat",
+          createdAt: "2024-01-02T00:00:00.000Z",
+          lastMessageAt: "2024-01-02T00:00:00.000Z",
+          status: "active",
+          sessionId: "chat-thread-1",
+          messageCount: 1,
+          lastEventSeq: 0,
+        },
+      ],
+      selectedWorkspaceId: "chat-ws-1",
+      selectedThreadId: "chat-thread-1",
+      addWorkspace,
+    });
+
+    await useAppStore.getState().openSkills();
+    const state = useAppStore.getState();
+    expect(state.view).toBe("settings");
+    expect(state.settingsPage).toBe("toolAccess");
+    expect(state.selectedWorkspaceId).toBe("chat-ws-1");
+    expect(state.selectedThreadId).toBe("chat-thread-1");
+    expect(state.notifications).toHaveLength(0);
+    expect(addWorkspace).not.toHaveBeenCalled();
+  });
+
   test("openSkills asks for a workspace instead of opening empty Tool Access", async () => {
     await useAppStore.getState().openSkills();
 

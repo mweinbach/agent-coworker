@@ -11,6 +11,7 @@ import {
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
+import { isOneOffChatWorkspace } from "../types";
 import {
   clearFailedMutationSend,
   managementWorkspaceIdFor,
@@ -44,6 +45,8 @@ export function createSkillActions(
   const workspacePath = (workspaceId: string): string | undefined =>
     workspacePathFor(get, workspaceId);
   const managementWorkspaceId = (): string | null => managementWorkspaceIdFor(get);
+  const hasProjectWorkspace = (): boolean =>
+    get().workspaces.some((workspace) => !isOneOffChatWorkspace(workspace));
   const resolveInstallationScopeForMutation = (
     workspaceId: string,
     installationId: string,
@@ -60,7 +63,7 @@ export function createSkillActions(
   return {
     openSkills: async () => {
       let workspaceId = managementWorkspaceId();
-      if (!workspaceId) {
+      if (!workspaceId && !hasProjectWorkspace()) {
         if (get().desktopFeatureFlags.workspaceLifecycle === false) {
           set((s) => ({
             notifications: pushNotification(s.notifications, {

@@ -1376,17 +1376,19 @@ describe("desktop JSON-RPC event mapping", () => {
 
   test("sandbox-denied escalation clears a stale approval modal for the same thread", async () => {
     const socket = await reconnectThreadAndGetSocket();
-    useAppStore.setState({
-      promptModal: {
-        kind: "approval",
-        threadId,
-        prompt: {
-          requestId: "ordinary-approval",
-          command: "rm -rf build",
-          dangerous: true,
-          reasonCode: "requires_manual_review",
+    act(() => {
+      useAppStore.setState({
+        promptModal: {
+          kind: "approval",
+          threadId,
+          prompt: {
+            requestId: "ordinary-approval",
+            command: "rm -rf build",
+            dangerous: true,
+            reasonCode: "requires_manual_review",
+          },
         },
-      },
+      });
     });
 
     socket.requestFromServer("sandbox-clears-modal", "item/commandExecution/requestApproval", {
@@ -1406,17 +1408,19 @@ describe("desktop JSON-RPC event mapping", () => {
   test("answering an inline sandbox approval leaves unrelated modals open", async () => {
     const socket = await reconnectThreadAndGetSocket();
     const requestId = "sandbox-unrelated-modal";
-    useAppStore.setState({
-      promptModal: {
-        kind: "approval",
-        threadId,
-        prompt: {
-          requestId: "ordinary-approval",
-          command: "rm -rf build",
-          dangerous: true,
-          reasonCode: "requires_manual_review",
+    act(() => {
+      useAppStore.setState({
+        promptModal: {
+          kind: "approval",
+          threadId,
+          prompt: {
+            requestId: "ordinary-approval",
+            command: "rm -rf build",
+            dangerous: true,
+            reasonCode: "requires_manual_review",
+          },
         },
-      },
+      });
     });
 
     socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
@@ -1428,17 +1432,19 @@ describe("desktop JSON-RPC event mapping", () => {
       reason: "sandbox_denied_escalation",
     });
     await flushAsyncWork();
-    useAppStore.setState({
-      promptModal: {
-        kind: "approval",
-        threadId,
-        prompt: {
-          requestId: "ordinary-approval",
-          command: "rm -rf build",
-          dangerous: true,
-          reasonCode: "requires_manual_review",
+    act(() => {
+      useAppStore.setState({
+        promptModal: {
+          kind: "approval",
+          threadId,
+          prompt: {
+            requestId: "ordinary-approval",
+            command: "rm -rf build",
+            dangerous: true,
+            reasonCode: "requires_manual_review",
+          },
         },
-      },
+      });
     });
 
     await act(async () => {

@@ -1014,6 +1014,131 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("shows runtime reasoning effort ahead of stale active session config", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2-draft-default",
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Reasoning thread",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-1",
+          messageCount: 1,
+          lastEventSeq: 1,
+          draft: false,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: "ws://mock",
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.2-draft-default",
+            workingDirectory: "/tmp/workspace-1",
+          },
+          sessionConfig: {
+            providerOptions: {
+              openai: { reasoningEffort: "medium" },
+            },
+          },
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          mode: null,
+          depth: 0,
+          nickname: null,
+          requestedModel: "gpt-5.2-draft-default",
+          effectiveModel: "gpt-5.2-draft-default",
+          requestedReasoningEffort: "xhigh",
+          effectiveReasoningEffort: "xhigh",
+          executionState: null,
+          lastMessagePreview: "Ready",
+          agents: [],
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          activeTurnId: null,
+          pendingSteer: null,
+          feed: [],
+          transcriptOnly: false,
+          draftComposerProvider: null,
+          draftComposerModel: null,
+          composerReasoningEffort: null,
+        },
+      },
+      providerCatalog: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [
+            {
+              id: "gpt-5.2-draft-default",
+              displayName: "GPT-5.2 Draft Default",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+              reasoning: {
+                defaultEffort: "high",
+                availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+              },
+            },
+          ],
+          defaultModel: "gpt-5.2-draft-default",
+        },
+      ],
+      providerConnected: ["openai"],
+      composerText: "",
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const reasoningSelector = container.querySelector<HTMLButtonElement>(
+        '[data-slot="composer-reasoning-selector"]',
+      );
+      expect(reasoningSelector?.getAttribute("title")).toBe("Reasoning: XHigh");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("shows a loading state while the selected startup thread is still hydrating", async () => {
     useAppStore.setState({
       ready: true,

@@ -441,8 +441,15 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           : provider === "google"
             ? getWorkspaceGoogleReasoningEffort(providerOptions, model)
             : undefined;
+      const runtimeEffort =
+        !thread.draft && (provider === "openai" || provider === "codex-cli")
+          ? (rt.effectiveReasoningEffort ?? rt.requestedReasoningEffort)
+          : undefined;
       const currentEffort =
-        rt.composerReasoningEffort ?? configuredEffort ?? reasoningConfig.defaultEffort;
+        rt.composerReasoningEffort ??
+        runtimeEffort ??
+        configuredEffort ??
+        reasoningConfig.defaultEffort;
       return {
         provider,
         model,

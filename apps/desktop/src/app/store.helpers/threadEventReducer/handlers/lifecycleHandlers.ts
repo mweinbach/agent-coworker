@@ -1,5 +1,10 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
 import {
+  getWorkspaceGoogleReasoningEffort,
+  type ReasoningEffortValue,
+  type WorkspaceProviderOptions,
+} from "../../../openaiCompatibleProviderOptions";
+import {
   developerDiagnosticSystemLineFromSessionEvent,
   upsertAgentSummary,
 } from "../../../store.feedMapping";
@@ -16,6 +21,30 @@ import { sortAgentSummaries } from "../../threadEventReducerContext";
 import type { HandlerDispatch, HandlerModuleContext } from "./shared";
 
 let sandboxApprovalSequence = 0;
+
+function shouldClearComposerReasoningEffort(
+  current: {
+    composerReasoningEffort?: ReasoningEffortValue | null;
+    config?: { provider?: unknown; model?: unknown } | null;
+  },
+  config: Extract<SessionEvent, { type: "session_config" }>["config"],
+): boolean {
+  const pendingEffort = current.composerReasoningEffort;
+  if (!pendingEffort) return true;
+
+  const provider = current.config?.provider;
+  const providerOptions = config.providerOptions as WorkspaceProviderOptions | undefined;
+  if (provider === "openai" || provider === "codex-cli") {
+    return providerOptions?.[provider]?.reasoningEffort === pendingEffort;
+  }
+
+  if (provider === "google") {
+    const model = typeof current.config?.model === "string" ? current.config.model : undefined;
+    return getWorkspaceGoogleReasoningEffort(providerOptions, model) === pendingEffort;
+  }
+
+  return true;
+}
 
 export function handleLifecycleThreadEvent(
   module: HandlerModuleContext,
@@ -263,10 +292,13 @@ export function handleLifecycleThreadEvent(
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
+      const composerReasoningEffort = shouldClearComposerReasoningEffort(rt, evt.config)
+        ? null
+        : (rt.composerReasoningEffort ?? null);
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...rt, sessionConfig: evt.config, composerReasoningEffort: null },
+          [threadId]: { ...rt, sessionConfig: evt.config, composerReasoningEffort },
         },
       };
     });

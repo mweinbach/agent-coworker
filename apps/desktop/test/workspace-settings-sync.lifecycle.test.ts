@@ -183,6 +183,90 @@ describe("workspace settings sync", () => {
     );
   });
 
+  test("session_config preserves a pending explicit reasoning effort until the server confirms it", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: {
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          composerReasoningEffort: "xhigh",
+        },
+      },
+    }));
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+      "xhigh",
+    );
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: { reasoningEffort: "xhigh" },
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBeNull();
+  });
+
   test("ensureServerRunning reactivates disposed JSON-RPC helper state for an existing workspace", async () => {
     primeWorkspaceConnection();
     const { threadId } = seedConnectedThread();

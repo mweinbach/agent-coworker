@@ -108,6 +108,32 @@ describe("pi runtime regressions", () => {
     });
   });
 
+  test("anthropic runtime model resolution accepts custom model IDs without static PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-anthropic-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "anthropic",
+      model: "claude-custom-20260704",
+      preferredChildModel: "claude-custom-20260704",
+    });
+
+    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "claude-custom-20260704",
+      name: "claude-custom-20260704",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    });
+    // Pricing is unknown for custom IDs: no cost may be inherited from an
+    // unrelated catalog model (e.g. Haiku's rates).
+    expect(resolved.model.cost).toBeUndefined();
+  });
+
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-abort-"));
     const runtime = createPiRuntime();
@@ -234,6 +260,23 @@ describe("pi runtime regressions", () => {
       contextWindow: 128000,
       maxTokens: 16384,
     });
+  });
+
+  test("openai responses custom IDs use the fallback builder instead of inheriting catalog pricing", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-custom-cost-"));
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "gpt-5.5-custom-preview",
+      preferredChildModel: "gpt-5.5-custom-preview",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    // Unknown IDs must not inherit the first catalog model's (gpt-4) pricing —
+    // cost stays undefined so accounting is conservative rather than wrong.
+    expect(resolved.model.cost).toBeUndefined();
+    // The fallback builder flags gpt-5* IDs as reasoning models.
+    expect(resolved.model.reasoning).toBe(true);
   });
 
   test("openai responses model resolution keeps supported token limits for gpt-5.4-mini", async () => {

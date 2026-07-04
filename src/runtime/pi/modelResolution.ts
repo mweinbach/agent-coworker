@@ -39,7 +39,7 @@ import {
   TOGETHER_BASE_URL,
 } from "../../providers/togetherShared";
 import type { ProviderName } from "../../types";
-import { asRecord, type PiModel, pickKnownPiModel } from "../piRuntimeOptions";
+import { asRecord, type PiModel, pickExactPiModel, pickKnownPiModel } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../types";
 import {
   LM_STUDIO_LOCAL_SENTINEL_API_KEY,
@@ -219,7 +219,7 @@ async function getBedrockPiModel(modelId: string): Promise<PiModel> {
 
 async function getAnthropicPiModel(modelId: string): Promise<PiModel | null> {
   if (modelId === "claude-opus-4-8") {
-    const opus47 = await pickKnownPiModel("anthropic", "claude-opus-4-7");
+    const opus47 = await pickExactPiModel("anthropic", "claude-opus-4-7");
     if (!opus47) return null;
     return {
       ...opus47,
@@ -230,10 +230,25 @@ async function getAnthropicPiModel(modelId: string): Promise<PiModel | null> {
     };
   }
 
-  const model = await pickKnownPiModel("anthropic", modelId);
-  if (model) return model;
+  return await pickExactPiModel("anthropic", modelId);
+}
 
-  return null;
+// Fallback for custom/unknown Anthropic model IDs (configured via the custom
+// model store). Mirrors buildOpenAiCompatibleCustomPiModel: conservative
+// limits and no cost metadata, so usage reporting treats pricing as unknown
+// instead of inheriting an unrelated catalog model's rates.
+function buildAnthropicCustomPiModel(modelId: string): PiModel {
+  return {
+    id: modelId,
+    name: modelId,
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: modelId.toLowerCase().includes("claude"),
+    input: ["text"],
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  };
 }
 
 function getTogetherPiModel(modelId: string): PiModel | null {
@@ -356,9 +371,7 @@ export async function resolvePiModel(
   }
 
   if (provider === "anthropic") {
-    const model = await getAnthropicPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider anthropic (model: ${modelId}).`);
+    const model = (await getAnthropicPiModel(modelId)) ?? buildAnthropicCustomPiModel(modelId);
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),

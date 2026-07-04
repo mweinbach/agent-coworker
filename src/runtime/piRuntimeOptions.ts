@@ -53,13 +53,20 @@ async function getPiModels(provider: string): Promise<readonly unknown[]> {
   }
 }
 
-export async function pickKnownPiModel(provider: string, modelId: string): Promise<PiModel | null> {
+// Exact catalog lookup only: returns null for unknown IDs so callers can apply
+// their own fallback instead of inheriting metadata (e.g. pricing) from an
+// unrelated catalog model.
+export async function pickExactPiModel(provider: string, modelId: string): Promise<PiModel | null> {
   const models = await getPiModels(provider);
-  const direct = models.find((model) => asRecord(model)?.id === modelId);
-  const directRecord = asRecord(direct);
-  if (directRecord) {
-    return directRecord as unknown as PiModel;
-  }
+  const direct = asRecord(models.find((model) => asRecord(model)?.id === modelId));
+  return direct ? (direct as unknown as PiModel) : null;
+}
+
+export async function pickKnownPiModel(provider: string, modelId: string): Promise<PiModel | null> {
+  const exact = await pickExactPiModel(provider, modelId);
+  if (exact) return exact;
+
+  const models = await getPiModels(provider);
   if (models.length === 0) return null;
   const fallbackRecord = asRecord(models[0]);
   if (!fallbackRecord) return null;

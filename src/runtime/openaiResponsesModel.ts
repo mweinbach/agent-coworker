@@ -1,7 +1,7 @@
 import { getSavedProviderApiKey } from "../config";
 import { getResolvedModelMetadataSync } from "../models/metadata";
 
-import { type PiModel, pickKnownPiModel } from "./piRuntimeOptions";
+import { type PiModel, pickExactPiModel } from "./piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "./types";
 
 type SupportedResponsesModelLimits = Pick<PiModel, "contextWindow" | "maxTokens">;
@@ -71,8 +71,10 @@ export async function resolveOpenAiResponsesModel(
   if (provider !== "openai") {
     throw new Error(`Unsupported provider for OpenAI Responses runtime: ${provider}`);
   }
+  // Exact match only: unknown/custom IDs must take the fallback builder rather
+  // than inheriting another catalog model's pricing and metadata.
   const model =
-    (await pickKnownPiModel("openai", modelId)) ?? buildOpenAiResponsesFallbackModel(modelId);
+    (await pickExactPiModel("openai", modelId)) ?? buildOpenAiResponsesFallbackModel(modelId);
   return {
     model: applySupportedOpenAiResponsesModel(provider, modelId, model),
     apiKey: getSavedProviderApiKey(params.config, "openai"),

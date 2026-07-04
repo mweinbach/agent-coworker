@@ -79,6 +79,38 @@ describe("model preferences store", () => {
     expect(store.providers.openai).toHaveLength(1);
   });
 
+  test("concurrent sets within one process all survive", async () => {
+    const paths = await makeTempPaths();
+    const ids = Array.from({ length: 12 }, (_, index) => `model-${index}`);
+
+    await Promise.all([
+      ...ids.map((id) => setModelPreferences(paths, "openai", [{ id, enabled: false }])),
+      ...ids.map((id) =>
+        setModelPreferences(paths, "together", [{ id: `org/${id}`, enabled: true }]),
+      ),
+    ]);
+
+    const store = await readModelPreferencesStore(paths);
+    expect(store.providers.openai?.map((entry) => entry.id).sort()).toEqual([...ids].sort());
+    expect(store.providers.together?.map((entry) => entry.id).sort()).toEqual(
+      ids.map((id) => `org/${id}`).sort(),
+    );
+  });
+
+  test("concurrent set and reset do not lose unrelated providers", async () => {
+    const paths = await makeTempPaths();
+    await setModelPreferences(paths, "together", [{ id: "a/b", enabled: false }]);
+
+    await Promise.all([
+      setModelPreferences(paths, "openai", [{ id: "gpt-5.5", enabled: true }]),
+      resetModelPreferences(paths, "together"),
+    ]);
+
+    const store = await readModelPreferencesStore(paths);
+    expect(store.providers.together).toBeUndefined();
+    expect(store.providers.openai?.map((entry) => entry.id)).toEqual(["gpt-5.5"]);
+  });
+
   test("invalid JSON falls back to an empty store", async () => {
     const paths = await makeTempPaths();
     await writeModelPreferencesStore(paths, {

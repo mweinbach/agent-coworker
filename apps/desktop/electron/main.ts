@@ -29,6 +29,10 @@ import {
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { DiagnosticsService } from "./services/diagnostics";
 import { logError, logInfo, logWarn } from "./services/localLogs";
+import {
+  registerDesktopMediaProtocolHandler,
+  registerDesktopMediaSchemePrivileges,
+} from "./services/mediaProtocol";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { createMenuCommandDispatcher } from "./services/menuCommandDispatcher";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
@@ -53,7 +57,7 @@ import {
 import { loadMainWindowBounds, trackMainWindowBounds } from "./services/windowState";
 
 const require = createRequire(import.meta.url);
-const { app, BrowserWindow, Menu, Notification, screen, shell } =
+const { app, BrowserWindow, Menu, Notification, net, protocol, screen, shell } =
   require("electron") as typeof Electron;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -75,6 +79,9 @@ if (process.platform === "win32") {
 // Keep packaged-mode feature resolution consistent across main and preload.
 process.env.COWORK_IS_PACKAGED = String(app.isPackaged);
 applyPublicTelemetryEnv(process.env);
+
+// Must run before app ready so cowork-media images load in renderer <img> tags.
+registerDesktopMediaSchemePrivileges(protocol);
 
 const productAnalytics = new DesktopProductAnalyticsService();
 const cloudSync = new CloudSyncService({
@@ -724,6 +731,7 @@ if (!gotSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      registerDesktopMediaProtocolHandler(protocol, net);
       const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
       await initElectronMainCrashReporting(initialState?.privacyTelemetrySettings);
       let preparedInitialState = initialState;

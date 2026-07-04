@@ -4,7 +4,17 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -25,6 +35,11 @@ import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
+import {
+  decodeDesktopMediaUrl,
+  encodeDesktopMediaUrl,
+  isAbsoluteDesktopPath,
+} from "../../lib/mediaProtocol";
 import { cn } from "../../lib/utils";
 
 const streamdownPlugins = { cjk, code, math, mermaid };
@@ -41,11 +56,13 @@ const desktopSanitizeSchema: RehypeSanitizeOptions = {
     ...defaultSchema.attributes,
     a: [...(defaultSchema.attributes?.a ?? []), "title"],
     cite: [...(defaultSchema.attributes?.cite ?? []), "data-citation-sources", "title"],
+    img: [...(defaultSchema.attributes?.img ?? []), "alt", "title"],
     span: [...(defaultSchema.attributes?.span ?? []), "title"],
   },
   protocols: {
     ...defaultSchema.protocols,
     href: [...(defaultSchema.protocols?.href ?? []), "tel", "cowork-file", "cowork-external"],
+    src: [...(defaultSchema.protocols?.src ?? []), "cowork-media"],
   },
 };
 export const defaultDesktopRehypePlugins: PluggableList = [
@@ -917,11 +934,76 @@ function resolveRelativeFileHref(rawHref: string, basePath: string | null): stri
   return desktopPathToFileUrl(`${normalizedBase}/${cleaned}`);
 }
 
+/**
+ * Resolve a markdown image src to an absolute desktop path when it points at a
+ * local file (absolute path, `file://` URL, or workspace-relative path).
+ * Remote/data URLs return null so they pass through untouched.
+ */
+function resolveDesktopImagePath(rawUrl: string, basePath: string | null): string | null {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.startsWith("#")) {
+    return null;
+  }
+
+  if (/^file:/i.test(trimmed)) {
+    return fileUrlToDesktopPath(trimmed);
+  }
+
+  const withoutDecorations = trimmed.replace(/[?#].*$/, "");
+  let decoded = withoutDecorations;
+  try {
+    decoded = decodeURIComponent(withoutDecorations);
+  } catch {
+    decoded = withoutDecorations;
+  }
+
+  if (isAbsoluteDesktopPath(decoded)) {
+    return decoded;
+  }
+
+  // Any other scheme (https, data, cowork-media itself, ...) passes through.
+  if (URL_SCHEME_RE.test(trimmed)) {
+    return null;
+  }
+
+  if (!basePath) {
+    return null;
+  }
+  const cleaned = decoded.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!cleaned || cleaned.startsWith("/")) {
+    return null;
+  }
+  const normalizedBase = basePath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedBase) {
+    return null;
+  }
+  return `${normalizedBase}/${cleaned}`;
+}
+
+/** Rewrite a local image src to a fetchable `cowork-media:` URL, or null to leave it unchanged. */
+export function rewriteDesktopImageUrl(
+  rawUrl: string,
+  basePath: string | null = null,
+): string | null {
+  const absPath = resolveDesktopImagePath(rawUrl, basePath);
+  if (!absPath) {
+    return null;
+  }
+  return encodeDesktopMediaUrl(absPath);
+}
+
 export function rewriteDesktopFileLinksInTree(
   node: HastNode,
   basePath: string | null = null,
 ): void {
-  if (typeof node.url === "string") {
+  if (node.type === "image" && typeof node.url === "string") {
+    // Images route through cowork-media (fetchable by <img>) instead of the
+    // cowork-file link scheme used for click-to-open file chips.
+    const mediaUrl = rewriteDesktopImageUrl(node.url, basePath);
+    if (mediaUrl) {
+      node.url = mediaUrl;
+    }
+  } else if (typeof node.url === "string") {
     const rebased =
       resolveAbsoluteDesktopFileHref(node.url) ?? resolveRelativeFileHref(node.url, basePath);
     if (rebased) {
@@ -940,6 +1022,17 @@ export function rewriteDesktopFileLinksInTree(
       if (rewrittenExternalUrl) {
         node.url = rewrittenExternalUrl;
       }
+    }
+  }
+
+  if (
+    node.type === "element" &&
+    node.tagName === "img" &&
+    typeof node.properties?.src === "string"
+  ) {
+    const mediaSrc = rewriteDesktopImageUrl(node.properties.src, basePath);
+    if (mediaSrc) {
+      node.properties.src = mediaSrc;
     }
   }
 
@@ -1089,6 +1182,100 @@ export function DesktopMessageLink({
   );
 }
 
+type DesktopMarkdownImageProps = ComponentProps<"img"> & { node?: unknown };
+
+function imageFallbackLabel(
+  alt: string | undefined,
+  src: string,
+  localPath: string | null,
+): string {
+  const trimmedAlt = alt?.trim();
+  if (trimmedAlt) {
+    return trimmedAlt;
+  }
+  if (localPath) {
+    return localPath.split(/[\\/]/).pop() ?? localPath;
+  }
+  return src;
+}
+
+/**
+ * Inline chat image: constrained, click-to-preview. Local images (served via
+ * cowork-media) open in the in-app file preview; remote images open externally
+ * after confirmation. Failed loads degrade to a file-chip style link.
+ */
+function DesktopMarkdownImage({
+  alt,
+  className,
+  node: _node,
+  src,
+  title,
+  ...props
+}: DesktopMarkdownImageProps) {
+  // Markdown images are rewritten to cowork-media at the remark stage, but raw
+  // HTML <img> tags only materialize after rehype-raw — upgrade those here.
+  const rawSrc = typeof src === "string" ? src : "";
+  const srcString = rawSrc ? (rewriteDesktopImageUrl(rawSrc) ?? rawSrc) : "";
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [srcString]);
+
+  if (!srcString) {
+    return null;
+  }
+
+  const localPath = decodeDesktopMediaUrl(srcString);
+
+  const handleOpen = () => {
+    if (localPath) {
+      useAppStore.getState().openFilePreview({ path: localPath });
+      return;
+    }
+    void openDesktopMessageLink(srcString);
+  };
+
+  if (failed) {
+    return (
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
+        className="wrap-anywhere appearance-none bg-transparent p-0 text-left font-medium text-primary underline"
+        data-streamdown="image-fallback"
+        onClick={handleOpen}
+        title={localPath ?? srcString}
+      >
+        {imageFallbackLabel(alt, srcString, localPath)}
+      </Button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="my-3 block max-w-full cursor-zoom-in appearance-none border-0 bg-transparent p-0 text-left"
+      data-streamdown="image"
+      onClick={handleOpen}
+      title={title ?? localPath ?? undefined}
+    >
+      <img
+        {...props}
+        src={srcString}
+        alt={alt ?? ""}
+        loading="lazy"
+        decoding="async"
+        className={cn(
+          "max-h-[420px] max-w-full rounded-md border border-border/60 object-contain",
+          className,
+        )}
+        onError={() => setFailed(true)}
+      />
+    </button>
+  );
+}
+
 export type DesktopMarkdownProps = StreamdownProps & {
   normalizeDisplayCitations?: boolean;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
@@ -1100,9 +1287,37 @@ export type DesktopMarkdownProps = StreamdownProps & {
 };
 
 /**
+ * Tracks whether the app is currently rendering in dark mode by observing the
+ * `dark` class that App.tsx toggles on `<html>` when system appearance changes.
+ */
+function useDocumentIsDark(): boolean {
+  const [isDark, setIsDark] = useState(
+    () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
+  );
+
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+      return;
+    }
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => {
+      setIsDark(root.classList.contains("dark"));
+    });
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+
+  return isDark;
+}
+
+/**
  * Wraps rendered `<pre>` (code) blocks with a hover-revealed Copy button.
  * Additive only: the original `<pre>` element and its children render unchanged,
  * so existing `[&_pre]` styling and Streamdown code-block structure are preserved.
+ *
+ * Mermaid fences are the exception: Streamdown's diagram renderer only engages
+ * when the child `<code>` carries `data-block` (its default `pre` behavior), so
+ * those are passed through instead of wrapped.
  */
 function PreWithCopy({
   children,
@@ -1111,6 +1326,14 @@ function PreWithCopy({
 }: ComponentProps<"pre"> & { node?: unknown }) {
   const preRef = useRef<HTMLPreElement | null>(null);
   const [copied, setCopied] = useState(false);
+
+  if (isValidElement<Record<string, unknown>>(children)) {
+    const childClassName =
+      typeof children.props.className === "string" ? children.props.className : "";
+    if (/\blanguage-mermaid\b/.test(childClassName)) {
+      return cloneElement(children, { "data-block": "true" });
+    }
+  }
 
   const handleCopy = () => {
     const text = preRef.current?.textContent ?? "";
@@ -1200,9 +1423,11 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   fallbackToSourcesFooter = true,
   desktopBasePath = null,
   controls,
+  mermaid: mermaidOptions,
   ...props
 }: DesktopMarkdownProps) {
   const { children, components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
+  const isDark = useDocumentIsDark();
   const desktopFileLinksPlugin = useMemo<
     [typeof remarkRewriteDesktopFileLinks, { basePath: string | null }]
   >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
@@ -1212,15 +1437,27 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
         ? false
         : {
             table: false,
+            mermaid: { copy: false, download: false, fullscreen: true, panZoom: true },
             ...(typeof controls === "object" ? controls : {}),
           },
     [controls],
+  );
+  const resolvedMermaid = useMemo<StreamdownProps["mermaid"]>(
+    () => ({
+      ...mermaidOptions,
+      config: {
+        theme: isDark ? "dark" : "default",
+        ...mermaidOptions?.config,
+      },
+    }),
+    [isDark, mermaidOptions],
   );
 
   return (
     <Streamdown
       {...restProps}
       controls={resolvedControls}
+      mermaid={resolvedMermaid}
       children={normalizeDesktopMarkdownChildren(
         children,
         normalizeDisplayCitations,
@@ -1245,6 +1482,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
         ...components,
         a: DesktopMessageLink,
         cite: DesktopCitationChip,
+        img: DesktopMarkdownImage,
         pre: PreWithCopy,
       }}
       plugins={{

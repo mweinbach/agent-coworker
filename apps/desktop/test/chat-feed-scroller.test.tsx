@@ -177,6 +177,19 @@ function setupScroller(heights: Map<string, number>) {
   return harness;
 }
 
+async function waitForScrollTop(viewport: HTMLElement, expected: number, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastScrollTop = viewport.scrollTop;
+  while (Date.now() < deadline) {
+    if (lastScrollTop === expected) return;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    lastScrollTop = viewport.scrollTop;
+  }
+  expect(lastScrollTop).toBe(expected);
+}
+
 describe("desktop chat message scroller", () => {
   test("opens at the last visible user turn with a 64px previous-message peek", async () => {
     const heights = new Map([
@@ -293,14 +306,11 @@ describe("desktop chat message scroller", () => {
           ),
         );
       });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-
       const viewport = container.querySelector(
         '[data-slot="message-scroller-viewport"]',
       ) as HTMLElement | null;
-      expect(viewport?.scrollTop).toBe(136);
+      if (!viewport) throw new Error("missing viewport");
+      await waitForScrollTop(viewport, 136);
 
       await act(async () => root.unmount());
     } finally {
@@ -334,14 +344,11 @@ describe("desktop chat message scroller", () => {
           renderFeed([...initialItems, message("user-2", "user", "Follow-up")], "thread-a"),
         );
       });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-
       const viewport = container.querySelector(
         '[data-slot="message-scroller-viewport"]',
       ) as HTMLElement | null;
-      expect(viewport?.scrollTop).toBe(536);
+      if (!viewport) throw new Error("missing viewport");
+      await waitForScrollTop(viewport, 536);
       const children = Array.from(
         container.querySelector('[data-slot="message-scroller-content"]')?.children ?? [],
       ).filter((element) => element.getAttribute("data-slot") === "message-scroller-item");
@@ -478,7 +485,8 @@ describe("desktop chat message scroller", () => {
         '[data-slot="message-scroller-viewport"]',
       ) as HTMLElement | null;
       expect(viewportB).not.toBe(viewportA);
-      expect(viewportB?.scrollTop).toBe(136);
+      if (!viewportB) throw new Error("missing viewport");
+      await waitForScrollTop(viewportB, 136);
 
       await act(async () => root.unmount());
     } finally {

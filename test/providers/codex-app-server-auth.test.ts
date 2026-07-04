@@ -325,6 +325,78 @@ describe("codex app-server auth", () => {
     expect(accountReadCount).toBe(1);
   });
 
+  test("login cancels pending handoff when the browser opener cannot launch", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-login-open-fail-"));
+    const notificationListeners = new Set<Parameters<CodexAppServerClient["onNotification"]>[0]>();
+    const closeListeners = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>();
+    let closeListenerCountDuringOpen = 0;
+    let notificationListenersDuringOpen: Parameters<CodexAppServerClient["onNotification"]>[0][] =
+      [];
+    let accountReadCount = 0;
+
+    clientInternal.setClientFactoryForTests(async () => {
+      const client: CodexAppServerClient = {
+        command: { command: "node", args: [], source: "system" },
+        isClosed: () => false,
+        request: async (method) => {
+          if (method === "initialize") return {};
+          if (method === "account/login/start") {
+            return { authUrl: "https://example.test/login", loginId: "login-cancelled" };
+          }
+          if (method === "account/read") {
+            accountReadCount += 1;
+            return {
+              account: { type: "chatgpt", email: "stale@example.com", planType: "Pro" },
+              requiresOpenaiAuth: false,
+            };
+          }
+          return {};
+        },
+        notify: () => {},
+        interruptTurn: async () => {},
+        onNotification: (listener) => {
+          notificationListeners.add(listener);
+          return () => {
+            notificationListeners.delete(listener);
+          };
+        },
+        onServerRequest: () => () => {},
+        onJsonRpcMessage: () => () => {},
+        onClose: (listener) => {
+          closeListeners.add(listener);
+          return () => {
+            closeListeners.delete(listener);
+          };
+        },
+        close: async () => {},
+      };
+      return client;
+    });
+
+    await expect(
+      loginCodexAppServerChatGpt({
+        codexHome,
+        openUrl: async (url) => {
+          expect(url).toBe("https://example.test/login");
+          closeListenerCountDuringOpen = closeListeners.size;
+          notificationListenersDuringOpen = [...notificationListeners];
+          return false;
+        },
+      }),
+    ).rejects.toThrow("Unable to open the Codex app-server ChatGPT login URL");
+
+    expect(closeListenerCountDuringOpen).toBeGreaterThan(closeListeners.size);
+    expect(notificationListenersDuringOpen).toHaveLength(1);
+    expect(notificationListeners.size).toBe(0);
+    for (const listener of notificationListenersDuringOpen) {
+      listener({
+        method: "account/login/completed",
+        params: { loginId: "login-cancelled", success: true },
+      });
+    }
+    expect(accountReadCount).toBe(0);
+  });
+
   test("logoutCodexAppServer deletes auth.json and closes pooled clients", async () => {
     const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-logout-"));
     const authFile = path.join(codexHome, "auth.json");

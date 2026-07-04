@@ -1,6 +1,6 @@
 import type { ProviderName } from "../types";
 
-export const MODEL_PREFERENCE_PROVIDER_NAMES = [
+const MODEL_PREFERENCE_PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",

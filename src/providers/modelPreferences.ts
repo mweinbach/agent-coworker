@@ -14,7 +14,7 @@ import { normalizeCustomModelId } from "./customModels";
 
 const MODEL_PREFERENCES_STORE_FILENAME = "model-preferences.json";
 
-export type ModelPreferenceEntry = {
+type ModelPreferenceEntry = {
   id: string;
   enabled: boolean;
   updatedAt: string;

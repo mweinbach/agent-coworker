@@ -33,7 +33,7 @@ import { type ChatRenderItem, summarizeActivityGroup } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
-const SCROLL_BUTTON_BOTTOM_GAP_PX = 14;
+const SCROLL_BUTTON_BOTTOM_GAP_PX = 9;
 
 export type VisibleSandboxApproval = {
   threadId: string;

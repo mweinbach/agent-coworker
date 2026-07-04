@@ -54,6 +54,7 @@ import { displayProviderName } from "../../../lib/providerDisplayNames";
 import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
 import { PROVIDER_NAMES, type ProviderName, type SessionEvent } from "../../../lib/wsProtocol";
+import { SettingsEmptyState, SettingsRow, SettingsSection } from "../SettingsPrimitives";
 import { AdvancedMemoryPanel } from "./AdvancedMemoryPanel";
 
 type DraftMemory = {
@@ -421,63 +422,67 @@ export function MemoryPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/40 p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="space-y-0.5">
-            <p className="text-sm font-medium text-foreground">Advanced memory</p>
-            <p className="text-xs text-muted-foreground">
-              Agent-driven memory that summarizes each turn into indexed files Cowork can recall.
-            </p>
-          </div>
-          <Switch
-            checked={advancedMemoryEnabled}
-            disabled={!activeTarget}
-            onCheckedChange={(value) => {
-              if (!activeTarget) return;
-              void setWorkspaceAdvancedMemory(activeTarget.workspaceId, value, {
-                cwd: activeTarget.targetPath,
-              });
-            }}
-            aria-label="Advanced memory"
-          />
-        </div>
-        {advancedMemoryEnabled ? (
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">Memory generation model</p>
-            <Select
-              value={memoryGenerationModelSelection}
-              onValueChange={(value) => {
+    <>
+      <SettingsSection
+        title="Advanced memory"
+        description="Agent-driven memory that summarizes each turn into indexed files Cowork can recall."
+      >
+        <SettingsRow
+          title="Enable advanced memory"
+          description="Replaces the manual remembered-facts list with agent-maintained memory files."
+          control={
+            <Switch
+              checked={advancedMemoryEnabled}
+              disabled={!activeTarget}
+              onCheckedChange={(value) => {
                 if (!activeTarget) return;
-                void setWorkspaceMemoryGenerationModel(
-                  activeTarget.workspaceId,
-                  value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value,
-                  { cwd: activeTarget.targetPath },
-                );
+                void setWorkspaceAdvancedMemory(activeTarget.workspaceId, value, {
+                  cwd: activeTarget.targetPath,
+                });
               }}
-            >
-              <SelectTrigger className="max-w-72" aria-label="Memory generation model">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>Default (economical)</SelectItem>
-                {generationModelGroups.map((group) => (
-                  <SelectGroup key={group.provider}>
-                    <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
-                      {group.label}
-                    </SelectLabel>
-                    {group.options.map((option) => (
-                      <SelectItem key={option.value} value={option.value} className="pl-6">
-                        <span title={option.title}>{option.label}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+              aria-label="Advanced memory"
+            />
+          }
+        />
+        {advancedMemoryEnabled ? (
+          <SettingsRow
+            title="Memory generation model"
+            description="Model used to summarize turns into memory files."
+            control={
+              <Select
+                value={memoryGenerationModelSelection}
+                onValueChange={(value) => {
+                  if (!activeTarget) return;
+                  void setWorkspaceMemoryGenerationModel(
+                    activeTarget.workspaceId,
+                    value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value,
+                    { cwd: activeTarget.targetPath },
+                  );
+                }}
+              >
+                <SelectTrigger className="max-w-72" aria-label="Memory generation model">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>Default (economical)</SelectItem>
+                  {generationModelGroups.map((group) => (
+                    <SelectGroup key={group.provider}>
+                      <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
+                        {group.label}
+                      </SelectLabel>
+                      {group.options.map((option) => (
+                        <SelectItem key={option.value} value={option.value} className="pl-6">
+                          <span title={option.title}>{option.label}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            }
+          />
         ) : null}
-      </div>
+      </SettingsSection>
 
       {advancedMemoryEnabled && activeTarget ? (
         <>
@@ -502,73 +507,77 @@ export function MemoryPage() {
         </>
       ) : (
         <>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              {workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
-                <Select value={activeTarget.id} onValueChange={handleTargetChange}>
-                  <SelectTrigger className="max-w-48" aria-label="Memory target">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {memoryTargets.map((entry) => (
-                      <SelectItem key={entry.id} value={entry.id}>
-                        {entry.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : null}
+          <SettingsSection
+            title="Remembered facts"
+            description="Facts Cowork keeps in mind across chats for this target."
+            action={
+              <>
+                {workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
+                  <Select value={activeTarget.id} onValueChange={handleTargetChange}>
+                    <SelectTrigger className="max-w-48" aria-label="Memory target">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {memoryTargets.map((entry) => (
+                        <SelectItem key={entry.id} value={entry.id}>
+                          {entry.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
 
-              <div className="flex rounded-md border border-border/70 overflow-hidden">
-                {(["all", "workspace", "user"] as const).map((scope) => (
-                  <Button
-                    key={scope}
-                    className={cn(
-                      "h-auto rounded-none border-0 px-3 py-1.5 text-xs font-medium shadow-none transition-colors first:rounded-l-none last:rounded-r-none",
-                      filterScope === scope
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                    )}
-                    onClick={() => setFilterScope(scope)}
-                    type="button"
-                    variant="ghost"
-                  >
-                    {scope === "all" ? "All" : scopeLabel(scope)}
+                <div className="flex rounded-md border border-border/70 overflow-hidden">
+                  {(["all", "workspace", "user"] as const).map((scope) => (
+                    <Button
+                      key={scope}
+                      className={cn(
+                        "h-auto rounded-none border-0 px-3 py-1.5 text-xs font-medium shadow-none transition-colors first:rounded-l-none last:rounded-r-none",
+                        filterScope === scope
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                      )}
+                      onClick={() => setFilterScope(scope)}
+                      type="button"
+                      variant="ghost"
+                    >
+                      {scope === "all" ? "All" : scopeLabel(scope)}
+                    </Button>
+                  ))}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  disabled={showMemoryLoading}
+                  onClick={() => activeTarget && requestMemories(activeTarget)}
+                >
+                  {showMemoryLoading ? "Loading..." : "Refresh"}
+                </Button>
+
+                {activeTarget ? (
+                  <Button variant="outline" size="sm" type="button" onClick={openCreateDialog}>
+                    <PlusIcon data-icon="inline-start" />
+                    Add memory
                   </Button>
-                ))}
-              </div>
-
-              <Button
-                variant="outline"
-                size="sm"
-                type="button"
-                disabled={showMemoryLoading}
-                onClick={() => activeTarget && requestMemories(activeTarget)}
-              >
-                {showMemoryLoading ? "Loading..." : "Refresh"}
-              </Button>
-            </div>
-
-            {activeTarget ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={openCreateDialog}
-              >
-                <PlusIcon className="w-4 h-4 mr-1.5" />
-                Add memory
-              </Button>
-            ) : null}
-          </div>
-
-          {filtered.length === 0 ? (
-            <div className="rounded-xl border border-border/70 bg-background/50 py-12 flex flex-col items-center justify-center gap-3">
-              <BrainIcon className="w-10 h-10 text-muted-foreground/40" />
-              {memoryLoadStalled ? (
-                <>
-                  <p className="text-sm text-muted-foreground">Still loading…</p>
-                  {activeTarget ? (
+                ) : null}
+              </>
+            }
+          >
+            {filtered.length === 0 ? (
+              <SettingsEmptyState
+                className="rounded-none border-0 bg-transparent"
+                icon={<BrainIcon />}
+                title={
+                  memoryLoadStalled
+                    ? "Still loading…"
+                    : showMemoryLoading
+                      ? "Loading…"
+                      : "No remembered facts yet"
+                }
+                action={
+                  memoryLoadStalled && activeTarget ? (
                     <Button
                       variant="outline"
                       size="sm"
@@ -576,102 +585,86 @@ export function MemoryPage() {
                     >
                       Retry
                     </Button>
-                  ) : null}
-                </>
-              ) : showMemoryLoading ? (
-                <p className="text-sm text-muted-foreground">Loading…</p>
-              ) : (
-                <>
-                  <p className="text-sm text-muted-foreground">No remembered facts yet</p>
-                  {activeTarget ? (
+                  ) : !memoryLoadStalled && !showMemoryLoading && activeTarget ? (
                     <Button variant="outline" size="sm" onClick={openCreateDialog}>
                       Add your first memory
                     </Button>
-                  ) : null}
-                </>
-              )}
-            </div>
-          ) : (
-            <div
-              className="rounded-xl border border-border/70 overflow-hidden bg-background/50"
-              ref={parent}
-            >
-              {filtered.map((entry) => {
-                const key = entryKey(entry);
-                const isExpanded = expandedIds[key] ?? false;
+                  ) : null
+                }
+              />
+            ) : (
+              <div ref={parent} className="divide-y divide-border/45">
+                {filtered.map((entry) => {
+                  const key = entryKey(entry);
+                  const isExpanded = expandedIds[key] ?? false;
 
-                return (
-                  <div
-                    key={key}
-                    className={cn(
-                      "border-b border-border/70 last:border-b-0",
-                      isExpanded && "bg-card/40",
-                    )}
-                  >
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
-                      onClick={() => toggleExpand(key)}
-                    >
-                      <div className="flex items-center gap-3">
-                        {isExpanded ? (
-                          <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
-                        ) : (
-                          <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
-                        )}
-                        <span className="font-medium text-foreground text-sm">
-                          {memoryTitle(entry)}
-                        </span>
-                        <Badge
-                          variant={entry.scope === "workspace" ? "default" : "secondary"}
-                          className="text-[10px] uppercase h-5"
-                        >
-                          {scopeLabel(entry.scope)}
-                        </Badge>
-                      </div>
-                      <span className="text-xs text-muted-foreground/60">
-                        Updated {relativeTime(entry.updatedAt)}
-                      </span>
-                    </button>
-
-                    {isExpanded && (
-                      <div className="px-10 pb-4 text-xs space-y-3">
-                        <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
-                          {entry.content}
-                        </pre>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openEditDialog(entry);
-                            }}
+                  return (
+                    <div key={key} className={cn(isExpanded && "bg-card/40")}>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between px-4 py-3.5 text-left transition-colors hover:bg-card/60"
+                        onClick={() => toggleExpand(key)}
+                      >
+                        <div className="flex items-center gap-3">
+                          {isExpanded ? (
+                            <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
+                          )}
+                          <span className="font-medium text-foreground text-sm">
+                            {memoryTitle(entry)}
+                          </span>
+                          <Badge
+                            variant={entry.scope === "workspace" ? "default" : "secondary"}
+                            className="text-[10px] uppercase h-5"
                           >
-                            <PencilIcon className="w-3.5 h-3.5 mr-1" />
-                            Edit
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleDelete(entry);
-                            }}
-                          >
-                            <Trash2Icon className="w-3.5 h-3.5 mr-1" />
-                            Delete
-                          </Button>
+                            {scopeLabel(entry.scope)}
+                          </Badge>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                        <span className="text-xs text-muted-foreground/60">
+                          Updated {relativeTime(entry.updatedAt)}
+                        </span>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="px-10 pb-4 text-xs space-y-3">
+                          <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
+                            {entry.content}
+                          </pre>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openEditDialog(entry);
+                              }}
+                            >
+                              <PencilIcon className="w-3.5 h-3.5 mr-1" />
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDelete(entry);
+                              }}
+                            >
+                              <Trash2Icon className="w-3.5 h-3.5 mr-1" />
+                              Delete
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </SettingsSection>
 
           <Dialog
             open={dialogOpen}
@@ -765,6 +758,6 @@ export function MemoryPage() {
           </Dialog>
         </>
       )}
-    </div>
+    </>
   );
 }

@@ -1,6 +1,6 @@
 import { CopyIcon, PencilIcon, PlusIcon, RefreshCcwIcon, Trash2Icon } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   AgentProfileCatalogEntry,
@@ -59,7 +59,13 @@ import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
 import type { ProviderName, SessionEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
-import { SettingsEmptyState, SettingsSection, SettingsStatusPill } from "../SettingsPrimitives";
+import { useOptionalSettingsChrome } from "../SettingsChromeContext";
+import {
+  EntityIcon,
+  SettingsEmptyState,
+  SettingsPage,
+  SettingsStatusPill,
+} from "../SettingsPrimitives";
 
 export type DraftProfile = AgentProfileDefinition & {
   scope: AgentProfileScope;
@@ -344,6 +350,9 @@ export function SubagentsPage() {
   const upsertAgentProfile = useAppStore((s) => s.upsertAgentProfile);
   const deleteAgentProfile = useAppStore((s) => s.deleteAgentProfile);
   const copyAgentProfile = useAppStore((s) => s.copyAgentProfile);
+  const setAgentProfileWorkspaceAvailability = useAppStore(
+    (s) => s.setAgentProfileWorkspaceAvailability,
+  );
   const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
@@ -387,7 +396,7 @@ export function SubagentsPage() {
     [configuredModelProviders, modelSelectorVisibility],
   );
   const profilesLoading = runtime?.agentProfilesLoading ?? false;
-  const [scope, setScope] = useState<AgentProfileScope>("workspace");
+  const [scope, setScope] = useState<AgentProfileScope>("global");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
 
   useEffect(() => {
@@ -424,6 +433,13 @@ export function SubagentsPage() {
         .sort((left, right) => left.profile.displayName.localeCompare(right.profile.displayName)),
     [catalog?.profiles, scope],
   );
+  const globalAvailabilityRows = useMemo(
+    () =>
+      (catalog?.profiles ?? [])
+        .filter((entry) => entry.scope === "global")
+        .sort((left, right) => left.profile.displayName.localeCompare(right.profile.displayName)),
+    [catalog?.profiles],
+  );
 
   const mcpServerNames = useMemo(
     () => sortedUnique((runtime?.mcpServers ?? []).map((server) => server.name)),
@@ -449,9 +465,37 @@ export function SubagentsPage() {
     return prompts;
   }, [catalog?.profiles]);
 
-  const startCreate = () => {
+  const startCreate = useCallback(() => {
     setDraft(newDraft(scope, defaultPromptForRole(rolePromptDefaults, "worker") ?? ""));
-  };
+  }, [rolePromptDefaults, scope]);
+
+  const settingsChrome = useOptionalSettingsChrome();
+  const workspaceId = workspace?.id ?? null;
+  useEffect(() => {
+    if (!settingsChrome || !workspaceId) return;
+    settingsChrome.setChrome({
+      headerActions: (
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void refreshAgentProfilesCatalog(workspaceId)}
+            aria-label="Refresh subagents"
+          >
+            <RefreshCcwIcon data-icon="inline-start" />
+            Refresh
+          </Button>
+          <Button variant="outline" size="sm" onClick={startCreate}>
+            <PlusIcon data-icon="inline-start" />
+            New subagent
+          </Button>
+        </div>
+      ),
+    });
+    return () => {
+      settingsChrome.setChrome(null);
+    };
+  }, [settingsChrome, workspaceId, refreshAgentProfilesCatalog, startCreate]);
 
   const saveDraft = async () => {
     if (!workspace) return;
@@ -483,122 +527,134 @@ export function SubagentsPage() {
   }
 
   return (
-    <div className="space-y-5">
-      <SettingsSection
-        title="Subagents"
-        description="Create reusable child-agent profiles for focused work."
-        action={
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => void refreshAgentProfilesCatalog(workspace.id)}
-              aria-label="Refresh profiles"
-            >
-              <RefreshCcwIcon />
-            </Button>
-            <Button size="sm" onClick={startCreate}>
-              <PlusIcon data-icon="inline-start" />
-              New
-            </Button>
+    <SettingsPage>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <div className="grid w-full max-w-xs grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
+            {(["global", "workspace"] as const).map((value) => (
+              <Button
+                key={value}
+                variant={scope === value ? "secondary" : "ghost"}
+                size="sm"
+                className="h-8"
+                onClick={() => setScope(value)}
+              >
+                {value === "workspace" ? "Workspace" : "Global"}
+              </Button>
+            ))}
           </div>
-        }
-      >
-        <div className="flex flex-col gap-4 px-4 py-4">
-          <div className="flex flex-col gap-2">
-            <div className="grid w-full max-w-sm grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
-              {(["workspace", "global"] as const).map((value) => (
-                <Button
-                  key={value}
-                  variant={scope === value ? "secondary" : "ghost"}
-                  size="sm"
-                  className="h-8"
-                  onClick={() => setScope(value)}
-                >
-                  {value === "workspace" ? "Workspace" : "Global"}
-                </Button>
-              ))}
-            </div>
-            <p className="max-w-2xl text-xs text-muted-foreground">
-              {ONE_OFF_CHAT_GLOBAL_PROFILE_NOTE}
-            </p>
-          </div>
+          <p className="max-w-2xl text-xs text-muted-foreground">
+            {scope === "global"
+              ? "Global subagents are available in every workspace and chat."
+              : "Workspace subagents only apply to the selected workspace. One-off chats always use global subagents."}
+          </p>
+        </div>
 
+        {scope === "workspace" ? (
           <WorkspaceTargetPicker
             workspaces={workspaceChoices}
             value={workspace?.id ?? ""}
             onValueChange={setProfileWorkspaceId}
           />
+        ) : null}
 
-          {runtime?.agentProfilesError ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-              {runtime.agentProfilesError}
+        {runtime?.agentProfilesError ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            {runtime.agentProfilesError}
+          </div>
+        ) : null}
+
+        {catalog?.diagnostics.length ? (
+          <div className="space-y-2">
+            {catalog.diagnostics.map((diagnostic) => (
+              <div
+                key={`${diagnostic.scope}:${diagnostic.path}`}
+                className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning-foreground"
+              >
+                {diagnostic.message}
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {profilesLoading && !catalog ? (
+          <SettingsEmptyState
+            title="Loading subagents"
+            description="Refreshing the subagent catalog."
+          />
+        ) : profileRows.length === 0 ? (
+          <SettingsEmptyState
+            title={
+              scope === "workspace" && workspace
+                ? `No subagents in ${formatWorkspaceName(workspace)}`
+                : "No global subagents"
+            }
+            description="Create a subagent to delegate focused work to it from any chat."
+            action={
+              <Button size="sm" onClick={startCreate}>
+                <PlusIcon data-icon="inline-start" />
+                Create
+              </Button>
+            }
+          />
+        ) : (
+          <div className="app-shadow-surface divide-y divide-border/50 overflow-hidden rounded-xl border border-border/75 bg-card/85">
+            {profileRows.map((entry) => (
+              <ProfileRow
+                key={`${entry.scope}:${entry.profile.id}`}
+                entry={entry}
+                onEdit={() => {
+                  setDraft(draftFromEntry(entry));
+                }}
+                onCopy={() => void copyProfile(entry)}
+                onDelete={async () => {
+                  const confirmed = await confirmAction({
+                    title: "Delete subagent",
+                    message: `Delete the "${entry.profile.displayName}" subagent?`,
+                    detail: "This subagent will be permanently removed.",
+                    confirmLabel: "Delete",
+                    cancelLabel: "Cancel",
+                    kind: "warning",
+                    defaultAction: "cancel",
+                  });
+                  if (confirmed) {
+                    void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id);
+                  }
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {scope === "workspace" && globalAvailabilityRows.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            <div>
+              <div className="text-sm font-semibold text-foreground">
+                Global subagents in this workspace
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                Turn off global subagents you don't want available in this workspace. This only
+                affects the selected workspace.
+              </div>
             </div>
-          ) : null}
-
-          {catalog?.diagnostics.length ? (
-            <div className="space-y-2">
-              {catalog.diagnostics.map((diagnostic) => (
-                <div
-                  key={`${diagnostic.scope}:${diagnostic.path}`}
-                  className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning-foreground"
-                >
-                  {diagnostic.message}
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          {profilesLoading && !catalog ? (
-            <SettingsEmptyState
-              title="Loading profiles"
-              description="Refreshing the subagent profile catalog."
-            />
-          ) : profileRows.length === 0 ? (
-            <SettingsEmptyState
-              title={
-                scope === "workspace" && workspace
-                  ? `No profiles in ${formatWorkspaceName(workspace)}`
-                  : `No ${scope} profiles`
-              }
-              description="Create a profile to make it available through spawnAgent(profileRef)."
-              action={
-                <Button size="sm" onClick={startCreate}>
-                  <PlusIcon data-icon="inline-start" />
-                  Create
-                </Button>
-              }
-            />
-          ) : (
-            <div className="grid gap-2">
-              {profileRows.map((entry) => (
-                <ProfileRow
-                  key={`${entry.scope}:${entry.profile.id}`}
+            <div className="app-shadow-surface divide-y divide-border/50 overflow-hidden rounded-xl border border-border/75 bg-card/85">
+              {globalAvailabilityRows.map((entry) => (
+                <GlobalAvailabilityRow
+                  key={`availability:${entry.profile.id}`}
                   entry={entry}
-                  onEdit={() => {
-                    setDraft(draftFromEntry(entry));
-                  }}
-                  onCopy={() => void copyProfile(entry)}
-                  onDelete={async () => {
-                    const confirmed = await confirmAction({
-                      title: "Delete profile",
-                      message: `Delete the "${entry.profile.displayName}" profile?`,
-                      detail: "This profile will be permanently removed.",
-                      confirmLabel: "Delete",
-                      cancelLabel: "Cancel",
-                      kind: "warning",
-                      defaultAction: "cancel",
-                    });
-                    if (confirmed) {
-                      void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id);
-                    }
-                  }}
+                  onAvailabilityChange={(available) =>
+                    void setAgentProfileWorkspaceAvailability(
+                      entry.profile.id,
+                      !available,
+                      workspace.id,
+                    )
+                  }
                 />
               ))}
             </div>
-          )}
-        </div>
-      </SettingsSection>
+          </div>
+        ) : null}
+      </div>
 
       <ProfileDialog
         draft={draft}
@@ -613,7 +669,7 @@ export function SubagentsPage() {
         onWorkspaceChange={setProfileWorkspaceId}
         onSave={() => void saveDraft()}
       />
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -672,33 +728,24 @@ function ProfileRow({
   onCopy: () => void;
   onDelete: () => void;
 }) {
-  const ref = `${entry.scope}:${entry.profile.id}`;
+  const description =
+    entry.profile.description.trim() || `${ROLE_LABELS[entry.profile.baseRole]} template`;
   return (
-    <div className="grid gap-3 rounded-lg border border-border/60 bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-      <div className="min-w-0 space-y-1">
+    <div className="flex items-center gap-3 px-4 py-3">
+      <EntityIcon name={entry.profile.displayName} />
+      <div className="min-w-0 flex-1 space-y-0.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
-          <SettingsStatusPill tone={entry.profile.enabled ? "success" : "neutral"}>
-            {entry.profile.enabled ? "Enabled" : "Disabled"}
-          </SettingsStatusPill>
+          {entry.profile.enabled ? null : (
+            <SettingsStatusPill tone="neutral">Disabled</SettingsStatusPill>
+          )}
           {entry.builtIn ? <SettingsStatusPill>Built-in</SettingsStatusPill> : null}
           {entry.locked ? <SettingsStatusPill>Main</SettingsStatusPill> : null}
           {entry.shadowed ? <SettingsStatusPill tone="warning">Shadowed</SettingsStatusPill> : null}
-          {entry.effective && entry.profile.enabled ? (
-            <SettingsStatusPill>Effective</SettingsStatusPill>
-          ) : null}
         </div>
-        <div className="text-xs text-muted-foreground">
-          <code>{ref}</code> · Template: {ROLE_LABELS[entry.profile.baseRole]}
-          {entry.profile.model ? ` · ${entry.profile.model}` : ""}
-        </div>
-        {entry.profile.description ? (
-          <div className="line-clamp-2 text-xs text-muted-foreground">
-            {entry.profile.description}
-          </div>
-        ) : null}
+        <div className="line-clamp-1 text-xs text-muted-foreground">{description}</div>
       </div>
-      <div className="flex items-center justify-end gap-1">
+      <div className="flex shrink-0 items-center justify-end gap-1">
         <Button variant="ghost" size="icon" aria-label="Edit profile" onClick={onEdit}>
           <PencilIcon />
         </Button>
@@ -715,6 +762,43 @@ function ProfileRow({
           <Trash2Icon />
         </Button>
       </div>
+    </div>
+  );
+}
+
+function GlobalAvailabilityRow({
+  entry,
+  onAvailabilityChange,
+}: {
+  entry: AgentProfileCatalogEntry;
+  onAvailabilityChange: (available: boolean) => void;
+}) {
+  const available = entry.workspaceDisabled !== true;
+  const overriddenByWorkspaceProfile = entry.shadowed === true;
+  const description =
+    entry.profile.description.trim() || `${ROLE_LABELS[entry.profile.baseRole]} template`;
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <EntityIcon name={entry.profile.displayName} />
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
+          {entry.locked ? <SettingsStatusPill>Always available</SettingsStatusPill> : null}
+          {overriddenByWorkspaceProfile ? (
+            <SettingsStatusPill tone="warning">Overridden by workspace subagent</SettingsStatusPill>
+          ) : null}
+          {!available && !overriddenByWorkspaceProfile ? (
+            <SettingsStatusPill tone="neutral">Off in this workspace</SettingsStatusPill>
+          ) : null}
+        </div>
+        <div className="line-clamp-1 text-xs text-muted-foreground">{description}</div>
+      </div>
+      <Switch
+        checked={available}
+        disabled={entry.locked === true || overriddenByWorkspaceProfile}
+        aria-label={`Toggle ${entry.profile.displayName} availability in this workspace`}
+        onCheckedChange={onAvailabilityChange}
+      />
     </div>
   );
 }

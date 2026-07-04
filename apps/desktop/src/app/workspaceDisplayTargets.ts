@@ -22,6 +22,19 @@ export function workspaceDisplayLabel(
   return isOneOffChatWorkspace(workspace) ? "Chats" : workspace.name;
 }
 
+export function resolveProjectWorkspaceId(
+  workspaces: Array<Pick<WorkspaceRecord, "id" | "workspaceKind">>,
+  selectedWorkspaceId: string | null,
+): string | null {
+  const selectedWorkspace =
+    workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null;
+  if (selectedWorkspace && !isOneOffChatWorkspace(selectedWorkspace)) {
+    return selectedWorkspace.id;
+  }
+  const projectWorkspaces = workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace));
+  return projectWorkspaces.length === 1 ? (projectWorkspaces[0]?.id ?? null) : null;
+}
+
 export function resolveWorkspaceDisplayTargets(
   workspaces: WorkspaceRecord[],
   selectedWorkspaceId: string | null,

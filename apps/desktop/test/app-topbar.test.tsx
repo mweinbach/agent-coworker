@@ -187,7 +187,6 @@ describe("desktop app top bar", () => {
             sessionUsage,
             lastTurnUsage,
             agents,
-            managementMode: "thread",
           }),
         );
       });
@@ -289,7 +288,6 @@ describe("desktop app top bar", () => {
             subtitle: null,
             sessionUsage: legacySessionUsage,
             lastTurnUsage: null,
-            managementMode: "thread",
           }),
         );
       });
@@ -350,7 +348,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage: null,
             lastTurnUsage: null,
-            managementMode: "thread",
           }),
         );
       });
@@ -407,7 +404,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage: null,
             lastTurnUsage: null,
-            managementMode: "thread",
           }),
         );
       });
@@ -450,7 +446,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage: null,
             lastTurnUsage: null,
-            managementMode: "thread",
           }),
         );
       });
@@ -505,7 +500,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage: null,
             lastTurnUsage: null,
-            managementMode: "thread",
           }),
         );
       });
@@ -549,7 +543,6 @@ describe("desktop app top bar", () => {
             sessionUsage: null,
             lastTurnUsage: null,
             showContextToggle: false,
-            managementMode: "thread",
             suppressThreadDetails: true,
           }),
         );
@@ -590,7 +583,6 @@ describe("desktop app top bar", () => {
             sessionUsage: null,
             lastTurnUsage: null,
             showContextToggle: false,
-            managementMode: "thread",
             suppressThreadDetails: true,
           }),
         );
@@ -634,7 +626,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage,
             lastTurnUsage: null,
-            managementMode: "thread",
             suppressThreadDetails: false,
           }),
         );
@@ -676,7 +667,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage: null,
             lastTurnUsage: null,
-            managementMode: "thread",
           }),
         );
       });
@@ -723,7 +713,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage: null,
             lastTurnUsage: null,
-            managementMode: "thread",
             canvasMode: true,
             canvasMaximized: false,
             onToggleCanvasMaximized,
@@ -756,7 +745,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage: null,
             lastTurnUsage: null,
-            managementMode: "thread",
             canvasMode: true,
             canvasMaximized: true,
             onToggleCanvasMaximized,
@@ -801,7 +789,6 @@ describe("desktop app top bar", () => {
             subtitle: "agent-coworker",
             sessionUsage,
             lastTurnUsage,
-            managementMode: "thread",
           }),
         );
       });
@@ -827,81 +814,6 @@ describe("desktop app top bar", () => {
       expect(container.querySelector('[role="dialog"]')).toBeNull();
 
       harness.dom.window.removeEventListener("keydown", handleWindowKeyDown);
-
-      await act(async () => {
-        root.unmount();
-      });
-    } finally {
-      harness.restore();
-    }
-  });
-
-  test("shows Global by default for plugin management and can switch targets", async () => {
-    const harness = setupJsdom({ includeAnimationFrame: true });
-    const onManagementWorkspaceChange = mock(() => {});
-
-    try {
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      const root = createRoot(container);
-
-      await act(async () => {
-        root.render(
-          createElement(AppTopBar, {
-            busy: false,
-            onToggleSidebar: () => {},
-            onNewChat: () => {},
-            sidebarCollapsed: false,
-            sidebarWidth: 280,
-            contextSidebarCollapsed: false,
-            onToggleContextSidebar: () => {},
-            title: "Plugins",
-            subtitle: "Global",
-            sessionUsage: null,
-            lastTurnUsage: null,
-            showContextToggle: false,
-            managementMode: "plugins",
-            managementWorkspaces: [
-              { id: "ws-1", name: "IntelProDay" },
-              { id: "ws-2", name: "Research Lab" },
-            ],
-            managementWorkspaceId: null,
-            onSelectManagementWorkspace: onManagementWorkspaceChange,
-          }),
-        );
-      });
-
-      const titleButton = container.querySelector(
-        'button[aria-label="Select plugin management workspace"]',
-      );
-      if (!(titleButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing plugin management selector button");
-      }
-
-      expect(container.textContent).toContain("Plugins");
-      expect(container.textContent).toContain("Global");
-      expect(container.textContent).not.toContain("Usage");
-
-      await act(async () => {
-        titleButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-      });
-
-      expect(titleButton.getAttribute("aria-expanded")).toBe("true");
-      expect(harness.dom.window.document.body.textContent).toContain("IntelProDay");
-      expect(harness.dom.window.document.body.textContent).toContain("Research Lab");
-
-      const intelOption = Array.from(
-        harness.dom.window.document.querySelectorAll('[data-slot="select-item"]'),
-      ).find((element) => element.textContent?.includes("IntelProDay"));
-      if (!(intelOption instanceof harness.dom.window.HTMLElement)) {
-        throw new Error("missing IntelProDay option");
-      }
-
-      await act(async () => {
-        intelOption.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-      });
-
-      expect(onManagementWorkspaceChange).toHaveBeenCalledWith("ws-1");
 
       await act(async () => {
         root.unmount();

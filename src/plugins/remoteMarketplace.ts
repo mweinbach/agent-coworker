@@ -212,6 +212,8 @@ export function buildRemoteMarketplaceCatalogEntry(opts: {
     interface: {
       displayName,
       shortDescription: opts.plugin.category,
+      ...(opts.plugin.icon ? { logo: opts.plugin.icon } : {}),
+      ...(opts.plugin.brandColor ? { brandColor: opts.plugin.brandColor } : {}),
     },
     marketplace: buildMarketplaceCatalogMetadata({
       name: opts.marketplace.name,
@@ -247,6 +249,7 @@ export function buildRemoteMarketplaceSkillCatalogEntry(opts: {
     interface: {
       displayName,
       shortDescription: opts.skill.category,
+      ...(opts.skill.icon ? { iconSmall: opts.skill.icon, iconLarge: opts.skill.icon } : {}),
     },
     marketplace: buildMarketplaceCatalogMetadata({
       name: opts.marketplace.name,

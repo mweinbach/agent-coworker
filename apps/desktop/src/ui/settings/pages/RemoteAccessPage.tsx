@@ -14,13 +14,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
 import { Separator } from "../../../components/ui/separator";
 import { Switch } from "../../../components/ui/switch";
 import type {
@@ -39,6 +32,7 @@ import {
   updateMobileRelayTrustedPhonePermissions,
 } from "../../../lib/desktopCommands";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
+import { SettingsSection } from "../SettingsPrimitives";
 
 const TRUSTED_DEVICE_PERMISSION_CONTROLS: Array<{
   key: MobileRelayTrustedDevicePermissionKey;
@@ -180,6 +174,7 @@ export function RemoteAccessPage() {
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button
             type="button"
+            variant="outline"
             size="sm"
             onClick={() =>
               selectedWorkspace &&
@@ -234,14 +229,11 @@ export function RemoteAccessPage() {
 
   return (
     <div className="space-y-5" data-remote-access-page="true">
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Workspace bridge</CardTitle>
-          <CardDescription>
-            Expose a single workspace while the desktop app remains running.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <SettingsSection
+        title="Workspace bridge"
+        description="Expose a single workspace while the desktop app remains running."
+      >
+        <div className="space-y-4 px-4 py-4">
           <div className="space-y-1">
             <div className="text-sm font-medium text-foreground">
               {selectedWorkspace?.name ?? "No workspace selected"}
@@ -285,19 +277,15 @@ export function RemoteAccessPage() {
               <div className="mt-2 text-xs text-destructive">{state.lastError}</div>
             ) : null}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </SettingsSection>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <Card className="border-border/80 bg-card/85">
-          <CardHeader>
-            <CardTitle>Pairing QR</CardTitle>
-            <CardDescription>
-              Scan this QR from Cowork Mobile to connect directly over HTTP/3, or copy the pairing
-              key below to paste on your phone. No relay is used.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <SettingsSection
+          title="Pairing QR"
+          description="Scan this QR from Cowork Mobile to connect directly over HTTP/3, or copy the pairing key below to paste on your phone. No relay is used."
+        >
+          <div className="space-y-4 px-4 py-4">
             {qrValue ? (
               <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border/60 bg-background/50 p-6">
                 <QRCodeSVG value={qrValue} size={220} includeMargin />
@@ -352,18 +340,14 @@ export function RemoteAccessPage() {
                 </p>
               ) : null}
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </SettingsSection>
 
-        <Card className="border-border/80 bg-card/85">
-          <CardHeader>
-            <CardTitle>Trusted devices</CardTitle>
-            <CardDescription>
-              Cowork Desktop keeps direct pairing trust state in `~/.cowork/mobile-pairing`, outside
-              the renderer.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <SettingsSection
+          title="Trusted devices"
+          description="Cowork Desktop keeps direct pairing trust state in `~/.cowork/mobile-pairing`, outside the renderer."
+        >
+          <div className="space-y-4 px-4 py-4">
             {trustedDevices.length > 0 ? (
               <div className="space-y-3">
                 {trustedDevices.map((device, index) => (
@@ -466,8 +450,8 @@ export function RemoteAccessPage() {
                 No trusted device yet. Scan the QR to pair the first device.
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </SettingsSection>
       </div>
     </div>
   );

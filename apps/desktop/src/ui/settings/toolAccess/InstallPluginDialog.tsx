@@ -1,99 +1,92 @@
+import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useAppStore } from "../../app/store";
-import { Button } from "../../components/ui/button";
+
+import { useAppStore } from "../../../app/store";
+import { Button } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { Textarea } from "../../components/ui/textarea";
-import type { SkillMutationTargetScope } from "../../lib/wsProtocol";
+} from "../../../components/ui/dialog";
+import { Textarea } from "../../../components/ui/textarea";
 
-type SkillPreviewState = NonNullable<
-  ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedSkillPreview"]
+type PluginPreviewScope = "workspace" | "user";
+type PluginPreviewState = NonNullable<
+  ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]
 >;
 
-function skillTargetLabel(targetScope: SkillMutationTargetScope): string {
-  return targetScope === "project" ? "workspace" : "Cowork Library";
+function validPreviewCandidates(preview: PluginPreviewState) {
+  return preview.candidates.filter((candidate) => candidate.diagnostics.length === 0);
 }
 
-function skillScopeLabel(scope: string | undefined): string {
-  if (scope === "project") return "Workspace";
-  if (scope === "user" || scope === "global") return "Library";
-  if (scope === "built-in") return "Built-in";
-  return "Shadowed";
-}
-
-function skillPreviewSummary(preview: SkillPreviewState) {
-  const validCount = preview.candidates.filter(
-    (candidate) => candidate.diagnostics.length === 0,
-  ).length;
+function previewSummary(
+  preview: NonNullable<
+    ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]
+  >,
+) {
+  const validCount = validPreviewCandidates(preview).length;
   if (validCount === 0) {
-    return "No valid skills found";
+    return "No valid plugins found";
   }
-  return validCount === 1 ? "1 skill ready" : `${validCount} skills ready`;
+  return validCount === 1 ? "1 plugin ready" : "Multiple plugins found";
 }
 
-function isSkillPreviewVisibleForInput(opts: {
+function isPluginPreviewVisibleForInput(opts: {
   normalizedSourceInput: string;
   lastPreviewSourceInput: string | null;
-  lastPreviewTargetScope: SkillMutationTargetScope | null;
-  skillPreview: SkillPreviewState | null;
+  lastPreviewTargetScope: PluginPreviewScope | null;
+  pluginPreview: PluginPreviewState | null;
 }): boolean {
   const previewMatchesCurrentInput =
     opts.lastPreviewSourceInput !== null &&
     opts.normalizedSourceInput.length > 0 &&
     opts.normalizedSourceInput === opts.lastPreviewSourceInput;
   return Boolean(
-    opts.skillPreview &&
+    opts.pluginPreview &&
       previewMatchesCurrentInput &&
       opts.lastPreviewTargetScope !== null &&
-      opts.skillPreview.targetScope === opts.lastPreviewTargetScope,
+      opts.pluginPreview.targetScope === opts.lastPreviewTargetScope,
   );
 }
 
-export function shouldRequireFreshSkillPreviewForScope(opts: {
+export function shouldRequireFreshPluginPreviewForScope(opts: {
   normalizedSourceInput: string;
   lastPreviewSourceInput: string | null;
-  lastPreviewTargetScope: SkillMutationTargetScope | null;
-  skillPreview: SkillPreviewState | null;
-  targetScope: SkillMutationTargetScope;
+  lastPreviewTargetScope: PluginPreviewScope | null;
+  pluginPreview: PluginPreviewState | null;
+  targetScope: PluginPreviewScope;
 }): boolean {
   return (
-    isSkillPreviewVisibleForInput(opts) &&
+    isPluginPreviewVisibleForInput(opts) &&
     opts.lastPreviewTargetScope !== null &&
     opts.lastPreviewTargetScope !== opts.targetScope
   );
 }
 
-export function shouldDisableSkillInstallForScope(opts: {
+export function shouldDisablePluginInstallForScope(opts: {
   normalizedSourceInput: string;
   lastPreviewSourceInput: string | null;
-  lastPreviewTargetScope: SkillMutationTargetScope | null;
-  skillPreview: SkillPreviewState | null;
-  targetScope: SkillMutationTargetScope;
-  skillInstallInFlight: boolean;
-  mutationBlocked: boolean;
+  lastPreviewTargetScope: PluginPreviewScope | null;
+  pluginPreview: PluginPreviewState | null;
+  targetScope: PluginPreviewScope;
+  pluginInstallInFlight: boolean;
 }): boolean {
-  if (opts.mutationBlocked || opts.skillInstallInFlight) {
+  if (opts.pluginInstallInFlight) {
     return true;
   }
-  if (shouldRequireFreshSkillPreviewForScope(opts)) {
+  if (shouldRequireFreshPluginPreviewForScope(opts)) {
     return true;
   }
-  const previewVisible = isSkillPreviewVisibleForInput(opts);
+  const previewVisible = isPluginPreviewVisibleForInput(opts);
   if (!previewVisible || opts.lastPreviewTargetScope !== opts.targetScope) {
     return false;
   }
-  return (
-    (opts.skillPreview?.candidates.some((candidate) => candidate.diagnostics.length === 0) ??
-      false) === false
-  );
+  return opts.pluginPreview ? validPreviewCandidates(opts.pluginPreview).length !== 1 : true;
 }
 
-export function InstallSkillDialog({
+export function InstallPluginDialog({
   workspaceId,
   initialOpen = false,
   initialSourceInput = "",
@@ -107,61 +100,60 @@ export function InstallSkillDialog({
   const [open, setOpen] = useState(initialOpen);
   const [sourceInput, setSourceInput] = useState(initialSourceInput);
   const [lastPreviewSourceInput, setLastPreviewSourceInput] = useState<string | null>(null);
-  const [lastPreviewTargetScope, setLastPreviewTargetScope] =
-    useState<SkillMutationTargetScope | null>(null);
+  const [lastPreviewTargetScope, setLastPreviewTargetScope] = useState<"workspace" | "user" | null>(
+    null,
+  );
   const [lastMutationSourceInput, setLastMutationSourceInput] = useState<string | null>(
     initialMutationSourceInput,
   );
-  const [lastMutationTargetScope, setLastMutationTargetScope] =
-    useState<SkillMutationTargetScope | null>(null);
+  const [lastMutationTargetScope, setLastMutationTargetScope] = useState<
+    "workspace" | "user" | null
+  >(null);
 
-  const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
-  const previewSkillInstall = useAppStore((s) => s.previewSkillInstall);
-  const installSkills = useAppStore((s) => s.installSkills);
+  const runtime = useAppStore((state) => state.workspaceRuntimeById[workspaceId]);
+  const previewPluginInstall = useAppStore((state) => state.previewPluginInstall);
+  const installPlugins = useAppStore((state) => state.installPlugins);
 
-  const rt = wsRtById[workspaceId];
-  const mutationBlocked = rt?.skillsMutationBlocked ?? false;
-  const mutationBlockedReason = rt?.skillsMutationBlockedReason ?? null;
-  const skillInstallInFlight = Object.keys(rt?.skillMutationPendingKeys ?? {}).some((k) =>
-    k.startsWith("install:"),
+  const pluginPreview = runtime?.selectedPluginPreview ?? null;
+  const pluginInstallInFlight = Object.keys(runtime?.pluginMutationPendingKeys ?? {}).some((key) =>
+    key.startsWith("plugin:install:"),
   );
-  const skillPreview = rt?.selectedSkillPreview ?? null;
-  const skillPreviewPending = rt?.skillMutationPendingKeys.preview === true;
+  const pluginPreviewPending = runtime?.pluginMutationPendingKeys["plugin:preview"] === true;
   const normalizedSourceInput = sourceInput.trim();
-  const showPreview = isSkillPreviewVisibleForInput({
+  const showPreview = isPluginPreviewVisibleForInput({
     normalizedSourceInput,
     lastPreviewSourceInput,
     lastPreviewTargetScope,
-    skillPreview,
+    pluginPreview,
   });
   const showPreviewPending =
-    skillPreviewPending &&
+    pluginPreviewPending &&
     lastPreviewSourceInput !== null &&
     normalizedSourceInput.length > 0 &&
     normalizedSourceInput === lastPreviewSourceInput;
   const showMutationError =
-    Boolean(rt?.skillMutationError) &&
+    Boolean(runtime?.pluginMutationError) &&
     lastMutationSourceInput !== null &&
     normalizedSourceInput.length > 0 &&
     normalizedSourceInput === lastMutationSourceInput;
-  const dialogError = showMutationError ? (rt?.skillMutationError ?? null) : null;
-  const disableInstallForScope = (targetScope: SkillMutationTargetScope) =>
-    shouldDisableSkillInstallForScope({
+  const dialogError = showMutationError ? (runtime?.pluginMutationError ?? null) : null;
+  const disableInstallForScope = (targetScope: PluginPreviewScope) =>
+    shouldDisablePluginInstallForScope({
       normalizedSourceInput,
       lastPreviewSourceInput,
       lastPreviewTargetScope,
-      skillPreview,
+      pluginPreview,
       targetScope,
-      skillInstallInFlight,
-      mutationBlocked,
+      pluginInstallInFlight,
     });
 
-  const validPreviewCandidates = useMemo(
+  const validPreviewCandidateRows = useMemo(
     () =>
       showPreview
-        ? (skillPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ?? [])
+        ? (pluginPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ??
+          [])
         : [],
-    [skillPreview, showPreview],
+    [pluginPreview, showPreview],
   );
 
   const resetDialogState = () => {
@@ -187,52 +179,53 @@ export function InstallSkillDialog({
     }
   };
 
-  const handlePreview = async (targetScope: SkillMutationTargetScope) => {
+  const handlePreview = async (targetScope: "workspace" | "user") => {
     if (!normalizedSourceInput) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
     setLastPreviewSourceInput(normalizedSourceInput);
     setLastPreviewTargetScope(targetScope);
-    await previewSkillInstall(normalizedSourceInput, targetScope);
+    await previewPluginInstall(normalizedSourceInput, targetScope);
   };
 
-  const handleInstall = async (targetScope: SkillMutationTargetScope) => {
+  const handleInstall = async (targetScope: "workspace" | "user") => {
     if (!normalizedSourceInput) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
     try {
-      await installSkills(normalizedSourceInput, targetScope);
+      await installPlugins(normalizedSourceInput, targetScope);
       handleOpenChange(false);
     } catch {
-      // Server failures surface as `skillMutationError` above; connection/superseded errors reject here.
+      // Control-session and mutation errors are surfaced via runtime state.
     }
   };
 
   return (
     <>
       <Button
+        variant="outline"
         size="sm"
-        className="rounded-full px-4"
         type="button"
         onPointerDown={openDialog}
         onClick={openDialog}
       >
-        + New skill
+        <PlusIcon data-icon="inline-start" />
+        New plugin
       </Button>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>
-            <DialogTitle>Install skill from source</DialogTitle>
+            <DialogTitle>Install plugin from source</DialogTitle>
             <DialogDescription>
-              Paste a `skills.sh` URL, GitHub URL, `owner/repo`, or local path.
+              Paste a GitHub URL, `owner/repo`, or local path containing a Codex plugin bundle.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <Textarea
               className="min-h-24 w-full"
-              placeholder="https://skills.sh/example/skills/imagegen"
+              placeholder="https://github.com/example/codex-plugin-repo"
               value={sourceInput}
-              aria-label="Skill source"
+              aria-label="Plugin source"
               onChange={(event) => {
                 setSourceInput(event.target.value);
                 setLastPreviewSourceInput(null);
@@ -246,7 +239,7 @@ export function InstallSkillDialog({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void handlePreview("project")}
+                  onClick={() => void handlePreview("workspace")}
                   type="button"
                 >
                   Preview in Workspace
@@ -254,7 +247,7 @@ export function InstallSkillDialog({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void handlePreview("global")}
+                  onClick={() => void handlePreview("user")}
                   type="button"
                 >
                   Preview in Library
@@ -263,8 +256,8 @@ export function InstallSkillDialog({
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
-                  disabled={disableInstallForScope("project")}
-                  onClick={() => void handleInstall("project")}
+                  disabled={disableInstallForScope("workspace")}
+                  onClick={() => void handleInstall("workspace")}
                   type="button"
                 >
                   Install to Workspace
@@ -272,52 +265,53 @@ export function InstallSkillDialog({
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={disableInstallForScope("global")}
-                  onClick={() => void handleInstall("global")}
+                  disabled={disableInstallForScope("user")}
+                  onClick={() => void handleInstall("user")}
                   type="button"
                 >
-                  Install to Cowork Library
+                  Install to Library
                 </Button>
               </div>
             </div>
 
             {showPreviewPending ? (
               <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                Previewing skill source...
+                Previewing plugin bundle…
               </div>
             ) : null}
 
             {showPreview ? (
               <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
                 <div className="font-medium text-foreground">
-                  {skillPreview ? skillPreviewSummary(skillPreview) : "No skill preview"}
+                  {pluginPreview ? previewSummary(pluginPreview) : "No plugin preview"}
                 </div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
                   Previewed for{" "}
-                  {skillPreview?.targetScope ? skillTargetLabel(skillPreview.targetScope) : "skill"}{" "}
-                  install.
+                  {pluginPreview?.targetScope === "workspace" ? "workspace" : "library"} install.
                 </div>
                 <div className="mt-2 space-y-1.5">
-                  {skillPreview?.candidates.map((candidate) => (
+                  {pluginPreview?.candidates.map((candidate) => (
                     <div
-                      key={`${candidate.name}:${candidate.relativeRootPath}`}
+                      key={`${candidate.pluginId}:${candidate.relativeRootPath}`}
                       className="rounded border border-border/60 bg-background/40 px-2.5 py-2"
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate font-medium text-foreground">
-                            {candidate.name}
+                            {candidate.displayName}
                           </div>
                           <div className="truncate text-[11px] text-muted-foreground">
-                            {candidate.relativeRootPath}
+                            {candidate.pluginId}
                           </div>
                         </div>
                         <div className="shrink-0 text-[11px] text-muted-foreground">
-                          {candidate.conflictsWithScope
-                            ? skillScopeLabel(candidate.conflictsWithScope)
-                            : candidate.wouldBeEffective
-                              ? "Effective"
-                              : "Shadowed"}
+                          {candidate.conflictsWithScope === "workspace"
+                            ? "Workspace"
+                            : candidate.conflictsWithScope === "user"
+                              ? "Library"
+                              : candidate.wouldBePrimary
+                                ? "Primary"
+                                : "Shadowed"}
                         </div>
                       </div>
                       <div className="mt-1 text-[11px] text-muted-foreground">
@@ -326,7 +320,7 @@ export function InstallSkillDialog({
                       {candidate.diagnostics.length > 0 ? (
                         <div className="mt-2 space-y-1 text-[11px] text-destructive">
                           {candidate.diagnostics.map((diagnostic) => (
-                            <div key={`${candidate.name}:${diagnostic.code}`}>
+                            <div key={`${candidate.pluginId}:${diagnostic.code}`}>
                               {diagnostic.message}
                             </div>
                           ))}
@@ -335,9 +329,9 @@ export function InstallSkillDialog({
                     </div>
                   ))}
                 </div>
-                {(skillPreview?.warnings?.length ?? 0) > 0 ? (
+                {(pluginPreview?.warnings?.length ?? 0) > 0 ? (
                   <div className="mt-2 space-y-1 text-[11px] text-destructive">
-                    {skillPreview?.warnings.map((warning) => (
+                    {pluginPreview?.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>
                     ))}
                   </div>
@@ -352,24 +346,19 @@ export function InstallSkillDialog({
             ) : null}
             {dialogError && lastMutationTargetScope ? (
               <div className="text-[11px] text-muted-foreground">
-                Last attempted target: {skillTargetLabel(lastMutationTargetScope)}.
-              </div>
-            ) : null}
-            {mutationBlockedReason ? (
-              <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
-                {mutationBlockedReason}
+                Last attempted target:{" "}
+                {lastMutationTargetScope === "workspace" ? "workspace" : "library"}.
               </div>
             ) : null}
             {showPreview ? (
               <div className="text-[11px] text-muted-foreground">
-                To install to{" "}
-                {lastPreviewTargetScope === "project" ? "Cowork Library" : "workspace"}, run a new
-                preview for that scope first.
+                To install to {lastPreviewTargetScope === "workspace" ? "library" : "workspace"},
+                run a new preview for that scope first.
               </div>
             ) : null}
-            {showPreview && validPreviewCandidates.length === 0 ? (
+            {showPreview && validPreviewCandidateRows.length === 0 ? (
               <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
-                Fix the preview issues before installing this skill source.
+                Fix the preview issues before installing this plugin source.
               </div>
             ) : null}
           </div>

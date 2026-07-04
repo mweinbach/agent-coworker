@@ -720,21 +720,9 @@ export function createControlSocketHelpers(
     }
     const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
     const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
-    set((s) => ({
+    set(() => ({
       providerStatusRefreshing: true,
       providerLastAuthChallenge: null,
-      workspaceRuntimeById: {
-        ...s.workspaceRuntimeById,
-        [workspaceId]: {
-          ...s.workspaceRuntimeById[workspaceId],
-          ...(s.view === "skills" && s.workspaceRuntimeById[workspaceId]?.skillsCatalog === null
-            ? {
-                skillCatalogLoading: true,
-                skillCatalogError: null,
-              }
-            : {}),
-        },
-      },
     }));
 
     const agentProfilesCatalogGeneration = getAgentProfilesCatalogGeneration(workspaceId);

@@ -220,7 +220,7 @@ describe("desktop chat message scroller", () => {
         "false",
       );
       expect(container.querySelector('[data-slot="message-scroller-button"]')?.style.bottom).toBe(
-        "214px",
+        "209px",
       );
 
       await act(async () => root.unmount());

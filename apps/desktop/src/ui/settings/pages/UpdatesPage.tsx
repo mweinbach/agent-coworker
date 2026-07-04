@@ -1,17 +1,15 @@
 import { DownloadIcon, LoaderCircleIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useAppStore } from "../../../app/store";
-import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
 import type { UpdaterState } from "../../../lib/desktopApi";
 import { DesktopMarkdown } from "../../markdown";
+import {
+  SettingsPage,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatusPill,
+} from "../SettingsPrimitives";
 
 function formatTimestamp(value: string | null): string {
   if (!value) {
@@ -47,14 +45,17 @@ function statusLabel(phase: string): string {
   }
 }
 
-function statusVariant(phase: string): "secondary" | "outline" | "destructive" {
+function statusTone(phase: string): "neutral" | "success" | "warning" | "danger" {
   if (phase === "error") {
-    return "destructive";
+    return "danger";
   }
   if (phase === "downloaded") {
-    return "secondary";
+    return "warning";
   }
-  return "outline";
+  if (phase === "up-to-date") {
+    return "success";
+  }
+  return "neutral";
 }
 
 type UpdatesPageProps = {
@@ -84,77 +85,92 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
   }, [updateState.error, updateState.message]);
 
   return (
-    <div className="space-y-5" data-update-phase={updateState.phase}>
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader className="flex-row items-center justify-between space-y-0">
-          <div>
-            <CardTitle>Current build</CardTitle>
-            <CardDescription>
-              {updateState.packaged
-                ? "Updater checks only work when packaged update metadata exists for this platform."
-                : "This is a development build, so in-app update checks are disabled."}
-            </CardDescription>
-          </div>
-          <Badge variant={statusVariant(updateState.phase)}>{statusLabel(updateState.phase)}</Badge>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {!updateState.packaged ? (
-            <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
-              Updates only work in packaged builds. Check the{" "}
-              <a
-                href="https://github.com/agent-coworker/agent-coworker/releases"
-                target="_blank"
-                rel="noreferrer"
-                className="underline hover:text-foreground transition-colors"
-              >
-                releases page
-              </a>{" "}
-              for new versions.
-            </div>
-          ) : (
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Installed version
-                </div>
-                <div className="text-sm font-medium text-foreground">
+    <SettingsPage data-update-phase={updateState.phase}>
+      <SettingsSection
+        title="Current build"
+        description={
+          updateState.packaged
+            ? "Updater checks only work when packaged update metadata exists for this platform."
+            : "This is a development build, so in-app update checks are disabled."
+        }
+        action={
+          <>
+            <SettingsStatusPill tone={statusTone(updateState.phase)}>
+              {statusLabel(updateState.phase)}
+            </SettingsStatusPill>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void checkForUpdates()}
+              disabled={!canCheck}
+            >
+              {busy ? (
+                <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <RefreshCwIcon data-icon="inline-start" />
+              )}
+              Check now
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void quitAndInstallUpdate()}
+              disabled={!canInstall}
+            >
+              <RotateCcwIcon data-icon="inline-start" />
+              Restart to update
+            </Button>
+          </>
+        }
+      >
+        {!updateState.packaged ? (
+          <SettingsRow
+            title="Packaged builds only"
+            description={
+              <>
+                Updates only work in packaged builds. Check the{" "}
+                <a
+                  href="https://github.com/agent-coworker/agent-coworker/releases"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline transition-colors hover:text-foreground"
+                >
+                  releases page
+                </a>{" "}
+                for new versions.
+              </>
+            }
+          />
+        ) : (
+          <>
+            <SettingsRow
+              title="Installed version"
+              control={
+                <span className="text-sm font-medium text-foreground">
                   {updateState.currentVersion}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Latest seen version
-                </div>
-                <div className="text-sm font-medium text-foreground">
+                </span>
+              }
+            />
+            <SettingsRow
+              title="Latest seen version"
+              control={
+                <span className="text-sm font-medium text-foreground">
                   {updateState.release?.version ?? "None yet"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Last check started
-                </div>
-                <div className="text-sm text-foreground">
-                  {formatTimestamp(updateState.lastCheckStartedAt)}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Last check finished
-                </div>
-                <div className="text-sm text-foreground">
-                  {formatTimestamp(updateState.lastCheckedAt)}
-                </div>
-              </div>
-            </div>
-          )}
+                </span>
+              }
+            />
+            <SettingsRow
+              title="Last checked"
+              description={`Started ${formatTimestamp(updateState.lastCheckStartedAt)} · finished ${formatTimestamp(updateState.lastCheckedAt)}`}
+            />
+          </>
+        )}
 
-          <div className="rounded-lg border border-border/70 bg-background/70 p-4">
-            <div className="text-sm font-medium text-foreground">Status</div>
-            <div className="mt-1 text-sm text-muted-foreground">{primaryMessage}</div>
-          </div>
-
+        <SettingsRow title="Status" description={primaryMessage}>
           {updateState.phase === "downloading" && updateState.progress ? (
-            <div className="space-y-2">
+            <div className="max-w-md space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="font-medium text-foreground">Download progress</span>
                 <span className="text-muted-foreground">{progressPercent}%</span>
@@ -167,95 +183,58 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
               </div>
             </div>
           ) : null}
-
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={() => void checkForUpdates()} disabled={!canCheck}>
-              {busy ? (
-                <LoaderCircleIcon className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCwIcon className="h-4 w-4" />
-              )}
-              Check now
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void quitAndInstallUpdate()}
-              disabled={!canInstall}
-            >
-              <RotateCcwIcon className="h-4 w-4" />
-              Restart to update
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+        </SettingsRow>
+      </SettingsSection>
 
       {updateState.release ? (
-        <Card className="border-border/80 bg-card/85">
-          <CardHeader>
-            <CardTitle>Release details</CardTitle>
-            <CardDescription>Metadata reported by the packaged update feed.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">Version</div>
-                <div className="text-sm font-medium text-foreground">
-                  {updateState.release.version}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Release date
-                </div>
-                <div className="text-sm text-foreground">
-                  {formatTimestamp(updateState.release.releaseDate ?? null)}
-                </div>
-              </div>
-            </div>
-
-            {updateState.release.releaseName ? (
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Release name
-                </div>
-                <div className="text-sm text-foreground">{updateState.release.releaseName}</div>
-              </div>
-            ) : null}
-
-            {updateState.release.releaseNotes ? (
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Release notes
-                </div>
-                <DesktopMarkdown className="mt-2 max-w-none text-sm leading-6 text-muted-foreground [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_p]:text-muted-foreground [&_ul]:text-muted-foreground">
-                  {updateState.release.releaseNotes}
-                </DesktopMarkdown>
-              </div>
-            ) : null}
-
-            {updateState.release.releasePageUrl ? (
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    if (!updateState.release?.releasePageUrl) return;
-                    window.open(
-                      updateState.release.releasePageUrl,
-                      "_blank",
-                      "noopener,noreferrer",
-                    );
-                  }}
-                >
-                  <DownloadIcon className="h-4 w-4" />
-                  Open release notes
-                </Button>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+        <SettingsSection
+          title="Release details"
+          description="Metadata reported by the packaged update feed."
+          action={
+            updateState.release.releasePageUrl ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (!updateState.release?.releasePageUrl) return;
+                  window.open(updateState.release.releasePageUrl, "_blank", "noopener,noreferrer");
+                }}
+              >
+                <DownloadIcon data-icon="inline-start" />
+                Open release notes
+              </Button>
+            ) : null
+          }
+        >
+          <SettingsRow
+            title="Version"
+            description={
+              updateState.release.releaseName ? updateState.release.releaseName : undefined
+            }
+            control={
+              <span className="text-sm font-medium text-foreground">
+                {updateState.release.version}
+              </span>
+            }
+          />
+          <SettingsRow
+            title="Release date"
+            control={
+              <span className="text-sm text-foreground">
+                {formatTimestamp(updateState.release.releaseDate ?? null)}
+              </span>
+            }
+          />
+          {updateState.release.releaseNotes ? (
+            <SettingsRow title="Release notes">
+              <DesktopMarkdown className="max-w-none text-sm leading-6 text-muted-foreground [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_p]:text-muted-foreground [&_ul]:text-muted-foreground">
+                {updateState.release.releaseNotes}
+              </DesktopMarkdown>
+            </SettingsRow>
+          ) : null}
+        </SettingsSection>
       ) : null}
-    </div>
+    </SettingsPage>
   );
 }

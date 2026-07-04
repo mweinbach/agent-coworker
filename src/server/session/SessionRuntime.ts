@@ -1,4 +1,4 @@
-import type { EditableMCPServerConfigSource } from "../../mcp/configRegistry";
+import type { EditableMCPServerConfigSource, MCPServerSource } from "../../mcp/configRegistry";
 import type { MemoryScope } from "../../memoryStore";
 import type { AgentProfileCopyInput, AgentProfileUpsertInput } from "../../shared/agentProfiles";
 import type {
@@ -328,20 +328,20 @@ export class SessionMcpService {
     await this.session.setMcpServerEnabled(opts);
   }
 
-  async validate(name: string): Promise<void> {
-    await this.session.validateMcpServer(name);
+  async validate(name: string, source?: MCPServerSource): Promise<void> {
+    await this.session.validateMcpServer(name, source);
   }
 
-  async authorizeAuth(name: string): Promise<void> {
-    await this.session.authorizeMcpServerAuth(name);
+  async authorizeAuth(name: string, source?: MCPServerSource): Promise<void> {
+    await this.session.authorizeMcpServerAuth(name, source);
   }
 
-  async callbackAuth(name: string, code?: string): Promise<void> {
-    await this.session.callbackMcpServerAuth(name, code);
+  async callbackAuth(name: string, code?: string, source?: MCPServerSource): Promise<void> {
+    await this.session.callbackMcpServerAuth(name, code, source);
   }
 
-  async setApiKey(name: string, apiKey: string): Promise<void> {
-    await this.session.setMcpServerApiKey(name, apiKey);
+  async setApiKey(name: string, apiKey: string, source?: MCPServerSource): Promise<void> {
+    await this.session.setMcpServerApiKey(name, apiKey, source);
   }
 }
 
@@ -481,6 +481,10 @@ export class SessionAgentProfileService {
 
   async copy(input: AgentProfileCopyInput): Promise<void> {
     await this.session.copyAgentProfile(input);
+  }
+
+  async setWorkspaceAvailability(id: string, disabled: boolean): Promise<void> {
+    await this.session.setAgentProfileWorkspaceAvailability(id, disabled);
   }
 }
 

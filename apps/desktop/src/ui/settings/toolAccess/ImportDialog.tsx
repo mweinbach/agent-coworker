@@ -8,20 +8,20 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import { useAppStore } from "../../app/store";
-import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { Spinner } from "../../components/ui/spinner";
-import { pickDirectory } from "../../lib/desktopCommands";
-import { cn } from "../../lib/utils";
-import type { ImportableItem, ImportableKind, ImportSource } from "../../lib/wsProtocol";
+} from "../../../components/ui/dialog";
+import { Spinner } from "../../../components/ui/spinner";
+import { pickDirectory } from "../../../lib/desktopCommands";
+import { cn } from "../../../lib/utils";
+import type { ImportableItem, ImportableKind, ImportSource } from "../../../lib/wsProtocol";
 
 type ImportTab = ImportSource | "folder";
 
@@ -301,7 +301,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
 
   const homeSource: ImportSource | null = tab === "folder" ? null : tab;
   const state = homeSource
-    ? (runtime?.importItemsByKey[importKey(homeSource, kind)] ?? null)
+    ? (runtime?.importItemsByKey?.[importKey(homeSource, kind)] ?? null)
     : null;
   const pendingKeys = runtime?.importPendingKeys ?? {};
   const noun = kind === "plugin" ? "plugin" : "skill";
@@ -332,14 +332,8 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
 
   return (
     <>
-      <Button
-        variant="outline"
-        size="sm"
-        className="rounded-full px-4"
-        type="button"
-        onClick={openDialog}
-      >
-        <DownloadIcon className="mr-1.5 h-4 w-4" />
+      <Button variant="outline" size="sm" type="button" onClick={openDialog}>
+        <DownloadIcon data-icon="inline-start" />
         Import
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>

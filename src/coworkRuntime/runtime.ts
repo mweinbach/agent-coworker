@@ -51,16 +51,21 @@ export async function buildRuntimeEnv(
   const resolvedRuntimeDir = path.resolve(runtimeDir);
   const manifest = await readRuntimeManifest(resolvedRuntimeDir);
   const directEntrypoints = [
+    "bin",
     "node",
     "python",
+    "nodeModules",
     "nodeResolver",
+    "artifactToolPackage",
     "git",
     "pnpm",
+    "popplerBin",
     "pdfinfo",
     "pdftoppm",
     "heifConvert",
     "jxrDecApp",
     "soffice",
+    "libreOffice",
     "libreOfficeBinary",
   ].filter((name) => manifest.paths[name as keyof typeof manifest.paths] !== undefined);
   await verifyRuntimeIntegrityForUse({

@@ -2,7 +2,6 @@ import type { CoworkRuntimeBootstrapProgress } from "../../../../../src/coworkRu
 import { Button } from "../../components/ui/button";
 import { ChatView } from "../ChatView";
 import { ResearchView } from "../ResearchView";
-import { SkillsView } from "../SkillsView";
 import { TaskView } from "../tasks/TaskView";
 import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
 
@@ -11,7 +10,7 @@ interface PrimaryContentProps {
   ready: boolean;
   startupError: string | null;
   workspaceStartupProgress: CoworkRuntimeBootstrapProgress | null;
-  view: "chat" | "task" | "skills" | "research";
+  view: "chat" | "task" | "research";
 }
 
 type PrimaryContentVariant =
@@ -20,7 +19,6 @@ type PrimaryContentVariant =
   | "error"
   | "chat"
   | "task"
-  | "skills"
   | "research";
 
 function resolveVariant({
@@ -37,9 +35,6 @@ function resolveVariant({
   }
   if (startupError) {
     return "error";
-  }
-  if (view === "skills") {
-    return "skills";
   }
   if (view === "research") {
     return "research";
@@ -91,12 +86,6 @@ export function PrimaryContent({
       );
     case "error":
       return <ErrorContent startupError={startupError ?? "Startup error"} init={init} />;
-    case "skills":
-      return (
-        <div className="h-full min-h-0 bg-panel">
-          <SkillsView />
-        </div>
-      );
     case "research":
       return (
         <div className="h-full min-h-0 bg-panel">

@@ -1,4 +1,3 @@
-import { resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import {
   type AppStoreActions,
   ensureControlSocket,
@@ -11,8 +10,8 @@ import {
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  syncDesktopStateCache,
 } from "../store.helpers";
+import { isOneOffChatWorkspace } from "../types";
 import {
   clearFailedMutationSend,
   managementWorkspaceIdFor,
@@ -46,6 +45,8 @@ export function createSkillActions(
   const workspacePath = (workspaceId: string): string | undefined =>
     workspacePathFor(get, workspaceId);
   const managementWorkspaceId = (): string | null => managementWorkspaceIdFor(get);
+  const hasProjectWorkspace = (): boolean =>
+    get().workspaces.some((workspace) => !isOneOffChatWorkspace(workspace));
   const resolveInstallationScopeForMutation = (
     workspaceId: string,
     installationId: string,
@@ -61,8 +62,8 @@ export function createSkillActions(
 
   return {
     openSkills: async () => {
-      let workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
+      let workspaceId = managementWorkspaceId();
+      if (!workspaceId && !hasProjectWorkspace()) {
         if (get().desktopFeatureFlags.workspaceLifecycle === false) {
           set((s) => ({
             notifications: pushNotification(s.notifications, {
@@ -77,7 +78,7 @@ export function createSkillActions(
           return;
         }
         await get().addWorkspace();
-        workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+        workspaceId = managementWorkspaceId();
         if (!workspaceId) {
           set((s) => ({
             notifications: pushNotification(s.notifications, {
@@ -92,18 +93,7 @@ export function createSkillActions(
         }
       }
 
-      const targetWorkspaceId =
-        resolvePluginManagementWorkspaceId(
-          get().workspaces ?? [],
-          get().pluginManagementWorkspaceId,
-        ) ?? workspaceId;
-
-      set({ view: "skills", selectedWorkspaceId: workspaceId });
-      syncDesktopStateCache(get);
-      ensureWorkspaceRuntime(get, set, targetWorkspaceId);
-      await ensureServerRunning(get, set, targetWorkspaceId);
-      ensureControlSocket(get, set, targetWorkspaceId);
-      await Promise.all([get().refreshPluginsCatalog(), get().refreshSkillsCatalog()]);
+      get().openSettings("toolAccess");
     },
 
     refreshSkillsCatalog: async (targetWorkspaceId?: string) => {

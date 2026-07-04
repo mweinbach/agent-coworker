@@ -16,6 +16,7 @@ import { isRecord } from "../utils/typeGuards";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalStringArraySchema = z.array(nonEmptyStringSchema).optional();
+const MAX_SKILL_ICON_BYTES = 256 * 1024;
 
 const pluginInterfaceSchema = z
   .object({
@@ -239,6 +240,52 @@ async function parseSkillFrontMatter(
   };
 }
 
+function mimeTypeForIconPath(targetPath: string): string {
+  const ext = path.extname(targetPath).toLowerCase();
+  switch (ext) {
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+async function readSkillIconAsDataUri(
+  skillRoot: string,
+  relativePath: string,
+): Promise<string | null> {
+  const resolvedPath = path.resolve(skillRoot, relativePath);
+  if (!isPathInside(skillRoot, resolvedPath)) {
+    return null;
+  }
+  try {
+    // Resolve through symlinks before reading so icon paths cannot escape the skill root.
+    const [canonicalSkillRoot, canonicalTarget] = await Promise.all([
+      fs.realpath(skillRoot),
+      fs.realpath(resolvedPath),
+    ]);
+    if (!isPathInside(canonicalSkillRoot, canonicalTarget)) {
+      return null;
+    }
+    const stat = await fs.stat(canonicalTarget);
+    // Catalog payloads inline icons, so cap files before base64 encoding.
+    if (!stat.isFile() || stat.size > MAX_SKILL_ICON_BYTES) {
+      return null;
+    }
+    const buf = await fs.readFile(canonicalTarget);
+    return `data:${mimeTypeForIconPath(canonicalTarget)};base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
 async function readSkillInterface(skillRoot: string): Promise<SkillInterfaceMeta | undefined> {
   const agentsDir = path.join(skillRoot, "agents");
   let dirents: Array<{ name: string; isFile: boolean }> = [];
@@ -255,15 +302,35 @@ async function readSkillInterface(skillRoot: string): Promise<SkillInterfaceMeta
   if (agentFiles.length === 0) return undefined;
   const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0];
   if (!primary) return undefined;
+  const agents = agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, ""));
+  let raw: string;
   try {
-    const raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
-    return {
-      ...(parseAgentInterfaceYaml(raw) ?? {}),
-      agents: agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, "")),
-    };
+    raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
   } catch {
-    return { agents: agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, "")) };
+    return { agents };
   }
+
+  const out: SkillInterfaceMeta = { ...(parseAgentInterfaceYaml(raw) ?? {}), agents };
+
+  const iconSmallPathMatch = raw.match(/^\s+icon_small:\s*(.+)\s*$/m);
+  const iconLargePathMatch = raw.match(/^\s+icon_large:\s*(.+)\s*$/m);
+  const iconSmallRel = iconSmallPathMatch ? stripQuotes(iconSmallPathMatch[1] ?? "") : "";
+  const iconLargeRel = iconLargePathMatch ? stripQuotes(iconLargePathMatch[1] ?? "") : "";
+
+  if (iconSmallRel) {
+    const dataUri = await readSkillIconAsDataUri(skillRoot, iconSmallRel);
+    if (dataUri) {
+      out.iconSmall = dataUri;
+    }
+  }
+  if (iconLargeRel) {
+    const dataUri = await readSkillIconAsDataUri(skillRoot, iconLargeRel);
+    if (dataUri) {
+      out.iconLarge = dataUri;
+    }
+  }
+
+  return out;
 }
 
 function normalizePluginInterface(

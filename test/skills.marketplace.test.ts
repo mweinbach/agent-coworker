@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { parsePluginMarketplace, parseRemotePluginMarketplace } from "../src/plugins/marketplace";
+import {
+  buildRemoteMarketplaceCatalogEntry,
+  buildRemoteMarketplaceSkillCatalogEntry,
+} from "../src/plugins/remoteMarketplace";
 import { writeSkillInstallManifest } from "../src/skills/manifest";
 import { getSkillCatalog } from "../src/skills/operations";
 import type { AgentConfig } from "../src/types";
@@ -152,6 +156,65 @@ describe("skill marketplace", () => {
         "https://github.com/mweinbach/cowork-skills-plugins/tree/main/skills/create-skill",
       category: "Authoring",
     });
+  });
+
+  test("marketplace entries carry interface icon metadata into catalog entries", () => {
+    const doc = parseRemotePluginMarketplace(
+      JSON.stringify({
+        name: "cowork-test",
+        plugins: [
+          {
+            name: "iconized-plugin",
+            source: { source: "local", path: "./plugins/iconized-plugin" },
+            policy: { installation: "AVAILABLE", authentication: "NONE" },
+            category: "Productivity",
+            interface: {
+              displayName: "Iconized Plugin",
+              logo: "https://example.com/plugin.png",
+              brandColor: "#ff6600",
+            },
+          },
+        ],
+        skills: [
+          {
+            name: "iconized-skill",
+            source: { source: "local", path: "./skills/iconized-skill" },
+            policy: { installation: "AVAILABLE", authentication: "NONE" },
+            category: "Authoring",
+            interface: {
+              displayName: "Iconized Skill",
+              icon: "https://example.com/skill.png",
+            },
+          },
+        ],
+      }),
+      {
+        marketplacePath:
+          "https://github.com/mweinbach/cowork-skills-plugins/blob/main/.agents/plugins/marketplace.json",
+        repo: "mweinbach/cowork-skills-plugins",
+        ref: "main",
+      },
+    );
+
+    expect(doc.plugins[0]).toMatchObject({
+      icon: "https://example.com/plugin.png",
+      brandColor: "#ff6600",
+    });
+    expect(doc.skills[0]).toMatchObject({ icon: "https://example.com/skill.png" });
+
+    const pluginEntry = buildRemoteMarketplaceCatalogEntry({
+      marketplace: doc,
+      plugin: doc.plugins[0] as NonNullable<(typeof doc.plugins)[number]>,
+    });
+    expect(pluginEntry?.interface?.logo).toBe("https://example.com/plugin.png");
+    expect(pluginEntry?.interface?.brandColor).toBe("#ff6600");
+
+    const skillEntry = buildRemoteMarketplaceSkillCatalogEntry({
+      marketplace: doc,
+      skill: doc.skills[0] as NonNullable<(typeof doc.skills)[number]>,
+    });
+    expect(skillEntry?.interface?.iconSmall).toBe("https://example.com/skill.png");
+    expect(skillEntry?.interface?.iconLarge).toBe("https://example.com/skill.png");
   });
 
   test("parsePluginMarketplace resolves local skill paths and tolerates a missing skills key", async () => {

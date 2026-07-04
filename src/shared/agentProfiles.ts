@@ -77,6 +77,8 @@ export const agentProfileCatalogEntrySchema = z
     locked: z.boolean().optional(),
     effective: z.boolean(),
     shadowed: z.boolean(),
+    /** True when this global profile is disabled for the current workspace via a workspace override. */
+    workspaceDisabled: z.boolean().optional(),
     profile: agentProfileDefinitionSchema,
   })
   .strict();
@@ -119,6 +121,26 @@ export type AgentProfileUpsertInput = AgentProfileDefinition & {
 export const agentProfileUpsertInputSchema = agentProfileDefinitionSchema.extend({
   scope: agentProfileScopeSchema,
 });
+
+export const agentProfileWorkspaceOverridesSchema = z
+  .object({
+    version: z.literal(1).default(1),
+    disabledGlobalProfileIds: z.array(agentProfileIdSchema).default([]),
+  })
+  .strict();
+
+export type AgentProfileWorkspaceOverrides = z.infer<typeof agentProfileWorkspaceOverridesSchema>;
+
+export const agentProfileWorkspaceAvailabilityInputSchema = z
+  .object({
+    id: agentProfileIdSchema,
+    disabled: z.boolean(),
+  })
+  .strict();
+
+export type AgentProfileWorkspaceAvailabilityInput = z.infer<
+  typeof agentProfileWorkspaceAvailabilityInputSchema
+>;
 
 export const agentProfileCopyInputSchema = z
   .object({

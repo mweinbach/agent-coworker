@@ -22,7 +22,11 @@ export function createAgentProfileActions(
   get: StoreGet,
 ): Pick<
   AppStoreActions,
-  "refreshAgentProfilesCatalog" | "upsertAgentProfile" | "deleteAgentProfile" | "copyAgentProfile"
+  | "refreshAgentProfilesCatalog"
+  | "upsertAgentProfile"
+  | "deleteAgentProfile"
+  | "copyAgentProfile"
+  | "setAgentProfileWorkspaceAvailability"
 > {
   const resolveWorkspaceId = (workspaceId?: string): string | null => {
     const workspaces = get().workspaces ?? [];
@@ -164,6 +168,31 @@ export function createAgentProfileActions(
           rpcError.message?.trim() || "The profile could not be deleted.",
         );
       }
+    },
+
+    setAgentProfileWorkspaceAvailability: async (id, disabled, workspaceIdArg) => {
+      const workspaceId = resolveWorkspaceId(workspaceIdArg);
+      if (!workspaceId) return false;
+      const cwd = workspacePathFor(get, workspaceId);
+      await prepareWorkspace(workspaceId);
+      const rpcError: { message?: string } = {};
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/agentProfiles/workspaceAvailability/set",
+        { cwd, id, disabled },
+        rpcError,
+        { beforeApplyEvent: bumpBeforeCatalogMutationEvent(workspaceId) },
+      );
+      if (!ok) {
+        notifyFailure(
+          "Unable to update subagent availability",
+          rpcError.message?.trim() || "The subagent availability could not be updated.",
+        );
+        return false;
+      }
+      return true;
     },
 
     copyAgentProfile: async (copy: AgentProfileCopyInput, workspaceIdArg) => {

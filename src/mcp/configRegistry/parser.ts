@@ -43,6 +43,7 @@ const mcpServerSchema = z.object({
   required: z.boolean().optional(),
   retries: z.number().finite().optional(),
   auth: authSchema.optional(),
+  icon: z.string().trim().min(1).optional(),
 });
 
 const mcpServersDocumentSchema = z.object({

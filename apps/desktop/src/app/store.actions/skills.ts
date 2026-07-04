@@ -90,9 +90,6 @@ export function createSkillActions(
         }
       }
 
-      if (get().selectedWorkspaceId !== workspaceId) {
-        set({ selectedWorkspaceId: workspaceId });
-      }
       get().openSettings("toolAccess");
     },
 

@@ -32,6 +32,13 @@ export type DesktopIpcDeps = {
 
   shouldKeepPopupWindowsAlive?: () => boolean;
   applyPersistedState?: (state: PersistedState) => void;
+  /**
+   * Shared approved-roots controller. Pass the same instance used by the
+   * `cowork-media:` protocol handler so workspace approvals made over IPC are
+   * visible to media requests (and vice versa). When omitted, a private
+   * controller is created.
+   */
+  workspaceRoots?: WorkspaceRootsAccess;
 };
 
 type HandleDesktopInvoke = <TArgs extends unknown[], TResult>(

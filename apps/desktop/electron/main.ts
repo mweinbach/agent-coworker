@@ -15,6 +15,7 @@ import {
   type UpdaterState,
 } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
+import { WorkspaceRootsController } from "./ipc/workspaceRoots";
 import {
   applySystemAppearanceToWindow,
   getInitialWindowAppearanceOptions,
@@ -106,6 +107,9 @@ const serverManager = new ServerManager({
 });
 const mobileRelayBridge = new MobileRelayBridge({ serverManager });
 const persistence = new PersistenceService();
+// Shared between the cowork-media protocol handler and desktop IPC so both
+// enforce (and observe approvals against) the same workspace-root boundary.
+const workspaceRoots = new WorkspaceRootsController(persistence);
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
@@ -731,7 +735,7 @@ if (!gotSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
-      registerDesktopMediaProtocolHandler(protocol, net);
+      registerDesktopMediaProtocolHandler(protocol, net, workspaceRoots);
       const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
       await initElectronMainCrashReporting(initialState?.privacyTelemetrySettings);
       let preparedInitialState = initialState;
@@ -772,6 +776,7 @@ if (!gotSingleInstanceLock) {
       registerDesktopIpc({
         mobileRelayBridge,
         persistence,
+        workspaceRoots,
         productAnalytics,
         cloudSync,
         diagnostics,

@@ -934,19 +934,35 @@ function resolveRelativeFileHref(rawHref: string, basePath: string | null): stri
   return desktopPathToFileUrl(`${normalizedBase}/${cleaned}`);
 }
 
+type DesktopImagePathResolution =
+  | { kind: "local"; absPath: string }
+  /** A workspace-relative local path that escapes the base — must not render. */
+  | { kind: "blocked" }
+  /** Remote/data/other src that should pass through untouched. */
+  | { kind: "passthrough" };
+
+const PASSTHROUGH: DesktopImagePathResolution = { kind: "passthrough" };
+const BLOCKED: DesktopImagePathResolution = { kind: "blocked" };
+
 /**
  * Resolve a markdown image src to an absolute desktop path when it points at a
  * local file (absolute path, `file://` URL, or workspace-relative path).
- * Remote/data URLs return null so they pass through untouched.
+ * Remote/data URLs pass through untouched; workspace-relative paths that
+ * escape the base resolve to "blocked" so callers can drop them instead of
+ * letting downstream URL resolution rebuild an escaping path.
  */
-function resolveDesktopImagePath(rawUrl: string, basePath: string | null): string | null {
+function resolveDesktopImagePath(
+  rawUrl: string,
+  basePath: string | null,
+): DesktopImagePathResolution {
   const trimmed = rawUrl.trim();
   if (!trimmed || trimmed.startsWith("#")) {
-    return null;
+    return PASSTHROUGH;
   }
 
   if (/^file:/i.test(trimmed)) {
-    return fileUrlToDesktopPath(trimmed);
+    const fromFileUrl = fileUrlToDesktopPath(trimmed);
+    return fromFileUrl ? { kind: "local", absPath: fromFileUrl } : PASSTHROUGH;
   }
 
   const withoutDecorations = trimmed.replace(/[?#].*$/, "");
@@ -958,26 +974,55 @@ function resolveDesktopImagePath(rawUrl: string, basePath: string | null): strin
   }
 
   if (isAbsoluteDesktopPath(decoded)) {
-    return decoded;
+    return { kind: "local", absPath: decoded };
   }
 
   // Any other scheme (https, data, cowork-media itself, ...) passes through.
   if (URL_SCHEME_RE.test(trimmed)) {
-    return null;
+    return PASSTHROUGH;
   }
 
   if (!basePath) {
-    return null;
+    return PASSTHROUGH;
   }
   const cleaned = decoded.replace(/\\/g, "/").replace(/^\.\//, "");
   if (!cleaned || cleaned.startsWith("/")) {
-    return null;
+    return PASSTHROUGH;
   }
   const normalizedBase = basePath.replace(/\\/g, "/").replace(/\/+$/, "");
   if (!normalizedBase) {
+    return PASSTHROUGH;
+  }
+  const joined = joinImagePathWithinBase(normalizedBase, cleaned);
+  return joined ? { kind: "local", absPath: joined } : BLOCKED;
+}
+
+/**
+ * Join a workspace-relative image path onto the base path, normalizing `.`/`..`
+ * segments and rejecting anything that would escape the base (e.g.
+ * `../outside/secret.png`). The main-process cowork-media handler enforces the
+ * real workspace-root boundary; this just avoids constructing escaping URLs in
+ * the renderer at all.
+ */
+function joinImagePathWithinBase(normalizedBase: string, relativePath: string): string | null {
+  const segments: string[] = [];
+  for (const segment of relativePath.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return null;
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  if (segments.length === 0) {
     return null;
   }
-  return `${normalizedBase}/${cleaned}`;
+  return `${normalizedBase}/${segments.join("/")}`;
 }
 
 /** Rewrite a local image src to a fetchable `cowork-media:` URL, or null to leave it unchanged. */
@@ -985,11 +1030,32 @@ export function rewriteDesktopImageUrl(
   rawUrl: string,
   basePath: string | null = null,
 ): string | null {
-  const absPath = resolveDesktopImagePath(rawUrl, basePath);
-  if (!absPath) {
+  const resolution = resolveDesktopImagePath(rawUrl, basePath);
+  if (resolution.kind !== "local") {
     return null;
   }
-  return encodeDesktopMediaUrl(absPath);
+  return encodeDesktopMediaUrl(resolution.absPath);
+}
+
+/**
+ * Apply an image src rewrite in the markdown tree: local files route through
+ * cowork-media, base-escaping relative paths are dropped entirely (returning
+ * `""`), and everything else is left as-is (returning null). Dropping matters:
+ * if an escaping relative src survives to Streamdown's URL hardening it gets
+ * resolved against the page origin into a root-absolute path, which would then
+ * look like a legitimate local image. The main-process cowork-media handler
+ * enforces the real workspace-root boundary; this keeps the renderer from
+ * constructing escaping URLs in the first place.
+ */
+function rewriteDesktopImageSrcForTree(rawUrl: string, basePath: string | null): string | null {
+  const resolution = resolveDesktopImagePath(rawUrl, basePath);
+  if (resolution.kind === "blocked") {
+    return "";
+  }
+  if (resolution.kind !== "local") {
+    return null;
+  }
+  return encodeDesktopMediaUrl(resolution.absPath);
 }
 
 export function rewriteDesktopFileLinksInTree(
@@ -999,8 +1065,8 @@ export function rewriteDesktopFileLinksInTree(
   if (node.type === "image" && typeof node.url === "string") {
     // Images route through cowork-media (fetchable by <img>) instead of the
     // cowork-file link scheme used for click-to-open file chips.
-    const mediaUrl = rewriteDesktopImageUrl(node.url, basePath);
-    if (mediaUrl) {
+    const mediaUrl = rewriteDesktopImageSrcForTree(node.url, basePath);
+    if (mediaUrl !== null) {
       node.url = mediaUrl;
     }
   } else if (typeof node.url === "string") {
@@ -1030,8 +1096,8 @@ export function rewriteDesktopFileLinksInTree(
     node.tagName === "img" &&
     typeof node.properties?.src === "string"
   ) {
-    const mediaSrc = rewriteDesktopImageUrl(node.properties.src, basePath);
-    if (mediaSrc) {
+    const mediaSrc = rewriteDesktopImageSrcForTree(node.properties.src, basePath);
+    if (mediaSrc !== null) {
       node.properties.src = mediaSrc;
     }
   }

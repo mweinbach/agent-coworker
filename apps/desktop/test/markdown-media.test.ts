@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import os from "node:os";
+import path from "node:path";
+import type * as Electron from "electron";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { resolveDesktopMediaRequestPath } from "../electron/services/mediaProtocol";
+import {
+  type DesktopMediaWorkspaceRoots,
+  registerDesktopMediaProtocolHandler,
+  resolveDesktopMediaRequestPath,
+} from "../electron/services/mediaProtocol";
 import {
   decodeDesktopMediaUrl,
   desktopMediaMimeType,
@@ -66,30 +73,117 @@ describe("cowork-media protocol helpers", () => {
 });
 
 describe("resolveDesktopMediaRequestPath", () => {
-  test("resolves valid image request URLs to absolute paths", () => {
+  const WS_ROOT = "/Users/test/ws";
+  const mediaUrl = (p: string) => `cowork-media://media?path=${encodeURIComponent(p)}`;
+
+  test("resolves image request URLs inside an approved workspace root", () => {
+    expect(resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/chart.png"), [WS_ROOT])).toBe(
+      "/Users/test/ws/chart.png",
+    );
     expect(
-      resolveDesktopMediaRequestPath("cowork-media://media?path=%2FUsers%2Ftest%2Fchart.png"),
-    ).toBe("/Users/test/chart.png");
+      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/outputs/plot.webp"), [WS_ROOT]),
+    ).toBe("/Users/test/ws/outputs/plot.webp");
   });
 
-  test("normalizes traversal segments and re-validates the target", () => {
+  test("rejects absolute image paths outside every approved root", () => {
+    // The finding-1 case: rendered chat content pointing at arbitrary local images.
     expect(
-      resolveDesktopMediaRequestPath(
-        `cowork-media://media?path=${encodeURIComponent("/Users/test/../test/chart.png")}`,
-      ),
-    ).toBe("/Users/test/chart.png");
-    // Traversal that lands on a non-image target is rejected.
+      resolveDesktopMediaRequestPath(mediaUrl("/home/user/Pictures/private.png"), [WS_ROOT]),
+    ).toBeNull();
+    expect(resolveDesktopMediaRequestPath(mediaUrl("/outside-root/secret.png"), [])).toBeNull();
+  });
+
+  test("rejects traversal that escapes the approved root", () => {
     expect(
-      resolveDesktopMediaRequestPath(
-        `cowork-media://media?path=${encodeURIComponent("/Users/test/chart.png/../secrets.env")}`,
-      ),
+      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/../secret.png"), [WS_ROOT]),
+    ).toBeNull();
+    expect(
+      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/a/../../../etc/leak.png"), [WS_ROOT]),
     ).toBeNull();
   });
 
+  test("normalizes in-root traversal segments and re-validates the target", () => {
+    expect(
+      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/a/../chart.png"), [WS_ROOT]),
+    ).toBe("/Users/test/ws/chart.png");
+    // Traversal that lands on a non-image target is rejected.
+    expect(
+      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/chart.png/../secrets.env"), [
+        WS_ROOT,
+      ]),
+    ).toBeNull();
+  });
+
+  test("allows the one-off chats home like the file IPC boundary does", () => {
+    const oneOffImage = path.join(os.homedir(), ".cowork", "chats", "session-1", "chart.png");
+    expect(resolveDesktopMediaRequestPath(mediaUrl(oneOffImage), [])).toBe(oneOffImage);
+  });
+
   test("rejects non-media and malformed requests", () => {
-    expect(resolveDesktopMediaRequestPath("cowork-media://media?path=%2Fetc%2Fpasswd")).toBeNull();
-    expect(resolveDesktopMediaRequestPath("https://example.com/x.png")).toBeNull();
-    expect(resolveDesktopMediaRequestPath("")).toBeNull();
+    expect(resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/passwd"), [WS_ROOT])).toBeNull();
+    expect(resolveDesktopMediaRequestPath("https://example.com/x.png", [WS_ROOT])).toBeNull();
+    expect(resolveDesktopMediaRequestPath("", [WS_ROOT])).toBeNull();
+  });
+});
+
+describe("registerDesktopMediaProtocolHandler", () => {
+  const WS_ROOT = "/Users/test/ws";
+  const mediaUrl = (p: string) => `cowork-media://media?path=${encodeURIComponent(p)}`;
+
+  type MediaHandler = (request: Request) => Promise<Response>;
+
+  function setupHandler(roots: string[], opts?: { ensureRejects?: boolean }) {
+    let handler: MediaHandler | undefined;
+    const protocol = {
+      handle: (_scheme: string, fn: MediaHandler) => {
+        handler = fn;
+      },
+    } as unknown as Electron.Protocol;
+    const fetchedUrls: string[] = [];
+    const net = {
+      fetch: async (url: string) => {
+        fetchedUrls.push(url);
+        return new Response("PNGDATA", { status: 200 });
+      },
+    } as unknown as typeof Electron.net;
+    let ensured = false;
+    const workspaceRoots: DesktopMediaWorkspaceRoots = {
+      ensureApprovedWorkspaceRoots: async () => {
+        if (opts?.ensureRejects) {
+          throw new Error("persistence unavailable");
+        }
+        ensured = true;
+      },
+      getApprovedWorkspaceRoots: () => roots,
+    };
+    registerDesktopMediaProtocolHandler(protocol, net, workspaceRoots);
+    if (!handler) {
+      throw new Error("protocol handler was not registered");
+    }
+    return { handler, fetchedUrls, wasEnsured: () => ensured };
+  }
+
+  test("serves images inside approved workspace roots", async () => {
+    const { handler, fetchedUrls, wasEnsured } = setupHandler([WS_ROOT]);
+    const response = await handler(new Request(mediaUrl("/Users/test/ws/chart.png")));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(wasEnsured()).toBe(true);
+    expect(fetchedUrls).toEqual(["file:///Users/test/ws/chart.png"]);
+  });
+
+  test("returns 404 without touching disk for out-of-root images", async () => {
+    const { handler, fetchedUrls } = setupHandler([WS_ROOT]);
+    const response = await handler(new Request(mediaUrl("/home/user/Pictures/private.png")));
+    expect(response.status).toBe(404);
+    expect(fetchedUrls).toEqual([]);
+  });
+
+  test("returns 404 when approved roots cannot be loaded", async () => {
+    const { handler, fetchedUrls } = setupHandler([WS_ROOT], { ensureRejects: true });
+    const response = await handler(new Request(mediaUrl("/Users/test/ws/chart.png")));
+    expect(response.status).toBe(404);
+    expect(fetchedUrls).toEqual([]);
   });
 });
 
@@ -114,6 +208,25 @@ describe("rewriteDesktopImageUrl", () => {
       `cowork-media://media?path=${encodeURIComponent("/Users/test/ws/outputs/plot.png")}`,
     );
     expect(rewriteDesktopImageUrl("outputs/plot.png", null)).toBeNull();
+  });
+
+  test("rejects relative paths that escape the base path", () => {
+    // The finding-2 case: "../" must not resolve outside the workspace root.
+    expect(rewriteDesktopImageUrl("../outside/secret.png", "/Users/test/ws")).toBeNull();
+    expect(rewriteDesktopImageUrl("outputs/../../secret.png", "/Users/test/ws")).toBeNull();
+    expect(rewriteDesktopImageUrl("a/../../../etc/leak.png", "/Users/test/ws")).toBeNull();
+    expect(rewriteDesktopImageUrl("..%2Foutside%2Fsecret.png", "/Users/test/ws")).toBeNull();
+    expect(rewriteDesktopImageUrl("..\\outside\\secret.png", "C:\\Users\\Test\\ws")).toBeNull();
+    expect(rewriteDesktopImageUrl("..", "/Users/test/ws")).toBeNull();
+  });
+
+  test("normalizes in-base traversal and redundant segments", () => {
+    expect(rewriteDesktopImageUrl("outputs/../plot.png", "/Users/test/ws")).toBe(
+      `cowork-media://media?path=${encodeURIComponent("/Users/test/ws/plot.png")}`,
+    );
+    expect(rewriteDesktopImageUrl("./outputs/./plot.png", "/Users/test/ws")).toBe(
+      `cowork-media://media?path=${encodeURIComponent("/Users/test/ws/outputs/plot.png")}`,
+    );
   });
 
   test("leaves remote and data URLs untouched", () => {
@@ -158,6 +271,19 @@ describe("DesktopMarkdown inline images", () => {
     expect(html).toContain(
       `src="cowork-media://media?path=${encodeURIComponent("/Users/test/ws/outputs/plot.png")}"`,
     );
+  });
+
+  test("does not build cowork-media URLs for images escaping desktopBasePath", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        DesktopMarkdown,
+        { desktopBasePath: "/Users/test/ws" },
+        "![escape](../outside/secret.png) ![deep](a/../../etc/leak.png)",
+      ),
+    );
+
+    expect(html).not.toContain("cowork-media:");
+    expect(html).not.toContain("outside%2Fsecret");
   });
 
   test("sanitizes raw HTML images but keeps cowork-media and https sources", () => {

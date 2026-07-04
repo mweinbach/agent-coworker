@@ -9,13 +9,31 @@ import {
   desktopMediaMimeType,
   isDesktopMediaImagePath,
 } from "../../src/lib/mediaProtocol";
+import type { WorkspaceRootsAccess } from "../ipc/types";
+import { resolveAllowedPath } from "./ipcSecurity";
+
+/**
+ * The subset of {@link WorkspaceRootsAccess} the media protocol handler needs:
+ * the same approved-roots source of truth the file IPC surface
+ * (openPath/readFileForPreview) validates against.
+ */
+export type DesktopMediaWorkspaceRoots = Pick<
+  WorkspaceRootsAccess,
+  "ensureApprovedWorkspaceRoots" | "getApprovedWorkspaceRoots"
+>;
 
 /**
  * Resolves a `cowork-media:` request URL to the absolute image path it may
- * serve, or null when the request is malformed, escapes via traversal
- * segments, or targets a non-image file. Pure so tests can cover it directly.
+ * serve, or null when the request is malformed, targets a non-image file, or
+ * escapes the approved workspace roots (including via `..` traversal or
+ * symlinks). Enforces the same boundary as the file IPC handlers
+ * (`resolveAllowedPath`, which also admits the one-off chats home). Pure so
+ * tests can cover it directly.
  */
-export function resolveDesktopMediaRequestPath(requestUrl: string): string | null {
+export function resolveDesktopMediaRequestPath(
+  requestUrl: string,
+  approvedWorkspaceRoots: readonly string[],
+): string | null {
   const decoded = decodeDesktopMediaUrl(requestUrl);
   if (!decoded) {
     return null;
@@ -26,7 +44,21 @@ export function resolveDesktopMediaRequestPath(requestUrl: string): string | nul
   if (!isDesktopMediaImagePath(resolved)) {
     return null;
   }
-  return resolved;
+  // Rendered chat content must not read arbitrary local files: only serve
+  // paths inside approved workspace roots, exactly like openPath /
+  // readFileForPreview do across the IPC boundary.
+  let bounded: string;
+  try {
+    bounded = resolveAllowedPath([...approvedWorkspaceRoots], resolved);
+  } catch {
+    return null;
+  }
+  // `resolveAllowedPath` realpath-normalizes, so a symlinked "image" could
+  // resolve to a non-image target; re-validate the final path.
+  if (!isDesktopMediaImagePath(bounded)) {
+    return null;
+  }
+  return bounded;
 }
 
 /**
@@ -50,9 +82,19 @@ export function registerDesktopMediaSchemePrivileges(protocol: Electron.Protocol
 export function registerDesktopMediaProtocolHandler(
   protocol: Electron.Protocol,
   net: typeof Electron.net,
+  workspaceRoots: DesktopMediaWorkspaceRoots,
 ): void {
   protocol.handle(DESKTOP_MEDIA_PROTOCOL_SCHEME, async (request) => {
-    const absPath = resolveDesktopMediaRequestPath(request.url);
+    let absPath: string | null = null;
+    try {
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      absPath = resolveDesktopMediaRequestPath(
+        request.url,
+        workspaceRoots.getApprovedWorkspaceRoots(),
+      );
+    } catch {
+      absPath = null;
+    }
     if (!absPath) {
       return new Response("Not found", { status: 404 });
     }

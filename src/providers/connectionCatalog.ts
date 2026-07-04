@@ -8,6 +8,7 @@ import {
   type SupportedModel,
 } from "../models/registry";
 import { supportsCustomModelIds } from "../shared/customModels";
+import { supportsModelPreferences } from "../shared/modelPreferences";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
@@ -21,6 +22,7 @@ import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { openAiReasoningConfigForSupportedModel } from "./catalog";
 import { type listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import { type CustomModelEntry, readCustomModelStore } from "./customModels";
+import { readModelPreferencesStore } from "./modelPreferences";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
   isFireworksInferenceProvider,
@@ -76,6 +78,8 @@ export type ProviderCatalogModelEntry = Pick<
   };
   runtimeOptions?: Record<string, unknown>;
   runtimeOverrides?: Record<string, unknown>;
+  /** Omitted when enabled; `false` hides the model from pickers without blocking explicit use. */
+  enabled?: boolean;
 };
 
 export type ProviderCatalogEntry = {
@@ -418,6 +422,56 @@ function mergeCustomModelsIntoCatalogEntry(
   };
 }
 
+function applyModelPreferencesToCatalogEntry(
+  entry: ProviderCatalogEntry,
+  preferencesByProvider: Awaited<ReturnType<typeof readModelPreferencesStore>>["providers"],
+  customModelsByProvider: Awaited<ReturnType<typeof readCustomModelStore>>["providers"],
+): ProviderCatalogEntry {
+  if (!supportsModelPreferences(entry.id)) return entry;
+  if (entry.models.length === 0) return entry;
+
+  const overrides = new Map(
+    (preferencesByProvider[entry.id] ?? []).map((pref) => [pref.id, pref.enabled] as const),
+  );
+  const customIds = new Set(
+    (supportsCustomModelIds(entry.id) ? (customModelsByProvider[entry.id] ?? []) : []).map(
+      (model) => model.id,
+    ),
+  );
+
+  // Codex app-server discovery reflects the user's actual account entitlements,
+  // so its models stay enabled by default; curated registries gate the rest.
+  const discoveryIsAuthoritative = entry.id === "codex-cli";
+  const enabledById = new Map<string, boolean>();
+  for (const model of entry.models) {
+    const defaultEnabled =
+      discoveryIsAuthoritative ||
+      getSupportedModel(entry.id, model.id) !== null ||
+      customIds.has(model.id);
+    enabledById.set(model.id, overrides.get(model.id) ?? defaultEnabled);
+  }
+
+  // Fail open when curation and discovery do not overlap and the user has not
+  // expressed any preference for this provider; an explicit disable-all sticks.
+  const anyEnabled = [...enabledById.values()].some(Boolean);
+  if (!anyEnabled && overrides.size === 0) return entry;
+
+  const models = entry.models.map((model) =>
+    enabledById.get(model.id) === false ? { ...model, enabled: false } : model,
+  );
+
+  let defaultModel = entry.defaultModel;
+  if (defaultModel && anyEnabled && enabledById.get(defaultModel) === false) {
+    const registryDefaultId = defaultSupportedModel(entry.id).id;
+    defaultModel =
+      enabledById.get(registryDefaultId) === true
+        ? registryDefaultId
+        : (models.find((model) => model.enabled !== false)?.id ?? defaultModel);
+  }
+
+  return { ...entry, models, defaultModel };
+}
+
 function resolveApiModelDiscoveryKey(opts: {
   provider: ApiModelDiscoveryProvider;
   store?: Awaited<ReturnType<typeof readConnectionStore>>;
@@ -755,6 +809,7 @@ export async function listProviderCatalogEntries(
 ): Promise<ProviderCatalogEntry[]> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const customModelStore = await readCustomModelStore(paths);
+  const modelPreferencesStore = await readModelPreferencesStore(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
     providerOptions: opts.providerOptions,
@@ -806,7 +861,14 @@ export async function listProviderCatalogEntries(
       if (apiEntry) return apiEntry;
       return staticCatalogEntry(provider);
     })
-    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers));
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers))
+    .map((entry) =>
+      applyModelPreferencesToCatalogEntry(
+        entry,
+        modelPreferencesStore.providers,
+        customModelStore.providers,
+      ),
+    );
 }
 
 export async function getProviderCatalog(
@@ -830,6 +892,7 @@ export async function getProviderCatalog(
     opts.readCodexAppServerAccountImpl ?? readCodexAppServerAccount;
   const store = await readStore(paths);
   const customModelStore = await readCustomModelStore(paths);
+  const modelPreferencesStore = await readModelPreferencesStore(paths);
   const codexHome = codexHomeFromPaths(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
@@ -886,7 +949,14 @@ export async function getProviderCatalog(
       if (apiEntry) return apiEntry;
       return staticCatalogEntry(provider);
     })
-    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers));
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers))
+    .map((entry) =>
+      applyModelPreferencesToCatalogEntry(
+        entry,
+        modelPreferencesStore.providers,
+        customModelStore.providers,
+      ),
+    );
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
   const connected = PROVIDER_NAMES.filter((provider) => {

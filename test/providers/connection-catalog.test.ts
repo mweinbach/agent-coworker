@@ -8,6 +8,7 @@ import {
   listProviderCatalogEntries,
 } from "../../src/providers/connectionCatalog";
 import { upsertCustomModel } from "../../src/providers/customModels";
+import { setModelPreferences } from "../../src/providers/modelPreferences";
 import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
 import { PROVIDER_NAMES } from "../../src/types";
 
@@ -732,6 +733,156 @@ describe("providers/connectionCatalog", () => {
       supportsImageInput: false,
       runtimeOptions: { source: "custom" },
     });
+  });
+
+  test("marks discovered non-curated models as disabled by default", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-default-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await upsertCustomModel(paths, "openai", "my-custom-model");
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-5.4", object: "model", owned_by: "openai" },
+            { id: "gpt-5.6-experimental", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const byId = new Map(openai?.models.map((model) => [model.id, model] as const));
+    expect(byId.get("gpt-5.4")?.enabled).toBeUndefined();
+    expect(byId.get("gpt-5.6-experimental")?.enabled).toBe(false);
+    expect(byId.get("my-custom-model")?.enabled).toBeUndefined();
+  });
+
+  test("model preference overrides flip enabled state and repair the default model", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-override-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await setModelPreferences(paths, "openai", [
+      { id: "gpt-5.4", enabled: false },
+      { id: "gpt-5.6-experimental", enabled: true },
+    ]);
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-5.4", object: "model", owned_by: "openai" },
+            { id: "gpt-5.6-experimental", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const byId = new Map(openai?.models.map((model) => [model.id, model] as const));
+    expect(byId.get("gpt-5.4")?.enabled).toBe(false);
+    expect(byId.get("gpt-5.6-experimental")?.enabled).toBeUndefined();
+    expect(openai?.defaultModel).toBe("gpt-5.6-experimental");
+    expect(payload.default.openai).toBe("gpt-5.6-experimental");
+  });
+
+  test("keeps every model enabled when curation misses discovery and no overrides exist", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-failopen-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-totally-unknown-alpha", object: "model", owned_by: "openai" },
+            { id: "gpt-totally-unknown-beta", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    expect(openai?.models.length).toBe(2);
+    expect(openai?.models.every((model) => model.enabled === undefined)).toBe(true);
+  });
+
+  test("static catalogs keep curated models enabled without preference flags", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-prefs-static-");
+    const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      platform: "linux",
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    for (const entry of payload.all) {
+      for (const model of entry.models) {
+        expect(model.enabled).toBeUndefined();
+      }
+    }
   });
 
   test("lists MiniMax in the provider catalog with the expected model set", async () => {

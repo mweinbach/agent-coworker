@@ -91,8 +91,9 @@ describe("workspace display targets", () => {
     ];
 
     expect(resolveProjectWorkspaceId(workspaces, "project-2")).toBe("project-2");
-    expect(resolveProjectWorkspaceId(workspaces, "chat-1")).toBe("project-1");
+    expect(resolveProjectWorkspaceId(workspaces, "chat-1")).toBeNull();
     expect(resolveProjectWorkspaceId([workspaces[0]], "chat-1")).toBeNull();
+    expect(resolveProjectWorkspaceId([workspaces[0], workspaces[1]], "chat-1")).toBe("project-1");
   });
 
   test("labels one-off chat metadata as Chats", () => {

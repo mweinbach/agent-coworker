@@ -1326,6 +1326,7 @@ const mcpServerValidateRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
   })
   .strict();
 
@@ -1333,6 +1334,7 @@ const mcpServerAuthAuthorizeRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
   })
   .strict();
 
@@ -1340,6 +1342,7 @@ const mcpServerAuthCallbackRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
     code: z.string().optional(),
   })
   .strict();
@@ -1348,6 +1351,7 @@ const mcpServerAuthSetApiKeyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
     apiKey: z.string(),
   })
   .strict();

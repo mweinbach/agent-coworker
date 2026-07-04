@@ -7,7 +7,7 @@ import {
   setMCPServerOAuthClientInformation,
   setMCPServerOAuthPending,
 } from "../../../mcp/authStore";
-import type { MCPRegistryServer } from "../../../mcp/configRegistry";
+import type { MCPRegistryServer, MCPServerSource } from "../../../mcp/configRegistry";
 import {
   authorizeMCPServerOAuth,
   consumeCapturedOAuthCode,
@@ -23,6 +23,12 @@ type McpAuthFlowDeps = {
   consumeCapturedOAuthCode: typeof consumeCapturedOAuthCode;
   exchangeMCPServerOAuthCode: typeof exchangeMCPServerOAuthCode;
 };
+
+type McpServerRef = Pick<MCPRegistryServer, "name" | "source" | "pluginId" | "pluginScope">;
+
+function serverAuthFlowKey(server: McpServerRef): string {
+  return `${server.source}:${server.pluginScope ?? ""}:${server.pluginId ?? ""}:${server.name}`;
+}
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -71,10 +77,10 @@ export class McpAuthFlow {
     this.autoCallbackControllers.clear();
   }
 
-  async authorize(nameRaw: string) {
+  async authorize(nameRaw: string, source?: MCPServerSource) {
     if (!this.context.guardBusy()) return;
 
-    const server = await this.resolver.resolveByName(nameRaw);
+    const server = await this.resolver.resolveByName(nameRaw, source);
     if (!server) return;
 
     if (server.auth?.type !== "oauth") {
@@ -135,10 +141,14 @@ export class McpAuthFlow {
     }
   }
 
-  async callback(nameRaw: string, codeRaw?: string): Promise<string | null> {
+  async callback(
+    nameRaw: string,
+    codeRaw?: string,
+    source?: MCPServerSource,
+  ): Promise<McpServerRef | null> {
     if (!this.context.guardBusy()) return null;
 
-    const server = await this.resolver.resolveByName(nameRaw);
+    const server = await this.resolver.resolveByName(nameRaw, source);
     if (!server) return null;
 
     if (server.auth?.type !== "oauth") {
@@ -157,7 +167,7 @@ export class McpAuthFlow {
     try {
       const providedCode = codeRaw?.trim() || undefined;
       if (providedCode) {
-        this.cancelAutoOAuthCompletion(server.name);
+        this.cancelAutoOAuthCompletion(server);
       }
 
       const pendingState = await readMCPServerOAuthPending({
@@ -209,11 +219,12 @@ export class McpAuthFlow {
     }
   }
 
-  private cancelAutoOAuthCompletion(serverName: string) {
-    const existing = this.autoCallbackControllers.get(serverName);
+  private cancelAutoOAuthCompletion(server: McpServerRef) {
+    const key = serverAuthFlowKey(server);
+    const existing = this.autoCallbackControllers.get(key);
     if (!existing) return;
     existing.abort();
-    this.autoCallbackControllers.delete(serverName);
+    this.autoCallbackControllers.delete(key);
   }
 
   private startAutoOAuthCompletion(
@@ -223,13 +234,14 @@ export class McpAuthFlow {
   ) {
     if (method !== "auto") return;
 
-    this.cancelAutoOAuthCompletion(server.name);
+    this.cancelAutoOAuthCompletion(server);
     const controller = new AbortController();
-    this.autoCallbackControllers.set(server.name, controller);
+    const key = serverAuthFlowKey(server);
+    this.autoCallbackControllers.set(key, controller);
 
     void this.completeAutoOAuthWhenReady(server, pending, controller.signal).finally(() => {
-      if (this.autoCallbackControllers.get(server.name) === controller) {
-        this.autoCallbackControllers.delete(server.name);
+      if (this.autoCallbackControllers.get(key) === controller) {
+        this.autoCallbackControllers.delete(key);
       }
     });
   }
@@ -303,7 +315,7 @@ export class McpAuthFlow {
     server: MCPRegistryServer,
     pending: MCPServerOAuthPending,
     code: string,
-  ): Promise<string> {
+  ): Promise<McpServerRef> {
     const storedClientState = await readMCPServerOAuthClientInformation({
       config: this.context.state.config,
       server,
@@ -320,7 +332,7 @@ export class McpAuthFlow {
       tokens: exchange.tokens,
       clearPending: true,
     });
-    this.cancelAutoOAuthCompletion(server.name);
+    this.cancelAutoOAuthCompletion(server);
     this.context.emit({
       type: "mcp_server_auth_result",
       sessionId: this.context.id,
@@ -330,13 +342,17 @@ export class McpAuthFlow {
       message: exchange.message,
     });
     await this.emitMcpServers();
-    return server.name;
+    return server;
   }
 
-  async setApiKey(nameRaw: string, apiKeyRaw: string): Promise<string | null> {
+  async setApiKey(
+    nameRaw: string,
+    apiKeyRaw: string,
+    source?: MCPServerSource,
+  ): Promise<McpServerRef | null> {
     if (!this.context.guardBusy()) return null;
 
-    const server = await this.resolver.resolveByName(nameRaw);
+    const server = await this.resolver.resolveByName(nameRaw, source);
     if (!server) return null;
 
     if (server.auth?.type !== "api_key") {
@@ -368,7 +384,7 @@ export class McpAuthFlow {
         message: `API key saved (${result.maskedApiKey}) to ${result.scope} auth store.`,
       });
       await this.emitMcpServers();
-      return server.name;
+      return server;
     } catch (err) {
       this.context.emit({
         type: "mcp_server_auth_result",

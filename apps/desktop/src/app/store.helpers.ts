@@ -528,14 +528,28 @@ export type AppStoreState = {
       pluginScope?: "workspace" | "user";
     },
   ) => Promise<void>;
-  validateWorkspaceMcpServer: (workspaceId: string, name: string) => Promise<void>;
-  authorizeWorkspaceMcpServerAuth: (workspaceId: string, name: string) => Promise<void>;
+  validateWorkspaceMcpServer: (
+    workspaceId: string,
+    name: string,
+    source?: "workspace" | "user" | "plugin" | "system",
+  ) => Promise<void>;
+  authorizeWorkspaceMcpServerAuth: (
+    workspaceId: string,
+    name: string,
+    source?: "workspace" | "user" | "plugin" | "system",
+  ) => Promise<void>;
   callbackWorkspaceMcpServerAuth: (
     workspaceId: string,
     name: string,
     code?: string,
+    source?: "workspace" | "user" | "plugin" | "system",
   ) => Promise<void>;
-  setWorkspaceMcpServerApiKey: (workspaceId: string, name: string, apiKey: string) => Promise<void>;
+  setWorkspaceMcpServerApiKey: (
+    workspaceId: string,
+    name: string,
+    apiKey: string,
+    source?: "workspace" | "user" | "plugin" | "system",
+  ) => Promise<void>;
   requestOpenAiNativeConnectors: (workspaceId: string) => Promise<void>;
   refreshOpenAiNativeConnectors: (workspaceId: string) => Promise<void>;
   setOpenAiNativeConnectorEnabled: (

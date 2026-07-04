@@ -11,7 +11,11 @@ import {
 import type { runTurn } from "../../agent";
 import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
 import { closeMcpServersForSession, getOrLoadMCPToolsCached } from "../../mcp";
-import type { EditableMCPServerConfigSource, MCPRegistryServer } from "../../mcp/configRegistry";
+import type {
+  EditableMCPServerConfigSource,
+  MCPRegistryServer,
+  MCPServerSource,
+} from "../../mcp/configRegistry";
 import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
@@ -428,7 +432,7 @@ export class AgentSession {
       guardBusy: () => this.guardBusy(),
       getCoworkPaths: () => this.getCoworkPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
-      getMcpServerByName: async (nameRaw) => await this.getMcpServerByName(nameRaw),
+      getMcpServerByName: async (nameRaw, source) => await this.getMcpServerByName(nameRaw, source),
       queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
       updateSessionInfo: (patch, infoOpts) =>
         this.metadataManager.updateSessionInfo(patch, infoOpts),
@@ -1326,20 +1330,20 @@ export class AgentSession {
     await this.getMcpManager().setEnabled(opts);
   }
 
-  async validateMcpServer(nameRaw: string) {
-    await this.getMcpManager().validate(nameRaw);
+  async validateMcpServer(nameRaw: string, source?: MCPServerSource) {
+    await this.getMcpManager().validate(nameRaw, source);
   }
 
-  async authorizeMcpServerAuth(nameRaw: string) {
-    await this.getMcpManager().authorize(nameRaw);
+  async authorizeMcpServerAuth(nameRaw: string, source?: MCPServerSource) {
+    await this.getMcpManager().authorize(nameRaw, source);
   }
 
-  async callbackMcpServerAuth(nameRaw: string, codeRaw?: string) {
-    await this.getMcpManager().callback(nameRaw, codeRaw);
+  async callbackMcpServerAuth(nameRaw: string, codeRaw?: string, source?: MCPServerSource) {
+    await this.getMcpManager().callback(nameRaw, codeRaw, source);
   }
 
-  async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string) {
-    await this.getMcpManager().setApiKey(nameRaw, apiKeyRaw);
+  async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string, source?: MCPServerSource) {
+    await this.getMcpManager().setApiKey(nameRaw, apiKeyRaw, source);
   }
   getHarnessContext() {
     this.metadataManager.getHarnessContext();
@@ -1842,8 +1846,11 @@ export class AgentSession {
     return await this.runtimeSupport.runProviderConnect(opts);
   }
 
-  private async getMcpServerByName(nameRaw: string): Promise<MCPRegistryServer | null> {
-    return await this.runtimeSupport.getMcpServerByName(nameRaw);
+  private async getMcpServerByName(
+    nameRaw: string,
+    source?: MCPServerSource,
+  ): Promise<MCPRegistryServer | null> {
+    return await this.runtimeSupport.getMcpServerByName(nameRaw, source);
   }
 
   private waitForPromptResponse<T>(

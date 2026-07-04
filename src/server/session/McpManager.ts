@@ -1,4 +1,4 @@
-import type { EditableMCPServerConfigSource } from "../../mcp/configRegistry";
+import type { EditableMCPServerConfigSource, MCPServerSource } from "../../mcp/configRegistry";
 import type { MCPServerConfig, PluginScope } from "../../types";
 import { McpAuthFlow } from "./mcp/McpAuthFlow";
 import { McpRegistryFlow } from "./mcp/McpRegistryFlow";
@@ -47,10 +47,10 @@ export class McpManager {
   async upsert(
     server: MCPServerConfig,
     previousName?: string,
-    source?: EditableMCPServerConfigSource,
+    source: EditableMCPServerConfigSource = "workspace",
   ) {
     const validateName = await this.registryFlow.upsert(server, previousName, source);
-    if (validateName) void this.validate(validateName);
+    if (validateName) void this.validate(validateName, source);
   }
 
   async delete(nameRaw: string, source?: EditableMCPServerConfigSource) {
@@ -67,21 +67,21 @@ export class McpManager {
     await this.registryFlow.setEnabled(opts);
   }
 
-  async validate(nameRaw: string) {
-    await this.validationFlow.validate(nameRaw);
+  async validate(nameRaw: string, source?: MCPServerSource) {
+    await this.validationFlow.validate(nameRaw, source);
   }
 
-  async authorize(nameRaw: string) {
-    await this.authFlow.authorize(nameRaw);
+  async authorize(nameRaw: string, source?: MCPServerSource) {
+    await this.authFlow.authorize(nameRaw, source);
   }
 
-  async callback(nameRaw: string, codeRaw?: string) {
-    const validateName = await this.authFlow.callback(nameRaw, codeRaw);
-    if (validateName) void this.validate(validateName);
+  async callback(nameRaw: string, codeRaw?: string, source?: MCPServerSource) {
+    const validateServer = await this.authFlow.callback(nameRaw, codeRaw, source);
+    if (validateServer) void this.validate(validateServer.name, validateServer.source);
   }
 
-  async setApiKey(nameRaw: string, apiKeyRaw: string) {
-    const validateName = await this.authFlow.setApiKey(nameRaw, apiKeyRaw);
-    if (validateName) void this.validate(validateName);
+  async setApiKey(nameRaw: string, apiKeyRaw: string, source?: MCPServerSource) {
+    const validateServer = await this.authFlow.setApiKey(nameRaw, apiKeyRaw, source);
+    if (validateServer) void this.validate(validateServer.name, validateServer.source);
   }
 }

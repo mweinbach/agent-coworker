@@ -31,7 +31,8 @@ export function resolveProjectWorkspaceId(
   if (selectedWorkspace && !isOneOffChatWorkspace(selectedWorkspace)) {
     return selectedWorkspace.id;
   }
-  return workspaces.find((workspace) => !isOneOffChatWorkspace(workspace))?.id ?? null;
+  const projectWorkspaces = workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace));
+  return projectWorkspaces.length === 1 ? (projectWorkspaces[0]?.id ?? null) : null;
 }
 
 export function resolveWorkspaceDisplayTargets(

@@ -55,12 +55,15 @@ import {
 
 type RuntimeMcpServer = WorkspaceRuntime["mcpServers"][number];
 
-function credentialDraftKey(workspaceId: string, serverName: string): string {
-  return `${workspaceId}::${serverName}`;
-}
-
 function serverIdentityKey(server: Pick<RuntimeMcpServer, "name" | "source">): string {
   return `${server.source}:${server.name}`;
+}
+
+export function mcpCredentialDraftKey(
+  workspaceId: string,
+  server: Pick<RuntimeMcpServer, "name" | "source">,
+): string {
+  return `${workspaceId}::${serverIdentityKey(server)}`;
 }
 
 const SOURCE_ORDER: Record<string, number> = {
@@ -105,7 +108,7 @@ export function McpServersPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const autoValidateSchedulerRef = useRef(
     createMcpAutoValidateScheduler((workspaceId: string, name: string) => {
-      void validateWorkspaceMcpServer(workspaceId, name);
+      void validateWorkspaceMcpServer(workspaceId, name, "user");
     }),
   );
 
@@ -188,7 +191,7 @@ export function McpServersPage() {
       ...prev,
       [server.name]: serverIdentityKey(server),
     }));
-    void validateWorkspaceMcpServer(workspaceId, server.name);
+    void validateWorkspaceMcpServer(workspaceId, server.name, server.source);
   };
 
   const [parent] = useAutoAnimate();
@@ -471,7 +474,7 @@ export function McpServersPage() {
         ) : null}
         {servers.map((server) => {
           const serverKey = serverIdentityKey(server);
-          const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;
+          const draftKey = workspace ? mcpCredentialDraftKey(workspace.id, server) : serverKey;
           const validation = validationByServerKey[serverKey];
           const canEdit = server.source === "user";
           const apiKeyDraft = apiKeyByName[draftKey] ?? "";
@@ -675,7 +678,11 @@ export function McpServersPage() {
                         className="h-7 text-xs"
                         onClick={() =>
                           workspace &&
-                          void authorizeWorkspaceMcpServerAuth(workspace.id, server.name)
+                          void authorizeWorkspaceMcpServerAuth(
+                            workspace.id,
+                            server.name,
+                            server.source,
+                          )
                         }
                       >
                         Sign in
@@ -702,6 +709,7 @@ export function McpServersPage() {
                             workspace.id,
                             server.name,
                             oauthCode.trim() ? oauthCode : undefined,
+                            server.source,
                           )
                         }
                       >
@@ -731,6 +739,7 @@ export function McpServersPage() {
                             workspace.id,
                             server.name,
                             apiKeyDraft.trim(),
+                            server.source,
                           )
                         }
                       >

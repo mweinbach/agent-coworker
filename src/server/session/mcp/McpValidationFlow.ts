@@ -1,5 +1,6 @@
-import { loadMCPServers, loadMCPTools } from "../../../mcp";
+import { loadMCPServerForValidation, loadMCPTools } from "../../../mcp";
 import { resolveMCPServerAuthState } from "../../../mcp/authStore";
+import type { MCPServerSource } from "../../../mcp/configRegistry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { SessionContext } from "../SessionContext";
 import type { McpServerResolver } from "./McpServerResolver";
@@ -12,7 +13,7 @@ export class McpValidationFlow {
     private readonly resolver: McpServerResolver,
   ) {}
 
-  async validate(nameRaw: string) {
+  async validate(nameRaw: string, source?: MCPServerSource) {
     const name = nameRaw.trim();
     const validationStartedAt = Date.now();
     if (!name) {
@@ -23,7 +24,7 @@ export class McpValidationFlow {
 
     this.context.state.connecting = true;
     try {
-      const server = await this.resolver.resolveByName(name);
+      const server = await this.resolver.resolveByName(name, source);
       if (!server) {
         this.context.emit({
           type: "mcp_server_validation",
@@ -59,10 +60,7 @@ export class McpValidationFlow {
       // it is allowed to include the workspace's own (otherwise untrusted)
       // servers — this is the per-command approval branch of the trust gate. The
       // automatic turn-setup path does not pass this flag and stays fail-closed.
-      const runtimeServers = await loadMCPServers(this.context.state.config, {
-        includeUntrustedWorkspace: true,
-      });
-      const runtimeServer = runtimeServers.find((entry) => entry.name === server.name);
+      const runtimeServer = await loadMCPServerForValidation(this.context.state.config, server);
       if (!runtimeServer) {
         this.context.emit({
           type: "mcp_server_validation",

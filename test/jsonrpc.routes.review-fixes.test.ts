@@ -74,12 +74,14 @@ function createRuntimeDouble(session: Record<string, any>) {
       delete: async (name: string) => await session.deleteMcpServer?.(name),
       setEnabled: async (opts: Record<string, unknown>) =>
         await session.setMcpServerEnabled?.(opts),
-      validate: async (name: string) => await session.validateMcpServer?.(name),
-      authorizeAuth: async (name: string) => await session.authorizeMcpServerAuth?.(name),
-      callbackAuth: async (name: string, code?: string) =>
-        await session.callbackMcpServerAuth?.(name, code),
-      setApiKey: async (name: string, apiKey: string) =>
-        await session.setMcpServerApiKey?.(name, apiKey),
+      validate: async (name: string, source?: string) =>
+        await session.validateMcpServer?.(name, source),
+      authorizeAuth: async (name: string, source?: string) =>
+        await session.authorizeMcpServerAuth?.(name, source),
+      callbackAuth: async (name: string, code?: string, source?: string) =>
+        await session.callbackMcpServerAuth?.(name, code, source),
+      setApiKey: async (name: string, apiKey: string, source?: string) =>
+        await session.setMcpServerApiKey?.(name, apiKey, source),
       migrateLegacyServers: async (scope: "workspace" | "user") =>
         await session.migrateLegacyMcpServers?.(scope),
     },
@@ -848,6 +850,32 @@ describe("JSON-RPC extracted route review fixes", () => {
     });
   });
 
+  test("mcp validate forwards source metadata", async () => {
+    let received: unknown[] | null = null;
+    const harness = createRouteHarness({
+      validateMcpServer: async (...args: unknown[]) => {
+        received = args;
+        harness.emitted.push({
+          type: "mcp_server_validation",
+          sessionId: "session-1",
+          name: "grep",
+          ok: true,
+          mode: "none",
+          message: "ok",
+        });
+      },
+    });
+
+    const handlers = createMcpRouteHandlers(harness.context);
+    await harness.invoke(handlers, "cowork/mcp/server/validate", {
+      cwd: "C:/workspace",
+      name: "grep",
+      source: "plugin",
+    });
+
+    expect(received).toEqual(["grep", "plugin"]);
+  });
+
   test("runtime LibreOffice check returns diagnostic status", async () => {
     const harness = createRouteHarness({
       checkLibreOfficeRuntime: async (checkOpts: { smoke?: boolean }) => ({
@@ -1014,6 +1042,68 @@ describe("JSON-RPC extracted route review fixes", () => {
       expect((response.result as any).event).toMatchObject({ name: "beta" });
     });
   }
+
+  test("mcp auth operations forward source metadata", async () => {
+    const received: unknown[][] = [];
+    const harness = createRouteHarness({
+      authorizeMcpServerAuth: async (...args: unknown[]) => {
+        received.push(args);
+        harness.emitted.push({
+          type: "mcp_server_auth_challenge",
+          sessionId: "session-1",
+          name: "grep",
+          challenge: { method: "code", instructions: "paste code" },
+        });
+      },
+      callbackMcpServerAuth: async (...args: unknown[]) => {
+        received.push(args);
+        harness.emitted.push({
+          type: "mcp_server_auth_result",
+          sessionId: "session-1",
+          name: "grep",
+          ok: true,
+          mode: "oauth",
+          message: "ok",
+        });
+      },
+      setMcpServerApiKey: async (...args: unknown[]) => {
+        received.push(args);
+        harness.emitted.push({
+          type: "mcp_server_auth_result",
+          sessionId: "session-1",
+          name: "grep",
+          ok: true,
+          mode: "api_key",
+          message: "ok",
+        });
+      },
+    });
+    const handlers = createMcpRouteHandlers(harness.context);
+
+    await harness.invoke(handlers, "cowork/mcp/server/auth/authorize", {
+      cwd: "C:/workspace",
+      name: "grep",
+      source: "plugin",
+    });
+    await harness.invoke(handlers, "cowork/mcp/server/auth/callback", {
+      cwd: "C:/workspace",
+      name: "grep",
+      source: "plugin",
+      code: "1234",
+    });
+    await harness.invoke(handlers, "cowork/mcp/server/auth/setApiKey", {
+      cwd: "C:/workspace",
+      name: "grep",
+      source: "plugin",
+      apiKey: "secret",
+    });
+
+    expect(received).toEqual([
+      ["grep", "plugin"],
+      ["grep", "1234", "plugin"],
+      ["grep", "secret", "plugin"],
+    ]);
+  });
 
   test("provider catalog read forwards emitted provider errors", async () => {
     let harness!: RouteHarness;

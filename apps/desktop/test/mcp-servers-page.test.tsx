@@ -12,12 +12,17 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { McpServersPage } = await import("../src/ui/settings/pages/McpServersPage");
+const { McpServersPage, mcpCredentialDraftKey } = await import(
+  "../src/ui/settings/pages/McpServersPage"
+);
 
 const defaultActions = {
   requestWorkspaceMcpServers: useAppStore.getState().requestWorkspaceMcpServers,
   setWorkspaceMcpServerEnabled: useAppStore.getState().setWorkspaceMcpServerEnabled,
   validateWorkspaceMcpServer: useAppStore.getState().validateWorkspaceMcpServer,
+  authorizeWorkspaceMcpServerAuth: useAppStore.getState().authorizeWorkspaceMcpServerAuth,
+  callbackWorkspaceMcpServerAuth: useAppStore.getState().callbackWorkspaceMcpServerAuth,
+  setWorkspaceMcpServerApiKey: useAppStore.getState().setWorkspaceMcpServerApiKey,
 };
 
 describe("MCP servers settings page", () => {
@@ -27,6 +32,13 @@ describe("MCP servers settings page", () => {
 
   afterEach(() => {
     useAppStore.setState(defaultActions);
+  });
+
+  test("keys credential drafts by workspace, source, and name", () => {
+    expect(mcpCredentialDraftKey("ws-1", { name: "grep", source: "user" })).toBe("ws-1::user:grep");
+    expect(mcpCredentialDraftKey("ws-1", { name: "grep", source: "plugin" })).toBe(
+      "ws-1::plugin:grep",
+    );
   });
 
   test("renders per-server switches and toggles without expanding the row", async () => {
@@ -482,7 +494,7 @@ describe("MCP servers settings page", () => {
           new harness.dom.window.MouseEvent("click", { bubbles: true }),
         );
       });
-      expect(validateMcpServer).toHaveBeenCalledWith("ws-1", "grep");
+      expect(validateMcpServer).toHaveBeenCalledWith("ws-1", "grep", "plugin");
 
       await act(async () => {
         useAppStore.setState((state) => ({
@@ -510,6 +522,109 @@ describe("MCP servers settings page", () => {
 
       expect(container.textContent?.match(/Last Check/g) ?? []).toHaveLength(1);
       expect(container.textContent?.match(/Passed \(none\)/g) ?? []).toHaveLength(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("sends duplicate server credential actions with row source", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const setApiKey = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace",
+              path: "/tmp/workspace",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              ...useAppStore.getState().workspaceRuntimeById["ws-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [
+                {
+                  name: "grep",
+                  transport: { type: "http", url: "https://user.example.test" },
+                  enabled: true,
+                  source: "user",
+                  inherited: true,
+                  authMode: "missing",
+                  authScope: "user",
+                  authMessage: "API key required.",
+                  auth: { type: "api_key" },
+                },
+                {
+                  name: "grep",
+                  transport: { type: "http", url: "https://plugin.example.test" },
+                  enabled: true,
+                  source: "plugin",
+                  inherited: true,
+                  authMode: "missing",
+                  authScope: "user",
+                  authMessage: "API key required.",
+                  auth: { type: "api_key" },
+                  pluginId: "search-plugin",
+                  pluginScope: "user",
+                },
+              ],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+          setWorkspaceMcpServerApiKey: setApiKey,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      const rowButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
+        button.textContent?.includes("grep"),
+      );
+      expect(rowButtons).toHaveLength(2);
+      await act(async () => {
+        rowButtons[0]?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        rowButtons[1]?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const setKeyButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
+        button.textContent?.includes("Set key"),
+      );
+      expect(setKeyButtons).toHaveLength(2);
+      await act(async () => {
+        setKeyButtons[0]?.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+
+      expect(setApiKey).toHaveBeenCalledWith("ws-1", "grep", "", "user");
     } finally {
       if (root) {
         await act(async () => {

@@ -78,6 +78,84 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("provider model setEnabled and resetEnabled round-trip through the provider_catalog payload", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const initial = await rpc.request("cowork/provider/catalog/read", { cwd: tmpDir });
+      const initialOpenai = initial.result.event.all.find(
+        (entry: { id?: string }) => entry.id === "openai",
+      );
+      const initialDefault = initialOpenai.defaultModel as string;
+      expect(initialOpenai.models.length).toBeGreaterThan(1);
+
+      const disabled = await rpc.request("cowork/provider/model/setEnabled", {
+        cwd: tmpDir,
+        provider: "openai",
+        models: [{ id: initialDefault, enabled: false }],
+      });
+      expect(disabled.result.event.type).toBe("provider_catalog");
+      const disabledOpenai = disabled.result.event.all.find(
+        (entry: { id?: string }) => entry.id === "openai",
+      );
+      expect(
+        disabledOpenai.models.find((model: { id?: string }) => model.id === initialDefault)
+          ?.enabled,
+      ).toBe(false);
+      expect(disabledOpenai.defaultModel).not.toBe(initialDefault);
+      expect(disabled.result.event.default.openai).toBe(disabledOpenai.defaultModel);
+
+      const reset = await rpc.request("cowork/provider/model/resetEnabled", {
+        cwd: tmpDir,
+        provider: "openai",
+      });
+      const resetOpenai = reset.result.event.all.find(
+        (entry: { id?: string }) => entry.id === "openai",
+      );
+      expect(
+        resetOpenai.models.find((model: { id?: string }) => model.id === initialDefault)?.enabled,
+      ).toBeUndefined();
+      expect(resetOpenai.defaultModel).toBe(initialDefault);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("provider model setEnabled rejects malformed params", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const missingModels = await rpc.request("cowork/provider/model/setEnabled", {
+        cwd: tmpDir,
+        provider: "openai",
+        models: [],
+      });
+      expect(missingModels.error.code).toBe(-32602);
+
+      const badProvider = await rpc.request("cowork/provider/model/setEnabled", {
+        cwd: tmpDir,
+        provider: "not-a-provider",
+        models: [{ id: "gpt-5.4", enabled: false }],
+      });
+      expect(badProvider.error.code).toBe(-32602);
+
+      const badEntry = await rpc.request("cowork/provider/model/setEnabled", {
+        cwd: tmpDir,
+        provider: "openai",
+        models: [{ id: "gpt-5.4" }],
+      });
+      expect(badEntry.error.code).toBe(-32602);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("provider auth methods read returns a session-event provider_auth_methods event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

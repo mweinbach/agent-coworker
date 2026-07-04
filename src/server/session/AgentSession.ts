@@ -23,6 +23,7 @@ import type { logoutProviderAuth } from "../../providers/authRegistry";
 import { closePooledCodexAppServerClient } from "../../providers/codexAppServerClient";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import { deleteCustomModel, upsertCustomModel } from "../../providers/customModels";
+import { resetModelPreferences, setModelPreferences } from "../../providers/modelPreferences";
 import {
   SessionCostTracker,
   type SessionUsageSnapshot,
@@ -1534,6 +1535,35 @@ export class AgentSession {
   async deleteCustomProviderModel(providerRaw: AgentConfig["provider"], modelIdRaw: string) {
     try {
       await deleteCustomModel(this.getGlobalAuthPaths(), providerRaw, modelIdRaw);
+      await this.emitProviderCatalog();
+    } catch (error) {
+      this.context.emitError(
+        "validation_failed",
+        "provider",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  async setProviderModelsEnabled(
+    providerRaw: AgentConfig["provider"],
+    models: ReadonlyArray<{ id: string; enabled: boolean }>,
+  ) {
+    try {
+      await setModelPreferences(this.getGlobalAuthPaths(), providerRaw, models);
+      await this.emitProviderCatalog();
+    } catch (error) {
+      this.context.emitError(
+        "validation_failed",
+        "provider",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  async resetProviderModelPreferences(providerRaw: AgentConfig["provider"]) {
+    try {
+      await resetModelPreferences(this.getGlobalAuthPaths(), providerRaw);
       await this.emitProviderCatalog();
     } catch (error) {
       this.context.emitError(

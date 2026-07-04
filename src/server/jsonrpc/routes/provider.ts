@@ -342,5 +342,65 @@ export function createProviderRouteHandlers(
       }
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
     },
+
+    "cowork/provider/model/setEnabled": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      const models = Array.isArray(params.models)
+        ? params.models.flatMap((model) => {
+            if (typeof model !== "object" || model === null) return [];
+            const { id, enabled } = model as Record<string, unknown>;
+            if (typeof id !== "string" || !id.trim() || typeof enabled !== "boolean") return [];
+            return [{ id: id.trim(), enabled }];
+          })
+        : [];
+      const modelsValid =
+        Array.isArray(params.models) && models.length === params.models.length && models.length > 0;
+      if (!isProviderName(provider) || !modelsValid) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider and a non-empty models array of { id, enabled }`,
+        });
+        return;
+      }
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.setModelsEnabled(provider, models),
+        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
+          event.type === "provider_catalog",
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/model/resetEnabled": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      if (!isProviderName(provider)) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider`,
+        });
+        return;
+      }
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.resetModelPreferences(provider),
+        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
+          event.type === "provider_catalog",
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
   };
 }

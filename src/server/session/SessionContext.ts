@@ -5,7 +5,7 @@ import type {
   getAiCoworkerPaths,
 } from "../../connect";
 import type { getOrLoadMCPToolsCached } from "../../mcp";
-import type { MCPRegistryServer } from "../../mcp/configRegistry";
+import type { MCPRegistryServer, MCPServerSource } from "../../mcp/configRegistry";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { logoutProviderAuth } from "../../providers/authRegistry";
@@ -328,7 +328,10 @@ export type SessionContext = {
   runProviderConnect: (
     opts: Parameters<typeof connectModelProvider>[0],
   ) => Promise<ConnectProviderResult>;
-  getMcpServerByName: (nameRaw: string) => Promise<MCPRegistryServer | null>;
+  getMcpServerByName: (
+    nameRaw: string,
+    source?: MCPServerSource,
+  ) => Promise<MCPRegistryServer | null>;
   queuePersistSessionSnapshot: (reason: string) => void;
   updateSessionInfo: (
     patch: Partial<SessionInfoState>,

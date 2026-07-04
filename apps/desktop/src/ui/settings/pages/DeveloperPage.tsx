@@ -11,15 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
-import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import {
   Select,
@@ -43,6 +35,12 @@ import {
   DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
   type LibreOfficeRuntimeDiagnostic,
 } from "../../../lib/wsProtocol";
+import {
+  SettingsPage,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatusPill,
+} from "../SettingsPrimitives";
 
 function parseOverflowThresholdDraft(value: string): number | null {
   const trimmed = value.trim();
@@ -52,13 +50,13 @@ function parseOverflowThresholdDraft(value: string): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function libreOfficeBadge(status: LibreOfficeRuntimeDiagnostic | null): {
+function libreOfficeStatusPill(status: LibreOfficeRuntimeDiagnostic | null): {
   label: string;
-  variant: "default" | "secondary" | "destructive" | "outline";
+  tone: "neutral" | "success" | "danger";
 } {
-  if (!status) return { label: "Not checked", variant: "secondary" };
-  if (status.status === "available") return { label: "Available", variant: "default" };
-  return { label: "Unavailable", variant: "destructive" };
+  if (!status) return { label: "Not checked", tone: "neutral" };
+  if (status.status === "available") return { label: "Available", tone: "success" };
+  return { label: "Unavailable", tone: "danger" };
 }
 
 function smokeSummary(status: LibreOfficeRuntimeDiagnostic | null): string {
@@ -158,7 +156,7 @@ export function DeveloperPage() {
     overflowEnabled &&
     parsedOverflowThreshold !== null &&
     parsedOverflowThreshold !== persistedOverflowThreshold;
-  const libreOfficeState = libreOfficeBadge(libreOfficeStatus);
+  const libreOfficePill = libreOfficeStatusPill(libreOfficeStatus);
   const libreOfficeHealthy = libreOfficeStatus?.status === "available";
 
   const runLibreOfficeCheck = async () => {
@@ -246,22 +244,22 @@ export function DeveloperPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <div className="flex items-start justify-between gap-3 max-[720px]:flex-col">
-            <div>
-              <CardTitle>Diagnostics Bundle</CardTitle>
-              <CardDescription>Local logs and redacted technical metadata.</CardDescription>
-            </div>
-            <Badge
-              variant={privacyTelemetrySettings.diagnosticsUploadEnabled ? "secondary" : "outline"}
-            >
-              Uploads {privacyTelemetrySettings.diagnosticsUploadEnabled ? "allowed" : "off"}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    <SettingsPage>
+      <SettingsSection
+        title="Diagnostics Bundle"
+        description="Local logs and redacted technical metadata."
+        action={
+          <SettingsStatusPill
+            tone={privacyTelemetrySettings.diagnosticsUploadEnabled ? "success" : "neutral"}
+          >
+            Uploads {privacyTelemetrySettings.diagnosticsUploadEnabled ? "allowed" : "off"}
+          </SettingsStatusPill>
+        }
+      >
+        <SettingsRow
+          title="Bundle actions"
+          description="Create a redacted bundle, open local logs, or copy the summary."
+        >
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -327,102 +325,92 @@ export function DeveloperPage() {
               </Button>
             ) : null}
           </div>
+        </SettingsRow>
+        <SettingsRow
+          title="Last bundle"
+          description={
+            <span className="break-all">{diagnosticsBundle?.path ?? "No bundle created yet."}</span>
+          }
+          meta={diagnosticsStatus}
+        />
+      </SettingsSection>
 
-          <div className="rounded-xl border border-border/70 bg-muted/15 p-4 text-xs">
-            <div className="font-medium text-foreground">Last bundle</div>
-            <div className="mt-1 break-all text-muted-foreground">
-              {diagnosticsBundle?.path ?? "No bundle created yet."}
-            </div>
-            {diagnosticsStatus ? (
-              <div className="mt-2 text-muted-foreground">{diagnosticsStatus}</div>
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>File Explorer</CardTitle>
-          <CardDescription>Configure how files are displayed in the workspace.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div>
-              <div className="text-sm font-medium">Show hidden files</div>
-              <div className="text-xs text-muted-foreground">
-                Display dotfiles and other hidden system files.
-              </div>
-            </div>
+      <SettingsSection
+        title="File Explorer"
+        description="Configure how files are displayed in the workspace."
+      >
+        <SettingsRow
+          title="Show hidden files"
+          description="Display dotfiles and other hidden system files."
+          control={
             <Switch
               checked={showHiddenFiles}
               aria-label="Show hidden files"
               onCheckedChange={setShowHiddenFiles}
             />
-          </div>
-        </CardContent>
-      </Card>
+          }
+        />
+      </SettingsSection>
 
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>System & Debugging</CardTitle>
-          <CardDescription>Internal visibility and event tracking.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div>
-              <div className="text-sm font-medium">Developer mode</div>
-              <div className="text-xs text-muted-foreground">
-                Show internal system notices in the chat feed.
-              </div>
-            </div>
+      <SettingsSection
+        title="System & Debugging"
+        description="Internal visibility and event tracking."
+      >
+        <SettingsRow
+          title="Developer mode"
+          description="Show internal system notices in the chat feed."
+          control={
             <Switch
               checked={developerMode}
               aria-label="Enable developer mode"
               onCheckedChange={setDeveloperMode}
             />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <div className="flex items-start justify-between gap-3 max-[720px]:flex-col">
-            <div>
-              <CardTitle>LibreOffice</CardTitle>
-              <CardDescription>Managed headless document-rendering runtime.</CardDescription>
-            </div>
-            <Badge variant={libreOfficeState.variant}>
-              {libreOfficeHealthy ? (
-                <CheckCircle2Icon aria-hidden="true" />
-              ) : libreOfficeStatus ? (
-                <TriangleAlertIcon aria-hidden="true" />
-              ) : null}
-              {libreOfficeState.label}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="grid gap-3 text-xs text-muted-foreground md:grid-cols-2">
-            <div>
-              <div className="text-sm font-medium text-foreground">Resolved executable</div>
-              <div className="break-all">{libreOfficeStatus?.resolvedPath ?? "Not checked"}</div>
-            </div>
-            <div>
-              <div className="text-sm font-medium text-foreground">Version</div>
-              <div>{libreOfficeStatus?.version ?? "Not checked"}</div>
-            </div>
-            <div>
-              <div className="text-sm font-medium text-foreground">PDF smoke test</div>
-              <div className="break-words">{smokeSummary(libreOfficeStatus)}</div>
-            </div>
-          </div>
-          {libreOfficeStatus ? (
-            <div className="text-xs text-muted-foreground">{libreOfficeStatus.message}</div>
-          ) : null}
-          <div>
+          }
+        />
+        <SettingsRow
+          title="Onboarding"
+          description="Re-run the first-time setup walkthrough."
+          control={
             <Button
               type="button"
               variant="outline"
+              aria-label="Run onboarding again"
+              onClick={async () => {
+                const confirmed = await confirmAction({
+                  title: "Run onboarding again",
+                  message: "Restart the first-time setup walkthrough?",
+                  detail: "Your workspaces and settings will be kept.",
+                  confirmLabel: "Run onboarding",
+                  cancelLabel: "Cancel",
+                  kind: "info",
+                  defaultAction: "cancel",
+                });
+                if (confirmed) startOnboarding();
+              }}
+            >
+              Run onboarding again
+            </Button>
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="LibreOffice"
+        description="Managed headless document-rendering runtime."
+        action={
+          <>
+            <SettingsStatusPill tone={libreOfficePill.tone}>
+              {libreOfficeHealthy ? (
+                <CheckCircle2Icon aria-hidden="true" className="size-3" />
+              ) : libreOfficeStatus ? (
+                <TriangleAlertIcon aria-hidden="true" className="size-3" />
+              ) : null}
+              {libreOfficePill.label}
+            </SettingsStatusPill>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               disabled={libreOfficeChecking || !workspace}
               onClick={() => void runLibreOfficeCheck()}
             >
@@ -433,60 +421,51 @@ export function DeveloperPage() {
               )}
               Check managed runtime
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </>
+        }
+      >
+        <SettingsRow
+          title="Resolved executable"
+          description={
+            <span className="break-all">{libreOfficeStatus?.resolvedPath ?? "Not checked"}</span>
+          }
+        />
+        <SettingsRow
+          title="Version"
+          control={
+            <span className="text-sm text-foreground">
+              {libreOfficeStatus?.version ?? "Not checked"}
+            </span>
+          }
+        />
+        <SettingsRow
+          title="PDF smoke test"
+          description={<span className="break-words">{smokeSummary(libreOfficeStatus)}</span>}
+          meta={libreOfficeStatus ? libreOfficeStatus.message : null}
+        />
+      </SettingsSection>
 
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Onboarding</CardTitle>
-          <CardDescription>Re-run the first-time setup walkthrough.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button
-            type="button"
-            variant="outline"
-            aria-label="Run onboarding again"
-            onClick={async () => {
-              const confirmed = await confirmAction({
-                title: "Run onboarding again",
-                message: "Restart the first-time setup walkthrough?",
-                detail: "Your workspaces and settings will be kept.",
-                confirmLabel: "Run onboarding",
-                cancelLabel: "Cancel",
-                kind: "info",
-                defaultAction: "cancel",
-              });
-              if (confirmed) startOnboarding();
-            }}
-          >
-            Run onboarding again
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Large Tool Output Handling</CardTitle>
-          <CardDescription>
-            Save very large tool output to scratch files instead of keeping all of it inline.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {!workspace ? (
-            <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
-              Add a workspace to configure large tool output handling.
-            </div>
-          ) : (
-            <>
-              {workspacePickerEnabled && workspaceTargets.length > 1 && activeWorkspaceTarget ? (
-                <div className="space-y-2">
-                  <div className="text-sm font-medium">Workspace</div>
+      <SettingsSection
+        title="Large Tool Output Handling"
+        description="Save very large tool output to scratch files instead of keeping all of it inline."
+      >
+        {!workspace ? (
+          <SettingsRow
+            title="No workspace available"
+            description="Add a workspace to configure large tool output handling."
+          />
+        ) : (
+          <>
+            {workspacePickerEnabled && workspaceTargets.length > 1 && activeWorkspaceTarget ? (
+              <SettingsRow
+                title="Workspace"
+                description={activeWorkspaceTarget.targetPath ?? workspace.path}
+                control={
                   <Select
                     value={activeWorkspaceTarget.id}
                     onValueChange={handleWorkspaceTargetChange}
                   >
-                    <SelectTrigger aria-label="Developer workspace">
+                    <SelectTrigger aria-label="Developer workspace" className="min-w-48">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -497,28 +476,19 @@ export function DeveloperPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-              ) : null}
+                }
+              />
+            ) : (
+              <SettingsRow
+                title={activeWorkspaceTarget?.label ?? workspace.name}
+                description={activeWorkspaceTarget?.targetPath ?? workspace.path}
+              />
+            )}
 
-              <div className="rounded-xl border border-border/70 bg-muted/15 p-4">
-                <div className="text-sm font-medium text-foreground">
-                  {activeWorkspaceTarget?.label ?? workspace.name}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {activeWorkspaceTarget?.targetPath ?? workspace.path}
-                </div>
-              </div>
-
-              <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                <div>
-                  <div className="text-sm font-medium">
-                    Save oversized tool output to scratch files
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    When enabled, oversized text or JSON-like tool results are saved to disk instead
-                    of filling up the chat history. Cowork keeps a fixed inline preview.
-                  </div>
-                </div>
+            <SettingsRow
+              title="Save oversized tool output to scratch files"
+              description="When enabled, oversized text or JSON-like tool results are saved to disk instead of filling up the chat history. Cowork keeps a fixed inline preview."
+              control={
                 <Switch
                   checked={overflowEnabled}
                   aria-label="Save oversized tool output to scratch files"
@@ -533,12 +503,20 @@ export function DeveloperPage() {
                     });
                   }}
                 />
-              </div>
+              }
+            />
 
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-foreground">
-                  Spill after this many characters
-                </div>
+            <SettingsRow
+              title="Spill after this many characters"
+              description={
+                <>
+                  Once a result spills, Cowork keeps the first 5,000 characters inline and saves the
+                  rest to <code>{workspace.path}/.ModelScratchpad</code>. Default:{" "}
+                  {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
+                </>
+              }
+            >
+              <div className="max-w-md space-y-2">
                 <Input
                   type="text"
                   inputMode="numeric"
@@ -548,11 +526,6 @@ export function DeveloperPage() {
                   disabled={!overflowEnabled}
                   onChange={(event) => setOverflowThresholdDraft(event.target.value)}
                 />
-                <div className="text-xs text-muted-foreground">
-                  Once a result spills, Cowork keeps the first 5,000 characters inline and saves the
-                  rest to <code>{workspace.path}/.ModelScratchpad</code>. Default:{" "}
-                  {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
-                </div>
                 {overflowThresholdError ? (
                   <div className="text-xs text-destructive">{overflowThresholdError}</div>
                 ) : (
@@ -561,44 +534,43 @@ export function DeveloperPage() {
                     preview.
                   </div>
                 )}
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  disabled={!overflowThresholdDirty || !!overflowThresholdError}
-                  onClick={() => {
-                    if (parsedOverflowThreshold === null) return;
-                    setOverflowThresholdDraft(String(parsedOverflowThreshold));
-                    void updateWorkspaceDefaults(workspace.id, {
-                      defaultToolOutputOverflowChars: parsedOverflowThreshold,
-                    });
-                  }}
-                >
-                  Save threshold
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={overflowEnabled && overflowUsesInheritedDefault}
-                  onClick={() => {
-                    if (overflowEnabled) {
-                      setOverflowThresholdDraft(String(nextEnabledOverflowThreshold));
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    type="button"
+                    disabled={!overflowThresholdDirty || !!overflowThresholdError}
+                    onClick={() => {
+                      if (parsedOverflowThreshold === null) return;
+                      setOverflowThresholdDraft(String(parsedOverflowThreshold));
                       void updateWorkspaceDefaults(workspace.id, {
-                        clearDefaultToolOutputOverflowChars: true,
+                        defaultToolOutputOverflowChars: parsedOverflowThreshold,
                       });
-                      return;
-                    }
-                    enableOverflowWithDefault();
-                  }}
-                >
-                  {overflowEnabled ? "Inherit default" : "Enable default"}
-                </Button>
+                    }}
+                  >
+                    Save threshold
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={overflowEnabled && overflowUsesInheritedDefault}
+                    onClick={() => {
+                      if (overflowEnabled) {
+                        setOverflowThresholdDraft(String(nextEnabledOverflowThreshold));
+                        void updateWorkspaceDefaults(workspace.id, {
+                          clearDefaultToolOutputOverflowChars: true,
+                        });
+                        return;
+                      }
+                      enableOverflowWithDefault();
+                    }}
+                  >
+                    {overflowEnabled ? "Inherit default" : "Enable default"}
+                  </Button>
+                </div>
               </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+            </SettingsRow>
+          </>
+        )}
+      </SettingsSection>
+    </SettingsPage>
   );
 }

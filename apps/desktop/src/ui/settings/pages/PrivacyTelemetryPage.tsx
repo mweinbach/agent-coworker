@@ -100,6 +100,13 @@ export function PrivacyTelemetryPage() {
         title="Privacy & Telemetry"
         description="Cowork is local-first. These toggles only control optional reporting and AI diagnostics. Disabling them must prevent network telemetry from starting."
       >
+        {status.globalKillSwitchActive ? (
+          <SettingsRow
+            title="Global kill switch"
+            description="COWORK_DISABLE_NETWORK_TELEMETRY is active. Network telemetry is disabled."
+            control={<Badge variant="destructive">Disabled</Badge>}
+          />
+        ) : null}
         <SettingsRow
           title="Crash reports"
           description="Sends crash/error reports and basic technical metadata."
@@ -153,33 +160,6 @@ export function PrivacyTelemetryPage() {
               onCheckedChange={setAiTracePayloadsEnabled}
             />
           }
-        />
-      </SettingsSection>
-      <SettingsSection
-        title="Telemetry status"
-        description="Current network telemetry state for this build and configuration."
-      >
-        {status.globalKillSwitchActive ? (
-          <SettingsRow
-            title="Global kill switch"
-            description="COWORK_DISABLE_NETWORK_TELEMETRY is active. Network telemetry is disabled."
-            control={<Badge variant="destructive">Disabled</Badge>}
-          />
-        ) : null}
-        <SettingsRow
-          title="Crash reports"
-          description="Sentry crash/error reporting."
-          control={statusBadge(status.crashReports)}
-        />
-        <SettingsRow
-          title="Product analytics"
-          description="PostHog event-count analytics."
-          control={statusBadge(status.productAnalytics)}
-        />
-        <SettingsRow
-          title="AI traces"
-          description="Langfuse turn/tool tracing."
-          control={statusBadge(status.aiTraces)}
         />
       </SettingsSection>
     </SettingsPage>

@@ -124,50 +124,95 @@ describe("desktop workspaces page", () => {
     useAppStore.setState(defaultStoreActions);
   });
 
-  test("renders OpenAI and ChatGPT settings controls", () => {
-    const html = renderToStaticMarkup(
-      createElement(OpenAiCompatibleModelSettingsCard, {
-        workspace: {
-          id: "ws-1",
-          providerOptions: {
-            openai: {
-              reasoningEffort: "high",
-              reasoningSummary: "detailed",
-              textVerbosity: "medium",
-            },
-            "codex-cli": {
-              reasoningEffort: "medium",
-              reasoningSummary: "concise",
-              textVerbosity: "low",
-              webSearchBackend: "native",
-              webSearchMode: "live",
-              webSearch: {
-                contextSize: "high",
-                allowedDomains: ["openai.com"],
-                location: {
-                  country: "US",
-                  timezone: "America/New_York",
+  test("renders OpenAI and ChatGPT settings collapsed by default and expands on click", async () => {
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(OpenAiCompatibleModelSettingsCard, {
+            workspace: {
+              id: "ws-1",
+              providerOptions: {
+                openai: {
+                  reasoningEffort: "high",
+                  reasoningSummary: "detailed",
+                  textVerbosity: "medium",
+                },
+                "codex-cli": {
+                  reasoningEffort: "medium",
+                  reasoningSummary: "concise",
+                  textVerbosity: "low",
+                  webSearchBackend: "native",
+                  webSearchMode: "live",
+                  webSearch: {
+                    contextSize: "high",
+                    allowedDomains: ["openai.com"],
+                    location: {
+                      country: "US",
+                      timezone: "America/New_York",
+                    },
+                  },
                 },
               },
             },
-          },
-        },
-        providerStatusByName: {
-          openai: { verified: true },
-          "codex-cli": { authorized: true, mode: "oauth" },
-        },
+            providerStatusByName: {
+              openai: { verified: true },
+              "codex-cli": { authorized: true, mode: "oauth" },
+            },
+            updateWorkspaceDefaults: async () => {},
+          }),
+        );
+      });
+
+      const collapsedText = container.textContent ?? "";
+      expect(collapsedText).toContain("OpenAI & ChatGPT");
+      expect(collapsedText).toContain(
+        "Verbosity and reasoning defaults for ChatGPT Subscription and OpenAI API models.",
+      );
+      expect(collapsedText).not.toContain("Reasoning summary");
+
+      const trigger = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("OpenAI & ChatGPT"),
+      );
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing OpenAI settings trigger");
+      }
+      await act(async () => {
+        trigger.click();
+      });
+
+      const expandedText = container.textContent ?? "";
+      expect(expandedText).toContain("OpenAI API");
+      expect(expandedText).toContain("ChatGPT Subscription");
+      expect(expandedText).toContain("Verbosity");
+      expect(expandedText).toContain("Reasoning effort");
+      expect(expandedText).toContain("Reasoning summary");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("hides OpenAI and ChatGPT settings when neither provider is configured", () => {
+    const html = renderToStaticMarkup(
+      createElement(OpenAiCompatibleModelSettingsCard, {
+        workspace: { id: "ws-1", providerOptions: {} },
+        providerStatusByName: {},
         updateWorkspaceDefaults: async () => {},
       }),
     );
 
-    expect(html).toContain("OpenAI &amp; ChatGPT Settings");
-    expect(html).toContain("Default behavior for ChatGPT Subscription and OpenAI API models.");
-    expect(html).toContain("OpenAI API");
-    expect(html).toContain("ChatGPT Subscription");
-    expect(html).toContain("Verbosity");
-    expect(html).toContain("Reasoning effort");
-    expect(html).toContain("Reasoning summary");
-    expect(html).toContain("OpenAI API");
+    expect(html).toBe("");
   });
 
   test("renders shared search controls and Codex app-server web search mode", async () => {
@@ -244,30 +289,156 @@ describe("desktop workspaces page", () => {
     }
   });
 
-  test("renders Gemini API settings controls for reasoning effort", () => {
+  test("renders Gemini API settings collapsed by default and expands on click", async () => {
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(GeminiApiSettingsCard, {
+            workspace: {
+              id: "ws-1",
+              defaultProvider: "google",
+              defaultModel: "gemini-3-flash-preview",
+              providerOptions: {
+                google: {
+                  nativeWebSearch: true,
+                },
+              },
+            },
+            providerStatusByName: {
+              google: { verified: true },
+            },
+            googleDefaultModel: "gemini-3.1-pro-preview",
+            updateWorkspaceDefaults: async () => {},
+          }),
+        );
+      });
+
+      const collapsedText = container.textContent ?? "";
+      expect(collapsedText).toContain("Gemini API");
+      expect(collapsedText).toContain("Reasoning defaults for Gemini API models.");
+      expect(collapsedText).not.toContain("Reasoning effort");
+
+      const trigger = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Gemini API"),
+      );
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Gemini settings trigger");
+      }
+      await act(async () => {
+        trigger.click();
+      });
+
+      const expandedText = container.textContent ?? "";
+      expect(expandedText).toContain("Reasoning effort");
+      expect(expandedText).toContain("gemini-3-flash-preview");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("hides Gemini API settings when Google is not configured", () => {
     const html = renderToStaticMarkup(
       createElement(GeminiApiSettingsCard, {
         workspace: {
           id: "ws-1",
-          defaultProvider: "google",
-          defaultModel: "gemini-3-flash-preview",
-          providerOptions: {
-            google: {
-              nativeWebSearch: true,
-            },
-          },
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          providerOptions: {},
         },
-        providerStatusByName: {
-          google: { verified: true },
-        },
+        providerStatusByName: {},
         googleDefaultModel: "gemini-3.1-pro-preview",
         updateWorkspaceDefaults: async () => {},
       }),
     );
 
-    expect(html).toContain("Gemini API settings");
-    expect(html).toContain("Reasoning effort");
-    expect(html).toContain("gemini-3-flash-preview");
+    expect(html).toBe("");
+  });
+
+  test("models surface hides the defaults summary badges", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: false,
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace",
+          path: "/tmp/workspace",
+          workspaceKind: "project",
+          createdAt: "2026-04-17T00:00:00.000Z",
+          lastOpenedAt: "2026-04-17T00:00:00.000Z",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      providerCatalog: [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3-flash-preview",
+          models: [
+            {
+              id: "gemini-3-flash-preview",
+              displayName: "Gemini 3 Flash Preview",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+      ],
+      providerConnected: ["google"],
+      providerStatusByName: {
+        google: { verified: true },
+      },
+      providerDefaultModelByProvider: {
+        google: "gemini-3-flash-preview",
+      },
+    }));
+
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(WorkspacesPage, { surface: "models" }));
+      });
+
+      const text = container.textContent ?? "";
+      expect(text).not.toContain("Current provider:");
+      expect(text).not.toContain("Preferred subagent model:");
+      expect(text).toContain("Defaults");
+      expect(text).toContain("The provider and model Cowork uses for new chats.");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
   });
 
   test("surfaces legacy Gemini-local search overrides in the shared Search card", () => {
@@ -597,15 +768,15 @@ describe("desktop workspaces page", () => {
         ),
       ).toBe(false);
 
-      const advancedTab = [...container.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Advanced",
+      const advancedActionsToggle = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Advanced actions"),
       );
-      if (!(advancedTab instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing Advanced tab");
+      if (!(advancedActionsToggle instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Advanced actions toggle");
       }
 
       await act(async () => {
-        advancedTab.click();
+        advancedActionsToggle.click();
       });
 
       expect(container.textContent).not.toContain("Restart server");
@@ -621,9 +792,13 @@ describe("desktop workspaces page", () => {
   });
 
   test("uses project defaults in shared mode and the selected chat in per-target mode", async () => {
+    const updateDefaultsCalls: string[] = [];
     useAppStore.setState((state) => ({
       ...state,
       perWorkspaceSettings: false,
+      updateWorkspaceDefaults: (async (workspaceId: string) => {
+        updateDefaultsCalls.push(workspaceId);
+      }) as unknown as ReturnType<typeof useAppStore.getState>["updateWorkspaceDefaults"],
       workspaces: [
         {
           id: "project-1",
@@ -699,13 +874,24 @@ describe("desktop workspaces page", () => {
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
+      const clickMcpToggle = async () => {
+        const toggle = container.querySelector('[aria-label="Enable MCP tools"]');
+        if (!(toggle instanceof harness.dom.window.HTMLElement)) {
+          throw new Error("missing MCP tools toggle");
+        }
+        await act(async () => {
+          toggle.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+          await flushUi();
+        });
+      };
+
       await act(async () => {
         root.render(createElement(WorkspacesPage));
       });
 
-      expect(container.textContent).toContain("gemini-3-flash-preview");
       expect(container.textContent).not.toContain("One-off chat");
-      expect(container.textContent).not.toContain("ajax");
+      await clickMcpToggle();
+      expect(updateDefaultsCalls).toEqual(["project-1"]);
 
       await act(async () => {
         useAppStore.setState({ perWorkspaceSettings: true });
@@ -714,7 +900,8 @@ describe("desktop workspaces page", () => {
 
       expect(container.textContent).toContain("Chats");
       expect(container.textContent).not.toContain("One-off chat");
-      expect(container.textContent).toContain("ajax");
+      await clickMcpToggle();
+      expect(updateDefaultsCalls).toEqual(["project-1", "chat-1"]);
     } finally {
       if (root) {
         await act(async () => {
@@ -800,21 +987,10 @@ describe("desktop workspaces page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(WorkspacesPage));
+        root.render(createElement(WorkspacesPage, { surface: "models" }));
       });
 
-      const modelsTab = [...container.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Models",
-      );
-      if (!(modelsTab instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing Models tab");
-      }
-
-      await act(async () => {
-        modelsTab.click();
-      });
-
-      expect(container.textContent).toContain("gemini-3-flash-preview");
+      expect(container.textContent).toContain("Subagents");
       expect(container.textContent).not.toContain("ajax");
 
       const manageProfilesButton = [...container.querySelectorAll("button")].find(
@@ -1012,39 +1188,21 @@ describe("desktop workspaces page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(WorkspacesPage));
-      });
-
-      const topLevelText = container.textContent ?? "";
-      expect(topLevelText).toContain("Current provider:");
-      expect(topLevelText).toContain("Model:");
-      expect(topLevelText).toContain("Subagent routing:");
-      expect(topLevelText).toContain("Preferred subagent model:");
-      expect(topLevelText.indexOf("Current provider:")).toBeLessThan(
-        topLevelText.indexOf("Settings target"),
-      );
-
-      const modelsTab = [...container.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Models",
-      );
-      if (!(modelsTab instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing Models tab");
-      }
-
-      await act(async () => {
-        modelsTab.click();
+        root.render(createElement(WorkspacesPage, { surface: "models" }));
       });
 
       const text = container.textContent ?? "";
-      expect(text).toContain("Subagent routing");
-      expect(text).toContain("Multiple providers");
+      expect(text).toContain("Subagents");
+      expect(text).toContain("Pick models from any connected provider");
       expect(text).toContain("Subagent Models");
       expect(text).toContain("Preferred subagent model");
 
       const subagentModelsToggle = [...container.querySelectorAll("button")].find(
         (button) =>
           button.textContent?.trim() === "Show" &&
-          button.closest('[data-slot="card-content"]')?.textContent?.includes("Subagent Models"),
+          button
+            .closest('[data-slot="collapsible"], .app-shadow-surface')
+            ?.textContent?.includes("Subagent Models"),
       );
       if (!(subagentModelsToggle instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing Subagent Models toggle");
@@ -1055,9 +1213,8 @@ describe("desktop workspaces page", () => {
       });
 
       const expandedText = container.textContent ?? "";
-      expect(expandedText).toContain("OpenCode Zen | glm-5");
       // Search within the subagent models section to avoid matching provider
-      // names that appear earlier in the summary bar or dropdowns.
+      // names that appear earlier in dropdowns.
       const sectionStart = expandedText.lastIndexOf("Subagent Models");
       expect(sectionStart).toBeGreaterThanOrEqual(0);
       const sectionText = expandedText.slice(sectionStart);

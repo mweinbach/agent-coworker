@@ -92,6 +92,41 @@ export function createAgentProfilesRouteHandlers(
       context.jsonrpc.sendResult(ws, message.id, { event });
     },
 
+    "cowork/agentProfiles/workspaceAvailability/set": async (ws, message) => {
+      const parsed = jsonRpcAgentProfilesRequestSchemas[
+        "cowork/agentProfiles/workspaceAvailability/set"
+      ].safeParse(message.params);
+      if (!parsed.success) {
+        sendInvalidParams(context, ws, message.id, message.method, parsed.error);
+        return;
+      }
+      const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+      const mutationError = await captureWorkspaceControlMutationError(
+        context,
+        cwd,
+        async (runtime) =>
+          await runtime.agentProfiles.setWorkspaceAvailability(
+            parsed.data.id,
+            parsed.data.disabled,
+          ),
+      );
+      if (mutationError) {
+        sendSessionMutationError(context, ws, message.id, mutationError);
+        return;
+      }
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.agentProfiles.getCatalog(),
+        isAgentProfilesCatalogEvent,
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
     "cowork/agentProfiles/copy": async (ws, message) => {
       const parsed = jsonRpcAgentProfilesRequestSchemas["cowork/agentProfiles/copy"].safeParse(
         message.params,

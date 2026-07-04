@@ -150,7 +150,7 @@ describe("workspace settings sync", () => {
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
   });
 
-  test("removeWorkspace clears pluginManagementWorkspaceId when the deleted workspace owned plugin management", async () => {
+  test("removeWorkspace drops the deleted workspace from the workspace list", async () => {
     primeWorkspaceConnection();
     const managementWorkspaceId = `ws-management-${crypto.randomUUID()}`;
     useAppStore.setState((state) => ({
@@ -173,13 +173,11 @@ describe("workspace settings sync", () => {
           yolo: false,
         },
       ],
-      pluginManagementWorkspaceId: managementWorkspaceId,
     }));
 
     await useAppStore.getState().removeWorkspace(managementWorkspaceId);
 
     const state = useAppStore.getState();
-    expect(state.pluginManagementWorkspaceId).toBeNull();
     expect(state.workspaces.some((workspace) => workspace.id === managementWorkspaceId)).toBe(
       false,
     );

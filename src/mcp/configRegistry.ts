@@ -17,4 +17,5 @@ export {
 export type {
   MCPRegistryFileState,
   MCPRegistryServer,
+  MCPServerSource,
 } from "./configRegistry/types";

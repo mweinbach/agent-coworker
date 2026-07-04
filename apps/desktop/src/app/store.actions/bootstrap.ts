@@ -26,10 +26,6 @@ import {
   normalizePersistedProviderState,
 } from "../persistedProviderState";
 import {
-  resolvePluginCatalogWorkspaceSelection,
-  resolvePluginManagementWorkspaceId,
-} from "../pluginManagement";
-import {
   deriveDefaultLmStudioUiEnabled,
   normalizePersistedProviderUiState,
 } from "../providerUiState";
@@ -38,9 +34,6 @@ import {
   type AppStoreActions,
   type AppStoreDataState,
   defaultThreadRuntime,
-  ensureControlSocket,
-  ensureServerRunning,
-  ensureWorkspaceRuntime,
   isProviderName,
   makeId,
   normalizeThreadTitleSource,
@@ -113,16 +106,27 @@ const normalizedLastEventSeqSchema = z.preprocess(
     typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0,
   z.number().int().nonnegative(),
 );
+
+function normalizeLegacyUiSurface(value: unknown): unknown {
+  if (!isRecord(value) || value.view !== "skills") {
+    return value;
+  }
+
+  return {
+    ...value,
+    settingsPage: "toolAccess",
+  };
+}
+
 const normalizedViewSchema = z.preprocess(
-  (value) =>
-    value === "chat" ||
-    value === "task" ||
-    value === "skills" ||
-    value === "research" ||
-    value === "settings"
+  (value) => {
+    // The standalone skills/plugins view moved into Settings > Tool Access.
+    if (value === "skills") return "settings";
+    return value === "chat" || value === "task" || value === "research" || value === "settings"
       ? value
-      : "chat",
-  z.enum(["chat", "task", "skills", "research", "settings"]),
+      : "chat";
+  },
+  z.enum(["chat", "task", "research", "settings"]),
 );
 
 function normalizeSettingsPageId(
@@ -345,46 +349,45 @@ const persistedThreadSchema = z
     };
   });
 
-const persistedUiSchema = z
-  .object({
-    selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
-    selectedThreadId: normalizedNullableSelectionSchema.optional(),
-    selectedTaskId: normalizedNullableSelectionSchema.optional(),
-    pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
-    pluginManagementMode: z.enum(["auto", "global", "workspace"]).optional(),
-    view: normalizedViewSchema.optional(),
-    settingsPage: normalizedSettingsPageSchema.optional(),
-    lastNonSettingsView: normalizedViewSchema.optional(),
-    sidebarCollapsed: z
-      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
-      .optional(),
-    sidebarWidth: normalizedUiWidthSchema(160, 440, 248).optional(),
-    contextSidebarCollapsed: z
-      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
-      .optional(),
-    contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
-    canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
-    messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
-  })
-  .passthrough()
-  .transform(
-    (ui): CachedDesktopUiState => ({
-      selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
-      selectedThreadId: ui.selectedThreadId ?? null,
-      selectedTaskId: ui.selectedTaskId ?? null,
-      pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
-      pluginManagementMode: ui.pluginManagementMode ?? "auto",
-      view: ui.view ?? "chat",
-      settingsPage: ui.settingsPage ?? "models",
-      lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
-      sidebarCollapsed: ui.sidebarCollapsed ?? false,
-      sidebarWidth: ui.sidebarWidth ?? 248,
-      contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
-      contextSidebarWidth: ui.contextSidebarWidth ?? 300,
-      canvasSidebarWidth: ui.canvasSidebarWidth ?? 500,
-      messageBarHeight: ui.messageBarHeight ?? 96,
-    }),
-  );
+const persistedUiSchema = z.preprocess(
+  normalizeLegacyUiSurface,
+  z
+    .object({
+      selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
+      selectedThreadId: normalizedNullableSelectionSchema.optional(),
+      selectedTaskId: normalizedNullableSelectionSchema.optional(),
+      view: normalizedViewSchema.optional(),
+      settingsPage: normalizedSettingsPageSchema.optional(),
+      lastNonSettingsView: normalizedViewSchema.optional(),
+      sidebarCollapsed: z
+        .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+        .optional(),
+      sidebarWidth: normalizedUiWidthSchema(160, 440, 248).optional(),
+      contextSidebarCollapsed: z
+        .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+        .optional(),
+      contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
+      canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
+      messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
+    })
+    .passthrough()
+    .transform(
+      (ui): CachedDesktopUiState => ({
+        selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
+        selectedThreadId: ui.selectedThreadId ?? null,
+        selectedTaskId: ui.selectedTaskId ?? null,
+        view: ui.view ?? "chat",
+        settingsPage: ui.settingsPage ?? "models",
+        lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
+        sidebarCollapsed: ui.sidebarCollapsed ?? false,
+        sidebarWidth: ui.sidebarWidth ?? 248,
+        contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
+        contextSidebarWidth: ui.contextSidebarWidth ?? 300,
+        canvasSidebarWidth: ui.canvasSidebarWidth ?? 500,
+        messageBarHeight: ui.messageBarHeight ?? 96,
+      }),
+    ),
+);
 
 const privacyTelemetrySettingsSchema = z.preprocess(
   (value) =>
@@ -533,19 +536,11 @@ function buildResolvedDesktopUiState(
     b.lastOpenedAt.localeCompare(a.lastOpenedAt),
   );
   const fallbackSelectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
-  const selection = resolvePluginCatalogWorkspaceSelection({
-    workspaces,
-    selectedWorkspaceId:
-      normalizedUi.selectedWorkspaceId &&
-      workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
-        ? normalizedUi.selectedWorkspaceId
-        : fallbackSelectedWorkspaceId,
-    pluginManagementWorkspaceId: normalizedUi.pluginManagementWorkspaceId,
-    pluginManagementMode: normalizedUi.pluginManagementMode,
-  });
-  const selectedWorkspaceId = selection.selectedWorkspaceId;
-  const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
-  const pluginManagementMode = selection.pluginManagementMode;
+  const selectedWorkspaceId =
+    normalizedUi.selectedWorkspaceId &&
+    workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
+      ? normalizedUi.selectedWorkspaceId
+      : fallbackSelectedWorkspaceId;
   // When the Tasks feature is disabled — including packaged builds that ignore a
   // stale dev override — never resolve into task context. This is the single
   // invariant that keeps `view` out of "task" so the App/PrimaryContent task
@@ -600,8 +595,6 @@ function buildResolvedDesktopUiState(
     selectedWorkspaceId,
     selectedThreadId,
     selectedTaskId: threadSelectionIntent.selectedTaskId,
-    pluginManagementWorkspaceId,
-    pluginManagementMode,
     view,
     settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage, desktopFeatures),
     lastNonSettingsView,
@@ -716,8 +709,6 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       selectedWorkspaceId: ui.selectedWorkspaceId,
       selectedThreadId: ui.selectedThreadId,
       selectedTaskId: ui.selectedTaskId,
-      pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
-      pluginManagementMode: ui.pluginManagementMode,
       providerStatusByName: state.providerState?.statusByName ?? {},
       providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
       providerConnected: connectedProviders,
@@ -804,8 +795,6 @@ export function createBootstrapActions(
             selectedWorkspaceId: get().selectedWorkspaceId,
             selectedThreadId: get().selectedThreadId,
             selectedTaskId: get().selectedTaskId,
-            pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
-            pluginManagementMode: get().pluginManagementMode,
             view: get().view,
             settingsPage: get().settingsPage,
             lastNonSettingsView: get().lastNonSettingsView,
@@ -873,8 +862,6 @@ export function createBootstrapActions(
           selectedWorkspaceId: ui.selectedWorkspaceId,
           selectedThreadId: ui.selectedThreadId,
           selectedTaskId: ui.selectedTaskId,
-          pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
-          pluginManagementMode: ui.pluginManagementMode,
           providerStatusByName: state.providerState?.statusByName ?? {},
           providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
           providerConnected: connectedProviders,
@@ -942,25 +929,6 @@ export function createBootstrapActions(
               return;
             }
             void current.selectWorkspace(selectedWorkspaceId);
-          });
-        } else if (ui.selectedWorkspaceId && ui.view === "skills") {
-          const startupWorkspaceId =
-            resolvePluginManagementWorkspaceId(state.workspaces, ui.pluginManagementWorkspaceId) ??
-            ui.selectedWorkspaceId;
-          runAfterInitialPaint(() => {
-            const current = get();
-            if (
-              current.selectedWorkspaceId !== ui.selectedWorkspaceId ||
-              current.pluginManagementWorkspaceId !== ui.pluginManagementWorkspaceId ||
-              current.pluginManagementMode !== ui.pluginManagementMode ||
-              current.view !== "skills"
-            ) {
-              return;
-            }
-            ensureWorkspaceRuntime(get, set, startupWorkspaceId);
-            void ensureServerRunning(get, set, startupWorkspaceId).then(() => {
-              ensureControlSocket(get, set, startupWorkspaceId);
-            });
           });
         } else if (ui.selectedWorkspaceId && startupSelectionContext === "task") {
           const startupWorkspaceId = ui.selectedWorkspaceId;

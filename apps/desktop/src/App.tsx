@@ -1,7 +1,6 @@
 import type { CSSProperties } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 
-import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
 import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility";
 import { useAppStore } from "./app/store";
@@ -142,9 +141,6 @@ const ChatShell = memo(function ChatShell({
   const selectedTask = useAppStore((s) =>
     s.selectedTaskId ? s.tasksById[s.selectedTaskId] : null,
   );
-  const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
-  const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
-  const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
@@ -177,26 +173,6 @@ const ChatShell = memo(function ChatShell({
     const workspaceId = activeThread?.workspaceId ?? selectedWorkspaceId;
     return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
   }, [activeThread, selectedWorkspaceId, workspaces]);
-  const projectWorkspaces = useMemo(
-    () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
-    [workspaces],
-  );
-  const pluginSelection = useMemo(
-    () =>
-      resolvePluginCatalogWorkspaceSelection({
-        workspaces: projectWorkspaces,
-        selectedWorkspaceId,
-        pluginManagementWorkspaceId,
-        pluginManagementMode,
-      }),
-    [pluginManagementMode, pluginManagementWorkspaceId, projectWorkspaces, selectedWorkspaceId],
-  );
-  const pluginManagementWorkspace = useMemo(
-    () =>
-      projectWorkspaces.find((workspace) => workspace.id === pluginSelection.displayWorkspaceId) ??
-      null,
-    [pluginSelection.displayWorkspaceId, projectWorkspaces],
-  );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
   const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
@@ -204,10 +180,6 @@ const ChatShell = memo(function ChatShell({
   const showContextSidebar =
     (effectiveView === "chat" && activeThread !== null) ||
     (effectiveView === "task" && selectedTask !== null);
-  const catalogWorkspaceId = pluginSelection.catalogWorkspaceId;
-  const pluginViewMode = catalogWorkspaceId
-    ? (workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins")
-    : "plugins";
   const activeWorkspaceId = activeWorkspace?.id ?? null;
   const workspaceStartupProgress = useMemo(() => {
     const activeRuntime = activeWorkspaceId ? workspaceRuntimeById[activeWorkspaceId] : null;
@@ -223,23 +195,17 @@ const ChatShell = memo(function ChatShell({
     return null;
   }, [activeWorkspaceId, workspaceRuntimeById]);
   const topBarTitle =
-    effectiveView === "skills"
-      ? pluginViewMode === "skills"
-        ? "Skills"
-        : "Plugins"
-      : effectiveView === "research"
-        ? "Research"
-        : effectiveView === "task"
-          ? (selectedTask?.title ?? "New task")
-          : activeThread?.title?.trim() || "New thread";
+    effectiveView === "research"
+      ? "Research"
+      : effectiveView === "task"
+        ? (selectedTask?.title ?? "New task")
+        : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle: string | null =
-    effectiveView === "skills"
-      ? (pluginManagementWorkspace?.name ?? "Global")
-      : effectiveView === "research"
+    effectiveView === "research"
+      ? null
+      : isOneOffChatWorkspace(activeWorkspace)
         ? null
-        : isOneOffChatWorkspace(activeWorkspace)
-          ? null
-          : (activeWorkspace?.name ?? "Cowork");
+        : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
     runtime?.sessionUsage?.budgetStatus.stopTriggered === true &&
     runtime?.transcriptOnly !== true &&
@@ -310,19 +276,8 @@ const ChatShell = memo(function ChatShell({
         }
         title={topBarTitle}
         subtitle={topBarSubtitle}
-        managementMode={effectiveView === "skills" ? "plugins" : "thread"}
         suppressThreadDetails={effectiveView === "research"}
         hideThreadShell={isConversationView && activeThread === null}
-        managementWorkspaceId={pluginSelection.displayWorkspaceId}
-        managementWorkspaces={projectWorkspaces.map((workspace) => ({
-          id: workspace.id,
-          name: workspace.name,
-        }))}
-        onSelectManagementWorkspace={
-          effectiveView === "skills"
-            ? (workspaceId: string | null) => void setPluginManagementWorkspace(workspaceId)
-            : undefined
-        }
         sessionUsage={isConversationView ? (runtime?.sessionUsage ?? null) : null}
         lastTurnUsage={isConversationView ? (runtime?.lastTurnUsage ?? null) : null}
         agents={isConversationView ? (runtime?.agents ?? []) : []}
@@ -360,13 +315,11 @@ const ChatShell = memo(function ChatShell({
           aria-label={
             effectiveView === "settings"
               ? "Settings"
-              : effectiveView === "skills"
-                ? "Skills and plugins"
-                : effectiveView === "research"
-                  ? "Research"
-                  : effectiveView === "task"
-                    ? "Task"
-                    : "Chat"
+              : effectiveView === "research"
+                ? "Research"
+                : effectiveView === "task"
+                  ? "Task"
+                  : "Chat"
           }
           className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
@@ -378,13 +331,11 @@ const ChatShell = memo(function ChatShell({
                 startupError={startupError}
                 workspaceStartupProgress={workspaceStartupProgress}
                 view={
-                  effectiveView === "skills"
-                    ? "skills"
-                    : effectiveView === "research"
-                      ? "research"
-                      : effectiveView === "task"
-                        ? "task"
-                        : "chat"
+                  effectiveView === "research"
+                    ? "research"
+                    : effectiveView === "task"
+                      ? "task"
+                      : "chat"
                 }
               />
             </div>

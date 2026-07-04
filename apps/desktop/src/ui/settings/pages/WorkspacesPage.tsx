@@ -1,6 +1,5 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
-import { motion } from "framer-motion";
-import { ChevronDownIcon, InfoIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
@@ -45,13 +44,7 @@ import {
 import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
+import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Collapsible,
@@ -69,12 +62,6 @@ import {
 } from "../../../components/ui/select";
 import { Switch } from "../../../components/ui/switch";
 import { Textarea } from "../../../components/ui/textarea";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../../../components/ui/tooltip";
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
   type CatalogVisibilityOptions,
@@ -90,6 +77,7 @@ import {
 import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
+import { SettingsSection } from "../SettingsPrimitives";
 
 function ToggleChip({
   pressed,
@@ -223,10 +211,6 @@ function friendlyModelRef(ref: string): string {
   return `${displayProviderName(providerKey)} | ${model}`;
 }
 
-function subagentRoutingModeLabel(mode: "same-provider" | "cross-provider-allowlist"): string {
-  return mode === "same-provider" ? "Same model" : "Multiple providers";
-}
-
 function providerFromModelRef(ref: string): ProviderName | null {
   const colonIndex = ref.indexOf(":");
   if (colonIndex <= 0) return null;
@@ -315,124 +299,138 @@ export function OpenAiCompatibleModelSettingsCard({
   if (sections.length === 0) return null;
 
   return (
-    <Card className="border-border/80 bg-card/85">
-      <CardHeader>
-        <CardTitle>OpenAI &amp; ChatGPT Settings</CardTitle>
-        <CardDescription>
-          Default behavior for ChatGPT Subscription and OpenAI API models.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {sections.map((section) => (
-          <div key={section.key} className="space-y-4 rounded-lg border border-border/60 px-4 py-4">
-            <Badge variant="outline" className="rounded-sm text-xs font-medium">
-              {section.label}
-            </Badge>
+    <Collapsible>
+      <CollapsibleTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          className="group h-auto w-full justify-between rounded-none px-4 py-3.5 text-left hover:bg-muted/30"
+        >
+          <span>
+            <span className="block text-sm font-medium text-foreground">OpenAI &amp; ChatGPT</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              Verbosity and reasoning defaults for ChatGPT Subscription and OpenAI API models.
+            </span>
+          </span>
+          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-4 px-4 pb-5">
+          {sections.map((section) => (
+            <div
+              key={section.key}
+              className="space-y-4 rounded-lg border border-border/60 px-4 py-4"
+            >
+              <Badge variant="outline" className="rounded-sm text-xs font-medium">
+                {section.label}
+              </Badge>
 
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className={MODEL_CARD_FIELD_CLASS}>
-                <div className="text-[13px] font-medium text-foreground">Verbosity</div>
-                <Select
-                  value={section.verbosity}
-                  onValueChange={(value) => {
-                    void updateWorkspaceDefaults(workspace.id, {
-                      providerOptions: updateProviderOption(
-                        workspace.providerOptions,
-                        section.key,
-                        {
-                          textVerbosity: value as TextVerbosityValue,
-                        },
-                      ),
-                    });
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label={`${section.label} verbosity`}
-                    className={MODEL_CARD_SELECT_CLASS}
-                    size="sm"
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className={MODEL_CARD_FIELD_CLASS}>
+                  <div className="text-[13px] font-medium text-foreground">Verbosity</div>
+                  <Select
+                    value={section.verbosity}
+                    onValueChange={(value) => {
+                      void updateWorkspaceDefaults(workspace.id, {
+                        providerOptions: updateProviderOption(
+                          workspace.providerOptions,
+                          section.key,
+                          {
+                            textVerbosity: value as TextVerbosityValue,
+                          },
+                        ),
+                      });
+                    }}
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TEXT_VERBOSITY_VALUES.map((entry) => (
-                      <SelectItem key={entry} value={entry}>
-                        {entry}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                    <SelectTrigger
+                      aria-label={`${section.label} verbosity`}
+                      className={MODEL_CARD_SELECT_CLASS}
+                      size="sm"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TEXT_VERBOSITY_VALUES.map((entry) => (
+                        <SelectItem key={entry} value={entry}>
+                          {entry}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              <div className={MODEL_CARD_FIELD_CLASS}>
-                <div className="text-[13px] font-medium text-foreground">Reasoning effort</div>
-                <Select
-                  value={section.reasoningEffort}
-                  onValueChange={(value) => {
-                    void updateWorkspaceDefaults(workspace.id, {
-                      providerOptions: updateProviderOption(
-                        workspace.providerOptions,
-                        section.key,
-                        {
-                          reasoningEffort: value as ReasoningEffortValue,
-                        },
-                      ),
-                    });
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label={`${section.label} reasoning effort`}
-                    className={MODEL_CARD_SELECT_CLASS}
-                    size="sm"
+                <div className={MODEL_CARD_FIELD_CLASS}>
+                  <div className="text-[13px] font-medium text-foreground">Reasoning effort</div>
+                  <Select
+                    value={section.reasoningEffort}
+                    onValueChange={(value) => {
+                      void updateWorkspaceDefaults(workspace.id, {
+                        providerOptions: updateProviderOption(
+                          workspace.providerOptions,
+                          section.key,
+                          {
+                            reasoningEffort: value as ReasoningEffortValue,
+                          },
+                        ),
+                      });
+                    }}
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {REASONING_EFFORT_VALUES.map((entry) => (
-                      <SelectItem key={entry} value={entry}>
-                        {entry}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                    <SelectTrigger
+                      aria-label={`${section.label} reasoning effort`}
+                      className={MODEL_CARD_SELECT_CLASS}
+                      size="sm"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REASONING_EFFORT_VALUES.map((entry) => (
+                        <SelectItem key={entry} value={entry}>
+                          {entry}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              <div className={MODEL_CARD_FIELD_CLASS}>
-                <div className="text-[13px] font-medium text-foreground">Reasoning summary</div>
-                <Select
-                  value={section.reasoningSummary}
-                  onValueChange={(value) => {
-                    void updateWorkspaceDefaults(workspace.id, {
-                      providerOptions: updateProviderOption(
-                        workspace.providerOptions,
-                        section.key,
-                        {
-                          reasoningSummary: value as ReasoningSummaryValue,
-                        },
-                      ),
-                    });
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label={`${section.label} reasoning summary`}
-                    className={MODEL_CARD_SELECT_CLASS}
-                    size="sm"
+                <div className={MODEL_CARD_FIELD_CLASS}>
+                  <div className="text-[13px] font-medium text-foreground">Reasoning summary</div>
+                  <Select
+                    value={section.reasoningSummary}
+                    onValueChange={(value) => {
+                      void updateWorkspaceDefaults(workspace.id, {
+                        providerOptions: updateProviderOption(
+                          workspace.providerOptions,
+                          section.key,
+                          {
+                            reasoningSummary: value as ReasoningSummaryValue,
+                          },
+                        ),
+                      });
+                    }}
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {REASONING_SUMMARY_VALUES.map((entry) => (
-                      <SelectItem key={entry} value={entry}>
-                        {entry}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                    <SelectTrigger
+                      aria-label={`${section.label} reasoning summary`}
+                      className={MODEL_CARD_SELECT_CLASS}
+                      size="sm"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REASONING_SUMMARY_VALUES.map((entry) => (
+                        <SelectItem key={entry} value={entry}>
+                          {entry}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -498,14 +496,11 @@ export function SearchSettingsCard({
   };
 
   return (
-    <Card className="border-border/80 bg-card/85">
-      <CardHeader>
-        <CardTitle>Search</CardTitle>
-        <CardDescription>
-          Choose provider-native search or a local search tool for models that need one.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <SettingsSection
+      title="Search"
+      description="Choose provider-native search or a local search tool for models that need one."
+    >
+      <div className="space-y-4 px-4 py-4">
         <div className="rounded-lg border border-border/60 px-4 py-4">
           <div className="space-y-3">
             <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
@@ -636,8 +631,8 @@ export function SearchSettingsCard({
             </div>
           ) : null}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -672,57 +667,72 @@ export function GeminiApiSettingsCard({
   const googleReasoningEffortOptions = getGoogleReasoningEffortValuesForModel(selectedGoogleModel);
 
   return (
-    <Card className="border-border/80 bg-card/85">
-      <CardHeader>
-        <CardTitle>Gemini API settings</CardTitle>
-        <CardDescription>Default Gemini API reasoning behavior.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="rounded-lg border border-border/60 px-4 py-4">
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-foreground">Reasoning effort</div>
-              <div className="text-xs text-muted-foreground">
-                Applies to <span className="font-mono">{selectedGoogleModel}</span>. Dynamic leaves
-                Gemini&apos;s `thinking_level` unset and lets the model choose its own reasoning
-                depth. Available values depend on the selected Google model.
+    <Collapsible>
+      <CollapsibleTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          className="group h-auto w-full justify-between rounded-none px-4 py-3.5 text-left hover:bg-muted/30"
+        >
+          <span>
+            <span className="block text-sm font-medium text-foreground">Gemini API</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              Reasoning defaults for Gemini API models.
+            </span>
+          </span>
+          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-4 px-4 pb-5">
+          <div className="rounded-lg border border-border/60 px-4 py-4">
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <div className="text-sm font-medium text-foreground">Reasoning effort</div>
+                <div className="text-xs text-muted-foreground">
+                  Applies to <span className="font-mono">{selectedGoogleModel}</span>. Dynamic
+                  leaves Gemini&apos;s `thinking_level` unset and lets the model choose its own
+                  reasoning depth. Available values depend on the selected Google model.
+                </div>
               </div>
-            </div>
-            <div className="max-w-56">
-              <Select
-                value={googleReasoningEffort}
-                onValueChange={(value) => {
-                  const nextEffort = value as GoogleReasoningEffortValue;
-                  void updateWorkspaceDefaults(workspace.id, {
-                    providerOptions: updateGoogleProviderOption(workspace.providerOptions, {
-                      thinkingConfig:
-                        nextEffort === GOOGLE_DYNAMIC_REASONING_EFFORT
-                          ? {}
-                          : { thinkingLevel: googleThinkingLevelFromReasoningEffort(nextEffort) },
-                    }),
-                  });
-                }}
-              >
-                <SelectTrigger
-                  aria-label="Gemini reasoning effort"
-                  className={MODEL_CARD_SELECT_CLASS}
-                  size="sm"
+              <div className="max-w-56">
+                <Select
+                  value={googleReasoningEffort}
+                  onValueChange={(value) => {
+                    const nextEffort = value as GoogleReasoningEffortValue;
+                    void updateWorkspaceDefaults(workspace.id, {
+                      providerOptions: updateGoogleProviderOption(workspace.providerOptions, {
+                        thinkingConfig:
+                          nextEffort === GOOGLE_DYNAMIC_REASONING_EFFORT
+                            ? {}
+                            : {
+                                thinkingLevel: googleThinkingLevelFromReasoningEffort(nextEffort),
+                              },
+                      }),
+                    });
+                  }}
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {googleReasoningEffortOptions.map((entry) => (
-                    <SelectItem key={entry} value={entry}>
-                      {entry === GOOGLE_DYNAMIC_REASONING_EFFORT ? "dynamic (default)" : entry}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  <SelectTrigger
+                    aria-label="Gemini reasoning effort"
+                    className={MODEL_CARD_SELECT_CLASS}
+                    size="sm"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {googleReasoningEffortOptions.map((entry) => (
+                      <SelectItem key={entry} value={entry}>
+                        {entry === GOOGLE_DYNAMIC_REASONING_EFFORT ? "dynamic (default)" : entry}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -825,12 +835,11 @@ export function WorkspaceUserProfileCard({
   };
 
   return (
-    <Card className="border-border/80 bg-card/85">
-      <CardHeader>
-        <CardTitle>How Cowork should understand you</CardTitle>
-        <CardDescription>Identity and prompt context for new sessions.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <SettingsSection
+      title="How Cowork should understand you"
+      description="Identity and prompt context for new sessions."
+    >
+      <div className="space-y-4 px-4 py-4">
         <div className="space-y-2">
           <div className="text-sm font-medium text-foreground">Name</div>
           <Input
@@ -909,49 +918,14 @@ export function WorkspaceUserProfileCard({
             </span>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
-type WorkspaceDefaultsSummaryProps = {
-  provider: ProviderName;
-  model: string;
-  childModelRoutingMode: "same-provider" | "cross-provider-allowlist";
-  preferredChildLabel: string;
-};
+type WorkspacesPageSurface = "defaults" | "models" | "profile";
 
-function WorkspaceDefaultsSummary({
-  provider,
-  model,
-  childModelRoutingMode,
-  preferredChildLabel,
-}: WorkspaceDefaultsSummaryProps) {
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-border/60 bg-card/70 px-3 py-2 text-xs text-muted-foreground">
-      <span>Current provider:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {displayProviderName(provider)}
-      </Badge>
-      <span>Model:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {model}
-      </Badge>
-      <span>Subagent routing:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {subagentRoutingModeLabel(childModelRoutingMode)}
-      </Badge>
-      <span>Preferred subagent model:</span>
-      <Badge variant="outline" className="rounded-sm">
-        {preferredChildLabel}
-      </Badge>
-    </div>
-  );
-}
-
-type WorkspacesPageSurface = "all" | "defaults" | "models" | "profile";
-
-export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSurface } = {}) {
+export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesPageSurface } = {}) {
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
@@ -1045,7 +1019,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
   ).trim();
   const allowedChildModelRefs = ws?.defaultAllowedChildModelRefs ?? [];
   const enableMcp = ws?.defaultEnableMcp ?? true;
-  const backupsEnabled = ws?.defaultBackupsEnabled ?? false;
   const yolo = ws?.yolo ?? false;
 
   const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(
@@ -1122,19 +1095,8 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
     return preferredChildModelRef ? [preferredChildModelRef] : [];
   }, [childModelRoutingMode, preferredChildModelRef, visibleAllowedChildModelRefs]);
 
-  const initialTab: "general" | "models" | "profile" | "advanced" =
+  const visibleTab: "general" | "models" | "profile" =
     surface === "models" ? "models" : surface === "profile" ? "profile" : "general";
-  const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">(
-    initialTab,
-  );
-  const visibleTab =
-    surface === "all"
-      ? activeTab
-      : surface === "models"
-        ? "models"
-        : surface === "profile"
-          ? "profile"
-          : "general";
   const [subagentModelsOpen, setSubagentModelsOpen] = useState(false);
   const subagentModelsOpenSeedKey = useRef<string | null>(null);
 
@@ -1169,48 +1131,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
         </Card>
       ) : (
         <>
-          <WorkspaceDefaultsSummary
-            provider={provider}
-            model={model}
-            childModelRoutingMode={childModelRoutingMode}
-            preferredChildLabel={
-              childModelRoutingMode === "same-provider"
-                ? preferredChildModel || model
-                : friendlyModelRef(preferredChildModelRef)
-            }
-          />
-
-          {surface === "all" ? (
-            <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
-              {(["general", "models", "profile", "advanced"] as const).map((tab) => (
-                <Button
-                  key={tab}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setActiveTab(tab)}
-                  className={cn(
-                    "relative h-auto rounded-md px-3 py-1.5 text-sm font-medium shadow-none transition-colors",
-                    activeTab === tab
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {activeTab === tab && (
-                    <motion.div
-                      layoutId="workspaces-active-tab"
-                      className="app-shadow-surface pointer-events-none absolute inset-0 -z-10 rounded-md border border-border/50 bg-background"
-                      transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                    />
-                  )}
-                  <span className="relative z-10">
-                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                  </span>
-                </Button>
-              ))}
-            </div>
-          ) : null}
-
           <div
             className={cn(
               "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
@@ -1218,21 +1138,23 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
             )}
           >
             {perWorkspaceSettings && (
-              <Card className="border-border/80 bg-card/85">
-                <CardHeader className="flex-row items-center justify-between space-y-0">
-                  <div>
-                    <CardTitle>Settings target</CardTitle>
-                    <CardDescription>
-                      Selected project or chat group for this settings mode.
-                    </CardDescription>
-                  </div>
-                  {workspaceLifecycleEnabled ? (
-                    <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
+              <SettingsSection
+                title="Settings target"
+                description="Selected project or chat group for this settings mode."
+                action={
+                  workspaceLifecycleEnabled ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={() => void addWorkspace()}
+                    >
                       Add
                     </Button>
-                  ) : null}
-                </CardHeader>
-                <CardContent className="space-y-3">
+                  ) : undefined
+                }
+              >
+                <div className="space-y-3 px-4 py-4">
                   <div>
                     <div className="text-sm font-medium text-foreground">
                       {selectedSettingsTarget?.label ?? ws.name}
@@ -1260,18 +1182,15 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                       </SelectContent>
                     </Select>
                   ) : null}
-                </CardContent>
-              </Card>
+                </div>
+              </SettingsSection>
             )}
 
-            <Card className="border-border/80 bg-card/85">
-              <CardHeader>
-                <CardTitle>Behavior</CardTitle>
-                <CardDescription>
-                  Execution and visibility options for all folders and chats.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
+            <SettingsSection
+              title="Behavior"
+              description="Execution and visibility options for all folders and chats."
+            >
+              <div className="space-y-4 px-4 py-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div className="grid gap-1.5">
                     <Label
@@ -1293,29 +1212,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                     onPressedChange={(next) => {
                       if (!ws) return;
                       void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: next });
-                    }}
-                  />
-                </div>
-
-                <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                  <div className="grid gap-1.5">
-                    <Label
-                      htmlFor="backups-toggle"
-                      className="text-sm font-medium leading-none cursor-pointer"
-                    >
-                      Workspace backups
-                    </Label>
-                    <div className="text-xs text-muted-foreground">
-                      Opt into Cowork-managed recovery snapshots for future sessions.
-                    </div>
-                  </div>
-                  <ToggleChip
-                    id="backups-toggle"
-                    pressed={backupsEnabled}
-                    aria-label="Enable workspace backups"
-                    onPressedChange={(next) => {
-                      if (!ws) return;
-                      void updateWorkspaceDefaults(ws.id, { defaultBackupsEnabled: next });
                     }}
                   />
                 </div>
@@ -1363,23 +1259,17 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                     }}
                   />
                 </div>
-              </CardContent>
-            </Card>
-
-            <SearchSettingsCard
-              workspace={ws}
-              updateWorkspaceDefaults={updateWorkspaceDefaults}
-              providerStatusByName={providerStatusByName}
-            />
+              </div>
+            </SettingsSection>
 
             {surface === "defaults" ? (
               <Collapsible>
-                <Card className="border-border/80 bg-card/85">
+                <SettingsSection>
                   <CollapsibleTrigger asChild>
                     <Button
                       type="button"
                       variant="ghost"
-                      className="h-auto w-full justify-between rounded-none px-6 py-4 text-left hover:bg-muted/30"
+                      className="h-auto w-full justify-between rounded-none px-4 py-4 text-left hover:bg-muted/30"
                     >
                       <span>
                         <span className="block text-sm font-semibold text-foreground">
@@ -1393,7 +1283,40 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                     </Button>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <CardContent className="space-y-4 border-t border-border/70 pt-4">
+                    <div className="space-y-4 border-t border-border/70 px-4 py-4">
+                      <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                        <div>
+                          <div className="text-sm font-medium">
+                            Configure settings per folder or chat
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            When enabled, each folder or one-off chat can keep different provider,
+                            model, and behavior settings.
+                          </div>
+                        </div>
+                        <Switch
+                          checked={perWorkspaceSettings}
+                          aria-label="Configure settings per folder or chat"
+                          onCheckedChange={async (checked) => {
+                            if (!checked && workspaces.length > 1) {
+                              const confirmed = await confirmAction({
+                                title: "Share settings everywhere",
+                                message:
+                                  "All folders and chats will be synced to the current settings.",
+                                detail:
+                                  "This will overwrite provider, model, and behavior settings on other folders and chats.",
+                                confirmLabel: "Share settings",
+                                cancelLabel: "Cancel",
+                                kind: "warning",
+                                defaultAction: "cancel",
+                              });
+                              if (!confirmed) return;
+                            }
+                            setPerWorkspaceSettings(checked);
+                          }}
+                        />
+                      </div>
+
                       {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
                         <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>
@@ -1445,9 +1368,9 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                           </Button>
                         </div>
                       ) : null}
-                    </CardContent>
+                    </div>
                   </CollapsibleContent>
-                </Card>
+                </SettingsSection>
               </Collapsible>
             ) : null}
           </div>
@@ -1458,12 +1381,14 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
               visibleTab !== "models" && "hidden",
             )}
           >
-            <Card className="border-border/80 bg-card/85">
-              <CardHeader>
-                <CardTitle>Model</CardTitle>
-                <CardDescription>The default provider and model for new sessions.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
+            <div className="space-y-3">
+              <div>
+                <div className="text-sm font-semibold text-foreground">Defaults</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  The provider and model Cowork uses for new chats.
+                </div>
+              </div>
+              <div className="app-shadow-surface space-y-4 rounded-xl border border-border/75 bg-card/85 px-4 py-4">
                 {availableProviders.length === 0 ? (
                   <div className={MODEL_CARD_PANEL_CLASS}>
                     <div className="text-sm font-medium text-foreground">
@@ -1567,147 +1492,144 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                           </SelectContent>
                         </Select>
                       </div>
+                    </div>
 
-                      <div className={MODEL_CARD_FIELD_CLASS}>
-                        <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                          Subagent routing
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="cursor-help">
-                                  <InfoIcon className="size-3.5 text-muted-foreground" />
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {childModelRoutingMode === "same-provider"
-                                  ? "Subagents use your default model by default. This setting preselects which model from the same provider to suggest instead."
-                                  : "If a selected subagent model isn't available, your default model will be used instead."}
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </div>
-                        <Select
-                          value={childModelRoutingMode}
-                          onValueChange={(value) => {
-                            if (!ws) return;
-                            const nextMode = value as "same-provider" | "cross-provider-allowlist";
-                            void updateWorkspaceDefaults(ws.id, {
-                              defaultChildModelRoutingMode: nextMode,
-                              ...(nextMode === "same-provider"
-                                ? {
-                                    defaultPreferredChildModelRef: `${effectiveProvider}:${preferredChildModel || model}`,
-                                  }
-                                : {}),
-                            });
-                          }}
-                          disabled={modelControlsDisabled}
-                        >
-                          <SelectTrigger
-                            aria-label="Subagent routing"
-                            className={MODEL_CARD_SELECT_CLASS}
-                            size="sm"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="same-provider">Same model</SelectItem>
-                            <SelectItem value="cross-provider-allowlist">
-                              Multiple providers
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <div className="text-xs text-muted-foreground">
-                          Lets Cowork subagents use models from different providers you've set up.
-                          Codex can call these subagents through hybrid dynamic tools.
-                        </div>
+                    <div className="space-y-3 border-t border-border/60 pt-4">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={handleManageSubagentProfiles}
-                          >
-                            Manage profiles
-                          </Button>
+                          <div className="text-sm font-medium text-foreground">Subagents</div>
+                          <div className="mt-0.5 max-w-prose text-xs text-muted-foreground">
+                            Subagents are helpers Cowork runs alongside your chat to work on tasks
+                            in parallel. Choose where their models come from.
+                          </div>
                         </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 shrink-0 px-2 text-xs"
+                          onClick={handleManageSubagentProfiles}
+                        >
+                          Manage profiles
+                        </Button>
                       </div>
 
-                      {childModelRoutingMode === "same-provider" ? (
+                      <div className="grid gap-3 lg:grid-cols-2">
                         <div className={MODEL_CARD_FIELD_CLASS}>
-                          <div className="text-sm font-medium text-foreground">
-                            Preferred subagent model
-                          </div>
+                          <div className="text-sm font-medium text-foreground">Model source</div>
                           <Select
-                            value={preferredChildModel}
+                            value={childModelRoutingMode}
                             onValueChange={(value) => {
                               if (!ws) return;
+                              const nextMode = value as
+                                | "same-provider"
+                                | "cross-provider-allowlist";
                               void updateWorkspaceDefaults(ws.id, {
-                                defaultPreferredChildModel: value,
-                                defaultPreferredChildModelRef: `${effectiveProvider}:${value}`,
+                                defaultChildModelRoutingMode: nextMode,
+                                ...(nextMode === "same-provider"
+                                  ? {
+                                      defaultPreferredChildModelRef: `${effectiveProvider}:${preferredChildModel || model}`,
+                                    }
+                                  : {}),
                               });
                             }}
                             disabled={modelControlsDisabled}
                           >
                             <SelectTrigger
-                              aria-label="Preferred subagent model"
+                              aria-label="Subagent model source"
                               className={MODEL_CARD_SELECT_CLASS}
                               size="sm"
                             >
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {preferredChildModelOptions.map((entry) => (
-                                <SelectItem key={entry} value={entry}>
-                                  {hasCustomChildModel && entry === preferredChildModel
-                                    ? `${entry} (custom)`
-                                    : entry}
-                                </SelectItem>
-                              ))}
+                              <SelectItem value="same-provider">Same provider as chat</SelectItem>
+                              <SelectItem value="cross-provider-allowlist">
+                                Any connected provider
+                              </SelectItem>
                             </SelectContent>
                           </Select>
-                        </div>
-                      ) : (
-                        <div className={MODEL_CARD_FIELD_CLASS}>
-                          <div className="text-sm font-medium text-foreground">
-                            Preferred subagent model
+                          <div className="text-xs text-muted-foreground">
+                            {childModelRoutingMode === "same-provider"
+                              ? "Subagents stay on your chat provider and use the model picked here."
+                              : "Pick models from any connected provider. If one is unavailable, your default model is used instead."}
                           </div>
-                          <Select
-                            value={
-                              preferredChildTargetOptions.includes(preferredChildModelRef)
-                                ? preferredChildModelRef
-                                : undefined
-                            }
-                            onValueChange={(value) => {
-                              if (!ws) return;
-                              void updateWorkspaceDefaults(ws.id, {
-                                defaultPreferredChildModelRef: value,
-                              });
-                            }}
-                            disabled={
-                              modelControlsDisabled || preferredChildTargetOptions.length === 0
-                            }
-                          >
-                            <SelectTrigger
-                              aria-label="Preferred subagent model"
-                              className={MODEL_CARD_SELECT_CLASS}
-                              size="sm"
-                            >
-                              <SelectValue placeholder="Select subagent models first" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {preferredChildTargetOptions.map((entry) => (
-                                <SelectItem key={entry} value={entry}>
-                                  {friendlyModelRef(entry)}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
                         </div>
-                      )}
-                    </div>
 
-                    {childModelRoutingMode === "same-provider" ? null : (
-                      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]">
+                        {childModelRoutingMode === "same-provider" ? (
+                          <div className={MODEL_CARD_FIELD_CLASS}>
+                            <div className="text-sm font-medium text-foreground">
+                              Preferred subagent model
+                            </div>
+                            <Select
+                              value={preferredChildModel}
+                              onValueChange={(value) => {
+                                if (!ws) return;
+                                void updateWorkspaceDefaults(ws.id, {
+                                  defaultPreferredChildModel: value,
+                                  defaultPreferredChildModelRef: `${effectiveProvider}:${value}`,
+                                });
+                              }}
+                              disabled={modelControlsDisabled}
+                            >
+                              <SelectTrigger
+                                aria-label="Preferred subagent model"
+                                className={MODEL_CARD_SELECT_CLASS}
+                                size="sm"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {preferredChildModelOptions.map((entry) => (
+                                  <SelectItem key={entry} value={entry}>
+                                    {hasCustomChildModel && entry === preferredChildModel
+                                      ? `${entry} (custom)`
+                                      : entry}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ) : (
+                          <div className={MODEL_CARD_FIELD_CLASS}>
+                            <div className="text-sm font-medium text-foreground">
+                              Preferred subagent model
+                            </div>
+                            <Select
+                              value={
+                                preferredChildTargetOptions.includes(preferredChildModelRef)
+                                  ? preferredChildModelRef
+                                  : undefined
+                              }
+                              onValueChange={(value) => {
+                                if (!ws) return;
+                                void updateWorkspaceDefaults(ws.id, {
+                                  defaultPreferredChildModelRef: value,
+                                });
+                              }}
+                              disabled={
+                                modelControlsDisabled || preferredChildTargetOptions.length === 0
+                              }
+                            >
+                              <SelectTrigger
+                                aria-label="Preferred subagent model"
+                                className={MODEL_CARD_SELECT_CLASS}
+                                size="sm"
+                              >
+                                <SelectValue placeholder="Select subagent models first" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {preferredChildTargetOptions.map((entry) => (
+                                  <SelectItem key={entry} value={entry}>
+                                    {friendlyModelRef(entry)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                      </div>
+
+                      {childModelRoutingMode === "same-provider" ? null : (
                         <Collapsible
                           open={subagentModelsOpen}
                           onOpenChange={setSubagentModelsOpen}
@@ -1747,20 +1669,20 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
 
                           <CollapsibleContent className="space-y-3 border-t border-border/60 pt-3">
                             {childTargetGroups.length > 0 ? (
-                              <div className="max-h-72 space-y-3 overflow-auto pr-1">
+                              <div className="max-h-96 space-y-3 overflow-auto pr-1">
                                 {childTargetGroups.map((group) => (
                                   <div key={group.provider} className="space-y-2">
                                     <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                                       {displayProviderName(group.provider)}
                                     </div>
-                                    <div className="grid gap-2 xl:grid-cols-2">
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                                       {group.refs.map((ref) => {
                                         const checked = visibleAllowedChildModelRefs.includes(ref);
                                         const childModelCheckboxId = `allowed-child-model-${ws?.id ?? "workspace"}-${ref}`;
                                         return (
                                           <div
                                             key={ref}
-                                            className="flex items-center gap-2 rounded-sm border border-border/60 px-3 py-2 text-sm"
+                                            className="flex min-w-0 items-center gap-2 rounded-sm border border-border/60 px-3 py-2 text-sm"
                                           >
                                             <Checkbox
                                               id={childModelCheckboxId}
@@ -1788,7 +1710,11 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                                               aria-label={`Allow subagent model ${ref}`}
                                               disabled={modelControlsDisabled}
                                             />
-                                            <label htmlFor={childModelCheckboxId}>
+                                            <label
+                                              htmlFor={childModelCheckboxId}
+                                              className="truncate"
+                                              title={childTargetLabel(ref)}
+                                            >
                                               {childTargetLabel(ref)}
                                             </label>
                                           </div>
@@ -1805,26 +1731,41 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
                             )}
                           </CollapsibleContent>
                         </Collapsible>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
 
-            <OpenAiCompatibleModelSettingsCard
-              workspace={ws}
-              updateWorkspaceDefaults={updateWorkspaceDefaults}
-              providerStatusByName={providerStatusByName}
-            />
-            <GeminiApiSettingsCard
-              workspace={ws}
-              updateWorkspaceDefaults={updateWorkspaceDefaults}
-              providerStatusByName={providerStatusByName}
-              googleDefaultModel={
-                providerDefaultModelByProvider.google?.trim() || defaultModelForProvider("google")
-              }
-            />
+            {hasConfiguredProviderStatus(providerStatusByName["codex-cli"]) ||
+            hasConfiguredProviderStatus(providerStatusByName.openai) ||
+            hasConfiguredProviderStatus(providerStatusByName.google) ? (
+              <div className="space-y-3">
+                <div>
+                  <div className="text-sm font-semibold text-foreground">Provider Settings</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    Extra tuning options for your connected providers.
+                  </div>
+                </div>
+                <div className="app-shadow-surface divide-y divide-border/60 overflow-hidden rounded-xl border border-border/75 bg-card/85">
+                  <OpenAiCompatibleModelSettingsCard
+                    workspace={ws}
+                    updateWorkspaceDefaults={updateWorkspaceDefaults}
+                    providerStatusByName={providerStatusByName}
+                  />
+                  <GeminiApiSettingsCard
+                    workspace={ws}
+                    updateWorkspaceDefaults={updateWorkspaceDefaults}
+                    providerStatusByName={providerStatusByName}
+                    googleDefaultModel={
+                      providerDefaultModelByProvider.google?.trim() ||
+                      defaultModelForProvider("google")
+                    }
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div
@@ -1837,100 +1778,6 @@ export function WorkspacesPage({ surface = "all" }: { surface?: WorkspacesPageSu
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
             />
-          </div>
-
-          <div
-            className={cn(
-              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
-              visibleTab !== "advanced" && "hidden",
-            )}
-          >
-            <Card className="border-border/80 bg-card/85">
-              <CardHeader>
-                <CardTitle>Advanced</CardTitle>
-                <CardDescription>Maintenance and destructive actions.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                  <div>
-                    <div className="text-sm font-medium">Configure settings per folder or chat</div>
-                    <div className="text-xs text-muted-foreground">
-                      When enabled, each folder or one-off chat can keep different provider, model,
-                      and behavior settings.
-                    </div>
-                  </div>
-                  <Switch
-                    checked={perWorkspaceSettings}
-                    aria-label="Configure settings per folder or chat"
-                    onCheckedChange={async (checked) => {
-                      if (!checked && workspaces.length > 1) {
-                        const confirmed = await confirmAction({
-                          title: "Share settings everywhere",
-                          message: "All folders and chats will be synced to the current settings.",
-                          detail:
-                            "This will overwrite provider, model, and behavior settings on other folders and chats.",
-                          confirmLabel: "Share settings",
-                          cancelLabel: "Cancel",
-                          kind: "warning",
-                          defaultAction: "cancel",
-                        });
-                        if (!confirmed) return;
-                      }
-                      setPerWorkspaceSettings(checked);
-                    }}
-                  />
-                </div>
-
-                {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
-                  <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
-                    <div>
-                      <div className="text-sm font-medium">Restart server</div>
-                      <div className="text-xs text-muted-foreground">
-                        Restart the agent server for this folder or chat if unresponsive.
-                      </div>
-                    </div>
-                    <Button
-                      variant="outline"
-                      type="button"
-                      onClick={() => void restartWorkspaceServer(ws.id)}
-                    >
-                      Restart
-                    </Button>
-                  </div>
-                ) : null}
-
-                {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
-                  <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
-                    <div>
-                      <div className="text-sm font-medium">Remove from Cowork</div>
-                      <div className="text-xs text-muted-foreground">
-                        Remove this folder or chat from the app. Files on disk are not affected.
-                      </div>
-                    </div>
-                    <Button
-                      variant="destructive"
-                      type="button"
-                      onClick={async () => {
-                        const confirmed = await confirmAction({
-                          title: "Remove from Cowork",
-                          message: `Remove "${ws.name}" from Cowork?`,
-                          detail: "Files on disk will not be affected.",
-                          confirmLabel: "Remove",
-                          cancelLabel: "Cancel",
-                          kind: "warning",
-                          defaultAction: "cancel",
-                        });
-                        if (confirmed) {
-                          void removeWorkspace(ws.id);
-                        }
-                      }}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
           </div>
         </>
       )}

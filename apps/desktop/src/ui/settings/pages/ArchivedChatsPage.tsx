@@ -3,7 +3,6 @@ import { useAppStore } from "../../../app/store";
 import { isStandardChatThread } from "../../../app/threadFilters";
 import { workspaceLabelForThread } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
-import { Card, CardContent } from "../../../components/ui/card";
 import {
   Select,
   SelectContent,
@@ -12,6 +11,7 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { confirmAction } from "../../../lib/desktopCommands";
+import { SettingsEmptyState, SettingsRow, SettingsSection } from "../SettingsPrimitives";
 
 function formatArchivedDate(isoString?: string): string {
   if (!isoString) return "";
@@ -54,17 +54,15 @@ export function ArchivedChatsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <Card className="border border-border/45 bg-foreground/[0.015] shadow-none">
-        <CardContent className="p-4 space-y-4">
-          <div className="flex flex-col gap-1.5">
-            <h3 className="text-sm font-semibold tracking-[-0.01em]">Auto-delete Settings</h3>
-            <p className="text-xs text-muted-foreground leading-normal max-w-xl">
-              Configure how long archived conversation history remains before being permanently
-              deleted from your computer.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
+    <>
+      <SettingsSection
+        title="Auto-delete Settings"
+        description="Configure how long archived conversation history remains before being permanently deleted from your computer."
+      >
+        <SettingsRow
+          title="Delete archived chats"
+          description="Applies to every archived chat on this device."
+          control={
             <Select
               value={String(currentAutoDelete)}
               onValueChange={(val) => setArchivedChatsAutoDeleteDays(Number(val))}
@@ -79,54 +77,40 @@ export function ArchivedChatsPage() {
                 <SelectItem value="90">After 90 days</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-        </CardContent>
-      </Card>
+          }
+        />
+      </SettingsSection>
 
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold tracking-[-0.01em]">
-            Archived Chats ({archivedThreads.length})
-          </h3>
-        </div>
-
-        {archivedThreads.length === 0 ? (
-          <div className="flex flex-col items-center justify-center border border-dashed border-border/60 rounded-xl py-12 px-4 text-center">
-            <ArchiveIcon className="h-8 w-8 mb-3 text-muted-foreground/30" />
-            <p className="text-sm font-medium text-foreground">No archived chats</p>
-            <p className="text-xs text-muted-foreground mt-1 max-w-sm">
-              Archived chats will be stored here. You can archive any chat from the sidebar by
-              hovering over its date label.
-            </p>
-          </div>
-        ) : (
-          <div className="border border-border/45 rounded-xl divide-y divide-border/40 overflow-hidden bg-background">
-            {archivedThreads.map((thread) => {
-              const wsName = workspaceLabelForThread(
-                workspaces,
-                thread.workspaceId,
-                "Unknown workspace",
-              );
-              return (
-                <div
-                  key={thread.id}
-                  className="flex items-center justify-between p-3.5 hover:bg-foreground/[0.01] transition-all"
-                >
-                  <div className="min-w-0 flex-1 space-y-1 pr-4">
-                    <div className="font-medium text-[13px] truncate">
-                      {thread.title || "New thread"}
-                    </div>
-                    <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
-                      <span>{wsName}</span>
-                      <span className="text-[10px] opacity-45">•</span>
-                      <div className="flex items-center gap-1">
-                        <ClockIcon className="h-3 w-3" />
-                        <span>Archived {formatArchivedDate(thread.archivedAt)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0">
+      {archivedThreads.length === 0 ? (
+        <SettingsEmptyState
+          icon={<ArchiveIcon />}
+          title="No archived chats"
+          description="Archived chats will be stored here. You can archive any chat from the sidebar by hovering over its date label."
+        />
+      ) : (
+        <SettingsSection title={`Archived Chats (${archivedThreads.length})`}>
+          {archivedThreads.map((thread) => {
+            const wsName = workspaceLabelForThread(
+              workspaces,
+              thread.workspaceId,
+              "Unknown workspace",
+            );
+            return (
+              <SettingsRow
+                key={thread.id}
+                title={<span className="truncate">{thread.title || "New thread"}</span>}
+                description={
+                  <span className="flex items-center gap-2.5">
+                    <span>{wsName}</span>
+                    <span className="text-[10px] opacity-45">•</span>
+                    <span className="flex items-center gap-1">
+                      <ClockIcon className="h-3 w-3" />
+                      <span>Archived {formatArchivedDate(thread.archivedAt)}</span>
+                    </span>
+                  </span>
+                }
+                control={
+                  <div className="flex items-center gap-1.5">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -146,12 +130,12 @@ export function ArchivedChatsPage() {
                       Delete
                     </Button>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+                }
+              />
+            );
+          })}
+        </SettingsSection>
+      )}
+    </>
   );
 }

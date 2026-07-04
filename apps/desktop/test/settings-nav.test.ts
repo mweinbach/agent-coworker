@@ -210,10 +210,10 @@ describe("settings nav (store)", () => {
   });
 
   test("openSettings records lastNonSettingsView and enters settings", () => {
-    useAppStore.setState({ view: "skills" });
+    useAppStore.setState({ view: "research" });
     useAppStore.getState().openSettings();
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().lastNonSettingsView).toBe("skills");
+    expect(useAppStore.getState().lastNonSettingsView).toBe("research");
   });
 
   test("openSettings optionally selects a settings page", () => {
@@ -223,10 +223,10 @@ describe("settings nav (store)", () => {
   });
 
   test("closeSettings restores the prior view", () => {
-    useAppStore.setState({ view: "skills" });
+    useAppStore.setState({ view: "research" });
     useAppStore.getState().openSettings();
     useAppStore.getState().closeSettings();
-    expect(useAppStore.getState().view).toBe("skills");
+    expect(useAppStore.getState().view).toBe("research");
   });
 
   test("setSettingsPage updates settingsPage", () => {
@@ -679,11 +679,190 @@ describe("settings nav (store)", () => {
     expect(thread?.archivedAt).toBeUndefined();
   });
 
-  test("openSkills shows guidance when no workspace is available", async () => {
+  test("openSkills routes to Settings > Tool Access", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          workspaceKind: "project",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+    });
+
     await useAppStore.getState().openSkills();
-    expect(useAppStore.getState().view).toBe("chat");
-    const last = useAppStore.getState().notifications.at(-1);
-    expect(last?.title).toBe("Skills need a workspace");
+    const state = useAppStore.getState();
+    expect(state.view).toBe("settings");
+    expect(state.settingsPage).toBe("toolAccess");
+  });
+
+  test("openSkills preserves active one-off chat selection", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          workspaceKind: "project",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "chat-ws-1",
+          name: "Chat",
+          path: "/tmp/chat-ws-1",
+          workspaceKind: "oneOffChat",
+          createdAt: "2024-01-02T00:00:00.000Z",
+          lastOpenedAt: "2024-01-02T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "chat-thread-1",
+          workspaceId: "chat-ws-1",
+          title: "Chat",
+          createdAt: "2024-01-02T00:00:00.000Z",
+          lastMessageAt: "2024-01-02T00:00:00.000Z",
+          status: "active",
+          sessionId: "chat-thread-1",
+          messageCount: 1,
+          lastEventSeq: 0,
+        },
+      ],
+      selectedWorkspaceId: "chat-ws-1",
+      selectedThreadId: "chat-thread-1",
+    });
+
+    await useAppStore.getState().openSkills();
+    const state = useAppStore.getState();
+    expect(state.view).toBe("settings");
+    expect(state.settingsPage).toBe("toolAccess");
+    expect(state.selectedWorkspaceId).toBe("chat-ws-1");
+    expect(state.selectedThreadId).toBe("chat-thread-1");
+  });
+
+  test("openSkills does not add a workspace for ambiguous one-off chat targets", async () => {
+    const addWorkspace = mock(async () => {});
+    useAppStore.setState({
+      desktopFeatureFlags: {
+        menuBar: true,
+        remoteAccess: true,
+        workspacePicker: true,
+        workspaceLifecycle: false,
+        openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
+      },
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          workspaceKind: "project",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws-2",
+          name: "Workspace 2",
+          path: "/tmp/ws-2",
+          workspaceKind: "project",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "chat-ws-1",
+          name: "Chat",
+          path: "/tmp/chat-ws-1",
+          workspaceKind: "oneOffChat",
+          createdAt: "2024-01-02T00:00:00.000Z",
+          lastOpenedAt: "2024-01-02T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "chat-thread-1",
+          workspaceId: "chat-ws-1",
+          title: "Chat",
+          createdAt: "2024-01-02T00:00:00.000Z",
+          lastMessageAt: "2024-01-02T00:00:00.000Z",
+          status: "active",
+          sessionId: "chat-thread-1",
+          messageCount: 1,
+          lastEventSeq: 0,
+        },
+      ],
+      selectedWorkspaceId: "chat-ws-1",
+      selectedThreadId: "chat-thread-1",
+      addWorkspace,
+    });
+
+    await useAppStore.getState().openSkills();
+    const state = useAppStore.getState();
+    expect(state.view).toBe("settings");
+    expect(state.settingsPage).toBe("toolAccess");
+    expect(state.selectedWorkspaceId).toBe("chat-ws-1");
+    expect(state.selectedThreadId).toBe("chat-thread-1");
+    expect(state.notifications).toHaveLength(0);
+    expect(addWorkspace).not.toHaveBeenCalled();
+  });
+
+  test("openSkills asks for a workspace instead of opening empty Tool Access", async () => {
+    await useAppStore.getState().openSkills();
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.settingsPage).toBe("providers");
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "info",
+      title: "Skills need a workspace",
+      detail: "Add or select a workspace first.",
+    });
+  });
+
+  test("openSkills preserves the disabled workspace lifecycle notice", async () => {
+    useAppStore.setState({
+      desktopFeatureFlags: {
+        menuBar: true,
+        remoteAccess: true,
+        workspacePicker: true,
+        workspaceLifecycle: false,
+        openAiNativeConnectors: false,
+        canvas: false,
+        tasks: false,
+      },
+    });
+
+    await useAppStore.getState().openSkills();
+
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "info",
+      title: "Workspace management is disabled",
+    });
   });
 
   test("openResearch requires a saved Google API key", async () => {

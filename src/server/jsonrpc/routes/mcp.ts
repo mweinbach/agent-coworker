@@ -1,3 +1,4 @@
+import type { MCPServerSource } from "../../../mcp/configRegistry";
 import type { SessionEvent } from "../../protocol";
 
 import {
@@ -10,6 +11,13 @@ import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 function resolveEditableMcpSource(value: unknown): "workspace" | "user" {
   return value === "user" ? "user" : "workspace";
+}
+
+function resolveMcpSource(value: unknown): MCPServerSource | undefined {
+  if (value === "workspace" || value === "user" || value === "plugin" || value === "system") {
+    return value;
+  }
+  return undefined;
 }
 
 export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
@@ -134,10 +142,11 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
+      const source = resolveMcpSource(params.source);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.validate(name),
+        async (runtime) => await runtime.mcp.validate(name, source),
         (event): event is Extract<SessionEvent, { type: "mcp_server_validation" }> =>
           event.type === "mcp_server_validation" && event.name === name,
       );
@@ -152,10 +161,11 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
+      const source = resolveMcpSource(params.source);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.authorizeAuth(name),
+        async (runtime) => await runtime.mcp.authorizeAuth(name, source),
         (
           event,
         ): event is Extract<
@@ -176,12 +186,13 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
+      const source = resolveMcpSource(params.source);
       const code =
         typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.callbackAuth(name, code),
+        async (runtime) => await runtime.mcp.callbackAuth(name, code, source),
         (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );
@@ -196,11 +207,12 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
+      const source = resolveMcpSource(params.source);
       const apiKey = typeof params.apiKey === "string" ? params.apiKey : "";
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.setApiKey(name, apiKey),
+        async (runtime) => await runtime.mcp.setApiKey(name, apiKey, source),
         (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );

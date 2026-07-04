@@ -524,6 +524,14 @@ async function hydrateServerForRuntime(
   };
 }
 
+export async function loadMCPServerForValidation(
+  config: AgentConfig,
+  server: MCPRegistryServer,
+): Promise<MCPServerConfig | null> {
+  if (server.enabled === false) return null;
+  return await hydrateServerForRuntime(config, server);
+}
+
 export async function readMCPServersSnapshot(config: AgentConfig): Promise<MCPServersSnapshot> {
   const registry = await loadMCPConfigRegistry(config);
   const serversWithAuth = await Promise.all(

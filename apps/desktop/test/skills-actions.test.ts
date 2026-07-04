@@ -209,9 +209,8 @@ describe("skill store actions", () => {
     expect(state.notifications).toHaveLength(0);
   });
 
-  test("refreshSkillsCatalog can target a non-management workspace", async () => {
+  test("refreshSkillsCatalog can target a non-selected workspace", async () => {
     const state = createState();
-    state.pluginManagementWorkspaceId = workspaceId;
     state.workspaces = [
       { id: workspaceId, path: "/tmp/management" },
       { id: secondaryWorkspaceId, path: "/tmp/selected" },

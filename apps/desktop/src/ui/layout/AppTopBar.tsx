@@ -28,13 +28,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select";
 import { resolveCollapsedLeftRailWidth } from "../../lib/desktopPlatform";
 import { useDesktopPlatform } from "../../lib/useDesktopPlatform";
 import { cn } from "../../lib/utils";
@@ -57,12 +50,8 @@ interface AppTopBarProps {
   canClearHardCap?: boolean;
   onClearHardCap?: () => void;
   showContextToggle?: boolean;
-  managementMode?: "thread" | "plugins";
   suppressThreadDetails?: boolean;
   hideThreadShell?: boolean;
-  managementWorkspaceId?: string | null;
-  managementWorkspaces?: Array<{ id: string; name: string }>;
-  onSelectManagementWorkspace?: (workspaceId: string | null) => void;
   canvasMode?: boolean;
   canvasIsMarkdown?: boolean;
   canvasActiveTab?: "preview" | "edit";
@@ -261,12 +250,8 @@ export function AppTopBar({
   canClearHardCap = false,
   onClearHardCap,
   showContextToggle = true,
-  managementMode = "thread",
   suppressThreadDetails = false,
   hideThreadShell = false,
-  managementWorkspaceId = null,
-  managementWorkspaces = [],
-  onSelectManagementWorkspace,
   canvasMode = false,
   canvasIsMarkdown = false,
   canvasActiveTab = "preview",
@@ -280,7 +265,6 @@ export function AppTopBar({
 }: AppTopBarProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
-  const [managementSelectorOpen, setManagementSelectorOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
   const detailsId = useId();
   const platformInfo = useDesktopPlatform();
@@ -395,7 +379,7 @@ export function AppTopBar({
     : sidebarCollapsed
       ? 0
       : sidebarWidth;
-  const showQuickChatPopOut = managementMode === "thread" && onPopOutQuickChat !== undefined;
+  const showQuickChatPopOut = onPopOutQuickChat !== undefined;
   const defaultRightInset = canvasMode
     ? busy
       ? 12.5 * 16
@@ -496,59 +480,7 @@ export function AppTopBar({
         className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"
         style={{ left: titleOffset, right: titleRightInset }}
       >
-        {hideThreadShell ? null : managementMode === "plugins" ? (
-          <div
-            className={cn(
-              "app-topbar__thread-anchor relative flex min-w-0 items-center",
-              sidebarCollapsed && !showCollapsedLeftRail && "app-topbar__thread-anchor--collapsed",
-              showCollapsedLeftRail && "app-topbar__thread-anchor--win32-collapsed",
-            )}
-            style={collapsedThreadAnchorStyle}
-          >
-            <Select
-              open={managementSelectorOpen}
-              onOpenChange={setManagementSelectorOpen}
-              value={managementWorkspaceId ?? "__global__"}
-              onValueChange={(value) => {
-                onSelectManagementWorkspace?.(value === "__global__" ? null : value);
-              }}
-            >
-              <SelectTrigger
-                aria-label="Select plugin management workspace"
-                className="app-topbar__thread-button app-topbar__controls h-8 border-transparent bg-transparent px-0 text-sm font-medium shadow-none hover:bg-transparent"
-                size="sm"
-                onClick={() => setManagementSelectorOpen(true)}
-              >
-                <span className="app-topbar__thread-title truncate">{title}</span>
-                <span
-                  className="app-topbar__thread-separator mx-1.5 text-muted-foreground/52"
-                  aria-hidden="true"
-                >
-                  |
-                </span>
-                <SelectValue placeholder="Global">
-                  <span className="italic">
-                    {managementWorkspaceId
-                      ? (managementWorkspaces.find(
-                          (workspace) => workspace.id === managementWorkspaceId,
-                        )?.name ?? "Global")
-                      : "Global"}
-                  </span>
-                </SelectValue>
-              </SelectTrigger>
-              {managementSelectorOpen ? (
-                <SelectContent forceMount>
-                  <SelectItem value="__global__">Global</SelectItem>
-                  {managementWorkspaces.map((workspace) => (
-                    <SelectItem key={workspace.id} value={workspace.id}>
-                      {workspace.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              ) : null}
-            </Select>
-          </div>
-        ) : (
+        {hideThreadShell ? null : (
           <div
             ref={detailsRef}
             className={cn(

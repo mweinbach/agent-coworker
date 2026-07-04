@@ -186,6 +186,89 @@ describe("mcp config registry", () => {
     }
   });
 
+  test("icon round-trips through upsert and registry read", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-icon-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-icon-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-icon-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await upsertWorkspaceMCPServer(config, {
+        name: "iconized",
+        transport: { type: "http", url: "https://mcp.example.com" },
+        icon: "https://example.com/icon.png",
+      });
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const server = snapshot.servers.find((entry) => entry.name === "iconized");
+      expect(server?.icon).toBe("https://example.com/icon.png");
+
+      const raw = JSON.parse(
+        await fs.readFile(path.join(workspace, ".cowork", "mcp-servers.json"), "utf-8"),
+      );
+      expect(raw.servers[0].icon).toBe("https://example.com/icon.png");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP servers fall back to the owning plugin's icon", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-icon-ws-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-icon-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mcp-registry-plugin-icon-builtin-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "icon-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify(
+          {
+            name: "icon-toolkit",
+            description: "Plugin icon helpers",
+            interface: { displayName: "Icon Toolkit", logo: "https://example.com/plugin-logo.png" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              inheritsIcon: { type: "http", url: "https://mcp.plugin.example.com" },
+              ownIcon: {
+                type: "http",
+                url: "https://mcp2.plugin.example.com",
+                icon: "https://example.com/server-icon.png",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const inherited = snapshot.servers.find((entry) => entry.name === "inheritsIcon");
+      expect(inherited?.icon).toBe("https://example.com/plugin-logo.png");
+      const explicit = snapshot.servers.find((entry) => entry.name === "ownIcon");
+      expect(explicit?.icon).toBe("https://example.com/server-icon.png");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("plugin MCP stdio transports rebase only filesystem paths against the plugin root", async () => {
     const workspace = await fs.mkdtemp(
       path.join(os.tmpdir(), "mcp-registry-plugin-stdio-workspace-"),

@@ -69,7 +69,7 @@ mock.module("../src/lib/desktopCommands", () =>
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
-const { SkillDetailDialog } = await import("../src/ui/skills/SkillDetailDialog");
+const { SkillDetailDialog } = await import("../src/ui/settings/toolAccess/SkillDetailDialog");
 mock.restore();
 
 describe("skill detail dialog", () => {

@@ -1,4 +1,6 @@
-export const DEFAULT_ELECTRON_REMOTE_DEBUG_PORT = "9222";
+// 9222 is Chrome's own remote-debugging default; use a dedicated port so a
+// locally running Chrome instance can't shadow the Electron CDP endpoint.
+export const DEFAULT_ELECTRON_REMOTE_DEBUG_PORT = "9322";
 
 export function resolveElectronRemoteDebugConfig(options: {
   isPackaged: boolean;

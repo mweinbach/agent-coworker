@@ -750,15 +750,6 @@ export function createThreadActions(
             s.selectedWorkspaceId === workspaceIdToRemove
               ? fallbackWorkspaceId
               : s.selectedWorkspaceId,
-          pluginManagementWorkspaceId:
-            s.pluginManagementWorkspaceId === workspaceIdToRemove
-              ? null
-              : s.pluginManagementWorkspaceId,
-          pluginManagementMode:
-            s.pluginManagementWorkspaceId === workspaceIdToRemove &&
-            s.pluginManagementMode === "workspace"
-              ? "auto"
-              : s.pluginManagementMode,
         };
       });
 

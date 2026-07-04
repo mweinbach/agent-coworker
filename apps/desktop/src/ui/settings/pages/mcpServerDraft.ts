@@ -3,11 +3,16 @@ import type { MCPServerConfig } from "../../../lib/wsProtocol";
 export type DraftState = {
   name: string;
   enabled: boolean;
+  icon: string;
   transportType: "stdio" | "http" | "sse";
   command: string;
   args: string;
   cwd: string;
+  /** Newline-separated KEY=VALUE pairs for stdio transports. */
+  env: string;
   url: string;
+  /** Newline-separated KEY=VALUE pairs for http/sse transports. */
+  headers: string;
   required: boolean;
   retries: string;
   authType: "none" | "api_key" | "oauth";
@@ -17,7 +22,6 @@ export type DraftState = {
   scope: string;
   resource: string;
   oauthMode: "auto" | "code";
-  existingTransport: MCPServerConfig["transport"] | null;
 };
 
 const SIMPLE_ARG_RE = /^[A-Za-z0-9_@%+=:,./-]+$/;
@@ -26,11 +30,14 @@ export function defaultDraftState(): DraftState {
   return {
     name: "",
     enabled: true,
+    icon: "",
     transportType: "stdio",
     command: "",
     args: "",
     cwd: "",
+    env: "",
     url: "",
+    headers: "",
     required: false,
     retries: "",
     authType: "none",
@@ -40,7 +47,6 @@ export function defaultDraftState(): DraftState {
     scope: "",
     resource: "",
     oauthMode: "auto",
-    existingTransport: null,
   };
 }
 
@@ -126,11 +132,25 @@ function parseArgs(value: string): string[] | undefined {
   return tokens.length > 0 ? tokens : undefined;
 }
 
-function nonEmptyStringMap(
-  value: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!value) return undefined;
-  return Object.keys(value).length > 0 ? { ...value } : undefined;
+function formatKeyValueMap(value: Record<string, string> | undefined): string {
+  if (!value) return "";
+  return Object.entries(value)
+    .map(([key, entry]) => `${key}=${entry}`)
+    .join("\n");
+}
+
+function parseKeyValueMap(value: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (!key) continue;
+    out[key] = line.slice(eq + 1);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export function formatTransport(server: MCPServerConfig): string {
@@ -153,11 +173,14 @@ export function draftFromServer(server: MCPServerConfig): DraftState {
   const base: DraftState = {
     name: server.name,
     enabled: server.enabled !== false,
+    icon: server.icon ?? "",
     transportType: server.transport.type,
     command: "",
     args: "",
     cwd: "",
+    env: "",
     url: "",
+    headers: "",
     required: server.required === true,
     retries: typeof server.retries === "number" ? String(server.retries) : "",
     authType: server.auth?.type ?? "none",
@@ -167,15 +190,16 @@ export function draftFromServer(server: MCPServerConfig): DraftState {
     scope: "",
     resource: "",
     oauthMode: "auto",
-    existingTransport: server.transport,
   };
 
   if (server.transport.type === "stdio") {
     base.command = server.transport.command;
     base.args = formatArgs(server.transport.args);
     base.cwd = server.transport.cwd ?? "";
+    base.env = formatKeyValueMap(server.transport.env);
   } else {
     base.url = server.transport.url;
+    base.headers = formatKeyValueMap(server.transport.headers);
   }
 
   if (server.auth?.type === "api_key") {
@@ -202,10 +226,7 @@ export function buildServerFromDraft(draft: DraftState): MCPServerConfig | null 
       const command = draft.command.trim();
       if (!command) return null;
       const args = parseArgs(draft.args);
-      const env =
-        draft.existingTransport?.type === "stdio"
-          ? nonEmptyStringMap(draft.existingTransport.env)
-          : undefined;
+      const env = parseKeyValueMap(draft.env);
       return {
         type: "stdio" as const,
         command,
@@ -217,10 +238,7 @@ export function buildServerFromDraft(draft: DraftState): MCPServerConfig | null 
 
     const url = draft.url.trim();
     if (!url) return null;
-    const headers =
-      draft.existingTransport && draft.existingTransport.type !== "stdio"
-        ? nonEmptyStringMap(draft.existingTransport.headers)
-        : undefined;
+    const headers = parseKeyValueMap(draft.headers);
     return {
       type: draft.transportType,
       url,
@@ -252,6 +270,7 @@ export function buildServerFromDraft(draft: DraftState): MCPServerConfig | null 
   return {
     name,
     ...(draft.enabled ? {} : { enabled: false }),
+    ...(draft.icon.trim() ? { icon: draft.icon.trim() } : {}),
     transport,
     ...(draft.required ? { required: true } : {}),
     ...(typeof retries === "number" && Number.isFinite(retries) ? { retries } : {}),
@@ -263,4 +282,6 @@ export const __internal = {
   formatArgs,
   parseArgs,
   quoteArg,
+  formatKeyValueMap,
+  parseKeyValueMap,
 };

@@ -122,22 +122,6 @@ function StatItem({
   );
 }
 
-function InlineMetric({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
-        {label}
-      </div>
-      <div className="mt-1 text-lg font-semibold leading-tight tabular-nums text-foreground">
-        {value}
-      </div>
-      {detail ? (
-        <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">{detail}</div>
-      ) : null}
-    </div>
-  );
-}
-
 type BackupSidebarProps = {
   entries: WorkspaceBackupEntry[];
   selectedTargetSessionId: string | null;
@@ -915,41 +899,28 @@ export function BackupPage(props: BackupPageProps = {}) {
   return (
     <SettingsPage className="max-w-none gap-4 pt-5 sm:pt-6" data-backup-page="true">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-        <div className="space-y-3" data-backup-top="true">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-foreground">
-              {activeWorkspaceTarget?.label ?? workspace.name}
-            </span>
-            <span aria-hidden="true" className="text-muted-foreground/35">
-              ·
-            </span>
-            <SettingsStatusPill tone={workspaceBackupsVisibleEnabled ? "success" : "neutral"}>
-              {workspaceBackupsVisibleEnabled ? "Active" : "Off"}
-            </SettingsStatusPill>
-            {failedCount > 0 ? (
-              <SettingsStatusPill tone="danger">{failedCount} failed</SettingsStatusPill>
-            ) : null}
-          </div>
-          <div
-            className="flex flex-wrap items-start gap-x-6 gap-y-3 sm:gap-x-8"
-            data-backup-summary="true"
-          >
-            <InlineMetric
-              label="Backed-up sessions"
-              value={String(sortedEntries.length)}
-              detail="For this target"
-            />
-            <InlineMetric
-              label="Checkpoints"
-              value={String(checkpointCount)}
-              detail="Manual + auto"
-            />
-            <InlineMetric
-              label="Storage used"
-              value={formatBytes(totalBytes)}
-              detail="Local only"
-            />
-          </div>
+        <div
+          className="flex flex-wrap items-center gap-x-2 gap-y-1.5"
+          data-backup-top="true"
+          data-backup-summary="true"
+        >
+          <span className="text-sm font-medium text-foreground">
+            {activeWorkspaceTarget?.label ?? workspace.name}
+          </span>
+          <SettingsStatusPill tone={workspaceBackupsVisibleEnabled ? "success" : "neutral"}>
+            {workspaceBackupsVisibleEnabled ? "Active" : "Off"}
+          </SettingsStatusPill>
+          {failedCount > 0 ? (
+            <SettingsStatusPill tone="danger">{failedCount} failed</SettingsStatusPill>
+          ) : null}
+          <span aria-hidden="true" className="text-muted-foreground/35">
+            ·
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {sortedEntries.length} backed-up {sortedEntries.length === 1 ? "session" : "sessions"} ·{" "}
+            {checkpointCount} {checkpointCount === 1 ? "checkpoint" : "checkpoints"} ·{" "}
+            {formatBytes(totalBytes)} local storage
+          </span>
         </div>
 
         <section className="space-y-3 border-t border-border/45 pt-4" data-backup-controls="true">

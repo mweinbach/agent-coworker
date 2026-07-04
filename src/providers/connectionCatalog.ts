@@ -8,11 +8,11 @@ import {
   type SupportedModel,
 } from "../models/registry";
 import { supportsCustomModelIds } from "../shared/customModels";
-import { supportsModelPreferences } from "../shared/modelPreferences";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
 } from "../shared/googleThinking";
+import { supportsModelPreferences } from "../shared/modelPreferences";
 import type { CatalogReasoningEffort } from "../shared/openaiCompatibleOptions";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
@@ -22,7 +22,6 @@ import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { openAiReasoningConfigForSupportedModel } from "./catalog";
 import { type listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import { type CustomModelEntry, readCustomModelStore } from "./customModels";
-import { readModelPreferencesStore } from "./modelPreferences";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
   isFireworksInferenceProvider,
@@ -48,6 +47,7 @@ import {
   readModelDiscoveryCache,
   writeModelDiscoveryCache,
 } from "./modelDiscoveryCache";
+import { readModelPreferencesStore } from "./modelPreferences";
 import { NVIDIA_BASE_URL, resolveNvidiaApiKey } from "./nvidiaShared";
 import {
   getOpenCodeDisplayName,

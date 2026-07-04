@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   PlusIcon,
   RefreshCcwIcon,
+  SlidersHorizontalIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -28,6 +29,7 @@ import {
 import { Input } from "../../../components/ui/input";
 import {
   customModelPlaceholderForProvider,
+  isCatalogModelEnabled,
   isCustomCatalogModelEntry,
   isUiDisabledProvider,
   modelChoicesFromCatalog,
@@ -44,6 +46,7 @@ import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
+import { ManageModelsDialog } from "./ManageModelsDialog";
 import {
   describeLmStudioCard,
   EXA_AUTH_METHOD_ID,
@@ -154,6 +157,7 @@ export function ProvidersPage({
     initialExpandedSectionId,
   );
   const [newProviderOpen, setNewProviderOpen] = useState(initialNewProviderOpen);
+  const [manageModelsProvider, setManageModelsProvider] = useState<ProviderName | null>(null);
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
 
@@ -164,9 +168,12 @@ export function ProvidersPage({
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
     const filtered = source.filter((provider) => !isUiDisabledProvider(provider));
 
+    // Classify by the raw catalog so a provider whose models are all disabled
+    // stays in the model section (its Manage models entry point must survive).
     const isModelProvider = (provider: ProviderName) =>
       provider === "lmstudio" ||
       provider === "codex-cli" ||
+      (providerCatalog.find((entry) => entry.id === provider)?.models?.length ?? 0) > 0 ||
       (provider in modelChoices && modelChoices[provider]?.length > 0);
 
     const sortProviders = (providers: ProviderName[]) =>
@@ -637,6 +644,7 @@ export function ProvidersPage({
     const standardModelIds = allModelIds.filter((modelId) => !customModelIdSet.has(modelId));
     const modelPreviewIds = standardModelIds.slice(0, 8);
     const hiddenPreviewCount = Math.max(0, standardModelIds.length - modelPreviewIds.length);
+    const enabledModelCount = catalogModels.filter(isCatalogModelEnabled).length;
     const customDraft = customModelDraftByProvider[provider] ?? "";
     const canUseCustomModels = supportsCustomModelIds(provider);
     const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
@@ -1124,14 +1132,29 @@ export function ProvidersPage({
                 </div>
               ) : null}
 
-              {modelPreviewIds.length > 0 ? (
+              {catalogModels.length > 0 || modelPreviewIds.length > 0 ? (
                 <div className="space-y-2 border-t border-border/70 pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Available models
                     </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {allModelIds.length} total
+                    <div className="flex items-center gap-2">
+                      <div className="text-[11px] text-muted-foreground">
+                        {catalogModels.length > 0
+                          ? `${enabledModelCount} of ${catalogModels.length} enabled`
+                          : `${allModelIds.length} total`}
+                      </div>
+                      {catalogModels.length > 0 ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setManageModelsProvider(provider)}
+                        >
+                          <SlidersHorizontalIcon data-icon="inline-start" />
+                          Manage models
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1142,6 +1165,11 @@ export function ProvidersPage({
                     ))}
                     {hiddenPreviewCount > 0 ? (
                       <Badge variant="outline">+{hiddenPreviewCount} more</Badge>
+                    ) : null}
+                    {modelPreviewIds.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">
+                        All models are disabled. Use Manage models to enable some.
+                      </div>
                     ) : null}
                   </div>
                 </div>
@@ -1426,6 +1454,12 @@ export function ProvidersPage({
       >
         {allToolElements}
       </div>
+      <ManageModelsDialog
+        provider={manageModelsProvider}
+        onOpenChange={(open) => {
+          if (!open) setManageModelsProvider(null);
+        }}
+      />
     </div>
   );
 }

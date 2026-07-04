@@ -59,9 +59,9 @@ describe("model preferences store", () => {
 
   test("rejects providers without model preference support", async () => {
     const paths = await makeTempPaths();
-    await expect(setModelPreferences(paths, "lmstudio", [{ id: "x", enabled: false }])).rejects.toThrow(
-      "does not support model preferences",
-    );
+    await expect(
+      setModelPreferences(paths, "lmstudio", [{ id: "x", enabled: false }]),
+    ).rejects.toThrow("does not support model preferences");
     await expect(resetModelPreferences(paths, "lmstudio")).rejects.toThrow(
       "does not support model preferences",
     );

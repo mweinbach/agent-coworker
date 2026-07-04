@@ -8,8 +8,8 @@ import {
   listProviderCatalogEntries,
 } from "../../src/providers/connectionCatalog";
 import { upsertCustomModel } from "../../src/providers/customModels";
-import { setModelPreferences } from "../../src/providers/modelPreferences";
 import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
+import { setModelPreferences } from "../../src/providers/modelPreferences";
 import { PROVIDER_NAMES } from "../../src/types";
 
 const noCodexAccount = async () => ({

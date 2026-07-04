@@ -3,7 +3,6 @@ import path from "node:path";
 import { z } from "zod";
 
 import { type AiCoworkerPaths, ensureAiCoworkerHome } from "../connect";
-import { normalizeCustomModelId } from "./customModels";
 import {
   type ModelPreferenceProviderName,
   resolveModelPreferenceProviderName,
@@ -11,6 +10,7 @@ import {
 } from "../shared/modelPreferences";
 import type { ProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import { normalizeCustomModelId } from "./customModels";
 
 const MODEL_PREFERENCES_STORE_FILENAME = "model-preferences.json";
 

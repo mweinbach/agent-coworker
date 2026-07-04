@@ -169,6 +169,40 @@ describe("modelOptionsForProvider", () => {
     ).toBeUndefined();
   });
 
+  test("filters models flagged enabled:false out of picker choices", () => {
+    const choices = modelChoicesFromCatalog([
+      {
+        id: "together",
+        name: "Together AI",
+        models: [
+          {
+            id: "zai-org/GLM-5.2",
+            displayName: "GLM 5.2",
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: false,
+          },
+          {
+            id: "some-org/obscure-model",
+            displayName: "Obscure Model",
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: false,
+            enabled: false,
+          },
+          {
+            id: "moonshotai/Kimi-K2.6",
+            displayName: "Kimi K2.6",
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: false,
+            enabled: true,
+          },
+        ],
+        defaultModel: "zai-org/GLM-5.2",
+      },
+    ]);
+
+    expect(choices.together).toEqual(["zai-org/GLM-5.2", "moonshotai/Kimi-K2.6"]);
+  });
+
   test("filters provider options down to connected user-facing providers", () => {
     const providers = availableProvidersFromCatalog(
       [

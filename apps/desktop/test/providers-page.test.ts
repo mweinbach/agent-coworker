@@ -180,6 +180,75 @@ describe("desktop providers page", () => {
     }
   });
 
+  test("renders the Manage models control with enabled counts", () => {
+    useAppStore.setState({
+      providerCatalog: [
+        {
+          id: "together",
+          name: "Together AI",
+          models: [
+            { id: "zai-org/GLM-5.2", displayName: "GLM 5.2" },
+            { id: "moonshotai/Kimi-K2.6", displayName: "Kimi K2.6" },
+            { id: "some-org/obscure-model", displayName: "Obscure", enabled: false },
+          ],
+          defaultModel: "zai-org/GLM-5.2",
+        },
+      ] as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:together",
+      }),
+    );
+
+    expect(html).toContain("Manage models");
+    expect(html).toContain("2 of 3 enabled");
+    expect(html).toContain("zai-org/GLM-5.2");
+    expect(html).not.toContain("some-org/obscure-model");
+  });
+
+  test("keeps an all-disabled provider in the model providers list", () => {
+    useAppStore.setState({
+      providerStatusByName: {
+        together: {
+          provider: "together",
+          authorized: true,
+          verified: true,
+          mode: "api_key",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+      providerCatalog: [
+        {
+          id: "together",
+          name: "Together AI",
+          models: [
+            { id: "zai-org/GLM-5.2", displayName: "GLM 5.2", enabled: false },
+            { id: "moonshotai/Kimi-K2.6", displayName: "Kimi K2.6", enabled: false },
+          ],
+          defaultModel: "zai-org/GLM-5.2",
+        },
+      ] as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:together",
+        surface: "models",
+      }),
+    );
+
+    expect(html).toContain("Together AI");
+    // If the provider were misclassified as a tool provider, the models
+    // surface would fall back to the "No providers connected yet" empty state.
+    expect(html).not.toContain("No providers connected yet");
+    expect(html).toContain("0 of 2 enabled");
+    expect(html).toContain("All models are disabled");
+  });
+
   test("renders a dedicated Exa Search settings card", () => {
     const html = renderToStaticMarkup(
       createElement(ProvidersPage, {
@@ -490,7 +559,8 @@ describe("desktop providers page", () => {
     expect(html).toContain("Custom models");
     expect(html).toContain("nvidia/custom-preview-model");
     expect(html).toContain("nvidia/nemotron-3-super-120b-a12b");
-    expect(html).toContain("2 total");
+    expect(html).toContain("2 of 2 enabled");
+    expect(html).toContain("Manage models");
   });
 
   test("models surface shows an empty state when nothing is connected", () => {

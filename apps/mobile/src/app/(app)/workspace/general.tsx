@@ -177,19 +177,21 @@ export default function WorkspaceGeneralScreen() {
             <View style={{ gap: 8 }}>
               <SectionLabel>Model</SectionLabel>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {providerEntry.models.map((model) => (
-                  <ChoicePill
-                    key={model.id}
-                    label={model.displayName}
-                    selected={model.id === selectedModel}
-                    onPress={() => {
-                      void applyWorkspaceDefaults({
-                        provider: providerEntry.id,
-                        model: model.id,
-                      });
-                    }}
-                  />
-                ))}
+                {providerEntry.models
+                  .filter((model) => model.enabled !== false)
+                  .map((model) => (
+                    <ChoicePill
+                      key={model.id}
+                      label={model.displayName}
+                      selected={model.id === selectedModel}
+                      onPress={() => {
+                        void applyWorkspaceDefaults({
+                          provider: providerEntry.id,
+                          model: model.id,
+                        });
+                      }}
+                    />
+                  ))}
               </View>
             </View>
           ) : null}

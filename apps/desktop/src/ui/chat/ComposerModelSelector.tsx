@@ -126,11 +126,14 @@ export function ComposerModelSelector({
     setCustomDialogOpen(true);
   };
 
-  const saveCustomModel = () => {
+  const saveCustomModel = async () => {
     if (!customProvider) return;
     const customModel = customModelVal.trim();
     if (!customModel) return;
-    void addCustomProviderModel(customProvider, customModel);
+    // Wait for the add to persist before selecting: the model/set path only
+    // accepts unknown dynamic IDs once they exist in the custom-model store.
+    const added = await addCustomProviderModel(customProvider, customModel);
+    if (!added) return;
     onChange({ provider: customProvider, model: customModel });
     setCustomDialogOpen(false);
     setOpen(false);
@@ -226,7 +229,7 @@ export function ComposerModelSelector({
                         onChange={(e) => setCustomModelVal(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && customModelVal.trim()) {
-                            saveCustomModel();
+                            void saveCustomModel();
                           }
                         }}
                       />
@@ -234,7 +237,7 @@ export function ComposerModelSelector({
                         type="button"
                         size="sm"
                         disabled={!customModelVal.trim()}
-                        onClick={saveCustomModel}
+                        onClick={() => void saveCustomModel()}
                       >
                         Save
                       </Button>

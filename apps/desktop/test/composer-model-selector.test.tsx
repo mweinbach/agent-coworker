@@ -176,6 +176,7 @@ describe("ComposerModelSelector", () => {
     useAppStore.setState({
       addCustomProviderModel: async (provider, model) => {
         added.push({ provider, model });
+        return true;
       },
     });
     await renderSelector({

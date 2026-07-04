@@ -648,12 +648,12 @@ export type AppStoreState = {
   callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
-  addCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<void>;
+  addCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<boolean>;
   deleteCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<void>;
   setProviderModelsEnabled: (
     provider: ProviderName,
     models: ReadonlyArray<{ id: string; enabled: boolean }>,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   resetProviderModelPreferences: (provider: ProviderName) => Promise<void>;
   refreshProviderStatus: (opts?: {
     refreshBedrockDiscovery?: boolean;

@@ -318,7 +318,14 @@ export function ProvidersPage({
     const modelId = (customModelDraftByProvider[provider] ?? "").trim();
     if (!modelId) return;
     setCustomModelDraftByProvider((s) => ({ ...s, [provider]: "" }));
-    void addCustomProviderModel(provider, modelId);
+    void addCustomProviderModel(provider, modelId).then((added) => {
+      if (added) return;
+      // Restore the typed ID on failure so the user can retry without
+      // re-entering it, unless they have already started typing again.
+      setCustomModelDraftByProvider((s) =>
+        (s[provider] ?? "") === "" ? { ...s, [provider]: modelId } : s,
+      );
+    });
   };
 
   const renderAuthMethod = (opts: {

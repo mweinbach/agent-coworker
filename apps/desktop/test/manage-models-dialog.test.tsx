@@ -81,6 +81,7 @@ describe("manage models dialog", () => {
     useAppStore.setState({
       setProviderModelsEnabled: (async (provider: string, models: unknown) => {
         calls.push({ provider, models });
+        return true;
       }) as any,
     });
 
@@ -127,6 +128,7 @@ describe("manage models dialog", () => {
     useAppStore.setState({
       setProviderModelsEnabled: (async (provider: string, models: unknown) => {
         setCalls.push({ provider, models });
+        return true;
       }) as any,
       resetProviderModelPreferences: (async (provider: string) => {
         resetCalls.push(provider);

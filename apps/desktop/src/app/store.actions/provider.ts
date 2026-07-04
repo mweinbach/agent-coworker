@@ -578,11 +578,11 @@ export function createProviderActions(
             detail: "Enter a model ID before adding it.",
           }),
         }));
-        return;
+        return false;
       }
 
       const workspaceId = await ensureProviderControlReady();
-      if (!workspaceId) return;
+      if (!workspaceId) return false;
 
       const ok = await requestJsonRpcControlEvent(
         get,
@@ -606,6 +606,7 @@ export function createProviderActions(
           }),
         }));
       }
+      return ok;
     },
 
     deleteCustomProviderModel: async (provider, modelId) => {
@@ -642,9 +643,9 @@ export function createProviderActions(
       const normalizedModels = models
         .map((model) => ({ id: model.id.trim(), enabled: model.enabled }))
         .filter((model) => model.id);
-      if (normalizedModels.length === 0) return;
+      if (normalizedModels.length === 0) return false;
       const workspaceId = await ensureProviderControlReady();
-      if (!workspaceId) return;
+      if (!workspaceId) return false;
 
       const ok = await requestJsonRpcControlEvent(
         get,
@@ -668,6 +669,7 @@ export function createProviderActions(
           }),
         }));
       }
+      return ok;
     },
 
     resetProviderModelPreferences: async (provider) => {

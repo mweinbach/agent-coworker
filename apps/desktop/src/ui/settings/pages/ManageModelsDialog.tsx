@@ -78,28 +78,44 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
 
   const isModelChecked = (modelId: string, fallback: boolean) => pendingById[modelId] ?? fallback;
 
+  const dropPending = (modelIds: readonly string[]) => {
+    setPendingById((s) => {
+      const next = { ...s };
+      for (const id of modelIds) delete next[id];
+      return next;
+    });
+  };
+
   const toggleModel = (modelId: string, enabled: boolean) => {
     setPendingById((s) => ({ ...s, [modelId]: enabled }));
-    void setProviderModelsEnabled(provider, [{ id: modelId, enabled }]);
+    void setProviderModelsEnabled(provider, [{ id: modelId, enabled }]).then((ok) => {
+      if (!ok) dropPending([modelId]);
+    });
   };
 
   const setAllVisible = (enabled: boolean) => {
     if (visibleModels.length === 0) return;
+    const modelIds = visibleModels.map((model) => model.id);
     setPendingById((s) => ({
       ...s,
-      ...Object.fromEntries(visibleModels.map((model) => [model.id, enabled])),
+      ...Object.fromEntries(modelIds.map((id) => [id, enabled])),
     }));
     void setProviderModelsEnabled(
       provider,
       visibleModels.map((model) => ({ id: model.id, enabled })),
-    );
+    ).then((ok) => {
+      if (!ok) dropPending(modelIds);
+    });
   };
 
   const submitCustomModel = () => {
     const modelId = customDraft.trim();
     if (!modelId) return;
     setCustomDraft("");
-    void addCustomProviderModel(provider, modelId);
+    void addCustomProviderModel(provider, modelId).then((added) => {
+      if (added) return;
+      setCustomDraft((current) => (current === "" ? modelId : current));
+    });
   };
 
   return (

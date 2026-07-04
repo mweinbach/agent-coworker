@@ -205,19 +205,20 @@ export function EntityIcon({
   size?: "sm" | "md" | "lg";
   className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const sizeClass = size === "sm" ? "size-6" : size === "lg" ? "size-10" : "size-8";
   const textClass = size === "sm" ? "text-[10px]" : size === "lg" ? "text-base" : "text-xs";
   const paletteClass = useMemo(() => entityIconPaletteClass(name), [name]);
   const trimmed = src?.trim() ?? "";
+  const renderableImage = trimmed !== "" && isRenderableImageSource(trimmed);
 
-  if (trimmed && !failed && isRenderableImageSource(trimmed)) {
+  if (renderableImage && failedSrc !== trimmed) {
     return (
       <img
         src={trimmed}
         alt=""
         aria-hidden="true"
-        onError={() => setFailed(true)}
+        onError={() => setFailedSrc(trimmed)}
         className={cn(
           "shrink-0 rounded-md border border-border/45 bg-background object-contain",
           sizeClass,
@@ -227,7 +228,7 @@ export function EntityIcon({
     );
   }
 
-  if (trimmed && !failed && trimmed.length <= 3) {
+  if (trimmed && !renderableImage && trimmed.length <= 3) {
     return (
       <span
         aria-hidden="true"

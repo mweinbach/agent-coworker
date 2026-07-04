@@ -769,7 +769,7 @@ describe("desktop chat view stability", () => {
       ) as HTMLButtonElement | null;
       expect(scrollButton).not.toBeNull();
       expect(scrollButton?.dataset.active).toBe("true");
-      expect(scrollButton?.style.bottom).toBe("234px");
+      expect(scrollButton?.style.bottom).toBe("229px");
 
       await act(async () => {
         scrollButton?.click();

@@ -5,6 +5,8 @@ import { startAgentServer } from "../../src/server/startServer";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import { connectJsonRpc } from "./control.harness";
 
+const IMPORT_RPC_TIMEOUT_MS = 15_000;
+
 async function writeCodexPlugin(home: string, name: string): Promise<void> {
   const root = path.join(home, ".codex", "plugins", "cache", "mkt", name, "1.0.0");
   await fs.mkdir(path.join(root, ".codex-plugin"), { recursive: true });
@@ -43,11 +45,15 @@ describe("server JSON-RPC import methods", () => {
     try {
       const rpc = await connectJsonRpc(url);
 
-      const listPlugins = await rpc.request("cowork/import/list", {
-        cwd: tmpDir,
-        source: "codex",
-        kind: "plugin",
-      });
+      const listPlugins = await rpc.request(
+        "cowork/import/list",
+        {
+          cwd: tmpDir,
+          source: "codex",
+          kind: "plugin",
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
       expect(listPlugins.result.event).toEqual(
         expect.objectContaining({
           type: "import_list",
@@ -61,13 +67,17 @@ describe("server JSON-RPC import methods", () => {
       );
 
       const deltaItem = listPlugins.result.event.items.find((i: any) => i.id === "delta");
-      const importPluginResponse = await rpc.request("cowork/import/plugin", {
-        cwd: tmpDir,
-        source: "codex",
-        sourcePath: deltaItem.sourcePath,
-        conversionRequired: false,
-        targetScope: "workspace",
-      });
+      const importPluginResponse = await rpc.request(
+        "cowork/import/plugin",
+        {
+          cwd: tmpDir,
+          source: "codex",
+          sourcePath: deltaItem.sourcePath,
+          conversionRequired: false,
+          targetScope: "workspace",
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
       expect(Array.isArray(importPluginResponse.result.events)).toBe(true);
       expect(importPluginResponse.result.events).toEqual(
         expect.arrayContaining([
@@ -83,20 +93,28 @@ describe("server JSON-RPC import methods", () => {
         fs.stat(`${tmpDir}/.cowork/plugins/delta/.codex-plugin/plugin.json`),
       ).resolves.toBeDefined();
 
-      const listSkills = await rpc.request("cowork/import/list", {
-        cwd: tmpDir,
-        source: "codex",
-        kind: "skill",
-      });
+      const listSkills = await rpc.request(
+        "cowork/import/list",
+        {
+          cwd: tmpDir,
+          source: "codex",
+          kind: "skill",
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
       const skillItem = listSkills.result.event.items.find((i: any) => i.id === "echo-skill");
       expect(skillItem).toBeDefined();
 
-      const importSkillResponse = await rpc.request("cowork/import/skill", {
-        cwd: tmpDir,
-        source: "codex",
-        sourcePath: skillItem.sourcePath,
-        targetScope: "workspace",
-      });
+      const importSkillResponse = await rpc.request(
+        "cowork/import/skill",
+        {
+          cwd: tmpDir,
+          source: "codex",
+          sourcePath: skillItem.sourcePath,
+          targetScope: "workspace",
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
       expect(importSkillResponse.result.event).toEqual(
         expect.objectContaining({
           type: "skills_catalog",

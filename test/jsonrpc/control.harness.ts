@@ -47,7 +47,11 @@ export async function connectJsonRpc(url: string) {
     };
   });
 
-  const waitFor = async (predicate: (message: any) => boolean, timeoutMs = 5_000) => {
+  const waitFor = async (
+    predicate: (message: any) => boolean,
+    timeoutMs = 5_000,
+    timeoutLabel?: string,
+  ) => {
     const existingIndex = queue.findIndex(predicate);
     if (existingIndex >= 0) {
       return queue.splice(existingIndex, 1)[0];
@@ -55,7 +59,13 @@ export async function connectJsonRpc(url: string) {
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         waiters.delete(waiter);
-        reject(new Error("Timed out waiting for JSON-RPC message"));
+        reject(
+          new Error(
+            timeoutLabel
+              ? `Timed out waiting for JSON-RPC message (${timeoutLabel})`
+              : "Timed out waiting for JSON-RPC message",
+          ),
+        );
       }, timeoutMs);
       const waiter = { predicate, resolve, reject, timer };
       waiters.add(waiter);
@@ -66,7 +76,7 @@ export async function connectJsonRpc(url: string) {
   const request = async (method: string, params?: unknown, timeoutMs = 5_000) => {
     const id = ++nextId;
     ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
-    return await waitFor((message) => message.id === id, timeoutMs);
+    return await waitFor((message) => message.id === id, timeoutMs, `response to ${method}#${id}`);
   };
 
   await request("initialize", {

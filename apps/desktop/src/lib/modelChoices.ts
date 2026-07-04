@@ -3,9 +3,12 @@ import {
   reasoningConfigForProviderModel,
   userFacingAvailableModelsForProvider,
 } from "@cowork/providers/catalog";
+import { CUSTOM_MODEL_PROVIDER_NAMES, supportsCustomModelIds } from "@cowork/shared/customModels";
 import { type DesktopPlatform, getDesktopPlatformInfo } from "./desktopPlatform";
 import type { ProviderName, SessionEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
+
+export { CUSTOM_MODEL_PROVIDER_NAMES, supportsCustomModelIds };
 
 export const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
   PROVIDER_NAMES.filter((provider) => !isUserFacingProviderEnabled(provider)),
@@ -45,6 +48,19 @@ type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>[
 export type ComposerReasoningConfig = NonNullable<
   ProviderCatalogEntry["models"][number]["reasoning"]
 >;
+
+export function isCustomCatalogModelEntry(model: ProviderCatalogEntry["models"][number]): boolean {
+  return model.runtimeOptions?.source === "custom";
+}
+
+export function customModelPlaceholderForProvider(provider: ProviderName): string {
+  if (provider === "bedrock") return "e.g. us.amazon.nova-pro-v1:0";
+  if (provider === "anthropic") return "e.g. claude-sonnet-4-6-20260615";
+  if (provider === "nvidia") return "e.g. nvidia/llama-4.2-nemotron";
+  if (provider === "google") return "e.g. gemini-3.5-flash-latest";
+  if (provider === "openai") return "e.g. gpt-5.5-latest";
+  return "Paste a model ID";
+}
 
 export function reasoningConfigFromCatalog(
   catalog: readonly ProviderCatalogEntry[],

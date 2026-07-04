@@ -4,12 +4,14 @@ import {
   resolveBedrockModelMetadata,
   resolveDefaultBedrockModelMetadata,
 } from "../providers/bedrockShared";
+import { readCustomModelStore } from "../providers/customModels";
 import {
   buildLmStudioPlaceholderMetadata,
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
 import { readModelDiscoveryCache } from "../providers/modelDiscoveryCache";
+import { supportsCustomModelIds } from "../shared/customModels";
 import { getAiCoworkerPaths } from "../store/connections";
 import type { ProviderName } from "../types";
 import type { ResolvedModelMetadata } from "./metadataTypes";
@@ -34,7 +36,8 @@ type DynamicModelProvider =
   | "nvidia"
   | "minimax"
   | "opencode-go"
-  | "opencode-zen";
+  | "opencode-zen"
+  | "antigravity";
 
 function toResolvedStaticModel(
   provider: ProviderName,
@@ -86,7 +89,8 @@ export function isDynamicModelProvider(provider: ProviderName): provider is Dyna
     provider === "nvidia" ||
     provider === "minimax" ||
     provider === "opencode-go" ||
-    provider === "opencode-zen"
+    provider === "opencode-zen" ||
+    provider === "antigravity"
   );
 }
 
@@ -203,6 +207,23 @@ export async function getDiscoveredModelMetadata(
   }
 }
 
+export async function getCustomModelMetadata(
+  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock" | "codex-cli">,
+  modelId: string,
+  opts: { home?: string } = {},
+): Promise<ResolvedModelMetadata | null> {
+  if (!supportsCustomModelIds(provider)) return null;
+  try {
+    const paths = getAiCoworkerPaths(opts.home ? { homedir: opts.home } : {});
+    const store = await readCustomModelStore(paths);
+    const match = store.providers[provider]?.find((model) => model.id === modelId);
+    if (!match) return null;
+    return buildProviderPlaceholderMetadata(provider, modelId);
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveModelMetadata(
   provider: ProviderName,
   modelId: string,
@@ -229,7 +250,11 @@ export async function resolveModelMetadata(
       !getSupportedModel(provider, trimmed)
     ) {
       // Strict resolution (model selection paths): unknown ids are only
-      // accepted when they were previously discovered from the provider.
+      // accepted when configured by the user or previously discovered from the provider.
+      const custom = await getCustomModelMetadata(provider, trimmed, {
+        ...(opts.home ? { home: opts.home } : {}),
+      });
+      if (custom) return custom;
       const discovered = await getDiscoveredModelMetadata(provider, trimmed, {
         ...(opts.home ? { home: opts.home } : {}),
       });

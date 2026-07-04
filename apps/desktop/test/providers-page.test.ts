@@ -443,6 +443,56 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("OpenAI");
   });
 
+  test("expanded model provider card renders custom model controls", () => {
+    useAppStore.setState({
+      providerStatusByName: {
+        nvidia: {
+          provider: "nvidia",
+          authorized: true,
+          verified: true,
+          mode: "api_key",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+      providerConnected: ["nvidia"],
+      providerCatalog: [
+        {
+          id: "nvidia",
+          name: "NVIDIA",
+          models: [
+            {
+              id: "nvidia/nemotron-3-super-120b-a12b",
+              displayName: "Nemotron 3 Super 120B A12B",
+              knowledgeCutoff: "February 2026",
+              supportsImageInput: false,
+            },
+            {
+              id: "nvidia/custom-preview-model",
+              displayName: "nvidia/custom-preview-model",
+              description: "Custom model ID",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+              runtimeOptions: { source: "custom" },
+            },
+          ],
+          defaultModel: "nvidia/nemotron-3-super-120b-a12b",
+        },
+      ] as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, { initialExpandedSectionId: "provider:nvidia" }),
+    );
+
+    expect(html).toContain("2 models available");
+    expect(html).toContain("Custom models");
+    expect(html).toContain("nvidia/custom-preview-model");
+    expect(html).toContain("nvidia/nemotron-3-super-120b-a12b");
+    expect(html).toContain("2 total");
+  });
+
   test("models surface shows an empty state when nothing is connected", () => {
     const html = renderToStaticMarkup(createElement(ProvidersPage, { surface: "models" }));
 

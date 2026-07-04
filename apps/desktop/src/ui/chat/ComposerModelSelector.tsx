@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
@@ -10,16 +10,17 @@ import {
   CommandItem,
   CommandList,
 } from "../../components/ui/command";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import {
   availableProvidersFromCatalog,
   type CatalogVisibilityOptions,
+  customModelPlaceholderForProvider,
   encodeProviderModelSelection,
   modelChoicesFromCatalog,
   modelDescriptionsFromCatalog,
   resolveModelDisplayLabel,
+  supportsCustomModelIds,
 } from "../../lib/modelChoices";
 import { displayProviderName } from "../../lib/providerDisplayNames";
 import { cn } from "../../lib/utils";
@@ -79,6 +80,7 @@ export function ComposerModelSelector({
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerUiState = useAppStore((s) => s.providerUiState);
+  const addCustomProviderModel = useAppStore((s) => s.addCustomProviderModel);
   const chatCatalogVisibility = useMemo<CatalogVisibilityOptions>(
     () => ({
       hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
@@ -109,6 +111,7 @@ export function ComposerModelSelector({
 
   const [open, setOpen] = useState(defaultOpen);
   const [customDialogOpen, setCustomDialogOpen] = useState(false);
+  const [customProvider, setCustomProvider] = useState<ProviderName | null>(null);
   const [customModelVal, setCustomModelVal] = useState("");
 
   const selectModel = (nextProvider: ProviderName, nextModel: string) => {
@@ -117,133 +120,132 @@ export function ComposerModelSelector({
     onChange({ provider: nextProvider, model: nextModel });
   };
 
+  const openCustomModelEditor = (nextProvider: ProviderName, initialModel: string) => {
+    setCustomProvider(nextProvider);
+    setCustomModelVal(initialModel);
+    setCustomDialogOpen(true);
+  };
+
+  const saveCustomModel = () => {
+    if (!customProvider) return;
+    const customModel = customModelVal.trim();
+    if (!customModel) return;
+    void addCustomProviderModel(customProvider, customModel);
+    onChange({ provider: customProvider, model: customModel });
+    setCustomDialogOpen(false);
+    setOpen(false);
+  };
+
   return (
-    <>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={disabled}
-            aria-label="Model"
-            data-slot="composer-model-selector"
-            title={model ? `${triggerLabel} (${model})` : "Choose a model"}
-            className="h-7 min-w-0 max-w-[220px] gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground/85 hover:bg-muted/30 hover:text-foreground"
-          >
-            <span className="truncate">{triggerLabel || "Model"}</span>
-            <ChevronDownIcon className="size-3 shrink-0 opacity-60" aria-hidden />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          className="w-[300px] overflow-hidden rounded-xl border-border/45 p-1 shadow-xl shadow-foreground/10 outline-none"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          aria-label="Model"
+          data-slot="composer-model-selector"
+          title={model ? `${triggerLabel} (${model})` : "Choose a model"}
+          className="h-7 min-w-0 max-w-[220px] gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground/85 hover:bg-muted/30 hover:text-foreground"
         >
-          <Command className="rounded-lg bg-transparent [&_[data-slot=command-input-wrapper]]:border-b-border/50 [&_[data-slot=command-input-wrapper]]:bg-background/60 [&_[data-slot=command-input-wrapper]]:px-3">
-            <CommandInput placeholder="Search models…" />
-            <CommandList>
-              <CommandEmpty>No models found.</CommandEmpty>
-              {providers.map((p) => {
-                const models = choices[p] ?? [];
-                const showCurrentCustom = p === provider && !!model && !models.includes(model);
-                const showBedrockCustom = p === "bedrock";
-                if (models.length === 0 && !showCurrentCustom && !showBedrockCustom) return null;
-                return (
-                  <CommandGroup key={p} heading={displayProviderName(p)}>
-                    {models.map((m) => {
-                      const sel = encodeProviderModelSelection(p, m);
-                      const label = resolveModelDisplayLabel(p, m, modelDisplayNames);
-                      return (
-                        <CommandItem
-                          key={sel}
-                          value={`${sel} ${label} ${displayProviderName(p)}`}
-                          title={m}
-                          onSelect={() => selectModel(p, m)}
-                        >
-                          <ComposerModelOption
-                            label={label}
-                            description={modelDescriptions[p]?.[m]}
-                            selected={sel === selectedValue}
-                          />
-                        </CommandItem>
-                      );
-                    })}
-                    {showCurrentCustom ? (
+          <span className="truncate">{triggerLabel || "Model"}</span>
+          <ChevronDownIcon className="size-3 shrink-0 opacity-60" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[300px] overflow-hidden rounded-xl border-border/45 p-1 shadow-xl shadow-foreground/10 outline-none"
+      >
+        <Command className="rounded-lg bg-transparent [&_[data-slot=command-input-wrapper]]:border-b-border/50 [&_[data-slot=command-input-wrapper]]:bg-background/60 [&_[data-slot=command-input-wrapper]]:px-3">
+          <CommandInput placeholder="Search models…" />
+          <CommandList>
+            <CommandEmpty>No models found.</CommandEmpty>
+            {providers.map((p) => {
+              const models = choices[p] ?? [];
+              const showCurrentCustom = p === provider && !!model && !models.includes(model);
+              const showCustomEntry = supportsCustomModelIds(p);
+              if (models.length === 0 && !showCurrentCustom && !showCustomEntry) return null;
+              return (
+                <CommandGroup key={p} heading={displayProviderName(p)}>
+                  {models.map((m) => {
+                    const sel = encodeProviderModelSelection(p, m);
+                    const label = resolveModelDisplayLabel(p, m, modelDisplayNames);
+                    return (
                       <CommandItem
-                        key={selectedValue}
-                        value={`${selectedValue} custom ${displayProviderName(p)}`}
-                        title={model}
-                        onSelect={() => selectModel(p, model)}
+                        key={sel}
+                        value={`${sel} ${label} ${displayProviderName(p)}`}
+                        title={m}
+                        onSelect={() => selectModel(p, m)}
                       >
                         <ComposerModelOption
-                          label={`${resolveModelDisplayLabel(p, model, modelDisplayNames)} (custom)`}
-                          selected
+                          label={label}
+                          description={modelDescriptions[p]?.[m]}
+                          selected={sel === selectedValue}
                         />
                       </CommandItem>
-                    ) : null}
-                    {showBedrockCustom ? (
-                      <CommandItem
-                        key="bedrock-custom-entry"
-                        value="bedrock custom model id arn"
-                        onSelect={() => {
-                          setOpen(false);
-                          setCustomModelVal(provider === "bedrock" ? model : "");
-                          setCustomDialogOpen(true);
+                    );
+                  })}
+                  {showCurrentCustom ? (
+                    <CommandItem
+                      key={selectedValue}
+                      value={`${selectedValue} custom ${displayProviderName(p)}`}
+                      title={model}
+                      onSelect={() => selectModel(p, model)}
+                    >
+                      <ComposerModelOption
+                        label={`${resolveModelDisplayLabel(p, model, modelDisplayNames)} (custom)`}
+                        selected
+                      />
+                    </CommandItem>
+                  ) : null}
+                  {showCustomEntry ? (
+                    <button
+                      type="button"
+                      data-slot="command-item"
+                      key={`${p}-custom-entry`}
+                      className={cn(
+                        "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground",
+                        "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+                      )}
+                      onClick={() =>
+                        openCustomModelEditor(p, p === provider && showCurrentCustom ? model : "")
+                      }
+                    >
+                      <PlusIcon className="mr-2 size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Custom model ID…</span>
+                    </button>
+                  ) : null}
+                  {customDialogOpen && customProvider === p ? (
+                    <div className="mt-1 flex items-center gap-2 rounded-sm border border-border/50 bg-background/70 p-2">
+                      <Input
+                        autoFocus
+                        placeholder={customModelPlaceholderForProvider(p)}
+                        value={customModelVal}
+                        onInput={(e) => setCustomModelVal(e.currentTarget.value)}
+                        onChange={(e) => setCustomModelVal(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && customModelVal.trim()) {
+                            saveCustomModel();
+                          }
                         }}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!customModelVal.trim()}
+                        onClick={saveCustomModel}
                       >
-                        <span className="text-xs text-muted-foreground">
-                          Custom model ID / ARN…
-                        </span>
-                      </CommandItem>
-                    ) : null}
-                  </CommandGroup>
-                );
-              })}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-
-      <Dialog open={customDialogOpen} onOpenChange={setCustomDialogOpen}>
-        <DialogContent showCloseButton className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Custom Bedrock Model</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Enter a Bedrock model ID or ARN to use as the custom model.
-            </p>
-            <div className="space-y-2">
-              <Input
-                placeholder="e.g. us.amazon.nova-pro-v1:0"
-                value={customModelVal}
-                onChange={(e) => setCustomModelVal(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && customModelVal.trim()) {
-                    onChange({ provider: "bedrock", model: customModelVal.trim() });
-                    setCustomDialogOpen(false);
-                  }
-                }}
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setCustomDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                disabled={!customModelVal.trim()}
-                onClick={() => {
-                  onChange({ provider: "bedrock", model: customModelVal.trim() });
-                  setCustomDialogOpen(false);
-                }}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
+                        Save
+                      </Button>
+                    </div>
+                  ) : null}
+                </CommandGroup>
+              );
+            })}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

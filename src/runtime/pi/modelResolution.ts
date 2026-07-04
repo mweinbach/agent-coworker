@@ -1,16 +1,29 @@
 import { getSavedProviderApiKey } from "../../config";
 import { getResolvedModelMetadataSync } from "../../models/metadata";
-import { getBasetenModelSpec, resolveBasetenApiKey } from "../../providers/basetenShared";
+import {
+  BASETEN_BASE_URL,
+  getBasetenModelSpec,
+  resolveBasetenApiKey,
+} from "../../providers/basetenShared";
 import { bedrockClientConfig, resolveBedrockAuthConfig } from "../../providers/bedrockShared";
 import {
+  FIREWORKS_INFERENCE_BASE_URL,
   getFireworksInferenceModelSpec,
   isFireworksInferenceProvider,
   resolveFireworksInferenceApiKey,
 } from "../../providers/fireworksShared";
 import { prepareLmStudioModelMetadataForInference } from "../../providers/lmstudio/catalog";
 import { lmStudioOpenAiBaseUrl } from "../../providers/lmstudio/client";
-import { getMinimaxModelSpec, resolveMinimaxApiKey } from "../../providers/minimaxShared";
-import { getNvidiaModelSpec, resolveNvidiaApiKey } from "../../providers/nvidiaShared";
+import {
+  getMinimaxModelSpec,
+  MINIMAX_BASE_URL,
+  resolveMinimaxApiKey,
+} from "../../providers/minimaxShared";
+import {
+  getNvidiaModelSpec,
+  NVIDIA_BASE_URL,
+  resolveNvidiaApiKey,
+} from "../../providers/nvidiaShared";
 import {
   getOpenCodeModelPricing,
   getOpenCodeModelSpec,
@@ -20,7 +33,11 @@ import {
   type OpenCodeProviderName,
   resolveOpenCodeApiKey,
 } from "../../providers/opencodeShared";
-import { getTogetherModelSpec, resolveTogetherApiKey } from "../../providers/togetherShared";
+import {
+  getTogetherModelSpec,
+  resolveTogetherApiKey,
+  TOGETHER_BASE_URL,
+} from "../../providers/togetherShared";
 import type { ProviderName } from "../../types";
 import { asRecord, type PiModel, pickKnownPiModel } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../types";
@@ -97,6 +114,26 @@ function buildLmStudioPiModel(opts: {
       maxTokensField: "max_tokens",
       thinkingFormat: "openai",
     },
+  };
+}
+
+function buildOpenAiCompatibleCustomPiModel(opts: {
+  modelId: string;
+  provider: string;
+  baseUrl: string;
+  compat?: Record<string, unknown>;
+}): PiModel {
+  return {
+    id: opts.modelId,
+    name: opts.modelId,
+    api: "openai-completions",
+    provider: opts.provider,
+    baseUrl: opts.baseUrl,
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 131_072,
+    maxTokens: 8_192,
+    ...(opts.compat ? { compat: opts.compat } : {}),
   };
 }
 
@@ -338,9 +375,13 @@ export async function resolvePiModel(
   }
 
   if (provider === "baseten") {
-    const model = getBasetenPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider baseten (model: ${modelId}).`);
+    const model =
+      getBasetenPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "baseten",
+        baseUrl: BASETEN_BASE_URL,
+      });
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveBasetenApiKey({
@@ -350,9 +391,13 @@ export async function resolvePiModel(
   }
 
   if (provider === "together") {
-    const model = getTogetherPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider together (model: ${modelId}).`);
+    const model =
+      getTogetherPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "together",
+        baseUrl: TOGETHER_BASE_URL,
+      });
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveTogetherApiKey({
@@ -362,11 +407,13 @@ export async function resolvePiModel(
   }
 
   if (isFireworksInferenceProvider(provider)) {
-    const model = getFireworksInferencePiModel(provider, modelId);
-    if (!model)
-      throw new Error(
-        `No PI model metadata available for provider ${provider} (model: ${modelId}).`,
-      );
+    const model =
+      getFireworksInferencePiModel(provider, modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider,
+        baseUrl: FIREWORKS_INFERENCE_BASE_URL,
+      });
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveFireworksInferenceApiKey(provider, {
@@ -376,9 +423,20 @@ export async function resolvePiModel(
   }
 
   if (provider === "nvidia") {
-    const model = getNvidiaPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider nvidia (model: ${modelId}).`);
+    const model =
+      getNvidiaPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "nvidia",
+        baseUrl: NVIDIA_BASE_URL,
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          maxTokensField: "max_tokens",
+          thinkingFormat: "openai",
+        },
+      });
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveNvidiaApiKey({
@@ -388,9 +446,20 @@ export async function resolvePiModel(
   }
 
   if (provider === "minimax") {
-    const model = getMinimaxPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider minimax (model: ${modelId}).`);
+    const model =
+      getMinimaxPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "minimax",
+        baseUrl: MINIMAX_BASE_URL,
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          maxTokensField: "max_completion_tokens",
+          thinkingFormat: "openai",
+        },
+      });
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveMinimaxApiKey({
@@ -426,11 +495,14 @@ export async function resolvePiModel(
   }
 
   if (isOpenCodeProviderName(provider)) {
-    const model = getOpenCodePiModel(provider, modelId);
-    if (!model)
-      throw new Error(
-        `No PI model metadata available for provider ${provider} (model: ${modelId}).`,
-      );
+    const providerConfig = getOpenCodeProviderConfig(provider);
+    const model =
+      getOpenCodePiModel(provider, modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "opencode",
+        baseUrl: providerConfig.baseUrl,
+      });
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveOpenCodeApiKey(provider, {

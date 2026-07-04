@@ -281,6 +281,8 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/auth/setApiKey`
   - `cowork/provider/auth/setConfig`
   - `cowork/provider/auth/copyApiKey`
+  - `cowork/provider/customModel/add`
+  - `cowork/provider/customModel/delete`
 - runtime diagnostics
   - `cowork/runtime/libreoffice/check`
   - `cowork/runtime/diagnostics/read`

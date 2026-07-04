@@ -1,5 +1,11 @@
 import { motion } from "framer-motion";
-import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshCcwIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  PlusIcon,
+  RefreshCcwIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -20,7 +26,13 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
-import { isUiDisabledProvider, modelChoicesFromCatalog } from "../../../lib/modelChoices";
+import {
+  customModelPlaceholderForProvider,
+  isCustomCatalogModelEntry,
+  isUiDisabledProvider,
+  modelChoicesFromCatalog,
+  supportsCustomModelIds,
+} from "../../../lib/modelChoices";
 import {
   displayProviderName,
   fallbackAuthMethods,
@@ -82,6 +94,8 @@ export function ProvidersPage({
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
   const setProviderConfig = useAppStore((s) => s.setProviderConfig);
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
+  const addCustomProviderModel = useAppStore((s) => s.addCustomProviderModel);
+  const deleteCustomProviderModel = useAppStore((s) => s.deleteCustomProviderModel);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
@@ -133,6 +147,9 @@ export function ProvidersPage({
     Record<string, Record<string, string>>
   >({});
   const [oauthCodesByMethod, setOauthCodesByMethod] = useState<Record<string, string>>({});
+  const [customModelDraftByProvider, setCustomModelDraftByProvider] = useState<
+    Partial<Record<ProviderName, string>>
+  >({});
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(
     initialExpandedSectionId,
   );
@@ -288,6 +305,13 @@ export function ProvidersPage({
         await callbackProviderAuth(provider, method.id, code);
       }
     })();
+  };
+
+  const submitCustomModel = (provider: ProviderName) => {
+    const modelId = (customModelDraftByProvider[provider] ?? "").trim();
+    if (!modelId) return;
+    setCustomModelDraftByProvider((s) => ({ ...s, [provider]: "" }));
+    void addCustomProviderModel(provider, modelId);
   };
 
   const renderAuthMethod = (opts: {
@@ -606,7 +630,15 @@ export function ProvidersPage({
         : visibleAuthMethods(provider, authMethodsForProvider(provider));
     const providerDisplayName =
       catalogNameByProvider.get(provider) ?? displayProviderName(provider);
-    const models = (modelChoices[provider] ?? []).slice(0, 8);
+    const allModelIds = modelChoices[provider] ?? [];
+    const catalogModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
+    const customModelIds = catalogModels.filter(isCustomCatalogModelEntry).map((model) => model.id);
+    const customModelIdSet = new Set(customModelIds);
+    const standardModelIds = allModelIds.filter((modelId) => !customModelIdSet.has(modelId));
+    const modelPreviewIds = standardModelIds.slice(0, 8);
+    const hiddenPreviewCount = Math.max(0, standardModelIds.length - modelPreviewIds.length);
+    const customDraft = customModelDraftByProvider[provider] ?? "";
+    const canUseCustomModels = supportsCustomModelIds(provider);
     const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
       ? status.usage.rateLimits.filter(isVisibleUsageRateLimit)
       : [];
@@ -806,7 +838,7 @@ export function ProvidersPage({
                   {connected
                     ? status?.account
                       ? formatAccount(status.account)
-                      : `${models.length} model${models.length !== 1 ? "s" : ""} available`
+                      : `${allModelIds.length} model${allModelIds.length !== 1 ? "s" : ""} available`
                     : "Click to set up"}
                 </div>
               </div>
@@ -1025,17 +1057,92 @@ export function ProvidersPage({
                 </div>
               ) : null}
 
-              {models.length > 0 ? (
+              {canUseCustomModels ? (
+                <div className="space-y-2.5 border-t border-border/70 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Custom models
+                    </div>
+                    {customModelIds.length > 0 ? (
+                      <Badge variant="secondary" className="rounded-sm px-1.5 text-[10px]">
+                        {customModelIds.length}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      className="min-w-0 flex-1 sm:min-w-64"
+                      placeholder={customModelPlaceholderForProvider(provider)}
+                      value={customDraft}
+                      onChange={(event) => {
+                        const nextValue = event.currentTarget.value;
+                        setCustomModelDraftByProvider((s) => ({
+                          ...s,
+                          [provider]: nextValue,
+                        }));
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && customDraft.trim()) {
+                          submitCustomModel(provider);
+                        }
+                      }}
+                      aria-label={`${providerDisplayName} custom model ID`}
+                    />
+                    <Button
+                      variant="outline"
+                      type="button"
+                      disabled={!customDraft.trim()}
+                      onClick={() => submitCustomModel(provider)}
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      Add
+                    </Button>
+                  </div>
+                  {customModelIds.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {customModelIds.map((modelId) => (
+                        <div
+                          key={modelId}
+                          className="inline-flex h-7 max-w-full items-center gap-1 rounded-sm border border-border/60 bg-muted/20 pl-2 text-xs text-foreground"
+                          title={modelId}
+                        >
+                          <span className="min-w-0 max-w-72 truncate">{modelId}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-6 rounded-sm text-muted-foreground hover:text-destructive"
+                            aria-label={`Remove custom model ${modelId}`}
+                            onClick={() => void deleteCustomProviderModel(provider, modelId)}
+                          >
+                            <Trash2Icon className="size-3" aria-hidden />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {modelPreviewIds.length > 0 ? (
                 <div className="space-y-2 border-t border-border/70 pt-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Available models
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Available models
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {allModelIds.length} total
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {models.map((model) => (
+                    {modelPreviewIds.map((model) => (
                       <Badge key={model} variant="secondary">
                         {model}
                       </Badge>
                     ))}
+                    {hiddenPreviewCount > 0 ? (
+                      <Badge variant="outline">+{hiddenPreviewCount} more</Badge>
+                    ) : null}
                   </div>
                 </div>
               ) : null}

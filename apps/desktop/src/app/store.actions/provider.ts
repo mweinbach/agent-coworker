@@ -122,6 +122,8 @@ export function createProviderActions(
   | "callbackProviderAuth"
   | "requestProviderCatalog"
   | "requestProviderAuthMethods"
+  | "addCustomProviderModel"
+  | "deleteCustomProviderModel"
   | "refreshProviderStatus"
   | "checkCodexAppServerStatus"
   | "updateCodexAppServer"
@@ -557,6 +559,78 @@ export function createProviderActions(
             kind: "error",
             title: "Not connected",
             detail: "Unable to request provider auth methods.",
+          }),
+        }));
+      }
+    },
+
+    addCustomProviderModel: async (provider, modelId) => {
+      const normalizedModelId = modelId.trim();
+      if (!normalizedModelId) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Missing model ID",
+            detail: "Enter a model ID before adding it.",
+          }),
+        }));
+        return;
+      }
+
+      const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/provider/customModel/add",
+        {
+          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          provider,
+          modelId: normalizedModelId,
+        },
+      );
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Model not added",
+            detail: "Unable to add custom provider model.",
+          }),
+        }));
+      }
+    },
+
+    deleteCustomProviderModel: async (provider, modelId) => {
+      const normalizedModelId = modelId.trim();
+      if (!normalizedModelId) return;
+      const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/provider/customModel/delete",
+        {
+          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          provider,
+          modelId: normalizedModelId,
+        },
+      );
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Model not removed",
+            detail: "Unable to remove custom provider model.",
           }),
         }));
       }

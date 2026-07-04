@@ -22,6 +22,7 @@ import type { getProviderStatuses } from "../../providerStatus";
 import type { logoutProviderAuth } from "../../providers/authRegistry";
 import { closePooledCodexAppServerClient } from "../../providers/codexAppServerClient";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
+import { deleteCustomModel, upsertCustomModel } from "../../providers/customModels";
 import {
   SessionCostTracker,
   type SessionUsageSnapshot,
@@ -1515,6 +1516,32 @@ export class AgentSession {
     sourceProviderRaw: AgentConfig["provider"],
   ) {
     await this.getProviderAuthManager().copyProviderApiKey(providerRaw, sourceProviderRaw);
+  }
+
+  async addCustomProviderModel(providerRaw: AgentConfig["provider"], modelIdRaw: string) {
+    try {
+      await upsertCustomModel(this.getGlobalAuthPaths(), providerRaw, modelIdRaw);
+      await this.emitProviderCatalog();
+    } catch (error) {
+      this.context.emitError(
+        "validation_failed",
+        "provider",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  async deleteCustomProviderModel(providerRaw: AgentConfig["provider"], modelIdRaw: string) {
+    try {
+      await deleteCustomModel(this.getGlobalAuthPaths(), providerRaw, modelIdRaw);
+      await this.emitProviderCatalog();
+    } catch (error) {
+      this.context.emitError(
+        "validation_failed",
+        "provider",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   async refreshProviderStatus(opts: { refreshBedrockDiscovery?: boolean } = {}) {

@@ -1,5 +1,5 @@
 import { getSavedProviderApiKey } from "../config";
-import { assertSupportedModel } from "../models/registry";
+import { getResolvedModelMetadataSync } from "../models/metadata";
 import type { RuntimeRunTurnParams } from "./types";
 
 type GoogleInteractionsModelInputModality = "text" | "image" | "audio" | "video" | "document";
@@ -83,7 +83,14 @@ function resolveGoogleInteractionsModelInfo(modelId: string): GoogleInteractions
   const known = SUPPORTED_GOOGLE_INTERACTIONS_MODELS[modelId];
   if (known) return known;
 
-  throw new Error(`Missing supported Google Interactions model metadata for ${modelId}.`);
+  return {
+    id: modelId,
+    name: modelId,
+    reasoning: true,
+    input: ["text", "audio", "video", "document"],
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  };
 }
 
 function googleInteractionsInputForModel(
@@ -101,7 +108,7 @@ export async function resolveGoogleInteractionsModel(
   params: RuntimeRunTurnParams,
 ): Promise<ResolvedGoogleInteractionsModel> {
   const modelId = params.config.model;
-  const supported = assertSupportedModel("google", modelId, "model");
+  const supported = getResolvedModelMetadataSync("google", modelId, "model");
   const modelInfo = resolveGoogleInteractionsModelInfo(supported.id);
 
   return {

@@ -648,6 +648,8 @@ export type AppStoreState = {
   callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
+  addCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<void>;
+  deleteCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<void>;
   refreshProviderStatus: (opts?: {
     refreshBedrockDiscovery?: boolean;
     workspaceId?: string;

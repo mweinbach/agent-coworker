@@ -7,6 +7,7 @@ import {
   getProviderCatalog,
   listProviderCatalogEntries,
 } from "../../src/providers/connectionCatalog";
+import { upsertCustomModel } from "../../src/providers/customModels";
 import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
 import { PROVIDER_NAMES } from "../../src/types";
 
@@ -697,6 +698,39 @@ describe("providers/connectionCatalog", () => {
         },
       ],
       defaultModel: "nvidia/nemotron-3-super-120b-a12b",
+    });
+  });
+
+  test("merges configured custom model IDs into provider catalogs", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-custom-models-");
+    await upsertCustomModel(staticOpts.paths, "nvidia", "nvidia/custom-nemotron-preview");
+    await upsertCustomModel(staticOpts.paths, "anthropic", "claude-custom-20260704");
+
+    const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    const nvidia = payload.all.find((entry) => entry.id === "nvidia");
+    const anthropic = payload.all.find((entry) => entry.id === "anthropic");
+    expect(payload.default.nvidia).toBe("nvidia/nemotron-3-super-120b-a12b");
+    expect(nvidia?.models).toContainEqual({
+      id: "nvidia/custom-nemotron-preview",
+      displayName: "nvidia/custom-nemotron-preview",
+      description: "Custom model ID",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+      runtimeOptions: { source: "custom" },
+    });
+    expect(anthropic?.models).toContainEqual({
+      id: "claude-custom-20260704",
+      displayName: "claude-custom-20260704",
+      description: "Custom model ID",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+      runtimeOptions: { source: "custom" },
     });
   });
 

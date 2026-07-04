@@ -4,6 +4,7 @@ import {
   updateManagedCodexAppServer,
 } from "../../../providers/codexAppServerResolver";
 import type { AgentConfig } from "../../../types";
+import { isProviderName } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
@@ -282,6 +283,58 @@ export function createProviderRouteHandlers(
         async (runtime) => await runtime.provider.copyApiKey(provider, sourceProvider),
         (event): event is Extract<SessionEvent, { type: "provider_auth_result" }> =>
           event.type === "provider_auth_result" && event.provider === provider,
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/customModel/add": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      const modelId = typeof params.modelId === "string" ? params.modelId.trim() : "";
+      if (!isProviderName(provider) || !modelId) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider and modelId`,
+        });
+        return;
+      }
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.addCustomModel(provider, modelId),
+        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
+          event.type === "provider_catalog",
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/customModel/delete": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      const modelId = typeof params.modelId === "string" ? params.modelId.trim() : "";
+      if (!isProviderName(provider) || !modelId) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider and modelId`,
+        });
+        return;
+      }
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.deleteCustomModel(provider, modelId),
+        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
+          event.type === "provider_catalog",
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);

@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { getAiCoworkerPaths } from "../../src/connect";
+import { upsertCustomModel } from "../../src/providers/customModels";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -240,6 +242,29 @@ describe("AgentSession", () => {
       if (err && err.type === "error") {
         expect(err.message).toContain("Unsupported provider");
       }
+    });
+
+    test("configured custom model IDs can be selected for dynamic providers", async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-custom-model-"));
+      await upsertCustomModel(
+        getAiCoworkerPaths({ homedir: homeDir }),
+        "anthropic",
+        "claude-custom-20260704",
+      );
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(homeDir),
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          preferredChildModel: "claude-sonnet-4-5",
+        },
+      });
+
+      await session.setModel("claude-custom-20260704", "anthropic");
+
+      expect(session.getPublicConfig().provider).toBe("anthropic");
+      expect(session.getPublicConfig().model).toBe("claude-custom-20260704");
+      expect(events.some((event) => event.type === "error")).toBe(false);
     });
 
     test("OpenAI-looking model on anthropic emits actionable provider guidance", async () => {

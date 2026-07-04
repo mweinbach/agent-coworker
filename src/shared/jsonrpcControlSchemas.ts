@@ -1222,6 +1222,14 @@ const providerStatusRefreshRequestSchema = z
   })
   .strict();
 
+const providerCustomModelMutationRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+    modelId: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const providerCodexAppServerStatusRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1698,6 +1706,8 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/auth/setApiKey": providerAuthSetApiKeyRequestSchema,
   "cowork/provider/auth/setConfig": providerAuthSetConfigRequestSchema,
   "cowork/provider/auth/copyApiKey": providerAuthCopyApiKeyRequestSchema,
+  "cowork/provider/customModel/add": providerCustomModelMutationRequestSchema,
+  "cowork/provider/customModel/delete": providerCustomModelMutationRequestSchema,
   "cowork/mcp/servers/read": mcpServersReadRequestSchema,
   "cowork/mcp/server/upsert": mcpServerUpsertRequestSchema,
   "cowork/mcp/server/delete": mcpServerDeleteRequestSchema,
@@ -1783,6 +1793,8 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/auth/setApiKey": sessionEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/setConfig": sessionEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/copyApiKey": sessionEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/customModel/add": sessionEventEnvelope(providerCatalogEventSchema),
+  "cowork/provider/customModel/delete": sessionEventEnvelope(providerCatalogEventSchema),
   "cowork/mcp/servers/read": sessionEventEnvelope(mcpServersEventSchema),
   "cowork/mcp/server/upsert": sessionEventEnvelope(mcpServersEventSchema),
   "cowork/mcp/server/delete": sessionEventEnvelope(mcpServersEventSchema),

@@ -7,6 +7,7 @@ import {
   listSupportedModels,
   type SupportedModel,
 } from "../models/registry";
+import { supportsCustomModelIds } from "../shared/customModels";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
@@ -19,6 +20,7 @@ import { BASETEN_BASE_URL, resolveBasetenApiKey } from "./basetenShared";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { openAiReasoningConfigForSupportedModel } from "./catalog";
 import { type listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
+import { type CustomModelEntry, readCustomModelStore } from "./customModels";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
   isFireworksInferenceProvider,
@@ -386,6 +388,36 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
   };
 }
 
+function customModelToCatalogEntry(model: CustomModelEntry): ProviderCatalogModelEntry {
+  return {
+    id: model.id,
+    displayName: model.displayName ?? model.id,
+    description: "Custom model ID",
+    knowledgeCutoff: "Unknown",
+    supportsImageInput: false,
+    runtimeOptions: { source: "custom" },
+  };
+}
+
+function mergeCustomModelsIntoCatalogEntry(
+  entry: ProviderCatalogEntry,
+  customModelsByProvider: Awaited<ReturnType<typeof readCustomModelStore>>["providers"],
+): ProviderCatalogEntry {
+  if (!supportsCustomModelIds(entry.id)) return entry;
+  const customModels = customModelsByProvider[entry.id] ?? [];
+  if (customModels.length === 0) return entry;
+  const existingIds = new Set(entry.models.map((model) => model.id));
+  const additions = customModels
+    .filter((model) => !existingIds.has(model.id))
+    .map(customModelToCatalogEntry);
+  if (additions.length === 0) return entry;
+  return {
+    ...entry,
+    models: [...entry.models, ...additions],
+    defaultModel: entry.defaultModel || additions[0]?.id || "",
+  };
+}
+
 function resolveApiModelDiscoveryKey(opts: {
   provider: ApiModelDiscoveryProvider;
   store?: Awaited<ReturnType<typeof readConnectionStore>>;
@@ -722,6 +754,7 @@ export async function listProviderCatalogEntries(
   } = {},
 ): Promise<ProviderCatalogEntry[]> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
+  const customModelStore = await readCustomModelStore(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
     providerOptions: opts.providerOptions,
@@ -764,14 +797,16 @@ export async function listProviderCatalogEntries(
   }
   return PROVIDER_NAMES.filter(
     (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
-  ).map((provider) => {
-    if (provider === "bedrock") return bedrock.entry;
-    if (provider === "lmstudio") return lmstudio.entry;
-    if (provider === "codex-cli") return codex;
-    const apiEntry = apiEntries.get(provider);
-    if (apiEntry) return apiEntry;
-    return staticCatalogEntry(provider);
-  });
+  )
+    .map((provider) => {
+      if (provider === "bedrock") return bedrock.entry;
+      if (provider === "lmstudio") return lmstudio.entry;
+      if (provider === "codex-cli") return codex;
+      const apiEntry = apiEntries.get(provider);
+      if (apiEntry) return apiEntry;
+      return staticCatalogEntry(provider);
+    })
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers));
 }
 
 export async function getProviderCatalog(
@@ -794,6 +829,7 @@ export async function getProviderCatalog(
   const readCodexAppServerAccountImpl =
     opts.readCodexAppServerAccountImpl ?? readCodexAppServerAccount;
   const store = await readStore(paths);
+  const customModelStore = await readCustomModelStore(paths);
   const codexHome = codexHomeFromPaths(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
@@ -841,14 +877,16 @@ export async function getProviderCatalog(
   );
   const all = PROVIDER_NAMES.filter(
     (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
-  ).map((provider) => {
-    if (provider === "bedrock") return bedrock.entry;
-    if (provider === "lmstudio") return lmstudio.entry;
-    if (provider === "codex-cli") return codex;
-    const apiEntry = apiEntries.get(provider);
-    if (apiEntry) return apiEntry;
-    return staticCatalogEntry(provider);
-  });
+  )
+    .map((provider) => {
+      if (provider === "bedrock") return bedrock.entry;
+      if (provider === "lmstudio") return lmstudio.entry;
+      if (provider === "codex-cli") return codex;
+      const apiEntry = apiEntries.get(provider);
+      if (apiEntry) return apiEntry;
+      return staticCatalogEntry(provider);
+    })
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers));
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
   const connected = PROVIDER_NAMES.filter((provider) => {

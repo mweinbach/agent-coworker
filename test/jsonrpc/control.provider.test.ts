@@ -50,6 +50,34 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("provider custom model add returns the updated provider_catalog event payload", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/provider/customModel/add", {
+        cwd: tmpDir,
+        provider: "nvidia",
+        modelId: "nvidia/custom-preview-model",
+      });
+
+      expect(response.result.event.type).toBe("provider_catalog");
+      const nvidia = response.result.event.all.find(
+        (entry: { id?: string }) => entry.id === "nvidia",
+      );
+      expect(nvidia?.models).toContainEqual(
+        expect.objectContaining({
+          id: "nvidia/custom-preview-model",
+          runtimeOptions: { source: "custom" },
+        }),
+      );
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("provider auth methods read returns a session-event provider_auth_methods event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

@@ -217,6 +217,25 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.maxTokens).toBe(128000);
   });
 
+  test("openai responses model resolution uses conservative limits for custom IDs", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "gpt-5.5-custom-preview",
+      preferredChildModel: "gpt-5.5-custom-preview",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "gpt-5.5-custom-preview",
+      name: "gpt-5.5-custom-preview",
+      api: "openai-responses",
+      contextWindow: 128000,
+      maxTokens: 16384,
+    });
+  });
+
   test("openai responses model resolution keeps supported token limits for gpt-5.4-mini", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-gpt54mini-"));
     const config = makeConfig(homeDir, {
@@ -261,6 +280,26 @@ describe("pi runtime regressions", () => {
 
     expect(resolved.model.id).toBe("gemini-3.1-flash-lite");
     expect(resolved.model.name).toBe("Gemini 3.1 Flash-Lite");
+  });
+
+  test("google interactions model resolution uses fallback metadata for custom IDs", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-google-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "google",
+      model: "gemini-custom-preview",
+      preferredChildModel: "gemini-custom-preview",
+    });
+
+    const resolved = await resolveGoogleInteractionsModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "gemini-custom-preview",
+      name: "gemini-custom-preview",
+      reasoning: true,
+      input: ["text", "audio", "video", "document"],
+      contextWindow: 1048576,
+      maxTokens: 65536,
+    });
   });
 
   test("LM Studio PI model resolution builds a dynamic openai-completions model from live metadata", async () => {
@@ -945,6 +984,41 @@ describe("pi runtime regressions", () => {
         output: 3.2,
         cacheRead: 0.2,
         cacheWrite: 0,
+      },
+    });
+  });
+
+  test("NVIDIA runtime model resolution accepts custom OpenAI-compatible model IDs", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "nvidia",
+      model: "nvidia/custom-preview-model",
+      preferredChildModel: "nvidia/custom-preview-model",
+    });
+
+    const resolved = await withEnv(
+      "NVIDIA_API_KEY",
+      "env-nvidia-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.apiKey).toBe("env-nvidia-key");
+    expect(resolved.model).toMatchObject({
+      id: "nvidia/custom-preview-model",
+      name: "nvidia/custom-preview-model",
+      api: "openai-completions",
+      provider: "nvidia",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+        thinkingFormat: "openai",
       },
     });
   });

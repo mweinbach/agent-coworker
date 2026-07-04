@@ -422,6 +422,36 @@ function mergeCustomModelsIntoCatalogEntry(
   };
 }
 
+// Cross-provider default-enabled set for open-model aggregator catalogs.
+// Matched against the last path segment of the model id (case-insensitive),
+// so together's "moonshotai/Kimi-K2.6" and opencode's "kimi-k2.6" both hit.
+const CURATED_OPEN_MODEL_DEFAULT_PATTERNS: readonly RegExp[] = [
+  /^nemotron-3-ultra(?:$|[-.])/,
+  /^minimax-m3(?:$|[-.])/,
+  /^glm-5\.2(?:$|[-.])/,
+  // Fireworks spells version dots with "p" (kimi-k2p6), so accept both.
+  /^kimi-k2[.p]6(?:$|[-.])/,
+  /^deepseek-v4-pro(?:$|[-.])/,
+  /^deepseek-v4-flash(?:$|[-.])/,
+];
+
+const CURATED_OPEN_MODEL_PROVIDERS = new Set<ProviderName>([
+  "together",
+  "nvidia",
+  "minimax",
+  "baseten",
+  "fireworks",
+  "firepass",
+  "opencode-go",
+  "opencode-zen",
+]);
+
+function isCuratedOpenModelDefault(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  const lastSegment = normalized.split("/").pop() ?? normalized;
+  return CURATED_OPEN_MODEL_DEFAULT_PATTERNS.some((pattern) => pattern.test(lastSegment));
+}
+
 function applyModelPreferencesToCatalogEntry(
   entry: ProviderCatalogEntry,
   preferencesByProvider: Awaited<ReturnType<typeof readModelPreferencesStore>>["providers"],
@@ -440,16 +470,30 @@ function applyModelPreferencesToCatalogEntry(
   );
 
   // Codex app-server discovery reflects the user's actual account entitlements,
-  // so its models stay enabled by default; curated registries gate the rest.
+  // so its models stay enabled by default. Open-model aggregators default to
+  // the curated cross-provider list; everything else uses the model registry.
   const discoveryIsAuthoritative = entry.id === "codex-cli";
-  const enabledById = new Map<string, boolean>();
-  for (const model of entry.models) {
-    const defaultEnabled =
-      discoveryIsAuthoritative ||
-      getSupportedModel(entry.id, model.id) !== null ||
-      customIds.has(model.id);
-    enabledById.set(model.id, overrides.get(model.id) ?? defaultEnabled);
-  }
+  const computeEnabled = (useCuratedOpenDefaults: boolean) => {
+    const map = new Map<string, boolean>();
+    for (const model of entry.models) {
+      const defaultEnabled =
+        discoveryIsAuthoritative ||
+        (useCuratedOpenDefaults
+          ? isCuratedOpenModelDefault(model.id)
+          : getSupportedModel(entry.id, model.id) !== null) ||
+        customIds.has(model.id);
+      map.set(model.id, overrides.get(model.id) ?? defaultEnabled);
+    }
+    return map;
+  };
+
+  // The curated rule only applies when the catalog actually carries at least
+  // one of the curated defaults; otherwise the registry rule keeps the
+  // provider from going dark.
+  const useCuratedOpenDefaults =
+    CURATED_OPEN_MODEL_PROVIDERS.has(entry.id) &&
+    entry.models.some((model) => isCuratedOpenModelDefault(model.id));
+  const enabledById = computeEnabled(useCuratedOpenDefaults);
 
   // Fail open when curation and discovery do not overlap and the user has not
   // expressed any preference for this provider; an explicit disable-all sticks.

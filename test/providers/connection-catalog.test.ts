@@ -45,6 +45,35 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+// Mirrors the curated cross-provider default set for open-model aggregators:
+// only these models stay enabled by default; the rest are flagged disabled and
+// the entry default model is repaired to the first enabled one.
+const CURATED_OPEN_DEFAULT_ID =
+  /^(?:nemotron-3-ultra|minimax-m3|glm-5\.2|kimi-k2[.p]6|deepseek-v4-pro|deepseek-v4-flash)(?:$|[-.])/;
+
+type ExpectedCatalogEntry = {
+  id: string;
+  name: string;
+  models: Array<Record<string, unknown> & { id: string }>;
+  defaultModel: string;
+};
+
+function withCuratedOpenDefaults(entry: ExpectedCatalogEntry): ExpectedCatalogEntry {
+  const models = entry.models.map((model) => {
+    const lastSegment = model.id.toLowerCase().split("/").pop() ?? "";
+    return CURATED_OPEN_DEFAULT_ID.test(lastSegment) ? model : { ...model, enabled: false };
+  });
+  const defaultStillEnabled = models.some(
+    (model) => model.id === entry.defaultModel && model.enabled !== true && !("enabled" in model),
+  );
+  const firstEnabled = models.find((model) => !("enabled" in model))?.id ?? entry.defaultModel;
+  return {
+    ...entry,
+    models,
+    defaultModel: defaultStillEnabled ? entry.defaultModel : firstEnabled,
+  };
+}
+
 describe("providers/connectionCatalog", () => {
   test("marks models with selector-ready reasoning effort metadata", async () => {
     const entries = await listProviderCatalogEntries({ platform: "linux" });
@@ -127,8 +156,7 @@ describe("providers/connectionCatalog", () => {
       readStore: staticOpts.readStore,
     });
 
-    expect(payload.default["opencode-go"]).toBe("glm-5");
-    expect(payload.all).toContainEqual({
+    const expectedOpenCodeGo = withCuratedOpenDefaults({
       id: "opencode-go",
       name: "OpenCode Go",
       models: [
@@ -243,8 +271,10 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "glm-5",
     });
-    expect(payload.default["opencode-zen"]).toBe("glm-5");
-    expect(payload.all).toContainEqual({
+    expect(payload.default["opencode-go"]).toBe(expectedOpenCodeGo.defaultModel);
+    expect(payload.all).toContainEqual(expectedOpenCodeGo);
+
+    const expectedOpenCodeZen = withCuratedOpenDefaults({
       id: "opencode-zen",
       name: "OpenCode Zen",
       models: [
@@ -527,6 +557,8 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "glm-5",
     });
+    expect(payload.default["opencode-zen"]).toBe(expectedOpenCodeZen.defaultModel);
+    expect(payload.all).toContainEqual(expectedOpenCodeZen);
   });
 
   test("lists Baseten in the provider catalog with the expected model set", async () => {
@@ -612,8 +644,7 @@ describe("providers/connectionCatalog", () => {
       readStore: staticOpts.readStore,
     });
 
-    expect(payload.default.fireworks).toBe("accounts/fireworks/models/kimi-k2p6");
-    expect(payload.all).toContainEqual({
+    const expectedFireworks = withCuratedOpenDefaults({
       id: "fireworks",
       name: "Fireworks AI",
       models: [
@@ -650,6 +681,9 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "accounts/fireworks/models/kimi-k2p6",
     });
+    expect(payload.default.fireworks).toBe(expectedFireworks.defaultModel);
+    expect(expectedFireworks.defaultModel).toBe("accounts/fireworks/models/kimi-k2p6");
+    expect(payload.all).toContainEqual(expectedFireworks);
   });
 
   test("lists Fire Pass in the provider catalog with the expected model set", async () => {
@@ -868,7 +902,7 @@ describe("providers/connectionCatalog", () => {
     expect(openai?.models.every((model) => model.enabled === undefined)).toBe(true);
   });
 
-  test("static catalogs keep curated models enabled without preference flags", async () => {
+  test("first-party static catalogs keep registry models enabled without preference flags", async () => {
     const staticOpts = await staticCatalogTestOptions("connection-catalog-prefs-static-");
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
@@ -878,11 +912,116 @@ describe("providers/connectionCatalog", () => {
       readStore: staticOpts.readStore,
     });
 
-    for (const entry of payload.all) {
+    const firstParty = ["openai", "anthropic", "google", "bedrock", "codex-cli", "antigravity"];
+    for (const entry of payload.all.filter((candidate) => firstParty.includes(candidate.id))) {
       for (const model of entry.models) {
         expect(model.enabled).toBeUndefined();
       }
     }
+  });
+
+  test("open-model aggregators default to the curated cross-provider model set", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-curated-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.together.xyz/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "zai-org/GLM-5.2", object: "model" },
+            { id: "moonshotai/Kimi-K2.6", object: "model" },
+            { id: "MiniMaxAI/MiniMax-M3", object: "model" },
+            { id: "deepseek-ai/DeepSeek-V4-Pro", object: "model" },
+            { id: "nvidia/nemotron-3-ultra-550b-a55b", object: "model" },
+            { id: "Qwen/Qwen3.5-397B-A17B", object: "model" },
+            { id: "some-org/other-chat-model", object: "model" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          together: {
+            service: "together",
+            mode: "api_key",
+            apiKey: "together-test-key",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const together = payload.all.find((entry) => entry.id === "together");
+    const enabledIds = together?.models
+      .filter((model) => model.enabled !== false)
+      .map((model) => model.id)
+      .sort();
+    expect(enabledIds).toEqual([
+      "MiniMaxAI/MiniMax-M3",
+      "deepseek-ai/DeepSeek-V4-Pro",
+      "moonshotai/Kimi-K2.6",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "zai-org/GLM-5.2",
+    ]);
+    // Registry models that are not in the curated set start disabled too.
+    expect(together?.models.find((model) => model.id === "Qwen/Qwen3.5-397B-A17B")?.enabled).toBe(
+      false,
+    );
+  });
+
+  test("open-model aggregators without any curated match fall back to registry defaults", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-fallback-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.together.xyz/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "Qwen/Qwen3.5-397B-A17B", object: "model" },
+            { id: "some-org/other-chat-model", object: "model" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          together: {
+            service: "together",
+            mode: "api_key",
+            apiKey: "together-test-key",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const together = payload.all.find((entry) => entry.id === "together");
+    expect(
+      together?.models.find((model) => model.id === "Qwen/Qwen3.5-397B-A17B")?.enabled,
+    ).toBeUndefined();
+    expect(
+      together?.models.find((model) => model.id === "some-org/other-chat-model")?.enabled,
+    ).toBe(false);
   });
 
   test("lists MiniMax in the provider catalog with the expected model set", async () => {

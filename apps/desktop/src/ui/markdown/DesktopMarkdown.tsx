@@ -1199,16 +1199,28 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   normalizeDisplayCitations = false,
   fallbackToSourcesFooter = true,
   desktopBasePath = null,
+  controls,
   ...props
 }: DesktopMarkdownProps) {
   const { children, components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
   const desktopFileLinksPlugin = useMemo<
     [typeof remarkRewriteDesktopFileLinks, { basePath: string | null }]
   >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
+  const resolvedControls = useMemo(
+    () =>
+      controls === false
+        ? false
+        : {
+            table: false,
+            ...(typeof controls === "object" ? controls : {}),
+          },
+    [controls],
+  );
 
   return (
     <Streamdown
       {...restProps}
+      controls={resolvedControls}
       children={normalizeDesktopMarkdownChildren(
         children,
         normalizeDisplayCitations,
@@ -1219,9 +1231,14 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
       )}
       className={cn(
         "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
-        // Keep wide GFM tables from overflowing the message bubble: render the
-        // table as a block-level horizontal scroll container.
-        "[&_table]:block [&_table]:w-max [&_table]:overflow-x-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1",
+        // GFM tables: fill the bubble, wrap cell text (~3 lines) before horizontal scroll.
+        "[&_table]:w-full [&_table]:min-w-0 [&_table]:table-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_th]:align-top [&_th]:whitespace-normal [&_th]:break-words [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:whitespace-normal [&_td]:break-words",
+        // Streamdown wraps GFM tables in a card even with controls disabled — flatten it.
+        "[&_[data-streamdown=table-wrapper]]:my-0 [&_[data-streamdown=table-wrapper]]:w-full [&_[data-streamdown=table-wrapper]]:max-w-full [&_[data-streamdown=table-wrapper]]:gap-0 [&_[data-streamdown=table-wrapper]]:rounded-none [&_[data-streamdown=table-wrapper]]:border-0 [&_[data-streamdown=table-wrapper]]:bg-transparent [&_[data-streamdown=table-wrapper]]:p-0",
+        "[&_[data-streamdown=table-wrapper]>div]:max-w-full [&_[data-streamdown=table-wrapper]>div]:overflow-x-auto [&_[data-streamdown=table-wrapper]>div]:rounded-none [&_[data-streamdown=table-wrapper]>div]:border-0 [&_[data-streamdown=table-wrapper]>div]:bg-transparent",
+        "[&_[data-streamdown=table]]:w-full [&_[data-streamdown=table]]:min-w-0 [&_[data-streamdown=table]]:table-auto [&_[data-streamdown=table]]:border-0",
+        "[&_[data-streamdown=table-header-cell]]:min-w-[5rem] [&_[data-streamdown=table-header-cell]]:max-w-[13rem] [&_[data-streamdown=table-header-cell]]:px-2 [&_[data-streamdown=table-header-cell]]:py-1 [&_[data-streamdown=table-header-cell]]:align-top [&_[data-streamdown=table-header-cell]]:whitespace-normal [&_[data-streamdown=table-header-cell]]:break-words [&_[data-streamdown=table-header-cell]]:[overflow-wrap:anywhere]",
+        "[&_[data-streamdown=table-cell]]:min-w-[5rem] [&_[data-streamdown=table-cell]]:max-w-[13rem] [&_[data-streamdown=table-cell]]:px-2 [&_[data-streamdown=table-cell]]:py-1 [&_[data-streamdown=table-cell]]:align-top [&_[data-streamdown=table-cell]]:whitespace-normal [&_[data-streamdown=table-cell]]:break-words [&_[data-streamdown=table-cell]]:leading-snug [&_[data-streamdown=table-cell]]:[overflow-wrap:anywhere]",
         className,
       )}
       components={{

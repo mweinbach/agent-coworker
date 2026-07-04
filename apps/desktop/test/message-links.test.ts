@@ -205,6 +205,20 @@ describe("desktop message local file links", () => {
     expect(html).toContain("[&amp;_li]:pl-1");
   });
 
+  test("assistant markdown tables render without streamdown card chrome", () => {
+    const html = renderToStaticMarkup(
+      createElement(DesktopMarkdown, null, "| Area | Value |\n| --- | --- |\n| HBM | 216 GB |"),
+    );
+
+    expect(html).toContain('data-streamdown="table"');
+    expect(html).toContain("[&amp;_[data-streamdown=table-wrapper]]:border-0");
+    expect(html).toContain("[&amp;_[data-streamdown=table-wrapper]]:bg-transparent");
+    expect(html).toContain("[&amp;_[data-streamdown=table-header-cell]]:whitespace-normal");
+    expect(html).toContain("[&amp;_[data-streamdown=table-cell]]:max-w-[13rem]");
+    expect(html).not.toContain("Copy table");
+    expect(html).not.toContain("Download table");
+  });
+
   test("renders local file citations without blocked markers", () => {
     const html = renderToStaticMarkup(
       createElement(

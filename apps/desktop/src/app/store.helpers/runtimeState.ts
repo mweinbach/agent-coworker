@@ -335,7 +335,6 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     pluginMutationError: null,
     importItemsByKey: {},
     importPendingKeys: {},
-    pluginViewMode: "plugins",
     memories: [],
     memoriesLoading: false,
     advancedMemories: [],

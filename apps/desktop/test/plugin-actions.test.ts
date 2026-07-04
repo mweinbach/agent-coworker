@@ -213,11 +213,10 @@ describe("plugin store actions", () => {
     );
   });
 
-  test("previewPluginInstall uses the management workspace when selected", async () => {
+  test("previewPluginInstall targets the selected workspace", async () => {
     const state = createState();
     const managementWorkspaceId = "ws-plugin-management";
-    state.selectedWorkspaceId = workspaceId;
-    state.pluginManagementWorkspaceId = managementWorkspaceId;
+    state.selectedWorkspaceId = managementWorkspaceId;
     state.workspaceRuntimeById = {
       [workspaceId]: {
         ...defaultWorkspaceRuntime(),
@@ -281,11 +280,10 @@ describe("plugin store actions", () => {
     expect(state.workspaceRuntimeById[managementWorkspaceId].pluginMutationPendingKeys).toEqual({});
   });
 
-  test("installPlugins registers its waiter on the management workspace", async () => {
+  test("installPlugins registers its waiter on the selected workspace", async () => {
     const state = createState();
     const managementWorkspaceId = "ws-plugin-management";
-    state.selectedWorkspaceId = workspaceId;
-    state.pluginManagementWorkspaceId = managementWorkspaceId;
+    state.selectedWorkspaceId = managementWorkspaceId;
     state.workspaceRuntimeById = {
       [workspaceId]: {
         ...defaultWorkspaceRuntime(),
@@ -332,8 +330,7 @@ describe("plugin store actions", () => {
   test("installPlugins preserves server-side error details", async () => {
     const state = createState();
     const managementWorkspaceId = "ws-plugin-management";
-    state.selectedWorkspaceId = workspaceId;
-    state.pluginManagementWorkspaceId = managementWorkspaceId;
+    state.selectedWorkspaceId = managementWorkspaceId;
     state.workspaceRuntimeById = {
       [workspaceId]: {
         ...defaultWorkspaceRuntime(),
@@ -497,9 +494,8 @@ describe("plugin store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
   });
 
-  test("refreshPluginsCatalog falls back to the selected workspace when the management workspace no longer exists", async () => {
+  test("refreshPluginsCatalog targets the selected workspace", async () => {
     const state = createState();
-    state.pluginManagementWorkspaceId = "ws-stale";
     state.workspaceRuntimeById[workspaceId] = {
       ...defaultWorkspaceRuntime(),
       serverUrl: "ws://mock",

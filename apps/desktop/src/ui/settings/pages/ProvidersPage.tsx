@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ChevronDownIcon, ChevronRightIcon, RefreshCcwIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -12,6 +12,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import { isUiDisabledProvider, modelChoicesFromCatalog } from "../../../lib/modelChoices";
 import {
@@ -55,11 +62,13 @@ export { EXA_SECTION_ID, PARALLEL_SECTION_ID } from "./providersPageUtils";
 
 type ProvidersPageProps = {
   initialExpandedSectionId?: string | null;
+  initialNewProviderOpen?: boolean;
   surface?: "all" | "models" | "tools";
 };
 
 export function ProvidersPage({
   initialExpandedSectionId = null,
+  initialNewProviderOpen = false,
   surface = "all",
 }: ProvidersPageProps = {}) {
   const workspacesFromStore = useAppStore((s) => s.workspaces);
@@ -67,10 +76,6 @@ export function ProvidersPage({
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
   const workspaces = serverState?.workspaces ?? workspacesFromStore;
   const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
-  const selectedWorkspace = useMemo(
-    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
-    [selectedWorkspaceId, workspaces],
-  );
   const hasWorkspace = workspaces.length > 0;
   const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
 
@@ -131,6 +136,7 @@ export function ProvidersPage({
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(
     initialExpandedSectionId,
   );
+  const [newProviderOpen, setNewProviderOpen] = useState(initialNewProviderOpen);
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
 
@@ -173,6 +179,19 @@ export function ProvidersPage({
     return { modelProviders: mProviders, toolProviders: tProviders };
   }, [providerCatalog, providerStatusByName, modelChoices, providerUiState]);
 
+  const { connectedModelProviders, disconnectedModelProviders } = useMemo(() => {
+    const connected: ProviderName[] = [];
+    const disconnected: ProviderName[] = [];
+    for (const provider of modelProviders) {
+      const status = providerStatusByName[provider];
+      const authed = Boolean(status?.verified || status?.authorized);
+      const isConnected =
+        provider === "lmstudio" ? providerUiState.lmstudio.enabled && authed : authed;
+      (isConnected ? connected : disconnected).push(provider);
+    }
+    return { connectedModelProviders: connected, disconnectedModelProviders: disconnected };
+  }, [modelProviders, providerStatusByName, providerUiState]);
+
   const catalogNameByProvider = useMemo(() => {
     const map = new Map<ProviderName, string>();
     for (const entry of providerCatalog) {
@@ -208,7 +227,7 @@ export function ProvidersPage({
       headerActions: canConnectProvider ? (
         <button
           type="button"
-          className={buttonVariants({ variant: "ghost", size: "sm", className: "shrink-0" })}
+          className={buttonVariants({ variant: "outline", size: "sm", className: "shrink-0" })}
           onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
           disabled={providerStatusRefreshing}
         >
@@ -1174,53 +1193,6 @@ export function ProvidersPage({
   const [activeTab, setActiveTab] = useState<"models" | "tools">(initialTab);
   const effectiveTab = surface === "all" ? activeTab : surface;
 
-  const modelIssueCount = modelProviders.filter((provider) => {
-    const status = providerStatusByName[provider];
-    return status ? !status.verified && !status.authorized : true;
-  }).length;
-  const connectedModelCount = modelProviders.length - modelIssueCount;
-  const toolIssueCount =
-    disconnectedToolProviders.length + (isExaConnected ? 0 : 1) + (isParallelConnected ? 0 : 1);
-  const connectedToolCount =
-    connectedToolProviders.length + (isExaConnected ? 1 : 0) + (isParallelConnected ? 1 : 0);
-
-  const providerSummary = (
-    <div className="grid gap-3 md:grid-cols-3">
-      <div className="rounded-lg border border-border/55 bg-background/55 px-3 py-2.5">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          {effectiveTab === "models" ? "Connected models" : "Connected tools"}
-        </div>
-        <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
-          {effectiveTab === "models" ? connectedModelCount : connectedToolCount}
-        </div>
-      </div>
-      <div className="rounded-lg border border-border/55 bg-background/55 px-3 py-2.5">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          Needs setup
-        </div>
-        <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
-          {effectiveTab === "models" ? modelIssueCount : toolIssueCount}
-        </div>
-      </div>
-      <div className="rounded-lg border border-border/55 bg-background/55 px-3 py-2.5">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          {effectiveTab === "models" ? "Default provider" : "Search fallback"}
-        </div>
-        <div className="mt-1 truncate text-sm font-semibold text-foreground">
-          {effectiveTab === "models"
-            ? displayProviderName(
-                (selectedWorkspace?.defaultProvider as ProviderName | undefined) ?? "google",
-              )
-            : isExaConnected
-              ? "Exa"
-              : isParallelConnected
-                ? "Parallel"
-                : "Not connected"}
-        </div>
-      </div>
-    </div>
-  );
-
   return (
     <div className="space-y-5">
       {!canConnectProvider ? (
@@ -1230,8 +1202,6 @@ export function ProvidersPage({
           </CardContent>
         </Card>
       ) : null}
-
-      {providerSummary}
 
       {surface === "all" ? (
         <div className="app-shadow-surface relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 backdrop-blur-sm">
@@ -1264,14 +1234,83 @@ export function ProvidersPage({
         </div>
       ) : null}
 
-      <div
-        className={cn(
-          "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
-          effectiveTab !== "models" && "hidden",
-        )}
-      >
-        {modelProviders.map(renderProviderCard)}
-      </div>
+      {surface === "models" ? (
+        <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-foreground">Providers</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                Accounts and API keys Cowork can use to run models.
+              </div>
+            </div>
+            {disconnectedModelProviders.length > 0 ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setNewProviderOpen(true)}
+              >
+                <PlusIcon data-icon="inline-start" />
+                New Provider
+              </Button>
+            ) : null}
+          </div>
+          {connectedModelProviders.length > 0 ? (
+            <div className="divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface">
+              {connectedModelProviders.map(renderProviderCard)}
+            </div>
+          ) : (
+            <Card className="border-dashed border-border/75 bg-card/60 shadow-none">
+              <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
+                <div className="text-sm text-muted-foreground">
+                  No providers connected yet. Connect one to start chatting.
+                </div>
+                <Button type="button" size="sm" onClick={() => setNewProviderOpen(true)}>
+                  <PlusIcon data-icon="inline-start" />
+                  New Provider
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+          <Dialog open={newProviderOpen} onOpenChange={setNewProviderOpen}>
+            <DialogContent className="gap-0 p-0 sm:max-w-2xl">
+              <DialogHeader className="border-b border-border/70 px-5 py-4">
+                <DialogTitle>New provider</DialogTitle>
+                <DialogDescription>
+                  Pick a provider, then sign in or paste an API key to connect it.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="max-h-[65vh] divide-y divide-border/30 overflow-y-auto">
+                {disconnectedModelProviders.length > 0 ? (
+                  disconnectedModelProviders.map(renderProviderCard)
+                ) : (
+                  <div className="px-5 py-6 text-center text-sm text-muted-foreground">
+                    All available providers are already connected.
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      ) : surface === "tools" ? null : (
+        <div
+          className={cn(
+            "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
+            effectiveTab !== "models" && "hidden",
+          )}
+        >
+          {modelProviders.map(renderProviderCard)}
+        </div>
+      )}
+      {surface === "tools" ? (
+        <div>
+          <div className="text-sm font-semibold text-foreground">Search &amp; tool keys</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            Accounts and API keys for search and other external tools.
+          </div>
+        </div>
+      ) : null}
       <div
         className={cn(
           "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",

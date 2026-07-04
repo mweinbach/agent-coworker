@@ -89,7 +89,6 @@ import type {
   PersistedOnboardingState,
   PersistedPrivacyTelemetrySettings,
   PersistedProviderUiState,
-  PluginManagementMode,
   PrivacyTelemetrySettings,
   PromptModalState,
   ResearchCard,
@@ -207,8 +206,6 @@ export type AppStoreState = {
   threads: ThreadRecord[];
 
   selectedWorkspaceId: string | null;
-  pluginManagementWorkspaceId: string | null;
-  pluginManagementMode: PluginManagementMode;
   selectedThreadId: string | null;
   selectedTaskId: string | null;
   newTaskWorkspaceId: string | null;
@@ -429,9 +426,13 @@ export type AppStoreState = {
   upsertAgentProfile: (profile: AgentProfileUpsertInput, workspaceId?: string) => Promise<boolean>;
   deleteAgentProfile: (scope: AgentProfileScope, id: string, workspaceId?: string) => Promise<void>;
   copyAgentProfile: (copy: AgentProfileCopyInput, workspaceId?: string) => Promise<boolean>;
+  setAgentProfileWorkspaceAvailability: (
+    id: string,
+    disabled: boolean,
+    workspaceId?: string,
+  ) => Promise<boolean>;
   refreshPluginsCatalog: () => Promise<void>;
   selectPlugin: (pluginId: string | null, scope?: "workspace" | "user" | null) => Promise<void>;
-  setPluginManagementWorkspace: (workspaceId: string | null) => Promise<void>;
   previewPluginInstall: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
   installPlugins: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
   enablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
@@ -439,7 +440,6 @@ export type AppStoreState = {
   deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   checkPluginUpdate: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   updatePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
-  setPluginViewMode: (mode: "plugins" | "skills") => void;
   listImportable: (source: ImportSource, kind: ImportableKind) => Promise<void>;
   importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
   importSkill: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
@@ -528,14 +528,28 @@ export type AppStoreState = {
       pluginScope?: "workspace" | "user";
     },
   ) => Promise<void>;
-  validateWorkspaceMcpServer: (workspaceId: string, name: string) => Promise<void>;
-  authorizeWorkspaceMcpServerAuth: (workspaceId: string, name: string) => Promise<void>;
+  validateWorkspaceMcpServer: (
+    workspaceId: string,
+    name: string,
+    source?: "workspace" | "user" | "plugin" | "system",
+  ) => Promise<void>;
+  authorizeWorkspaceMcpServerAuth: (
+    workspaceId: string,
+    name: string,
+    source?: "workspace" | "user" | "plugin" | "system",
+  ) => Promise<void>;
   callbackWorkspaceMcpServerAuth: (
     workspaceId: string,
     name: string,
     code?: string,
+    source?: "workspace" | "user" | "plugin" | "system",
   ) => Promise<void>;
-  setWorkspaceMcpServerApiKey: (workspaceId: string, name: string, apiKey: string) => Promise<void>;
+  setWorkspaceMcpServerApiKey: (
+    workspaceId: string,
+    name: string,
+    apiKey: string,
+    source?: "workspace" | "user" | "plugin" | "system",
+  ) => Promise<void>;
   requestOpenAiNativeConnectors: (workspaceId: string) => Promise<void>;
   refreshOpenAiNativeConnectors: (workspaceId: string) => Promise<void>;
   setOpenAiNativeConnectorEnabled: (

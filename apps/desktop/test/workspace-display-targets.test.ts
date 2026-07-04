@@ -4,6 +4,7 @@ import type { WorkspaceRecord } from "../src/app/types";
 import {
   CHATS_WORKSPACE_TARGET_ID,
   parentDirectoryPath,
+  resolveProjectWorkspaceId,
   resolveWorkspaceDisplayTargets,
   workspaceDisplayLabel,
   workspaceLabelForThread,
@@ -75,6 +76,24 @@ describe("workspace display targets", () => {
     expect(targets.map((target) => target.label)).toEqual(["Chats", "Cowork", "GoogleIO"]);
     expect(activeTarget?.id).toBe("project-2");
     expect(activeTarget?.targetPath).toBe("/Users/me/Projects/GoogleIO");
+  });
+
+  test("resolves project workspaces for management surfaces", () => {
+    const workspaces = [
+      workspace({
+        id: "chat-1",
+        name: "New chat",
+        path: "/tmp/home/.cowork/chats/chat-1",
+        workspaceKind: "oneOffChat",
+      }),
+      workspace({ id: "project-1", name: "Cowork", path: "/Users/me/Projects/Cowork" }),
+      workspace({ id: "project-2", name: "GoogleIO", path: "/Users/me/Projects/GoogleIO" }),
+    ];
+
+    expect(resolveProjectWorkspaceId(workspaces, "project-2")).toBe("project-2");
+    expect(resolveProjectWorkspaceId(workspaces, "chat-1")).toBeNull();
+    expect(resolveProjectWorkspaceId([workspaces[0]], "chat-1")).toBeNull();
+    expect(resolveProjectWorkspaceId([workspaces[0], workspaces[1]], "chat-1")).toBe("project-1");
   });
 
   test("labels one-off chat metadata as Chats", () => {

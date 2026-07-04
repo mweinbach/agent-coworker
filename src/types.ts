@@ -840,4 +840,6 @@ export interface MCPServerConfig {
   required?: boolean;
   retries?: number;
   auth?: MCPServerAuthConfig;
+  /** Optional icon for UIs: an https URL or data: URI. */
+  icon?: string;
 }

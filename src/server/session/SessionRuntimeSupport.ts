@@ -1,4 +1,4 @@
-import type { MCPRegistryServer } from "../../mcp/configRegistry";
+import type { MCPRegistryServer, MCPServerSource } from "../../mcp/configRegistry";
 import type { ServerErrorCode, ServerErrorData, ServerErrorSource } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 import { resolveCoworkHomedir } from "../../utils/coworkHome";
@@ -101,7 +101,10 @@ export class SessionRuntimeSupport {
     });
   }
 
-  async getMcpServerByName(nameRaw: string): Promise<MCPRegistryServer | null> {
+  async getMcpServerByName(
+    nameRaw: string,
+    source?: MCPServerSource,
+  ): Promise<MCPRegistryServer | null> {
     const name = nameRaw.trim();
     if (!name) {
       this.emitError("validation_failed", "session", "MCP server name is required");
@@ -110,9 +113,17 @@ export class SessionRuntimeSupport {
 
     const { loadMCPConfigRegistry } = await import("../../mcp/configRegistry");
     const registry = await loadMCPConfigRegistry(this.opts.state.config);
-    const server = registry.servers.find((entry) => entry.name === name) ?? null;
+    const server =
+      registry.servers.find(
+        (entry) => entry.name === name && (source === undefined || entry.source === source),
+      ) ?? null;
     if (!server) {
-      this.emitError("validation_failed", "session", `MCP server "${name}" not found.`);
+      const sourceDetail = source ? ` from ${source}` : "";
+      this.emitError(
+        "validation_failed",
+        "session",
+        `MCP server "${name}"${sourceDetail} not found.`,
+      );
       return null;
     }
     return server;

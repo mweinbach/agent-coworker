@@ -307,10 +307,6 @@
   overflow: hidden;
 }
 
-:root[data-platform="win32"] .settings-shell__header-actions {
-  padding-right: calc(var(--platform-caption-button-reserve) + var(--platform-topbar-toolbar-gap));
-}
-
 :root[data-platform="win32"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;

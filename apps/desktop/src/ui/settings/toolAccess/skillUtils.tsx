@@ -1,5 +1,5 @@
-import type { useAppStore } from "../../app/store";
-import type { SkillEntry, SkillInstallationEntry } from "../../lib/wsProtocol";
+import type { useAppStore } from "../../../app/store";
+import type { SkillEntry, SkillInstallationEntry } from "../../../lib/wsProtocol";
 
 export function skillSourceLabel(source: SkillEntry["source"]): string {
   switch (source) {

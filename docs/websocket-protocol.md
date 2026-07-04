@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.40`
+- Current protocol version: `7.41`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -268,6 +268,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/agentProfiles/upsert`
   - `cowork/agentProfiles/delete`
   - `cowork/agentProfiles/copy`
+  - `cowork/agentProfiles/workspaceAvailability/set`
 - provider controls
   - `cowork/provider/catalog/read`
   - `cowork/provider/authMethods/read`
@@ -375,6 +376,8 @@ A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>
 
 A marketplace `marketplace.json` may also declare a `skills` array (same entry shape as `plugins`) for standalone skills. These surface in skill catalog snapshots under `availableSkills` (`installed: false`, each with an `installSource` GitHub URL); installed skills stay in `installations`. The `skills_catalog` event sets `availableSkillsPartial: true` whenever the remote marketplace was not fetched (local-only refresh) or the fetch failed, so clients keep their cached available-skill rows instead of clearing them. Install an available skill by passing its `installSource` to `cowork/skills/install` (no new method is required).
 
+Marketplace entries (plugins and skills) may carry optional icon metadata in `interface`: `icon` or `logo` (an image URL or `data:` URI) and `brandColor`. Parsed plugin entries expose them as `availablePlugins[].interface.logo` / `interface.brandColor`; parsed skill entries expose them as `availableSkills[].interface.iconSmall` / `interface.iconLarge`. Installed plugin skills additionally embed `iconSmall` / `iconLarge` `data:` URIs when the skill's `agents/*.yaml` declares `icon_small` / `icon_large` file paths, matching standalone skill catalog behavior.
+
 The import controls let a client browse and copy plugins/skills that already exist on disk from other agent tools:
 
 - `cowork/import/list` — params `{ cwd?, source: "claude" | "codex", kind: "plugin" | "skill" }`. Returns an `import_list` event `{ source, kind, homeExists, items }`. Each `ImportableItem` has `{ kind, source, id, displayName, description, version?, sourcePath, alreadyInstalledGlobal, alreadyInstalledWorkspace, diagnostics, conversionRequired? }`. A non-empty `diagnostics` array means the item is surfaced but not importable. `conversionRequired` marks Claude `.claude-plugin` bundles that are converted on import. Discovery scans only `~/.claude/plugins/{cache,marketplaces}` + `~/.codex/plugins/cache` for plugin manifests, and `~/.{claude,codex}/skills` for `SKILL.md` bundles.
@@ -388,6 +391,7 @@ Agent profile controls let clients manage user-created subagent profiles without
 - `cowork/agentProfiles/upsert` — params `{ cwd?, profile }`, where `profile` includes `id`, `scope: "global" | "workspace"`, `displayName`, optional `description`, `enabled`, `baseRole: "default" | "explorer" | "research" | "worker" | "reviewer"`, optional `prompt`, `allowedBuiltInTools`, `allowedMcpServers`, `skillNames`, `model`, `reasoningEffort`, `defaultTaskType`, and `defaultContextMode`. The result returns the updated `agent_profiles_catalog` event.
 - `cowork/agentProfiles/delete` — params `{ cwd?, scope, id }`. Deletes the profile file in the requested scope and returns the updated catalog. Deleting a workspace profile may reveal a shadowed global profile with the same id.
 - `cowork/agentProfiles/copy` — params `{ cwd?, copy: { sourceRef, targetScope, targetId?, targetDisplayName? } }`. `sourceRef` accepts either a bare profile id or a scoped ref. The result returns the updated catalog.
+- `cowork/agentProfiles/workspaceAvailability/set` — params `{ cwd?, id, disabled }`. Disables (or re-enables) a global profile — including built-in templates — for the current workspace only, without editing the global profile itself. Overrides persist in `<workspaceDir>/workspace-overrides.json` (`{ version: 1, disabledGlobalProfileIds: [] }`); the file is removed when the list empties. Workspace-disabled global entries are reported with `workspaceDisabled: true`, drop out of `effectiveProfiles`, and reject spawn resolution with a workspace-specific error. The locked `default` (Main Agent) profile cannot be workspace-disabled.
 
 Profile ids resolve with workspace-over-global precedence. Bare refs such as `"qa-reviewer"` resolve the effective profile for the active workspace. Scoped refs use `"workspace:qa-reviewer"` or `"global:qa-reviewer"`.
 
@@ -787,6 +791,10 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.41`:
+
+- Added `cowork/agentProfiles/workspaceAvailability/set` to disable or re-enable a global subagent profile for a single workspace. Catalog entries expose the per-workspace state as `workspaceDisabled`, and workspace-disabled profiles are excluded from `effectiveProfiles` and spawn resolution for that workspace.
 
 Changes in `7.40`:
 
@@ -2021,9 +2029,11 @@ Layered MCP server snapshot with auth status, source attribution, and file diagn
 |-------|------|-------------|
 | `type` | `"mcp_servers"` | — |
 | `sessionId` | `string` | Session identifier |
-| `servers` | `Array<MCPServerConfig & { source, inherited, authMode, authScope, authMessage }>` | Effective servers with layer/auth metadata. `enabled: false` servers remain listed but are skipped when agent turns load MCP tools. |
+| `servers` | `Array<MCPServerConfig & { source, inherited, authMode, authScope, authMessage }>` | Effective servers with layer/auth metadata. `enabled: false` servers remain listed but are skipped when agent turns load MCP tools. `MCPServerConfig` accepts an optional `icon` (image URL or `data:` URI) that round-trips through `cowork/mcp/server/upsert`; plugin-provided servers fall back to the owning plugin's `composerIcon`/`logo` when no explicit icon is set. |
 | `files` | `Array<{ source, path, exists, editable, legacy, parseError?, serverCount }>` | File-level diagnostics per layer |
 | `warnings` | `string[]` | Optional non-fatal parse warnings |
+
+Server-targeting MCP requests (`cowork/mcp/server/validate` and `cowork/mcp/server/auth/*`) accept params `{ cwd?, name, source? }`. `source` is optional for compatibility, but clients that render rows from `mcp_servers.servers` should pass the row's `source` so duplicate server names from different layers resolve to the intended entry.
 
 ---
 

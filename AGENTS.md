@@ -92,7 +92,7 @@ For the Electron desktop app (`apps/desktop`):
 
 - Start app in dev mode: `bun run desktop:dev`
 - Set `COWORK_ELECTRON_REMOTE_DEBUG=1` when you need to expose a CDP port for external inspection or automation.
-- Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9222` is already in use.
+- Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9322` (the default) is already in use. The default avoids `9222` because Chrome's own remote-debugging endpoint conventionally binds it.
 
 ### Desktop UI and shadcn/ui
 

@@ -135,7 +135,7 @@ export function createWorkspaceMcpActions(
       }));
     },
 
-    validateWorkspaceMcpServer: async (workspaceId, name) => {
+    validateWorkspaceMcpServer: async (workspaceId, name, source) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       const ok = await requestJsonRpcControlEvent(
@@ -146,6 +146,7 @@ export function createWorkspaceMcpActions(
         {
           cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
           name,
+          ...(source ? { source } : {}),
         },
       );
       if (ok) return;
@@ -160,7 +161,7 @@ export function createWorkspaceMcpActions(
       }));
     },
 
-    authorizeWorkspaceMcpServerAuth: async (workspaceId, name) => {
+    authorizeWorkspaceMcpServerAuth: async (workspaceId, name, source) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       const ok = await requestJsonRpcControlEvent(
@@ -171,6 +172,7 @@ export function createWorkspaceMcpActions(
         {
           cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
           name,
+          ...(source ? { source } : {}),
         },
       );
       if (ok) return;
@@ -185,7 +187,7 @@ export function createWorkspaceMcpActions(
       }));
     },
 
-    callbackWorkspaceMcpServerAuth: async (workspaceId, name, code) => {
+    callbackWorkspaceMcpServerAuth: async (workspaceId, name, code, source) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       const ok = await requestJsonRpcControlEvent(
@@ -196,6 +198,7 @@ export function createWorkspaceMcpActions(
         {
           cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
           name,
+          ...(source ? { source } : {}),
           code: code?.trim() ? code.trim() : undefined,
         },
       );
@@ -211,7 +214,7 @@ export function createWorkspaceMcpActions(
       }));
     },
 
-    setWorkspaceMcpServerApiKey: async (workspaceId, name, apiKey) => {
+    setWorkspaceMcpServerApiKey: async (workspaceId, name, apiKey, source) => {
       const trimmedKey = apiKey.trim();
       if (!trimmedKey) {
         set((s) => ({
@@ -235,6 +238,7 @@ export function createWorkspaceMcpActions(
         {
           cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
           name,
+          ...(source ? { source } : {}),
           apiKey: trimmedKey,
         },
       );

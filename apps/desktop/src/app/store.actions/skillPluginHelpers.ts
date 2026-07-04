@@ -1,8 +1,4 @@
 import {
-  resolvePluginCatalogWorkspaceSelection,
-  resolvePluginManagementWorkspaceId,
-} from "../pluginManagement";
-import {
   ensureControlSocket,
   ensureServerRunning,
   ensureWorkspaceRuntime,
@@ -14,6 +10,7 @@ import {
   type StoreSet,
 } from "../store.helpers";
 import type { WorkspaceRuntime } from "../types";
+import { resolveProjectWorkspaceId } from "../workspaceDisplayTargets";
 
 export type MutationDomain = "skill" | "plugin";
 
@@ -89,12 +86,7 @@ export const workspacePathFor = (get: StoreGet, workspaceId: string): string | u
 
 export const managementWorkspaceIdFor = (get: StoreGet): string | null => {
   const state = get();
-  return resolvePluginCatalogWorkspaceSelection({
-    workspaces: state.workspaces ?? [],
-    selectedWorkspaceId: state.selectedWorkspaceId,
-    pluginManagementWorkspaceId: state.pluginManagementWorkspaceId,
-    pluginManagementMode: state.pluginManagementMode,
-  }).catalogWorkspaceId;
+  return resolveProjectWorkspaceId(state.workspaces ?? [], state.selectedWorkspaceId);
 };
 
 export function clearFailedMutationSend(
@@ -161,11 +153,4 @@ export async function refreshSharedWorkspaceState(
       ]);
     }),
   );
-}
-
-export function resolvePluginManagementWorkspace(
-  get: StoreGet,
-  workspaceId: string | null,
-): string | null {
-  return resolvePluginManagementWorkspaceId(get().workspaces ?? [], workspaceId);
 }

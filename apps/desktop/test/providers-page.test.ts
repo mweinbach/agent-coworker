@@ -412,6 +412,94 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("Baseten");
   });
 
+  test("models surface hides the stat cards and keeps unconnected providers in the New Provider dialog", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerStatusByName: {
+        ...useAppStore.getState().providerStatusByName,
+        "codex-cli": {
+          provider: "codex-cli",
+          authorized: true,
+          verified: true,
+          mode: "oauth",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(createElement(ProvidersPage, { surface: "models" }));
+
+    expect(html).not.toContain("Connected models");
+    expect(html).not.toContain("Needs setup");
+    expect(html).not.toContain("Default provider");
+
+    expect(html).toContain("Providers");
+    expect(html).toContain("Codex CLI");
+    expect(html).toContain("New Provider");
+    // Unconnected providers live in the closed dialog, not on the page.
+    expect(html).not.toContain("Google");
+    expect(html).not.toContain("OpenAI");
+  });
+
+  test("models surface shows an empty state when nothing is connected", () => {
+    const html = renderToStaticMarkup(createElement(ProvidersPage, { surface: "models" }));
+
+    expect(html).toContain("No providers connected yet");
+    expect(html).toContain("New Provider");
+    expect(html).not.toContain("Codex CLI");
+  });
+
+  test("the New Provider dialog lists unconnected providers", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ProvidersPage, { surface: "models", initialNewProviderOpen: true }),
+        );
+      });
+
+      // The page still offers the trigger button.
+      const openButton = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("New Provider"),
+      );
+      expect(openButton).toBeDefined();
+
+      const dialog = harness.dom.window.document.querySelector('[data-slot="dialog-content"]');
+      if (!dialog) throw new Error("missing New Provider dialog");
+      expect(dialog.textContent).toContain("New provider");
+      expect(dialog.textContent).toContain("Google");
+      expect(dialog.textContent).toContain("OpenAI");
+      expect(dialog.textContent).toContain("Codex CLI");
+    } finally {
+      if (root) {
+        try {
+          await act(async () => {
+            root.unmount();
+          });
+        } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test("tools surface drops the stat cards and renders search tool keys", () => {
+    const html = renderToStaticMarkup(createElement(ProvidersPage, { surface: "tools" }));
+
+    expect(html).not.toContain("Connected tools");
+    expect(html).not.toContain("Needs setup");
+    expect(html).toContain("Search &amp; tool keys");
+    expect(html).toContain("Exa Search");
+    expect(html).toContain("Parallel Search");
+  });
+
   test("renders structured Bedrock credential methods", () => {
     useAppStore.setState({
       providerStatusByName: {

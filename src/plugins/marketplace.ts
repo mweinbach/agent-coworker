@@ -28,6 +28,9 @@ const marketplacePolicySchema = z
 const marketplaceEntryInterfaceSchema = z
   .object({
     displayName: nonEmptyTrimmedStringSchema.optional(),
+    icon: nonEmptyTrimmedStringSchema.optional(),
+    logo: nonEmptyTrimmedStringSchema.optional(),
+    brandColor: nonEmptyTrimmedStringSchema.optional(),
   })
   .strict();
 
@@ -70,6 +73,8 @@ interface ParsedMarketplaceEntry {
   installationPolicy: string;
   authenticationPolicy: string;
   displayName?: string;
+  icon?: string;
+  brandColor?: string;
   sourceHash?: string;
 }
 
@@ -109,8 +114,17 @@ function validateMarketplaceRelativeSourcePath(
   return trimSlashes(normalized);
 }
 
-function entryDisplayName(entry: MarketplaceEntryInput): { displayName?: string } {
-  return entry.interface?.displayName ? { displayName: entry.interface.displayName } : {};
+function entryInterfaceMeta(entry: MarketplaceEntryInput): {
+  displayName?: string;
+  icon?: string;
+  brandColor?: string;
+} {
+  const icon = entry.interface?.icon ?? entry.interface?.logo;
+  return {
+    ...(entry.interface?.displayName ? { displayName: entry.interface.displayName } : {}),
+    ...(icon ? { icon } : {}),
+    ...(entry.interface?.brandColor ? { brandColor: entry.interface.brandColor } : {}),
+  };
 }
 
 function mapLocalMarketplaceEntries(
@@ -137,7 +151,7 @@ function mapLocalMarketplaceEntries(
       installationPolicy: entry.policy.installation,
       authenticationPolicy: entry.policy.authentication,
       ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
-      ...entryDisplayName(entry),
+      ...entryInterfaceMeta(entry),
     };
   });
 }
@@ -166,7 +180,7 @@ function mapRemoteMarketplaceEntries(
       installationPolicy: entry.policy.installation,
       authenticationPolicy: entry.policy.authentication,
       ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
-      ...entryDisplayName(entry),
+      ...entryInterfaceMeta(entry),
     };
   });
 }

@@ -4,6 +4,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   PlusIcon,
+  ServerIcon,
   SettingsIcon,
   WrenchIcon,
   XCircleIcon,
@@ -11,15 +12,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import type { WorkspaceRuntime } from "../../../app/types";
+import { resolveProjectWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
@@ -35,8 +31,11 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { Switch } from "../../../components/ui/switch";
+import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
+import type { MCPServerConfig } from "../../../lib/wsProtocol";
+import { EntityIcon, SettingsEmptyState, SettingsSection } from "../SettingsPrimitives";
 import {
   buildServerFromDraft,
   type DraftState,
@@ -54,8 +53,29 @@ import {
   getPreviousNameForUpsert,
 } from "./mcpServerEditorState";
 
-function credentialDraftKey(workspaceId: string, serverName: string): string {
-  return `${workspaceId}::${serverName}`;
+type RuntimeMcpServer = WorkspaceRuntime["mcpServers"][number];
+
+function serverIdentityKey(server: Pick<RuntimeMcpServer, "name" | "source">): string {
+  return `${server.source}:${server.name}`;
+}
+
+export function mcpCredentialDraftKey(
+  workspaceId: string,
+  server: Pick<RuntimeMcpServer, "name" | "source">,
+): string {
+  return `${workspaceId}::${serverIdentityKey(server)}`;
+}
+
+const SOURCE_ORDER: Record<string, number> = {
+  user: 0,
+  workspace: 1,
+  plugin: 2,
+  system: 3,
+};
+
+function serverSortKey(server: { name: string; source: string }): string {
+  const order = SOURCE_ORDER[server.source] ?? 9;
+  return `${order}:${server.name.toLowerCase()}`;
 }
 
 export function McpServersPage() {
@@ -71,10 +91,10 @@ export function McpServersPage() {
   const callbackWorkspaceMcpServerAuth = useAppStore((s) => s.callbackWorkspaceMcpServerAuth);
   const setWorkspaceMcpServerApiKey = useAppStore((s) => s.setWorkspaceMcpServerApiKey);
 
-  const workspace = useMemo(
-    () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
-    [workspaces, selectedWorkspaceId],
-  );
+  const workspace = useMemo(() => {
+    const workspaceId = resolveProjectWorkspaceId(workspaces, selectedWorkspaceId);
+    return workspaceId ? (workspaces.find((entry) => entry.id === workspaceId) ?? null) : null;
+  }, [workspaces, selectedWorkspaceId]);
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
 
   const [editorState, setEditorState] = useState<EditorState | null>(null);
@@ -82,10 +102,13 @@ export function McpServersPage() {
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
   const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
+  const [validationServerKeyByName, setValidationServerKeyByName] = useState<
+    Record<string, string>
+  >({});
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const autoValidateSchedulerRef = useRef(
     createMcpAutoValidateScheduler((workspaceId: string, name: string) => {
-      void validateWorkspaceMcpServer(workspaceId, name);
+      void validateWorkspaceMcpServer(workspaceId, name, "user");
     }),
   );
 
@@ -100,15 +123,42 @@ export function McpServersPage() {
     clearAutoValidateTimer();
     setEditorState(null);
     setDraft(defaultDraftState());
+    setValidationServerKeyByName({});
     void requestWorkspaceMcpServers(workspace.id);
   }, [workspace?.id, requestWorkspaceMcpServers, workspace, clearAutoValidateTimer]);
 
   useEffect(() => clearAutoValidateTimer, [clearAutoValidateTimer]);
 
-  const servers = (runtime?.mcpServers ?? []).filter((server) => server.source === "user");
+  const servers = useMemo(
+    () =>
+      [...(runtime?.mcpServers ?? [])].sort((left, right) =>
+        serverSortKey(left).localeCompare(serverSortKey(right)),
+      ),
+    [runtime?.mcpServers],
+  );
   const files = runtime?.mcpFiles ?? [];
   const warnings = runtime?.mcpWarnings ?? [];
   const validationByName = runtime?.mcpValidationByName ?? {};
+  const validationByServerKey = useMemo(() => {
+    const serversByName = new Map<string, RuntimeMcpServer[]>();
+    for (const server of servers) {
+      serversByName.set(server.name, [...(serversByName.get(server.name) ?? []), server]);
+    }
+
+    const next: typeof validationByName = {};
+    for (const [name, validation] of Object.entries(validationByName)) {
+      const matchingServers = serversByName.get(name) ?? [];
+      if (matchingServers.length === 1) {
+        next[serverIdentityKey(matchingServers[0])] = validation;
+        continue;
+      }
+      const serverKey = validationServerKeyByName[name];
+      if (serverKey && matchingServers.some((server) => serverIdentityKey(server) === serverKey)) {
+        next[serverKey] = validation;
+      }
+    }
+    return next;
+  }, [servers, validationByName, validationServerKeyByName]);
 
   const resetDraft = ({ clearAutoValidate = true }: { clearAutoValidate?: boolean } = {}) => {
     if (clearAutoValidate) clearAutoValidateTimer();
@@ -116,46 +166,55 @@ export function McpServersPage() {
     setDraft(defaultDraftState());
   };
 
-  const toggleExpand = (name: string) => {
-    setExpandedServers((prev) => ({ ...prev, [name]: !prev[name] }));
+  const openCreateEditor = () => {
+    if (isCreating) {
+      resetDraft();
+      return;
+    }
+    clearAutoValidateTimer();
+    setEditorState({ mode: "create" });
+    setDraft(defaultDraftState());
+  };
+
+  const openEditEditor = (server: MCPServerConfig) => {
+    clearAutoValidateTimer();
+    setEditorState({ mode: "edit", name: server.name });
+    setDraft(draftFromServer(server));
+  };
+
+  const toggleExpand = (key: string) => {
+    setExpandedServers((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const validateServer = (workspaceId: string, server: RuntimeMcpServer) => {
+    setValidationServerKeyByName((prev) => ({
+      ...prev,
+      [server.name]: serverIdentityKey(server),
+    }));
+    void validateWorkspaceMcpServer(workspaceId, server.name, server.source);
   };
 
   const [parent] = useAutoAnimate();
 
   return (
-    <div className="space-y-5" ref={parent}>
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-medium">Custom servers</h2>
-        {workspace ? (
+    <SettingsSection
+      title="MCP servers"
+      description="Model Context Protocol servers from every config layer: user, workspace, plugin, and system."
+      action={
+        workspace ? (
           <Button
-            variant="ghost"
+            type="button"
+            variant="outline"
             size="sm"
-            className="text-muted-foreground hover:text-foreground"
-            onPointerDown={() => {
-              if (isCreating) {
-                resetDraft();
-                return;
-              }
-              clearAutoValidateTimer();
-              setEditorState({ mode: "create" });
-              setDraft(defaultDraftState());
-            }}
-            onClick={() => {
-              if (isCreating) {
-                resetDraft();
-                return;
-              }
-              clearAutoValidateTimer();
-              setEditorState({ mode: "create" });
-              setDraft(defaultDraftState());
-            }}
+            onPointerDown={openCreateEditor}
+            onClick={openCreateEditor}
           >
-            <PlusIcon className="w-4 h-4 mr-1" />
+            <PlusIcon data-icon="inline-start" />
             Add server
           </Button>
-        ) : null}
-      </div>
-
+        ) : undefined
+      }
+    >
       {workspace ? (
         <Dialog
           open={editorState !== null}
@@ -196,36 +255,76 @@ export function McpServersPage() {
               </div>
 
               {draft.transportType === "stdio" ? (
-                <div className="grid gap-3 md:grid-cols-3">
-                  <Input
-                    placeholder="Command"
-                    value={draft.command}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, command: event.target.value }))
-                    }
-                  />
-                  <Input
-                    placeholder="Args (shell-style, optional)"
-                    value={draft.args}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, args: event.target.value }))
-                    }
-                  />
-                  <Input
-                    placeholder="CWD (optional)"
-                    value={draft.cwd}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, cwd: event.target.value }))}
-                  />
-                </div>
+                <>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <Input
+                      placeholder="Command"
+                      value={draft.command}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, command: event.target.value }))
+                      }
+                    />
+                    <Input
+                      placeholder="Args (shell-style, optional)"
+                      value={draft.args}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, args: event.target.value }))
+                      }
+                    />
+                    <Input
+                      placeholder="CWD (optional)"
+                      value={draft.cwd}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, cwd: event.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">
+                      Environment variables (one KEY=VALUE per line, optional)
+                    </div>
+                    <Textarea
+                      placeholder={"API_TOKEN=secret\nDEBUG=1"}
+                      aria-label="Environment variables"
+                      className="min-h-16 font-mono text-xs"
+                      value={draft.env}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, env: event.target.value }))
+                      }
+                    />
+                  </div>
+                </>
               ) : (
-                <Input
-                  placeholder="Server URL"
-                  value={draft.url}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, url: event.target.value }))}
-                />
+                <>
+                  <Input
+                    placeholder="Server URL"
+                    value={draft.url}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, url: event.target.value }))}
+                  />
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">
+                      HTTP headers (one KEY=VALUE per line, optional)
+                    </div>
+                    <Textarea
+                      placeholder={"x-tenant=team-a\nauthorization=Bearer token"}
+                      aria-label="HTTP headers"
+                      className="min-h-16 font-mono text-xs"
+                      value={draft.headers}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, headers: event.target.value }))
+                      }
+                    />
+                  </div>
+                </>
               )}
 
               <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  placeholder="Icon URL (optional)"
+                  aria-label="Icon URL"
+                  value={draft.icon}
+                  onChange={(event) => setDraft((prev) => ({ ...prev, icon: event.target.value }))}
+                />
                 <Input
                   placeholder="Retries (optional)"
                   value={draft.retries}
@@ -233,16 +332,17 @@ export function McpServersPage() {
                     setDraft((prev) => ({ ...prev, retries: event.target.value }))
                   }
                 />
-                <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
-                  <span className="text-sm">Required server</span>
-                  <Switch
-                    aria-label="Required server"
-                    checked={draft.required}
-                    onCheckedChange={(checked) =>
-                      setDraft((prev) => ({ ...prev, required: toBool(checked) }))
-                    }
-                  />
-                </div>
+              </div>
+
+              <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                <span className="text-sm">Required server</span>
+                <Switch
+                  aria-label="Required server"
+                  checked={draft.required}
+                  onCheckedChange={(checked) =>
+                    setDraft((prev) => ({ ...prev, required: toBool(checked) }))
+                  }
+                />
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
@@ -335,6 +435,10 @@ export function McpServersPage() {
                     const workspaceId = workspace.id;
                     const previousName = getPreviousNameForUpsert(editorState);
                     void upsertWorkspaceMcpServer(workspaceId, next, previousName, "user");
+                    setValidationServerKeyByName((prev) => ({
+                      ...prev,
+                      [next.name]: serverIdentityKey({ name: next.name, source: "user" }),
+                    }));
                     autoValidateSchedulerRef.current.schedule(workspaceId, next.name);
                     resetDraft({ clearAutoValidate: false });
                   }}
@@ -350,22 +454,32 @@ export function McpServersPage() {
         </Dialog>
       ) : null}
 
-      <div
-        className="rounded-xl border border-border/70 overflow-hidden bg-background/50"
-        ref={parent}
-      >
+      <div ref={parent}>
         {servers.length === 0 ? (
-          <div className="text-sm text-muted-foreground p-4 text-center">
-            No custom servers configured.
+          <div className="p-4">
+            <SettingsEmptyState
+              icon={<ServerIcon />}
+              title="No MCP servers configured"
+              description="Add a server to give Cowork extra tools, or install a plugin that ships one."
+              action={
+                workspace ? (
+                  <Button type="button" variant="outline" size="sm" onClick={openCreateEditor}>
+                    <PlusIcon data-icon="inline-start" />
+                    Add server
+                  </Button>
+                ) : undefined
+              }
+            />
           </div>
         ) : null}
         {servers.map((server) => {
-          const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;
-          const validation = validationByName[server.name];
+          const serverKey = serverIdentityKey(server);
+          const draftKey = workspace ? mcpCredentialDraftKey(workspace.id, server) : serverKey;
+          const validation = validationByServerKey[serverKey];
           const canEdit = server.source === "user";
           const apiKeyDraft = apiKeyByName[draftKey] ?? "";
           const oauthCode = oauthCodeByName[draftKey] ?? "";
-          const isExpanded = expandedServers[server.name] ?? false;
+          const isExpanded = expandedServers[serverKey] ?? false;
           const serverEnabled = server.enabled !== false;
           const canToggle =
             server.source !== "system" &&
@@ -374,42 +488,43 @@ export function McpServersPage() {
 
           return (
             <div
-              key={server.name}
+              key={serverKey}
               className={cn(
-                "border-b border-border/70 last:border-b-0",
+                "border-b border-border/45 last:border-b-0",
                 isExpanded && "bg-card/40",
               )}
             >
-              <div className="flex items-center justify-between p-4 transition-colors hover:bg-card/60">
+              <div className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-card/60">
                 <button
                   type="button"
                   className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  onClick={() => toggleExpand(server.name)}
+                  onClick={() => toggleExpand(serverKey)}
                 >
                   {isExpanded ? (
-                    <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
+                    <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
                   ) : (
-                    <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
+                    <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
                   )}
-                  <span className="font-medium text-foreground text-sm">{server.name}</span>
-                  {!canEdit && (
-                    <Badge variant="secondary" className="text-[10px] uppercase h-5">
-                      {sourceLabel(server.source)}
-                    </Badge>
-                  )}
+                  <EntityIcon src={server.icon} name={server.name} size="sm" />
+                  <span className="truncate text-sm font-medium text-foreground">
+                    {server.name}
+                  </span>
+                  <Badge variant="secondary" className="h-5 text-[10px] uppercase">
+                    {sourceLabel(server.source)}
+                  </Badge>
                   {!serverEnabled ? (
                     <Badge variant="secondary" className="h-5 text-[10px] uppercase">
                       Disabled
                     </Badge>
                   ) : null}
                   {validation?.ok ? (
-                    <CheckCircle2Icon className="w-4 h-4 text-success" />
+                    <CheckCircle2Icon className="size-4 shrink-0 text-success" />
                   ) : validation && !validation.ok ? (
-                    <XCircleIcon className="w-4 h-4 text-destructive" />
+                    <XCircleIcon className="size-4 shrink-0 text-destructive" />
                   ) : null}
                 </button>
 
-                <div className="flex items-center gap-3">
+                <div className="flex shrink-0 items-center gap-3">
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">
                       {serverEnabled ? "Enabled" : "Disabled"}
@@ -438,56 +553,52 @@ export function McpServersPage() {
                       className="h-8 w-8 text-muted-foreground hover:text-foreground"
                       onPointerDown={(event) => {
                         event.stopPropagation();
-                        clearAutoValidateTimer();
-                        setEditorState({ mode: "edit", name: server.name });
-                        setDraft(draftFromServer(server));
+                        openEditEditor(server);
                       }}
                       onClick={(event) => {
                         event.stopPropagation();
-                        clearAutoValidateTimer();
-                        setEditorState({ mode: "edit", name: server.name });
-                        setDraft(draftFromServer(server));
+                        openEditEditor(server);
                       }}
                     >
-                      <SettingsIcon className="w-4 h-4" />
+                      <SettingsIcon className="size-4" />
                     </Button>
                   )}
                 </div>
               </div>
 
               {isExpanded && (
-                <div className="px-10 pb-4 text-xs space-y-4">
-                  <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
-                    <span className="text-muted-foreground uppercase tracking-wider text-[10px]">
+                <div className="space-y-4 px-11 pb-4 text-xs">
+                  <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                       Command
                     </span>
-                    <span className="font-mono bg-muted/30 px-2 py-1 rounded inline-block w-fit text-[11px]">
+                    <span className="inline-block w-fit rounded bg-muted/30 px-2 py-1 font-mono text-[11px]">
                       {formatTransport(server)}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
-                    <span className="text-muted-foreground uppercase tracking-wider text-[10px]">
+                  <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                       Auth Mode
                     </span>
-                    <span className="text-foreground text-[13px]">{server.authMode}</span>
+                    <span className="text-[13px] text-foreground">{server.authMode}</span>
                   </div>
 
                   {server.authMessage && (
-                    <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
-                      <span className="text-muted-foreground uppercase tracking-wider text-[10px]">
+                    <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                         Auth Status
                       </span>
-                      <span className="text-foreground text-[13px]">{server.authMessage}</span>
+                      <span className="text-[13px] text-foreground">{server.authMessage}</span>
                     </div>
                   )}
 
                   {validation && (
-                    <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
-                      <span className="text-muted-foreground uppercase tracking-wider text-[10px]">
+                    <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                         Last Check
                       </span>
-                      <span className="text-foreground text-[13px]">
+                      <span className="text-[13px] text-foreground">
                         {validation.ok ? "Passed" : "Failed"} ({validation.mode})
                         {typeof validation.toolCount === "number"
                           ? ` • ${validation.toolCount} tools`
@@ -502,15 +613,15 @@ export function McpServersPage() {
                   {validation?.ok &&
                     Array.isArray(validation.tools) &&
                     validation.tools.length > 0 && (
-                      <div className="grid grid-cols-[120px_1fr] gap-2 items-start mt-2">
-                        <span className="text-muted-foreground uppercase tracking-wider text-[10px] mt-1">
+                      <div className="mt-2 grid grid-cols-[120px_1fr] items-start gap-2">
+                        <span className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                           Available Tools
                         </span>
                         <div className="flex flex-wrap gap-1.5">
                           {validation.tools.map((t) => (
                             <div
                               key={t.name}
-                              className="px-2 py-0.5 bg-muted/40 border border-border/50 rounded-sm text-xs font-mono text-foreground flex items-center group relative cursor-default"
+                              className="group relative flex cursor-default items-center rounded-sm border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-xs text-foreground"
                               title={t.description || t.name}
                             >
                               {t.name}
@@ -525,10 +636,8 @@ export function McpServersPage() {
                       type="button"
                       variant="secondary"
                       size="sm"
-                      className="h-7 text-xs bg-muted/40 hover:bg-muted/60 text-foreground shadow-none border-transparent"
-                      onClick={() =>
-                        workspace && void validateWorkspaceMcpServer(workspace.id, server.name)
-                      }
+                      className="h-7 border-transparent bg-muted/40 text-xs text-foreground shadow-none hover:bg-muted/60"
+                      onClick={() => workspace && validateServer(workspace.id, server)}
                     >
                       Validate Connection
                     </Button>
@@ -537,7 +646,7 @@ export function McpServersPage() {
                         type="button"
                         variant="destructive"
                         size="sm"
-                        className="h-7 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive shadow-none border-transparent"
+                        className="h-7 border-transparent bg-destructive/10 text-xs text-destructive shadow-none hover:bg-destructive/20 hover:text-destructive"
                         onClick={async () => {
                           if (!workspace) return;
                           const confirmed = await confirmAction({
@@ -561,7 +670,7 @@ export function McpServersPage() {
                   </div>
 
                   {server.auth?.type === "oauth" ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 pt-2 border-t border-border/50">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/50 pt-2">
                       <Button
                         type="button"
                         variant="outline"
@@ -569,13 +678,17 @@ export function McpServersPage() {
                         className="h-7 text-xs"
                         onClick={() =>
                           workspace &&
-                          void authorizeWorkspaceMcpServerAuth(workspace.id, server.name)
+                          void authorizeWorkspaceMcpServerAuth(
+                            workspace.id,
+                            server.name,
+                            server.source,
+                          )
                         }
                       >
                         Sign in
                       </Button>
                       <Input
-                        className="max-w-64 h-7 text-xs"
+                        className="h-7 max-w-64 text-xs"
                         placeholder="Paste OAuth code (optional)"
                         value={oauthCode}
                         onChange={(event) =>
@@ -596,6 +709,7 @@ export function McpServersPage() {
                             workspace.id,
                             server.name,
                             oauthCode.trim() ? oauthCode : undefined,
+                            server.source,
                           )
                         }
                       >
@@ -605,9 +719,9 @@ export function McpServersPage() {
                   ) : null}
 
                   {server.auth?.type === "api_key" ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 pt-2 border-t border-border/50">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/50 pt-2">
                       <Input
-                        className="max-w-64 h-7 text-xs"
+                        className="h-7 max-w-64 text-xs"
                         placeholder="Paste API key"
                         value={apiKeyDraft}
                         onChange={(event) =>
@@ -625,6 +739,7 @@ export function McpServersPage() {
                             workspace.id,
                             server.name,
                             apiKeyDraft.trim(),
+                            server.source,
                           )
                         }
                       >
@@ -644,48 +759,42 @@ export function McpServersPage() {
           <Button
             type="button"
             variant="ghost"
-            className="h-auto w-full justify-start gap-2 rounded-lg px-1 py-1.5 text-sm font-medium text-muted-foreground hover:bg-transparent hover:text-foreground"
+            className="h-auto w-full justify-start gap-2 rounded-none px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-transparent hover:text-foreground"
           >
             <WrenchIcon className="size-4" />
-            <span>Advanced</span>
+            <span>Config files</span>
             <ChevronDownIcon
               className={cn("ml-auto size-4 transition-transform", advancedOpen && "rotate-180")}
             />
           </Button>
         </CollapsibleTrigger>
-        <CollapsibleContent className="space-y-5 pt-2">
-          <Card className="border-border/80 bg-card/85">
-            <CardHeader>
-              <CardTitle>Config files</CardTitle>
-              <CardDescription>Layer sources and parse warnings.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-xs">
-              {files.map((file) => (
-                <div
-                  key={file.path}
-                  className="rounded-md border border-border/70 bg-muted/20 px-3 py-2"
-                >
-                  <div className="font-medium text-foreground">
-                    {sourceLabel(file.source)} {file.editable ? "(editable)" : "(read-only)"}
-                  </div>
-                  <div className="font-mono text-muted-foreground">{file.path}</div>
-                  <div className="text-muted-foreground">
-                    exists={String(file.exists)}, servers={file.serverCount}
-                  </div>
-                  {file.parseError ? (
-                    <div className="text-destructive">parse error: {file.parseError}</div>
-                  ) : null}
+        <CollapsibleContent>
+          <div className="space-y-2 px-4 pb-4 text-xs">
+            {files.map((file) => (
+              <div
+                key={file.path}
+                className="rounded-md border border-border/70 bg-muted/20 px-3 py-2"
+              >
+                <div className="font-medium text-foreground">
+                  {sourceLabel(file.source)} {file.editable ? "(editable)" : "(read-only)"}
                 </div>
-              ))}
-              {warnings.length > 0 ? (
-                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
-                  {warnings.join(" | ")}
+                <div className="font-mono text-muted-foreground">{file.path}</div>
+                <div className="text-muted-foreground">
+                  exists={String(file.exists)}, servers={file.serverCount}
                 </div>
-              ) : null}
-            </CardContent>
-          </Card>
+                {file.parseError ? (
+                  <div className="text-destructive">parse error: {file.parseError}</div>
+                ) : null}
+              </div>
+            ))}
+            {warnings.length > 0 ? (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
+                {warnings.join(" | ")}
+              </div>
+            ) : null}
+          </div>
         </CollapsibleContent>
       </Collapsible>
-    </div>
+    </SettingsSection>
   );
 }

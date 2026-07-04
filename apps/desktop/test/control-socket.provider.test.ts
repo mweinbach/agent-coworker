@@ -384,7 +384,7 @@ describe("control socket helpers over JSON-RPC", () => {
           skillMutationPendingKeys: { preview: true },
         },
       },
-      view: "skills",
+      view: "settings",
     });
 
     const rejected = Promise.withResolvers<void>();

@@ -51,8 +51,6 @@ type HarnessWorkspace = { id: string; path: string };
 
 export type StoreActionHarnessState = {
   selectedWorkspaceId: string | null;
-  pluginManagementWorkspaceId: string | null;
-  pluginManagementMode: "auto" | "global" | "workspace";
   workspaces: HarnessWorkspace[];
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;
   notifications: AppStoreState["notifications"];
@@ -61,8 +59,6 @@ export type StoreActionHarnessState = {
 export function createState(): StoreActionHarnessState {
   return {
     selectedWorkspaceId: workspaceId,
-    pluginManagementWorkspaceId: null,
-    pluginManagementMode: "auto",
     workspaces: [{ id: workspaceId, path: "/tmp/workspace" }],
     workspaceRuntimeById: {
       [workspaceId]: {

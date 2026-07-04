@@ -31,18 +31,37 @@ function delay(ms: number): Promise<void> {
 }
 
 const MESSAGE_WAIT_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 2_000;
+const WINDOWS_REMOVE_RETRY_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+
+function readErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
 
 async function removeTempHome(home: string): Promise<void> {
-  if (process.platform === "win32") {
-    Bun.gc(true);
-    await delay(50);
+  const attempts = process.platform === "win32" ? 25 : 1;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (process.platform === "win32") {
+      Bun.gc(true);
+      await delay(attempt === 1 ? 50 : 100);
+    }
+    try {
+      await fs.rm(home, {
+        recursive: true,
+        force: true,
+        maxRetries: process.platform === "win32" ? 5 : 0,
+        retryDelay: 100,
+      });
+      return;
+    } catch (error) {
+      const retryable =
+        process.platform === "win32" && WINDOWS_REMOVE_RETRY_CODES.has(readErrorCode(error) ?? "");
+      if (!retryable || attempt === attempts) {
+        throw error;
+      }
+    }
   }
-  await fs.rm(home, {
-    recursive: true,
-    force: true,
-    maxRetries: process.platform === "win32" ? 10 : 0,
-    retryDelay: 50,
-  });
 }
 
 function makeSocket(connectionId: string): CapturedSocket {

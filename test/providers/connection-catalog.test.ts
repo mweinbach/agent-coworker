@@ -769,6 +769,27 @@ describe("providers/connectionCatalog", () => {
     });
   });
 
+  test("marks catalog models that duplicate a custom ID as custom-managed", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-custom-dupe-");
+    await upsertCustomModel(staticOpts.paths, "anthropic", "claude-opus-4-8");
+
+    const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    const anthropic = payload.all.find((entry) => entry.id === "anthropic");
+    const matches = anthropic?.models.filter((model) => model.id === "claude-opus-4-8") ?? [];
+    expect(matches).toHaveLength(1);
+    // Discovered/static metadata is kept; only the custom marker is added so
+    // clients can offer removal of the store entry.
+    expect(matches[0]?.runtimeOptions?.source).toBe("custom");
+    expect(matches[0]?.displayName).not.toBe("claude-opus-4-8");
+    expect(matches[0]?.description).not.toBe("Custom model ID");
+  });
+
   test("marks discovered non-curated models as disabled by default", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-default-"));
     const paths = getAiCoworkerPaths({ homedir: home });

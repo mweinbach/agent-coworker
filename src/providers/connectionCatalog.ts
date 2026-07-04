@@ -410,14 +410,24 @@ function mergeCustomModelsIntoCatalogEntry(
   if (!supportsCustomModelIds(entry.id)) return entry;
   const customModels = customModelsByProvider[entry.id] ?? [];
   if (customModels.length === 0) return entry;
+  const customIds = new Set(customModels.map((model) => model.id));
   const existingIds = new Set(entry.models.map((model) => model.id));
+  // A custom ID that also exists in the catalog keeps its discovered metadata
+  // but is still marked as custom-managed, so clients can surface the store
+  // entry for removal instead of leaving it invisible.
+  const models = entry.models.map((model) =>
+    customIds.has(model.id)
+      ? { ...model, runtimeOptions: { ...model.runtimeOptions, source: "custom" } }
+      : model,
+  );
+  const annotated = entry.models.some((model) => customIds.has(model.id));
   const additions = customModels
     .filter((model) => !existingIds.has(model.id))
     .map(customModelToCatalogEntry);
-  if (additions.length === 0) return entry;
+  if (!annotated && additions.length === 0) return entry;
   return {
     ...entry,
-    models: [...entry.models, ...additions],
+    models: [...models, ...additions],
     defaultModel: entry.defaultModel || additions[0]?.id || "",
   };
 }

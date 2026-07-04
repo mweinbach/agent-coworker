@@ -51,6 +51,7 @@ export function createCommandRouteHandlers(context: JsonRpcRouteContext): JsonRp
         return;
       }
       const { threadId, name, clientMessageId } = parsed.data;
+      await context.runtime.waitForStartupReady();
       const binding = context.threads.subscribe(ws, threadId);
       if (!binding?.runtime) {
         context.jsonrpc.sendError(ws, message.id, {

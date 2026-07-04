@@ -55,7 +55,7 @@ Bundle generation only reads an allowlist of local log files and the normalized 
 
 ## Runtime Health Signals
 
-Desktop reconnect logs include the socket generation, reconnect attempt, retry queue size, and sanitized server URL. The sidecar also exposes `cowork/runtime/diagnostics/read` with send queue drop/depth counters, journal write health, and session DB write-lock waits. If `thread/resume.replayHealth.snapshotRequired` is true, clients should treat replay as discontinuous and refresh the thread with `thread/read`.
+Desktop reconnect logs include the socket generation, reconnect attempt, retry queue size, and sanitized server URL. The sidecar also exposes `cowork/runtime/diagnostics/read` with startup readiness, send queue drop/depth counters, journal write health, and session DB write-lock waits. If `thread/resume.replayHealth.snapshotRequired` is true, clients should treat replay as discontinuous and refresh the thread with `thread/read`.
 
 ### `GET /cowork/health`
 
@@ -71,11 +71,11 @@ The `/cowork/health` HTTP endpoint is a cheap liveness probe (the desktop superv
   "db": { "ok": true, "lockWaitMs": 0 }, // ok = SELECT 1; lockWaitMs present only when > 0
   "journal": { "healthy": true, "backlog": 0 }, // healthy = no failed/dropped writes; backlog = pending events
   "sendQueue": { "dropped": 0, "queued": 0 },   // dropped = deltas + important drops; queued = queued sends
-  "startup": { "ready": true }         // false while listening but not fully booted
+  "startup": { "ready": true }         // false while listening but runtime setup is still finishing
 }
 ```
 
-For deeper counters (per-connection queue depth, per-thread journal failures, full write-lock diagnostics), use the `cowork/runtime/diagnostics/read` JSON-RPC method instead.
+For deeper counters (per-connection queue depth, per-thread journal failures, full write-lock diagnostics), use the `cowork/runtime/diagnostics/read` JSON-RPC method instead. Its `diagnostics.startup.ready` field mirrors readiness for turn mutations; while it is false, clients may continue reading threads but should keep new messages pending until readiness flips true.
 
 ## Uploads
 

@@ -142,15 +142,17 @@ describe("Server Startup", () => {
 
   test("startAgentServer returns server, config, system, and url", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, config, system, url } = await startAgentServer(serverOpts(tmpDir));
+    const started = await startAgentServer(serverOpts(tmpDir));
+    const { server, config, url } = started;
     try {
+      await started.ready;
       expect(server).toBeDefined();
       expect(typeof server.port).toBe("number");
       expect(server.port).toBeGreaterThan(0);
       expect(config).toBeDefined();
       expect(typeof config.provider).toBe("string");
-      expect(typeof system).toBe("string");
-      expect(system.length).toBeGreaterThan(0);
+      expect(typeof started.system).toBe("string");
+      expect(started.system.length).toBeGreaterThan(0);
       expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/ws$/);
     } finally {
       await stopTestServer(server);
@@ -159,8 +161,9 @@ describe("Server Startup", () => {
 
   test("serves explicit cowork health endpoint with diagnostics payload", async () => {
     const tmpDir = await makeTmpProject();
-    const { server } = await startAgentServer(serverOpts(tmpDir));
+    const { server, ready } = await startAgentServer(serverOpts(tmpDir));
     try {
+      await ready;
       const response = await fetch(`http://127.0.0.1:${server.port}/cowork/health`);
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
@@ -192,6 +195,44 @@ describe("Server Startup", () => {
       expect(body.startup).toEqual({ ready: true });
     } finally {
       await stopTestServer(server);
+    }
+  });
+
+  test("serves health while background startup readiness is still pending", async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseRuntimeSetup: () => void = () => undefined;
+    const runtimeSetupGate = new Promise<void>((resolve) => {
+      releaseRuntimeSetup = resolve;
+    });
+    const started = await startAgentServer(
+      serverOpts(tmpDir, {
+        preloadSystemPrompt: false,
+        ensureCoworkRuntimeReadyImpl: async () => {
+          await runtimeSetupGate;
+          return null;
+        },
+        ensureDefaultGlobalSkillsReadyImpl: async () => null,
+      }),
+    );
+    try {
+      let readySettled = false;
+      void started.ready.then(() => {
+        readySettled = true;
+      });
+
+      const pendingResponse = await fetch(`http://127.0.0.1:${started.server.port}/cowork/health`);
+      const pendingBody = (await pendingResponse.json()) as { startup: { ready: boolean } };
+      expect(pendingBody.startup).toEqual({ ready: false });
+      expect(readySettled).toBe(false);
+
+      releaseRuntimeSetup();
+      await started.ready;
+
+      const readyResponse = await fetch(`http://127.0.0.1:${started.server.port}/cowork/health`);
+      const readyBody = (await readyResponse.json()) as { startup: { ready: boolean } };
+      expect(readyBody.startup).toEqual({ ready: true });
+    } finally {
+      await stopTestServer(started.server);
     }
   });
 
@@ -256,14 +297,16 @@ describe("Server Startup", () => {
 
   test("shared startup keeps built-in skills as the final runtime fallback", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, config, system } = await startAgentServer(serverOpts(tmpDir));
+    const started = await startAgentServer(serverOpts(tmpDir));
+    const { server, config } = started;
     try {
+      await started.ready;
       expect(config.skillsDirs).toHaveLength(3);
       expect(config.skillsDirs[0]).toBe(path.join(tmpDir, ".cowork", "skills"));
       expect(config.skillsDirs[2]).toBe(path.join(config.builtInDir, "skills"));
-      expect(system).toContain("## Available Skills");
-      expect(system).toContain("**memories**");
-      expect(system).not.toContain("**presentations**");
+      expect(started.system).toContain("## Available Skills");
+      expect(started.system).toContain("**memories**");
+      expect(started.system).not.toContain("**presentations**");
     } finally {
       await stopTestServer(server);
     }
@@ -291,12 +334,13 @@ describe("Server Startup", () => {
 
   test("loads system prompt as a non-empty string", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, system } = await startAgentServer(serverOpts(tmpDir));
+    const started = await startAgentServer(serverOpts(tmpDir));
     try {
-      expect(typeof system).toBe("string");
-      expect(system.length).toBeGreaterThan(10);
+      await started.ready;
+      expect(typeof started.system).toBe("string");
+      expect(started.system.length).toBeGreaterThan(10);
     } finally {
-      await stopTestServer(server);
+      await stopTestServer(started.server);
     }
   });
 

@@ -74,6 +74,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
       : never
     : never;
   system: string;
+  ready: Promise<void>;
   url: string;
   browserAccessToken?: string;
 }> {
@@ -149,8 +150,15 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           }
         }
         if (req.method === "GET" && url.pathname === "/cowork/health") {
+          const runtimeStartup = runtime.getStartupReadiness();
           return Response.json(
-            { ...runtime.getHealthSnapshot(), startup: { ready: startupReady } },
+            {
+              ...runtime.getHealthSnapshot(),
+              startup: {
+                ready: startupReady && runtimeStartup.ready,
+                ...(runtimeStartup.error ? { error: runtimeStartup.error } : {}),
+              },
+            },
             { headers: corsHeaders },
           );
         }
@@ -359,7 +367,10 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     server: stoppableServer,
     mobileServer,
     config: runtime.config,
-    system: runtime.system,
+    get system() {
+      return runtime.system;
+    },
+    ready: runtime.waitForStartupReady(),
     url,
     ...(browserAccessToken ? { browserAccessToken } : {}),
   };

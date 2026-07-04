@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { spawnStreamingSubprocess, subscribeLines } from "../src/utils/subprocess";
+import { subscribeLines } from "../src/utils/subprocess";
 
 const encoder = new TextEncoder();
 
@@ -75,66 +79,25 @@ describe("subscribeLines", () => {
 });
 
 describe("spawnStreamingSubprocess", () => {
-  test("exposes stdout and honors cwd and env", async () => {
-    const child = spawnStreamingSubprocess(
-      [
-        process.execPath,
-        "-e",
-        "console.log(`${process.cwd()}|${process.env.SUBPROCESS_SENTINEL ?? ''}|${process.env.HOME ?? ''}`)",
-      ],
-      {
-        cwd: "/tmp",
-        env: {
-          SUBPROCESS_SENTINEL: "present",
-        },
-      },
-    );
+  test("preserves child process streaming behavior outside the repo preload", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-subprocess-"));
+    const childTestPath = path.join(tempDir, "subprocess.child.test.ts");
+    const fixtureUrl = pathToFileURL(
+      path.join(import.meta.dir, "fixtures", "subprocessChild.ts"),
+    ).href;
 
-    const stdout = await new Response(child.stdout).text();
-    const exit = await child.exited;
+    await fs.writeFile(childTestPath, `import ${JSON.stringify(fixtureUrl)};\n`);
 
-    expect(exit.exitCode).toBe(0);
-    expect(stdout.trim()).toBe("/tmp|present|");
-  });
-
-  test("supports piped stdin and idempotent stdin close", async () => {
-    const child = spawnStreamingSubprocess(
-      [
-        process.execPath,
-        "-e",
-        "const input = await new Response(Bun.stdin.stream()).text(); console.log(`got:${input.trim()}`);",
-      ],
-      { stdin: "pipe" },
-    );
-    const lines: string[] = [];
-    const subscription = subscribeLines(child.stdout, (line) => {
-      lines.push(line);
-    });
-
-    child.writeStdin?.("hello\n");
-    child.endStdin?.();
-    child.endStdin?.();
-
-    const exit = await child.exited;
-    await subscription.done;
-
-    expect(exit.exitCode).toBe(0);
-    expect(lines).toEqual(["got:hello"]);
-  });
-
-  test("kill is safe before and after exit", async () => {
-    const child = spawnStreamingSubprocess([process.execPath, "-e", "setTimeout(() => {}, 10000)"]);
-
-    child.kill("SIGTERM");
-    const exit = await child.exited;
-
-    expect(exit.exitCode === null || exit.exitCode !== 0).toBe(true);
-    child.kill("SIGTERM");
-  });
-
-  test("throws when the executable cannot be spawned", () => {
-    expect(() =>
-      spawnStreamingSubprocess(["/definitely/not/a/real/binary/agent-coworker-subprocess-test"]),
-    ).toThrow();
+    try {
+      const proc = Bun.spawn([process.execPath, "test", childTestPath], {
+        cwd: os.tmpdir(),
+        env: process.env,
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      expect(await proc.exited).toBe(0);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

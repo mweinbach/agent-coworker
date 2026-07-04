@@ -9,6 +9,7 @@ function makeHarness(events: SessionEvent[]) {
   const errors: unknown[] = [];
   const executeCommand = mock(async () => {});
   const listCommands = mock(async () => {});
+  const waitForStartupReady = mock(async () => {});
   const runtime = {
     id: "chat-1",
     skills: { executeCommand, listCommands },
@@ -29,12 +30,15 @@ function makeHarness(events: SessionEvent[]) {
     utils: {
       isSessionError: (event: SessionEvent) => event.type === "error",
     },
+    runtime: {
+      waitForStartupReady,
+    },
     jsonrpc: {
       sendResult: (_ws: unknown, _id: unknown, result: unknown) => results.push(result),
       sendError: (_ws: unknown, _id: unknown, error: unknown) => errors.push(error),
     },
   } as unknown as JsonRpcRouteContext;
-  return { context, errors, executeCommand, listCommands, results };
+  return { context, errors, executeCommand, listCommands, results, waitForStartupReady };
 }
 
 describe("command JSON-RPC routes", () => {
@@ -88,6 +92,7 @@ describe("command JSON-RPC routes", () => {
     });
 
     expect(harness.errors).toEqual([]);
+    expect(harness.waitForStartupReady).toHaveBeenCalledTimes(1);
     expect(harness.executeCommand).toHaveBeenCalledWith(
       "task",
       "Build the release report",
@@ -107,6 +112,7 @@ describe("command JSON-RPC routes", () => {
     });
 
     expect(harness.executeCommand).not.toHaveBeenCalled();
+    expect(harness.waitForStartupReady).toHaveBeenCalledTimes(1);
     expect(harness.errors).toHaveLength(1);
   });
 });

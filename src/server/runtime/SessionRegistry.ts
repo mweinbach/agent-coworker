@@ -72,6 +72,7 @@ export type SessionRegistryOptions = {
   setConfig: (config: AgentConfig) => void;
   readSkillCatalogMtimeSnapshot?: (config: AgentConfig) => Promise<string>;
   initialSkillCatalogMtimeSnapshot?: string | null;
+  shouldWarmSessionResources?: () => boolean;
   refreshSkillsAcrossWorkspaceSessions: (options: {
     workingDirectory: string;
     sourceSessionId: string;
@@ -118,11 +119,17 @@ export class SessionRegistry {
   });
 
   private config: AgentConfig;
+  private system: string;
+  private discoveredSkills: Array<{ name: string; description: string }>;
+  private initialSkillCatalogMtimeSnapshot: string | null;
   private workspaceBackupService: WorkspaceBackupService | null = null;
   private agentControl: AgentControl | null = null;
 
   constructor(private readonly options: SessionRegistryOptions) {
     this.config = options.config;
+    this.system = options.system;
+    this.discoveredSkills = options.discoveredSkills;
+    this.initialSkillCatalogMtimeSnapshot = options.initialSkillCatalogMtimeSnapshot ?? null;
   }
 
   getConfig(): AgentConfig {
@@ -132,6 +139,22 @@ export class SessionRegistry {
   syncConfig(config: AgentConfig): void {
     this.config = config;
     this.options.setConfig(config);
+  }
+
+  updateSystemPromptSnapshot(input: {
+    system: string;
+    discoveredSkills: Array<{ name: string; description: string }>;
+    initialSkillCatalogMtimeSnapshot: string | null;
+  }): void {
+    this.system = input.system;
+    this.discoveredSkills = input.discoveredSkills;
+    this.initialSkillCatalogMtimeSnapshot = input.initialSkillCatalogMtimeSnapshot;
+  }
+
+  warmLiveSessionResources(): void {
+    for (const binding of this.sessionBindings.values()) {
+      binding.session?.warmSessionResources();
+    }
   }
 
   addBindingSink(binding: SessionBinding, sinkId: string, sink: (evt: SessionEvent) => void): void {
@@ -203,7 +226,9 @@ export class SessionRegistry {
     this.sessionBindings.set(built.runtime.id, binding);
     // Warm first-turn resources (system prompt, MCP cache, lazy modules) in
     // the background so the first user message does not pay that setup cost.
-    built.session.warmSessionResources();
+    if (this.options.shouldWarmSessionResources?.() !== false) {
+      built.session.warmSessionResources();
+    }
     return built.runtime;
   }
 
@@ -232,7 +257,9 @@ export class SessionRegistry {
     this.sessionBindings.set(built.session.id, binding);
     // Resumed threads warm the same first-turn resources (the persisted
     // system prompt makes that part a no-op; MCP cache warm is the main win).
-    built.session.warmSessionResources();
+    if (this.options.shouldWarmSessionResources?.() !== false) {
+      built.session.warmSessionResources();
+    }
     return binding;
   }
 
@@ -470,7 +497,7 @@ export class SessionRegistry {
     const globalConfigDir = path.join(currentConfig.userCoworkDir, "config");
 
     return {
-      discoveredSkills: this.options.discoveredSkills,
+      discoveredSkills: this.discoveredSkills,
       yolo: this.options.yolo,
       connectProviderImpl: this.options.connectProviderImpl,
       getAiCoworkerPathsImpl: this.options.getAiCoworkerPathsImpl,
@@ -679,11 +706,9 @@ export class SessionRegistry {
     const { AgentSession } = loadAgentSessionModule();
     const session = new AgentSession({
       config: sessionConfig,
-      system: overrides?.system ?? this.options.system,
+      system: overrides?.system ?? this.system,
       initialSkillCatalogMtimeSnapshot:
-        overrides?.config || overrides?.system
-          ? null
-          : this.options.initialSkillCatalogMtimeSnapshot,
+        overrides?.config || overrides?.system ? null : this.initialSkillCatalogMtimeSnapshot,
       persistenceEnabled: overrides?.persistenceEnabled,
       ...(overrides?.seedContext ? { seedContext: overrides.seedContext } : {}),
       ...(overrides?.sessionInfoPatch ? { sessionInfoPatch: overrides.sessionInfoPatch } : {}),

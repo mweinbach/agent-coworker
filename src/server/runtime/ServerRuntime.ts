@@ -102,6 +102,9 @@ export interface StartAgentServerOptions {
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
   loadAgentPromptImpl?: typeof loadAgentPromptFn;
+  loadSystemPromptWithSkillsImpl?: typeof loadSystemPromptWithSkillsFn;
+  ensureCoworkRuntimeReadyImpl?: typeof ensureCoworkRuntimeReady;
+  ensureDefaultGlobalSkillsReadyImpl?: typeof ensureDefaultGlobalSkillsReady;
   preloadSystemPrompt?: boolean;
   taskTerminalQuiesceTimeoutMs?: number;
   onCoworkRuntimeBootstrapProgress?: (progress: CoworkRuntimeBootstrapProgress) => void;
@@ -128,6 +131,11 @@ export type HealthSnapshot = {
   sendQueue: { dropped: number; queued: number };
 };
 
+export type RuntimeStartupReadiness = {
+  ready: boolean;
+  error?: string;
+};
+
 export type AgentServerRuntime = {
   config: AgentConfig;
   system: string;
@@ -143,6 +151,8 @@ export type AgentServerRuntime = {
   isAddrInUse(err: unknown): boolean;
   startIdleEviction(): ReturnType<typeof setInterval>;
   getHealthSnapshot(): HealthSnapshot;
+  getStartupReadiness(): RuntimeStartupReadiness;
+  waitForStartupReady(): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -174,26 +184,8 @@ export async function createAgentServerRuntime(
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
-  const coworkRuntimeSetup = await ensureCoworkRuntimeReady({
-    homedir: opts.homedir,
-    env,
-    onProgress: opts.onCoworkRuntimeBootstrapProgress,
-    log: (line) => {
-      console.warn(`[cowork-runtime] ${line}`);
-    },
-  });
-  if (coworkRuntimeSetup) Object.assign(env, coworkRuntimeSetup.runtimeEnv);
 
   let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
-  await ensureDefaultGlobalSkillsReady({
-    homedir: opts.homedir,
-    env,
-    config,
-    log: (line) => {
-      console.warn(`[default-skills] ${line}`);
-    },
-  });
-
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,
     config.providerOptions,
@@ -205,12 +197,20 @@ export async function createAgentServerRuntime(
   let system = "";
   let discoveredSkills: Array<{ name: string; description: string }> = [];
   let initialSkillCatalogMtimeSnapshot: string | null = null;
-  if (opts.preloadSystemPrompt !== false) {
-    const loadedSystemPrompt = await lazyLoadSystemPromptWithSkills(config);
-    system = loadedSystemPrompt.prompt;
-    discoveredSkills = loadedSystemPrompt.discoveredSkills;
-    initialSkillCatalogMtimeSnapshot = await readSkillCatalogMtimeSnapshot(config);
-  }
+  let startupReady = false;
+  let startupError: string | null = null;
+  let resolveStartupReady: () => void = () => undefined;
+  const startupReadyPromise = new Promise<void>((resolve) => {
+    resolveStartupReady = resolve;
+  });
+  const markStartupReady = (error?: unknown): void => {
+    if (startupReady) return;
+    startupReady = true;
+    if (error !== undefined) {
+      startupError = error instanceof Error ? error.message : String(error);
+    }
+    resolveStartupReady();
+  };
 
   const getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPathsDefault;
   const sessionDb = await SessionDb.create({
@@ -379,6 +379,7 @@ export async function createAgentServerRuntime(
     },
     readSkillCatalogMtimeSnapshot,
     initialSkillCatalogMtimeSnapshot,
+    shouldWarmSessionResources: () => startupReady,
     onThreadListChanged: broadcastWorkspaceListChanged,
     refreshSkillsAcrossWorkspaceSessions: async ({
       workingDirectory,
@@ -452,6 +453,87 @@ export async function createAgentServerRuntime(
     refreshLocalSkillState,
   });
   await skillMutationBus.start();
+
+  const runStartupReadinessWork = async (): Promise<void> => {
+    const failures: string[] = [];
+    const ensureRuntimeReady = opts.ensureCoworkRuntimeReadyImpl ?? ensureCoworkRuntimeReady;
+    const ensureDefaultSkillsReady =
+      opts.ensureDefaultGlobalSkillsReadyImpl ?? ensureDefaultGlobalSkillsReady;
+    const loadSystemPromptWithSkills =
+      opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills;
+    const runtimeSetup = ensureRuntimeReady({
+      homedir: opts.homedir,
+      env,
+      onProgress: opts.onCoworkRuntimeBootstrapProgress,
+      log: (line) => {
+        console.warn(`[cowork-runtime] ${line}`);
+      },
+    }).then((coworkRuntimeSetup) => {
+      if (coworkRuntimeSetup) Object.assign(env, coworkRuntimeSetup.runtimeEnv);
+    });
+    const defaultSkillsSetup = ensureDefaultSkillsReady({
+      homedir: opts.homedir,
+      env,
+      config,
+      log: (line) => {
+        console.warn(`[default-skills] ${line}`);
+      },
+    });
+
+    const [runtimeSettled, defaultSkillsSettled] = await Promise.allSettled([
+      runtimeSetup,
+      defaultSkillsSetup,
+    ]);
+    if (runtimeSettled.status === "rejected") {
+      failures.push(
+        `Cowork runtime setup failed: ${
+          runtimeSettled.reason instanceof Error
+            ? runtimeSettled.reason.message
+            : String(runtimeSettled.reason)
+        }`,
+      );
+    }
+    if (defaultSkillsSettled.status === "rejected") {
+      failures.push(
+        `Default skill setup failed: ${
+          defaultSkillsSettled.reason instanceof Error
+            ? defaultSkillsSettled.reason.message
+            : String(defaultSkillsSettled.reason)
+        }`,
+      );
+    }
+
+    if (opts.preloadSystemPrompt !== false) {
+      try {
+        const loadedSystemPrompt = await loadSystemPromptWithSkills(config);
+        system = loadedSystemPrompt.prompt;
+        discoveredSkills = loadedSystemPrompt.discoveredSkills;
+        initialSkillCatalogMtimeSnapshot = await readSkillCatalogMtimeSnapshot(config);
+        registry.updateSystemPromptSnapshot({
+          system,
+          discoveredSkills,
+          initialSkillCatalogMtimeSnapshot,
+        });
+      } catch (error) {
+        failures.push(
+          `System prompt preload failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    registry.warmLiveSessionResources();
+    if (failures.length > 0) {
+      console.warn(`[startup] ${failures.join("; ")}`);
+      markStartupReady(new Error(failures.join("; ")));
+      return;
+    }
+    markStartupReady();
+  };
+
+  void runStartupReadinessWork().catch((error) => {
+    console.warn(`[startup] ${error instanceof Error ? error.message : String(error)}`);
+    markStartupReady(error);
+  });
 
   const jsonRpcTransport = createJsonRpcTransportAdapter({
     maxPendingRequests: jsonRpcMaxPendingRequests,
@@ -579,6 +661,10 @@ export async function createAgentServerRuntime(
           }
         }
         return {
+          startup: {
+            ready: startupReady,
+            ...(startupError ? { error: startupError } : {}),
+          },
           sendQueue: sendQueue.getStats(),
           journal: {
             untrustedThreadCount,
@@ -588,6 +674,9 @@ export async function createAgentServerRuntime(
           },
           dbLocks: sessionDb.getWriteLockDiagnostics(),
         };
+      },
+      waitForStartupReady: async () => {
+        await startupReadyPromise;
       },
     },
     jsonrpc: {
@@ -636,7 +725,9 @@ export async function createAgentServerRuntime(
     get config() {
       return config;
     },
-    system,
+    get system() {
+      return system;
+    },
     env,
     jsonRpcMaxPendingRequests,
     sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
@@ -702,9 +793,19 @@ export async function createAgentServerRuntime(
         },
       };
     },
+    getStartupReadiness: () => ({
+      ready: startupReady,
+      ...(startupError ? { error: startupError } : {}),
+    }),
+    waitForStartupReady: async () => {
+      await startupReadyPromise;
+    },
     stop: async () => {
       if (stopped) return;
       stopped = true;
+      if (!startupReady) {
+        markStartupReady(new Error("Server stopped before startup completed"));
+      }
       disposeDesktopStateWatcher?.();
       skillMutationBus.stop();
       workspaceControl.clearSubscribers();

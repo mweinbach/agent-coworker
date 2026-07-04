@@ -16,6 +16,64 @@ import {
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
+  test("turn/start waits for background startup readiness before starting a turn", async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseRuntimeSetup: () => void = () => undefined;
+    const runtimeSetupGate = new Promise<void>((resolve) => {
+      releaseRuntimeSetup = resolve;
+    });
+    const { server, url, ready } = await startAgentServer(
+      serverOpts(tmpDir, {
+        preloadSystemPrompt: false,
+        ensureCoworkRuntimeReadyImpl: async () => {
+          await runtimeSetupGate;
+          return null;
+        },
+        ensureDefaultGlobalSkillsReadyImpl: async () => null,
+        runTurnImpl: (async () => ({
+          text: "ready reply",
+          responseMessages: [],
+        })) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      let turnSettled = false;
+      const turnPromise = rpc
+        .sendRequest(
+          "turn/start",
+          {
+            threadId: started.result.thread.id,
+            clientMessageId: "msg-startup-wait",
+            input: [{ type: "text", text: "wait for startup" }],
+          },
+          JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
+        )
+        .then((message) => {
+          turnSettled = true;
+          return message;
+        });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(turnSettled).toBe(false);
+
+      releaseRuntimeSetup();
+      await ready;
+
+      const turnResponse = await turnPromise;
+      expect(turnResponse.result.turn.threadId).toBe(started.result.thread.id);
+      const turnStarted = await rpc.waitFor((message) => message.method === "turn/started");
+      expect(turnStarted.params.threadId).toBe(started.result.thread.id);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start streams turn and item notifications", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

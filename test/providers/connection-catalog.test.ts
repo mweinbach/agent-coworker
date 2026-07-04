@@ -15,6 +15,27 @@ const noCodexAccount = async () => ({
   requiresOpenaiAuth: true,
 });
 
+function emptyConnectionStore() {
+  return {
+    version: 1 as const,
+    updatedAt: "2026-02-17T00:00:00.000Z",
+    services: {},
+  };
+}
+
+async function staticCatalogTestOptions(prefix: string) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const paths = getAiCoworkerPaths({ homedir: home });
+  const store = emptyConnectionStore();
+  return {
+    paths,
+    store,
+    env: {} as NodeJS.ProcessEnv,
+    readCodexAppServerAccountImpl: noCodexAccount,
+    readStore: async () => store,
+  };
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -47,19 +68,25 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("catalog entries stay aligned with provider names and default-model map", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-align-");
     const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
       platform: "linux",
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     const entryIds = payload.all.map((entry) => entry.id);
     expect(entryIds).toEqual(PROVIDER_NAMES);
-    expect(payload.all).toEqual(await listProviderCatalogEntries({ platform: "linux" }));
+    expect(payload.all).toEqual(
+      await listProviderCatalogEntries({
+        paths: staticOpts.paths,
+        store: staticOpts.store,
+        env: staticOpts.env,
+        platform: "linux",
+      }),
+    );
     expect(Object.keys(payload.default)).toEqual(PROVIDER_NAMES);
     for (const entry of payload.all) {
       expect(payload.default[entry.id]).toBe(entry.defaultModel);
@@ -90,13 +117,12 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("lists OpenCode providers in the provider catalog with the expected model sets", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-opencode-");
     const payload = await getProviderCatalog({
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     expect(payload.default["opencode-go"]).toBe("glm-5");
@@ -502,13 +528,12 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("lists Baseten in the provider catalog with the expected model set", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-baseten-");
     const payload = await getProviderCatalog({
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     expect(payload.default.baseten).toBe("moonshotai/Kimi-K2.5");
@@ -540,13 +565,12 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("lists Together AI in the provider catalog with the expected model set", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-together-");
     const payload = await getProviderCatalog({
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     expect(payload.default.together).toBe("moonshotai/Kimi-K2.5");
@@ -578,13 +602,12 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("lists Fireworks AI in the provider catalog with the expected model set", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-fireworks-");
     const payload = await getProviderCatalog({
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     expect(payload.default.fireworks).toBe("accounts/fireworks/models/kimi-k2p6");
@@ -628,13 +651,12 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("lists Fire Pass in the provider catalog with the expected model set", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-firepass-");
     const payload = await getProviderCatalog({
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     expect(payload.default.firepass).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
@@ -654,13 +676,12 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("lists NVIDIA in the provider catalog with the expected model set", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-nvidia-");
     const payload = await getProviderCatalog({
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     expect(payload.default.nvidia).toBe("nvidia/nemotron-3-super-120b-a12b");
@@ -680,13 +701,12 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("lists MiniMax in the provider catalog with the expected model set", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-minimax-");
     const payload = await getProviderCatalog({
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {},
-      }),
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
     });
 
     expect(payload.default.minimax).toBe("MiniMax-M3");

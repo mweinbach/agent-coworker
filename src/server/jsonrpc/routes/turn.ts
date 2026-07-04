@@ -40,6 +40,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
+      await context.runtime.waitForStartupReady();
       const binding = context.threads.subscribe(ws, threadId);
       if (!binding?.runtime) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -110,6 +111,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
+      await context.runtime.waitForStartupReady();
       const binding = context.threads.getLive(threadId);
       if (!binding) {
         context.jsonrpc.sendError(ws, message.id, {

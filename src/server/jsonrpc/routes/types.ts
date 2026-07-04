@@ -141,7 +141,12 @@ export interface JsonRpcRouteContext {
   };
   runtime: {
     checkLibreOffice(opts: { smoke?: boolean }): Promise<LibreOfficeCapabilityDiagnostic>;
+    waitForStartupReady(): Promise<void>;
     getDiagnostics(): {
+      startup: {
+        ready: boolean;
+        error?: string;
+      };
       sendQueue: {
         queuedSends: number;
         droppedDeltas: number;

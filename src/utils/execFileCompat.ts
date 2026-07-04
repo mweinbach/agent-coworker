@@ -1,6 +1,3 @@
-import { type ChildProcessByStdio, spawn } from "node:child_process";
-import type { Readable } from "node:stream";
-
 /**
  * Small replacement for the Node `child_process.execFile` contract the
  * harness tools rely on: fully buffered stdout/stderr with a byte cap, a
@@ -56,40 +53,29 @@ export async function execFileCompat(
 ): Promise<ExecFileCompatResult> {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
 
-  let proc: ChildProcessByStdio<null, Readable, Readable>;
+  let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {
-    proc = spawn(file, args, {
+    proc = Bun.spawn([file, ...args], {
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
-      ...(opts.env ? { env: opts.env as NodeJS.ProcessEnv } : {}),
-      stdio: ["ignore", "pipe", "pipe"],
+      ...(opts.env ? { env: opts.env } : {}),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
       windowsHide: true,
     });
   } catch (error) {
     return { stdout: "", stderr: "", exitCode: 1, errorCode: spawnErrorCode(error) };
   }
-  let spawnError: unknown;
   let cause: KillCause | null = null;
   const terminate = (nextCause: KillCause) => {
     if (cause) return;
     cause = nextCause;
     try {
-      proc.kill(opts.killSignal ?? "SIGTERM");
+      proc.kill((opts.killSignal ?? "SIGTERM") as never);
     } catch {
       // already exited
     }
   };
-
-  proc.once("error", (error) => {
-    spawnError = error;
-  });
-  proc.once("exit", () => {
-    if (!cause) return;
-    // Grandchildren can keep the stdio pipes open after the direct child dies
-    // (e.g. `sh -c "sleep 99"`). Node's exec destroyed the pipes on kill; do
-    // the equivalent so buffered output resolves promptly.
-    proc.stdout.destroy();
-    proc.stderr.destroy();
-  });
 
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   if (typeof opts.timeoutMs === "number" && opts.timeoutMs > 0) {
@@ -105,49 +91,57 @@ export async function execFileCompat(
     }
   }
 
-  const readCapped = async (stream: Readable): Promise<string> => {
+  const readCapped = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+    const reader = stream.getReader();
     const chunks: Buffer[] = [];
     let total = 0;
-    return await new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        resolve(Buffer.concat(chunks, Math.min(total, maxBuffer)).toString("utf8"));
-      };
-      stream.on("data", (value: Buffer | string) => {
-        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    let processExited = false;
+    void proc.exited.finally(() => {
+      processExited = true;
+      if (cause) {
+        void reader.cancel().catch(() => {});
+      }
+    });
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = Buffer.from(value);
         if (total < maxBuffer) {
           chunks.push(chunk.subarray(0, maxBuffer - total));
         }
         total += chunk.byteLength;
-        if (total > maxBuffer) terminate("overflow");
-      });
-      stream.once("end", finish);
-      stream.once("close", finish);
-      stream.once("error", (error) => {
-        if (cause) finish();
-        else reject(error);
-      });
-    });
+        if (total > maxBuffer) {
+          terminate("overflow");
+          if (processExited) {
+            void reader.cancel().catch(() => {});
+          }
+        }
+      }
+    } catch (error) {
+      if (!cause) throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    return Buffer.concat(chunks, Math.min(total, maxBuffer)).toString("utf8");
   };
-
-  const exited = new Promise<{ exitCode: number; signalCode: NodeJS.Signals | null }>((resolve) => {
-    proc.once("close", (code, signal) => {
-      resolve({ exitCode: typeof code === "number" ? code : 1, signalCode: signal });
-    });
-  });
 
   try {
     const [stdout, stderr, exit] = await Promise.all([
       readCapped(proc.stdout),
       readCapped(proc.stderr),
-      exited,
+      proc.exited.then(
+        (exitCode) => ({
+          exitCode: typeof exitCode === "number" ? exitCode : 1,
+          signalCode: proc.signalCode,
+        }),
+        () => ({
+          exitCode: typeof proc.exitCode === "number" ? proc.exitCode : 1,
+          signalCode: proc.signalCode,
+        }),
+      ),
     ]);
 
-    if (spawnError) {
-      return { stdout, stderr, exitCode: 1, errorCode: spawnErrorCode(spawnError) };
-    }
     if (cause === "timeout") {
       return { stdout, stderr, exitCode: 124, errorCode: "TIMEOUT" };
     }

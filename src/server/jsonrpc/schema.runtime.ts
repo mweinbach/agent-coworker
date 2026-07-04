@@ -9,6 +9,12 @@ const runtimeDiagnosticsResultSchema = z
   .object({
     diagnostics: z
       .object({
+        startup: z
+          .object({
+            ready: z.boolean(),
+            error: z.string().optional(),
+          })
+          .strict(),
         sendQueue: z
           .object({
             queuedSends: z.number().int().nonnegative(),

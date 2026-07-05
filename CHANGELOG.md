@@ -4,6 +4,128 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.7 - 2026-07-05
+
+### Added
+
+- **Custom provider model IDs** (#198) — Added persistent custom model ID
+  storage with cross-process file locking, merged configured entries into
+  provider catalogs across OpenAI, Google, Anthropic, NVIDIA, Together,
+  Fireworks, Baseten, MiniMax, OpenCode, Bedrock, and Antigravity, and
+  exposed JSON-RPC add/delete controls. Configured custom IDs flow through
+  model metadata, runtime resolution, prompt loading, child-agent routing,
+  and persisted-session resume with conservative fallbacks and placeholder
+  builders (unknown cost/limits) instead of inheriting registry pricing.
+  Added a global model-preferences store with curated default-enabled
+  models for open-model providers (Nemotron 3 Ultra, MiniMax M3, GLM 5.2,
+  Kimi K2.6, DeepSeek V4 Pro/Flash), `setEnabled`/`resetEnabled` JSON-RPC
+  controls, and a per-provider Manage Models desktop dialog with
+  enable/disable checkboxes, search, reset-to-defaults, and custom model
+  add/remove. Pickers across desktop and mobile hide `enabled:false`
+  models while keeping the active default visible.
+- **Mermaid diagrams and inline images in chat markdown** — Fixed mermaid
+  fence rendering (forwards Streamdown's `data-block` marker for
+  `language-mermaid`), trimmed mermaid controls to fullscreen + pan/zoom
+  with theme-following dark/light mode, and added a `cowork-media:`
+  Electron protocol serving local image files with an extension allowlist,
+  traversal normalization, and workspace-root boundary. Markdown image
+  sources (absolute paths, `file://` URLs, workspace-relative paths, and
+  raw `<img>` srcs) are rewritten to `cowork-media` at the remark/rehype
+  stage with a constrained `DesktopMarkdownImage` renderer
+  (click-to-preview for local files, confirm-and-open for remote URLs,
+  file-chip fallback). System prompts now document mermaid and inline
+  image usage for charts, screenshots, and architecture sketches.
+- **Settings overhaul — Tool Access hub, subagents UX, per-workspace
+  subagent availability** (#196) — Rebuilt Tool Access as the unified hub
+  for installed plugins, marketplace installs, skills, all-layer MCP
+  servers (user/workspace/plugin/system) with icon + env/header editors,
+  flag-gated Codex connectors, and relocated Search settings. Added icon
+  metadata for MCP servers, marketplace entries, and plugin skills.
+  Retired the standalone Plugins/Skills views and catalog pages in favor
+  of Settings > Tool Access. Migrated Desktop, Updates, Developer, Usage,
+  Chats, Memory, and Subagents settings pages to shared `SettingsPrimitives`
+  with consistent header/section action buttons and floated section
+  headers. Added per-workspace availability overrides for global/built-in
+  subagents (`cowork/agentProfiles/workspaceAvailability/set`) so a
+  subagent can be disabled for a single workspace without editing the
+  global profile; overrides persist in the workspace
+  `agent-profiles/workspace-overrides.json` and drop out of effective
+  profiles and spawn resolution. The locked Main Agent profile stays
+  always available.
+
+### Changed
+
+- **Deferred server startup readiness** — The WebSocket server now starts
+  before managed runtime bootstrap, default global skill bootstrap, and
+  prompt preload complete, so clients can list/read/hydrate threads during
+  startup. Managed runtime setup and default global skill bootstrap run
+  concurrently, startup readiness is published through health/diagnostics,
+  and `turn/start`, `turn/steer`, and command execution are held until
+  readiness resolves. Session warmup now waits for readiness.
+
+### Fixed
+
+- **Reasoning effort selector stability** — Preserved the composer
+  reasoning effort during stale `session_config` hydration, preferred live
+  runtime reasoning metadata for active OpenAI-compatible threads, and
+  synced runtime reasoning effort on config ack instead of reordering
+  selector precedence. Added `resolveCurrentReasoningEffort` with
+  composer → config → runtime → default precedence (runtime-first for
+  OpenAI/codex-cli) and cleared stuck pending efforts when the server
+  settles a different value. Guards against Google's `dynamic` mode.
+- **Reasoning option reconciliation across model switches** — Switching a
+  live thread from a reasoning model (GPT-5) to a non-reasoning custom id
+  (gpt-4o) no longer forwards stale `reasoningEffort`/`reasoningSummary`/
+  `textVerbosity` (GPT-5-family-only) into the fallback runtime. Child
+  agents routed to a different non-reasoning model use their own default
+  effort instead of inheriting the parent's. Custom placeholders no longer
+  inherit the provider default's reasoning options unless the id is
+  reasoning-capable. o-series keeps reasoning but not verbosity.
+- **Custom and discovered model metadata fidelity** — Discovered models
+  keep cached `supportsImageInput`/`displayName`/`knowledgeCutoff` and
+  default reasoning effort on resume and during runtime turns instead of
+  downgrading to text-only placeholders. Catalog entries for custom-only
+  reasoning ids derive a reasoning block so the desktop reasoning selector
+  renders. `customModelIdLikelySupportsReasoning` defaults unproven custom
+  ids to non-reasoning for non-OpenAI providers. Discovery cache is
+  preferred over custom placeholder in strict selection and resume paths.
+  Bedrock discovery snapshots resolve under non-default auth homes.
+- **Cross-process model store locking** — Custom-model and
+  model-preference mutations now take a sidecar file lock with atomic
+  `owner.json` (O_EXCL) ownership; a slow-but-live owner surfaces as an
+  acquire timeout instead of a stale-takeover that reopens lost-update
+  races. JSON-RPC mutation capture outwaits the store lock plus a
+  write/emit margin so concurrent refreshes cannot settle a stale catalog.
+- **Image gates and workspace media boundary** — Attachment materialization
+  and the `read` tool gate visual content through a new
+  `modelSupportsImageInputSync` that resolves dynamic metadata (registry →
+  discovery cache → custom store), so discovered vision models are no
+  longer downgraded to text-only. `cowork-media` enforces the same
+  `resolveAllowedPath` boundary as file IPC handlers, and markdown image
+  resolution drops base-escaping relative paths instead of resolving
+  outside the workspace.
+- **Custom-model resume correctness** — Persisted sessions no longer
+  migrate a configured custom model to the provider default on resume.
+  `normalizeModelIdForProvider` accepts a configured custom ID even when it
+  also exists in another provider's registry. Thread `resolveAuthHomeDir`
+  through every sync model resolution caller (config, modelRouter,
+  ProviderAuthManager, SessionMetadataManager, openaiResponses/google
+  runtimes, prompt loading) so custom cross-registry IDs resolve under
+  non-default homedirs. Bedrock custom IDs missing from the static/cache
+  snapshot resume as placeholders.
+- **Manage Models UI reconciliation** — Optimistic checkbox state is
+  reconciled per-model on catalog refresh instead of wiping all in-flight
+  toggles, reset-to-defaults clears pending toggles immediately, and
+  failed `setEnabled` RPCs roll back the optimistic checkbox. The
+  all-disabled hint keys off `enabledModelCount` (custom + standard) so a
+  provider with all built-ins disabled but custom models enabled is no
+  longer mislabeled. Custom IDs colliding with catalog models keep
+  discovered metadata with the custom marker so clients can surface
+  removal. Disabled built-ins no longer show the `(custom)` suffix.
+- **Markdown table chrome** — Disabled Streamdown table controls in
+  desktop markdown and flattened its table wrapper so assistant tables
+  stay inside the message flow without extra card chrome.
+
 ## 1.2.6 - 2026-07-02
 
 ### Fixed

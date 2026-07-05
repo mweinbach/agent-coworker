@@ -1,15 +1,9 @@
-import { PackageIcon } from "lucide-react";
-import { useMemo } from "react";
-
-import { useAppStore } from "../../../app/store";
-import { SettingsEmptyState, SettingsPage } from "../SettingsPrimitives";
+import { SettingsPage } from "../SettingsPrimitives";
 import { ArchivedChatsPage } from "./ArchivedChatsPage";
-import { McpServersPage } from "./McpServersPage";
 import { MemoryPage } from "./MemoryPage";
-import { OpenAiNativeConnectorsPage } from "./OpenAiNativeConnectorsPage";
 import { ProvidersPage } from "./ProvidersPage";
-import { ToolAccessCatalogSections, useToolAccessCatalogWorkspaceId } from "./ToolAccessPage";
-import { SearchSettingsCard, WorkspacesPage } from "./WorkspacesPage";
+import { ToolAccessTabs } from "./ToolAccessPage";
+import { WorkspacesPage } from "./WorkspacesPage";
 
 export function ModelsSettingsPage() {
   return (
@@ -21,42 +15,9 @@ export function ModelsSettingsPage() {
 }
 
 export function ToolAccessSettingsPage() {
-  const openAiNativeConnectorsAvailable = useAppStore(
-    (s) => s.desktopFeatureFlags.openAiNativeConnectors === true,
-  );
-  const catalogWorkspaceId = useToolAccessCatalogWorkspaceId();
-  const workspaces = useAppStore((s) => s.workspaces);
-  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
-  const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
-  const workspace = useMemo(
-    () =>
-      catalogWorkspaceId
-        ? (workspaces.find((entry) => entry.id === catalogWorkspaceId) ?? null)
-        : null,
-    [workspaces, catalogWorkspaceId],
-  );
-
   return (
     <SettingsPage>
-      {catalogWorkspaceId ? (
-        <ToolAccessCatalogSections workspaceId={catalogWorkspaceId} />
-      ) : (
-        <SettingsEmptyState
-          icon={<PackageIcon />}
-          title="No workspaces yet"
-          description="Add a project or start a chat first to load plugin, skill, and MCP server catalogs."
-        />
-      )}
-      <McpServersPage />
-      {openAiNativeConnectorsAvailable ? <OpenAiNativeConnectorsPage /> : null}
-      {workspace ? (
-        <SearchSettingsCard
-          workspace={workspace}
-          updateWorkspaceDefaults={updateWorkspaceDefaults}
-          providerStatusByName={providerStatusByName}
-        />
-      ) : null}
-      <ProvidersPage surface="tools" />
+      <ToolAccessTabs />
     </SettingsPage>
   );
 }

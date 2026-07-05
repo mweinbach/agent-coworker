@@ -165,6 +165,93 @@ describe("MCP servers settings page", () => {
     }
   });
 
+  test("filterQuery narrows connector rows and shows a no-matches state", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace",
+              path: "/tmp/workspace",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              ...useAppStore.getState().workspaceRuntimeById["ws-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [
+                {
+                  name: "grep",
+                  transport: { type: "http", url: "https://mcp.grep.app" },
+                  enabled: true,
+                  source: "user",
+                  inherited: true,
+                  authMode: "none",
+                  authScope: "user",
+                  authMessage: "",
+                },
+                {
+                  name: "linear",
+                  transport: { type: "http", url: "https://mcp.linear.app/mcp" },
+                  enabled: true,
+                  source: "user",
+                  inherited: true,
+                  authMode: "none",
+                  authScope: "user",
+                  authMessage: "",
+                },
+              ],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage, { filterQuery: "Grep" }));
+      });
+
+      expect(container.textContent).toContain("grep");
+      expect(container.textContent).not.toContain("linear");
+
+      await act(async () => {
+        root.render(createElement(McpServersPage, { filterQuery: "zzz" }));
+      });
+
+      expect(container.textContent).not.toContain("grep");
+      expect(container.textContent).not.toContain("linear");
+      expect(container.textContent).toContain("No matches for “zzz”");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("edit icon opens the server editor without expanding inline details", async () => {
     const harness = setupJsdom({
       includeAnimationFrame: true,

@@ -60,7 +60,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
   toolAccess: {
     title: "Tool Access",
-    description: "External services, MCP servers, and local search tools Cowork can use.",
+    description: "Connect external tools and data sources.",
   },
   desktop: {
     title: "Desktop",
@@ -112,11 +112,11 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
   },
   openAiNativeConnectors: {
     title: "Tool Access",
-    description: "External services, MCP servers, and local search tools Cowork can use.",
+    description: "Connect external tools and data sources.",
   },
   mcp: {
     title: "Tool Access",
-    description: "External services, MCP servers, and local search tools Cowork can use.",
+    description: "Connect external tools and data sources.",
   },
   workspaces: {
     title: "Defaults",

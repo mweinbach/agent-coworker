@@ -41,6 +41,7 @@ import { confirmAction } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import type { MCPServerConfig } from "../../../lib/wsProtocol";
 import { EntityIcon, SettingsEmptyState, SettingsSection } from "../SettingsPrimitives";
+import { NoMatchesState } from "../toolAccess/catalogShared";
 import {
   buildServerFromDraft,
   type DraftState,
@@ -143,7 +144,7 @@ const LOCATION_OPTIONS: Array<{
   },
 ];
 
-export function McpServersPage() {
+export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = {}) {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
@@ -213,6 +214,14 @@ export function McpServersPage() {
         serverSortKey(left).localeCompare(serverSortKey(right)),
       ),
     [runtime?.mcpServers],
+  );
+  const normalizedFilter = filterQuery.trim().toLowerCase();
+  const visibleServers = useMemo(
+    () =>
+      normalizedFilter
+        ? servers.filter((server) => server.name.toLowerCase().includes(normalizedFilter))
+        : servers,
+    [servers, normalizedFilter],
   );
   const files = runtime?.mcpFiles ?? [];
   const warnings = runtime?.mcpWarnings ?? [];
@@ -709,8 +718,10 @@ export function McpServersPage() {
               }
             />
           </div>
+        ) : visibleServers.length === 0 ? (
+          <NoMatchesState query={filterQuery.trim()} />
         ) : null}
-        {servers.map((server) => {
+        {visibleServers.map((server) => {
           const serverKey = serverIdentityKey(server);
           const draftKey = workspace ? mcpCredentialDraftKey(workspace.id, server) : serverKey;
           const validation = validationByServerKey[serverKey];

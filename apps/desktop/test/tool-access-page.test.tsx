@@ -9,26 +9,186 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
-const { ToolAccessCatalogSections, useToolAccessCatalogWorkspaceId } = await import(
+const { ToolAccessTabs, useToolAccessCatalogWorkspaceId } = await import(
   "../src/ui/settings/pages/ToolAccessPage"
 );
 const { managementWorkspaceIdFor } = await import("../src/app/store.actions/skillPluginHelpers");
 mock.restore();
 
+type PluginCatalogEntry = import("../src/lib/wsProtocol").PluginCatalogEntry;
+type InstalledPluginEntry = Extract<PluginCatalogEntry, { installed: true }>;
+type MarketplacePluginEntry = Extract<PluginCatalogEntry, { installed: false }>;
+type SkillInstallationEntry = import("../src/lib/wsProtocol").SkillInstallationEntry;
+type MarketplaceSkillEntry = import("../src/lib/wsProtocol").MarketplaceSkillCatalogEntry;
+
 const PLUGIN_MUTATION_ERROR = "Plugin install failed: marketplace source hash mismatch.";
 const SKILL_MUTATION_ERROR = "Skill install failed: GitHub rate limit exceeded.";
 
-describe("tool access catalog sections", () => {
-  test("renders skill and plugin mutation errors and clears them on dismiss", async () => {
+function projectWorkspace(id: string) {
+  return {
+    id,
+    name: "Workspace",
+    path: `/tmp/${id}`,
+    workspaceKind: "project" as const,
+    createdAt: "2026-06-02T00:00:00.000Z",
+    lastOpenedAt: "2026-06-02T00:00:00.000Z",
+    defaultEnableMcp: true,
+    defaultBackupsEnabled: false,
+    yolo: false,
+  };
+}
+
+function installedPlugin(id: string, displayName: string, description = ""): InstalledPluginEntry {
+  return {
+    id,
+    name: id,
+    displayName,
+    description,
+    scope: "user",
+    discoveryKind: "marketplace",
+    warnings: [],
+    installed: true,
+    enabled: true,
+    rootDir: `/tmp/plugins/${id}`,
+    manifestPath: `/tmp/plugins/${id}/manifest.json`,
+    skillsPath: `/tmp/plugins/${id}/skills`,
+    skills: [],
+    mcpServers: [],
+    apps: [],
+  };
+}
+
+function marketplacePlugin(id: string, displayName: string): MarketplacePluginEntry {
+  return {
+    id,
+    name: id,
+    displayName,
+    description: "Shared team workflows.",
+    scope: "user",
+    discoveryKind: "marketplace",
+    installed: false,
+    enabled: false,
+    installSource: `https://github.com/example/cowork-plugins/tree/main/plugins/${id}`,
+    marketplace: { name: "example-marketplace", category: "Productivity" },
+    warnings: [],
+  };
+}
+
+function skillInstallation(installationId: string, name: string): SkillInstallationEntry {
+  return {
+    installationId,
+    name,
+    description: "",
+    scope: "global",
+    enabled: true,
+    writable: true,
+    managed: true,
+    effective: true,
+    state: "effective",
+    rootDir: `/tmp/skills/${name}`,
+    skillPath: `/tmp/skills/${name}/SKILL.md`,
+    path: `/tmp/skills/${name}`,
+    triggers: [],
+    descriptionSource: "frontmatter",
+    diagnostics: [],
+  };
+}
+
+function marketplaceSkill(id: string, displayName: string): MarketplaceSkillEntry {
+  return {
+    id,
+    name: id,
+    displayName,
+    description: "Generate images.",
+    category: "Creative",
+    scope: "user",
+    discoveryKind: "marketplace",
+    installed: false,
+    enabled: false,
+    installSource: `https://skills.sh/example/skills/${id}`,
+    marketplace: { name: "example-marketplace", category: "Creative" },
+    warnings: [],
+  };
+}
+
+function mcpServer(name: string) {
+  return {
+    name,
+    transport: { type: "http" as const, url: `https://${name}.example.test` },
+    enabled: true,
+    source: "user" as const,
+    inherited: true,
+    authMode: "none",
+    authScope: "user" as const,
+    authMessage: "",
+  };
+}
+
+function catalogActionMocks(previousState: ReturnType<typeof useAppStore.getState>) {
+  return {
+    refreshPluginsCatalog: mock(async () => {}) as typeof previousState.refreshPluginsCatalog,
+    refreshSkillsCatalog: mock(
+      async (_workspaceId?: string) => {},
+    ) as typeof previousState.refreshSkillsCatalog,
+    requestWorkspaceMcpServers: mock(
+      async (_workspaceId: string) => {},
+    ) as typeof previousState.requestWorkspaceMcpServers,
+  };
+}
+
+function findTab(harness: ReturnType<typeof setupJsdom>, label: string): HTMLButtonElement {
+  const tab = Array.from(harness.dom.window.document.querySelectorAll('[role="tab"]')).find((el) =>
+    (el.textContent ?? "").startsWith(label),
+  );
+  if (!(tab instanceof harness.dom.window.HTMLButtonElement)) {
+    throw new Error(`missing tab ${label}`);
+  }
+  return tab;
+}
+
+async function selectTab(harness: ReturnType<typeof setupJsdom>, label: string) {
+  const tab = findTab(harness, label);
+  await act(async () => {
+    tab.dispatchEvent(
+      new harness.dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+    );
+    tab.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+  });
+}
+
+type InputChangeProps = {
+  onChange?: (event: { target: HTMLInputElement; currentTarget: HTMLInputElement }) => void;
+};
+
+function setInputValue(
+  harness: ReturnType<typeof setupJsdom>,
+  input: HTMLInputElement,
+  value: string,
+) {
+  const setter = Object.getOwnPropertyDescriptor(
+    harness.dom.window.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(input, value);
+  // The Bun preload imports React before jsdom exists, so direct DOM events
+  // alone do not reliably drive controlled fields; call the React prop too.
+  const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+  const props = propsKey
+    ? ((input as unknown as Record<string, unknown>)[propsKey] as InputChangeProps)
+    : {};
+  props.onChange?.({ target: input, currentTarget: input });
+  input.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+}
+
+describe("tool access tabs", () => {
+  test("renders mutation error banners in the tab shell and clears them on dismiss", async () => {
     const previousState = useAppStore.getState();
-    const refreshPluginsCatalogMock = mock(async () => {});
-    const refreshSkillsCatalogMock = mock(async (_workspaceId?: string) => {});
 
     useAppStore.setState({
       ...previousState,
-      refreshPluginsCatalog:
-        refreshPluginsCatalogMock as typeof previousState.refreshPluginsCatalog,
-      refreshSkillsCatalog: refreshSkillsCatalogMock as typeof previousState.refreshSkillsCatalog,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
       workspaceRuntimeById: {
         ...previousState.workspaceRuntimeById,
         "ws-1": {
@@ -50,10 +210,11 @@ describe("tool access catalog sections", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(ToolAccessCatalogSections, { workspaceId: "ws-1" }));
+        root.render(createElement(ToolAccessTabs));
       });
 
       const bodyText = () => harness.dom.window.document.body.textContent ?? "";
+      // Banners live in the shell, so they are visible from the default tab.
       expect(bodyText()).toContain("Install failed");
       expect(bodyText()).toContain(PLUGIN_MUTATION_ERROR);
       expect(bodyText()).toContain(SKILL_MUTATION_ERROR);
@@ -102,10 +263,226 @@ describe("tool access catalog sections", () => {
     }
   });
 
+  test("renders tabs with counts and gates the Apps tab behind the feature flag", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      desktopFeatureFlags: {
+        ...previousState.desktopFeatureFlags,
+        openAiNativeConnectors: false,
+      },
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            plugins: [
+              installedPlugin("alpha", "Alpha Plugin"),
+              installedPlugin("beta", "Beta Plugin"),
+            ],
+            availablePlugins: [marketplacePlugin("cursor-team-kit", "Cursor Team Kit")],
+            warnings: [],
+          },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [skillInstallation("skill-1", "skill-one")],
+            availableSkills: [marketplaceSkill("imagegen", "Imagegen")],
+          },
+          mcpServers: [mcpServer("grep")],
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      expect(findTab(harness, "Plugins").textContent).toBe("Plugins2");
+      expect(findTab(harness, "Skills").textContent).toBe("Skills1");
+      expect(findTab(harness, "Connectors").textContent).toBe("Connectors1");
+      expect(findTab(harness, "Marketplace").textContent).toBe("Marketplace2");
+      // The Search tab has no count.
+      expect(findTab(harness, "Search").textContent).toBe("Search");
+      expect(() => findTab(harness, "Apps")).toThrow("missing tab Apps");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          desktopFeatureFlags: {
+            ...state.desktopFeatureFlags,
+            openAiNativeConnectors: true,
+          },
+        }));
+      });
+
+      expect(findTab(harness, "Apps")).toBeDefined();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("switching tabs swaps the active section content", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            plugins: [installedPlugin("alpha", "Alpha Plugin")],
+            availablePlugins: [],
+            warnings: [],
+          },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [skillInstallation("skill-1", "skill-one")],
+            availableSkills: [],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      const bodyText = () => harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText()).toContain("Alpha Plugin");
+      expect(bodyText()).not.toContain("skill-one");
+
+      await selectTab(harness, "Skills");
+
+      expect(bodyText()).toContain("skill-one");
+      expect(bodyText()).not.toContain("Alpha Plugin");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("search input filters the installed plugins list", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            plugins: [
+              installedPlugin("alpha", "Alpha Plugin"),
+              installedPlugin("beta", "Beta Plugin"),
+            ],
+            availablePlugins: [],
+            warnings: [],
+          },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [],
+            availableSkills: [],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      const searchInput = harness.dom.window.document.querySelector(
+        'input[aria-label="Search plugins…"]',
+      );
+      if (!(searchInput instanceof harness.dom.window.HTMLInputElement)) {
+        throw new Error("missing plugins search input");
+      }
+
+      const bodyText = () => harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText()).toContain("Alpha Plugin");
+      expect(bodyText()).toContain("Beta Plugin");
+
+      await act(async () => {
+        setInputValue(harness, searchInput, "alpha");
+      });
+
+      expect(bodyText()).toContain("Alpha Plugin");
+      expect(bodyText()).not.toContain("Beta Plugin");
+
+      await act(async () => {
+        setInputValue(harness, searchInput, "zzz");
+      });
+
+      expect(bodyText()).not.toContain("Alpha Plugin");
+      expect(bodyText()).not.toContain("Beta Plugin");
+      expect(bodyText()).toContain("No matches for “zzz”");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("chat-only workspaces still anchor the catalog and marketplace installs", async () => {
     const previousState = useAppStore.getState();
-    const refreshPluginsCatalogMock = mock(async () => {});
-    const refreshSkillsCatalogMock = mock(async (_workspaceId?: string) => {});
     const installPluginsMock = mock(
       async (_sourceInput: string, _targetScope: "workspace" | "user") => {},
     );
@@ -127,11 +504,9 @@ describe("tool access catalog sections", () => {
 
     useAppStore.setState({
       ...previousState,
+      ...catalogActionMocks(previousState),
       workspaces: [chatWorkspace],
       selectedWorkspaceId: "chat-1",
-      refreshPluginsCatalog:
-        refreshPluginsCatalogMock as typeof previousState.refreshPluginsCatalog,
-      refreshSkillsCatalog: refreshSkillsCatalogMock as typeof previousState.refreshSkillsCatalog,
       installPlugins: installPluginsMock as typeof previousState.installPlugins,
       installSkills: installSkillsMock as typeof previousState.installSkills,
       workspaceRuntimeById: {
@@ -140,44 +515,14 @@ describe("tool access catalog sections", () => {
           ...defaultWorkspaceRuntime(),
           pluginsCatalog: {
             plugins: [],
-            availablePlugins: [
-              {
-                id: "cursor-team-kit",
-                name: "cursor-team-kit",
-                displayName: "Cursor Team Kit",
-                description: "Shared team workflows.",
-                scope: "user",
-                discoveryKind: "marketplace",
-                installed: false,
-                enabled: false,
-                installSource:
-                  "https://github.com/example/cowork-plugins/tree/main/plugins/cursor-team-kit",
-                marketplace: { name: "example-marketplace", category: "Productivity" },
-                warnings: [],
-              },
-            ],
+            availablePlugins: [marketplacePlugin("cursor-team-kit", "Cursor Team Kit")],
             warnings: [],
           },
           skillsCatalog: {
             scopes: [],
             effectiveSkills: [],
             installations: [],
-            availableSkills: [
-              {
-                id: "imagegen",
-                name: "imagegen",
-                displayName: "Imagegen",
-                description: "Generate images.",
-                category: "Creative",
-                scope: "user",
-                discoveryKind: "marketplace",
-                installed: false,
-                enabled: false,
-                installSource: "https://skills.sh/example/skills/imagegen",
-                marketplace: { name: "example-marketplace", category: "Creative" },
-                warnings: [],
-              },
-            ],
+            availableSkills: [marketplaceSkill("imagegen", "Imagegen")],
           },
         },
       },
@@ -186,13 +531,6 @@ describe("tool access catalog sections", () => {
     // The store-side anchor used by plugin/skill actions resolves to the chat
     // workspace instead of null, so installs are no longer silent no-ops.
     expect(managementWorkspaceIdFor(useAppStore.getState)).toBe("chat-1");
-
-    const CatalogHarness = () => {
-      const workspaceId = useToolAccessCatalogWorkspaceId();
-      return workspaceId
-        ? createElement(ToolAccessCatalogSections, { workspaceId })
-        : createElement("div", null, "catalog-empty-state");
-    };
 
     const harness = setupJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
@@ -205,12 +543,14 @@ describe("tool access catalog sections", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(CatalogHarness));
+        root.render(createElement(ToolAccessTabs));
       });
 
+      expect(harness.dom.window.document.body.textContent ?? "").not.toContain("No workspaces yet");
+
+      await selectTab(harness, "Marketplace");
+
       const bodyText = harness.dom.window.document.body.textContent ?? "";
-      expect(bodyText).not.toContain("catalog-empty-state");
-      expect(bodyText).toContain("Marketplace");
       expect(bodyText).toContain("Cursor Team Kit");
       expect(bodyText).toContain("Imagegen");
 
@@ -249,8 +589,6 @@ describe("tool access catalog sections", () => {
 
   test("marketplace install button attaches a rejection handler for failed installs", async () => {
     const previousState = useAppStore.getState();
-    const refreshPluginsCatalogMock = mock(async () => {});
-    const refreshSkillsCatalogMock = mock(async (_workspaceId?: string) => {});
     let rejectionHandled = false;
     const installPluginsMock = mock(
       (_sourceInput: string, _targetScope: "workspace" | "user") =>
@@ -264,9 +602,9 @@ describe("tool access catalog sections", () => {
 
     useAppStore.setState({
       ...previousState,
-      refreshPluginsCatalog:
-        refreshPluginsCatalogMock as typeof previousState.refreshPluginsCatalog,
-      refreshSkillsCatalog: refreshSkillsCatalogMock as typeof previousState.refreshSkillsCatalog,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
       installPlugins: installPluginsMock as typeof previousState.installPlugins,
       workspaceRuntimeById: {
         ...previousState.workspaceRuntimeById,
@@ -274,22 +612,7 @@ describe("tool access catalog sections", () => {
           ...defaultWorkspaceRuntime(),
           pluginsCatalog: {
             plugins: [],
-            availablePlugins: [
-              {
-                id: "cursor-team-kit",
-                name: "cursor-team-kit",
-                displayName: "Cursor Team Kit",
-                description: "Shared team workflows.",
-                scope: "user",
-                discoveryKind: "marketplace",
-                installed: false,
-                enabled: false,
-                installSource:
-                  "https://github.com/example/cowork-plugins/tree/main/plugins/cursor-team-kit",
-                marketplace: { name: "example-marketplace", category: "Productivity" },
-                warnings: [],
-              },
-            ],
+            availablePlugins: [marketplacePlugin("cursor-team-kit", "Cursor Team Kit")],
             warnings: [],
           },
           skillsCatalog: {
@@ -313,8 +636,10 @@ describe("tool access catalog sections", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(ToolAccessCatalogSections, { workspaceId: "ws-1" }));
+        root.render(createElement(ToolAccessTabs));
       });
+
+      await selectTab(harness, "Marketplace");
 
       const installButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (button) => button.textContent?.trim() === "Install",
@@ -332,6 +657,55 @@ describe("tool access catalog sections", () => {
         "user",
       );
       expect(rejectionHandled).toBe(true);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("no-workspace state keeps the tab shell with catalog empty states", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [],
+      selectedWorkspaceId: null,
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      const AnchorHarness = () => {
+        const workspaceId = useToolAccessCatalogWorkspaceId();
+        return createElement(
+          "div",
+          null,
+          createElement("span", null, workspaceId ?? "anchor-null"),
+          createElement(ToolAccessTabs),
+        );
+      };
+
+      await act(async () => {
+        root.render(createElement(AnchorHarness));
+      });
+
+      const bodyText = harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText).toContain("anchor-null");
+      expect(findTab(harness, "Plugins")).toBeDefined();
+      expect(bodyText).toContain("No workspaces yet");
     } finally {
       if (root) {
         await act(async () => {

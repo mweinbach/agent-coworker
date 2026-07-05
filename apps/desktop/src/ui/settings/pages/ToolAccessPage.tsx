@@ -1,472 +1,229 @@
-import { DownloadIcon, PackageIcon, RefreshCwIcon, SparklesIcon, StoreIcon } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { PackageIcon, SearchIcon } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { resolveManagementWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
-import { Skeleton } from "../../../components/ui/skeleton";
-import { Switch } from "../../../components/ui/switch";
-import type {
-  MarketplaceSkillCatalogEntry,
-  PluginCatalogEntry,
-  SkillInstallationEntry,
-} from "../../../lib/wsProtocol";
+import { Input } from "../../../components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
-import {
-  EntityIcon,
-  SettingsEmptyState,
-  SettingsSection,
-  SettingsStatusPill,
-} from "../SettingsPrimitives";
-import { ImportDialog } from "../toolAccess/ImportDialog";
-import { InstallPluginDialog } from "../toolAccess/InstallPluginDialog";
-import { InstallSkillDialog } from "../toolAccess/InstallSkillDialog";
-import { PluginDetailDialog } from "../toolAccess/PluginDetailDialog";
-import { SkillDetailDialog } from "../toolAccess/SkillDetailDialog";
-import { scopeLabel } from "../toolAccess/skillUtils";
+import { SettingsEmptyState, SettingsStatusPill } from "../SettingsPrimitives";
+import { MarketplaceSection } from "../toolAccess/MarketplaceSection";
+import { PluginsSection } from "../toolAccess/PluginsSection";
+import { SkillsSection } from "../toolAccess/SkillsSection";
+import { McpServersPage } from "./McpServersPage";
+import { OpenAiNativeConnectorsPage } from "./OpenAiNativeConnectorsPage";
+import { ProvidersPage } from "./ProvidersPage";
+import { SearchSettingsCard } from "./WorkspacesPage";
 
-type InstalledPluginEntry = Extract<PluginCatalogEntry, { installed: true }>;
-type MarketplacePluginEntry = Extract<PluginCatalogEntry, { installed: false }>;
+const TOOL_ACCESS_TAB_IDS = [
+  "plugins",
+  "skills",
+  "connectors",
+  "marketplace",
+  "apps",
+  "search",
+] as const;
 
-function pluginIcon(plugin: PluginCatalogEntry): string | undefined {
-  return plugin.interface?.logo ?? plugin.interface?.composerIcon;
+type ToolAccessTabId = (typeof TOOL_ACCESS_TAB_IDS)[number];
+
+function isToolAccessTabId(value: string): value is ToolAccessTabId {
+  return (TOOL_ACCESS_TAB_IDS as readonly string[]).includes(value);
 }
 
-function skillIcon(entry: {
-  interface?: { iconSmall?: string; iconLarge?: string };
-}): string | undefined {
-  return entry.interface?.iconSmall ?? entry.interface?.iconLarge;
+/** Tabs where the shell search input is hidden because the tab owns its own search UI (or has none). */
+const TAB_SEARCH_PLACEHOLDER: Record<ToolAccessTabId, string | null> = {
+  plugins: "Search plugins…",
+  skills: "Search skills…",
+  connectors: "Search connectors…",
+  marketplace: "Search marketplace…",
+  apps: null,
+  search: null,
+};
+
+function MutationErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3">
+      <SettingsStatusPill tone="danger">Install failed</SettingsStatusPill>
+      <span className="min-w-0 flex-1 truncate text-xs text-destructive">{message}</span>
+      <Button size="sm" variant="outline" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </div>
+  );
 }
 
-function skillStateLabel(state: SkillInstallationEntry["state"]): string {
-  switch (state) {
-    case "effective":
-      return "Active";
-    case "disabled":
-      return "Disabled";
-    case "shadowed":
-      return "Shadowed";
-    case "invalid":
-      return "Invalid";
-    default:
-      return state;
-  }
+function CatalogEmptyState() {
+  return (
+    <SettingsEmptyState
+      icon={<PackageIcon />}
+      title="No workspaces yet"
+      description="Add a project or start a chat first to load plugin, skill, and MCP server catalogs."
+    />
+  );
 }
 
-export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string }) {
-  const runtime = useAppStore((s) => s.workspaceRuntimeById[workspaceId]);
+export function ToolAccessTabs() {
+  const workspaceId = useToolAccessCatalogWorkspaceId();
+  const openAiNativeConnectorsAvailable = useAppStore(
+    (s) => s.desktopFeatureFlags.openAiNativeConnectors === true,
+  );
+  const workspaces = useAppStore((s) => s.workspaces);
+  const runtime = useAppStore((s) =>
+    workspaceId ? s.workspaceRuntimeById[workspaceId] : undefined,
+  );
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const refreshPluginsCatalog = useAppStore((s) => s.refreshPluginsCatalog);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
-  const selectPlugin = useAppStore((s) => s.selectPlugin);
-  const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
-  const enablePlugin = useAppStore((s) => s.enablePlugin);
-  const disablePlugin = useAppStore((s) => s.disablePlugin);
-  const enableSkillInstallation = useAppStore((s) => s.enableSkillInstallation);
-  const disableSkillInstallation = useAppStore((s) => s.disableSkillInstallation);
-  const installPlugins = useAppStore((s) => s.installPlugins);
-  const installSkills = useAppStore((s) => s.installSkills);
+  const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
   const dismissPluginMutationError = useAppStore((s) => s.dismissPluginMutationError);
   const dismissSkillMutationError = useAppStore((s) => s.dismissSkillMutationError);
 
+  const [activeTab, setActiveTab] = useState<ToolAccessTabId>("plugins");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Load every catalog up front so tab counts are populated regardless of
+  // which tab is active. Sections don't refetch on mount; the Connectors tab
+  // re-requests through its own anchor, which is an idempotent read.
   useEffect(() => {
+    if (!workspaceId) return;
     void refreshPluginsCatalog();
     void refreshSkillsCatalog(workspaceId);
-  }, [workspaceId, refreshPluginsCatalog, refreshSkillsCatalog]);
+    void requestWorkspaceMcpServers(workspaceId);
+  }, [workspaceId, refreshPluginsCatalog, refreshSkillsCatalog, requestWorkspaceMcpServers]);
+
+  const workspace = useMemo(
+    () => (workspaceId ? (workspaces.find((entry) => entry.id === workspaceId) ?? null) : null),
+    [workspaces, workspaceId],
+  );
 
   const pluginsCatalog = runtime?.pluginsCatalog ?? null;
   const skillsCatalog = runtime?.skillsCatalog ?? null;
-  const pluginsLoading = runtime?.pluginsLoading ?? false;
-  const skillsLoading = runtime?.skillCatalogLoading ?? false;
-  const pluginsError = runtime?.pluginsError ?? null;
-  const skillsError = runtime?.skillCatalogError ?? null;
+  const mcpServerCount = runtime?.mcpServers.length ?? 0;
+  const appsCount = runtime?.openAiNativeConnectors.length ?? 0;
   const pluginMutationError = runtime?.pluginMutationError ?? null;
   const skillMutationError = runtime?.skillMutationError ?? null;
-  const pluginPendingKeys = runtime?.pluginMutationPendingKeys ?? {};
-  const skillPendingKeys = runtime?.skillMutationPendingKeys ?? {};
 
-  const installedPlugins = useMemo(() => {
-    return [...(pluginsCatalog?.plugins ?? [])].sort((left, right) =>
-      left.displayName.localeCompare(right.displayName),
-    );
-  }, [pluginsCatalog]);
+  // `null` means "not loaded yet" and hides the count in the tab label. The
+  // connectors/apps lists have no explicit loaded flag, so an empty list stays
+  // countless instead of flashing a misleading zero.
+  const tabCounts: Record<ToolAccessTabId, number | null> = {
+    plugins: pluginsCatalog ? pluginsCatalog.plugins.length : null,
+    skills: skillsCatalog ? skillsCatalog.installations.length : null,
+    connectors: mcpServerCount > 0 ? mcpServerCount : null,
+    marketplace:
+      pluginsCatalog && skillsCatalog
+        ? pluginsCatalog.availablePlugins.length + skillsCatalog.availableSkills.length
+        : null,
+    apps: appsCount > 0 ? appsCount : null,
+    search: null,
+  };
 
-  const availablePlugins = useMemo(() => {
-    return [...(pluginsCatalog?.availablePlugins ?? [])].sort((left, right) =>
-      left.displayName.localeCompare(right.displayName),
-    );
-  }, [pluginsCatalog]);
+  const tabs: Array<{ id: ToolAccessTabId; label: string }> = [
+    { id: "plugins", label: "Plugins" },
+    { id: "skills", label: "Skills" },
+    { id: "connectors", label: "Connectors" },
+    { id: "marketplace", label: "Marketplace" },
+    ...(openAiNativeConnectorsAvailable ? [{ id: "apps" as const, label: "Apps" }] : []),
+    { id: "search", label: "Search" },
+  ];
 
-  const skillInstallations = useMemo(() => {
-    return [...(skillsCatalog?.installations ?? [])].sort((left, right) => {
-      const leftActive = left.state === "effective" ? 0 : 1;
-      const rightActive = right.state === "effective" ? 0 : 1;
-      if (leftActive !== rightActive) return leftActive - rightActive;
-      return `${left.name}:${left.scope}:${left.installationId}`.localeCompare(
-        `${right.name}:${right.scope}:${right.installationId}`,
-      );
-    });
-  }, [skillsCatalog]);
+  const effectiveTab: ToolAccessTabId = tabs.some((tab) => tab.id === activeTab)
+    ? activeTab
+    : "plugins";
+  const searchPlaceholder = TAB_SEARCH_PLACEHOLDER[effectiveTab];
 
-  const availableSkills = useMemo(() => {
-    return [...(skillsCatalog?.availableSkills ?? [])].sort((left, right) =>
-      left.displayName.localeCompare(right.displayName),
-    );
-  }, [skillsCatalog]);
-
-  const pluginInstallPending = Object.keys(pluginPendingKeys).some((key) =>
-    key.startsWith("plugin:install:"),
-  );
-  const skillInstallPending = Object.keys(skillPendingKeys).some((key) =>
-    key.startsWith("install:"),
-  );
-
-  const pluginTogglePending = (plugin: InstalledPluginEntry) =>
-    pluginPendingKeys[`plugin:enable:${plugin.scope}:${plugin.id}`] === true ||
-    pluginPendingKeys[`plugin:disable:${plugin.scope}:${plugin.id}`] === true;
-
-  const skillTogglePending = (installation: SkillInstallationEntry) =>
-    skillPendingKeys[`enable:${installation.installationId}`] === true ||
-    skillPendingKeys[`disable:${installation.installationId}`] === true;
-
-  const marketplaceLoading =
-    (pluginsLoading && pluginsCatalog === null) || (skillsLoading && skillsCatalog === null);
-  const marketplaceEmpty = availablePlugins.length === 0 && availableSkills.length === 0;
+  // Only the active entry mounts (see the single TabsContent below), so
+  // building the descriptors for every tab on each render stays cheap.
+  const tabContent: Record<ToolAccessTabId, ReactNode> = {
+    plugins: workspaceId ? (
+      <PluginsSection workspaceId={workspaceId} filterQuery={searchQuery} />
+    ) : (
+      <CatalogEmptyState />
+    ),
+    skills: workspaceId ? (
+      <SkillsSection workspaceId={workspaceId} filterQuery={searchQuery} />
+    ) : (
+      <CatalogEmptyState />
+    ),
+    connectors: <McpServersPage filterQuery={searchQuery} />,
+    marketplace: workspaceId ? (
+      <MarketplaceSection workspaceId={workspaceId} filterQuery={searchQuery} />
+    ) : (
+      <CatalogEmptyState />
+    ),
+    apps: <OpenAiNativeConnectorsPage />,
+    search: (
+      <div className="flex flex-col gap-5">
+        {workspace ? (
+          <SearchSettingsCard
+            workspace={workspace}
+            updateWorkspaceDefaults={updateWorkspaceDefaults}
+            providerStatusByName={providerStatusByName}
+          />
+        ) : null}
+        <ProvidersPage surface="tools" />
+      </div>
+    ),
+  };
 
   return (
-    <InlineErrorBoundary label="The plugin and skill catalogs couldn't be loaded.">
-      <SettingsSection
-        title="Plugins"
-        description="Installed plugin bundles of skills, MCP servers, and apps. Click a plugin for details, updates, and removal."
-        action={
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void refreshPluginsCatalog()}
-            >
-              <RefreshCwIcon data-icon="inline-start" />
-              Refresh
-            </Button>
-            <ImportDialog workspaceId={workspaceId} kind="plugin" />
-            <InstallPluginDialog workspaceId={workspaceId} />
-          </>
-        }
+    <InlineErrorBoundary label="The tool access settings couldn't be loaded.">
+      <Tabs
+        value={effectiveTab}
+        onValueChange={(value) => {
+          if (isToolAccessTabId(value)) setActiveTab(value);
+        }}
+        className="gap-4"
       >
-        {pluginsError ? (
-          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <SettingsStatusPill tone="danger">Connection issue</SettingsStatusPill>
-            <span className="min-w-0 flex-1 truncate text-xs text-destructive">{pluginsError}</span>
-            <Button size="sm" variant="outline" onClick={() => void refreshPluginsCatalog()}>
-              Retry
-            </Button>
-          </div>
-        ) : null}
-        {pluginsLoading && pluginsCatalog === null ? (
-          <div className="space-y-3 px-4 py-3.5">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-          </div>
-        ) : installedPlugins.length === 0 && !pluginsError ? (
-          <div className="p-4">
-            <SettingsEmptyState
-              icon={<PackageIcon />}
-              title="No plugins installed"
-              description="Install a plugin from the marketplace below, a GitHub URL, or import one from another tool."
-            />
-          </div>
-        ) : (
-          installedPlugins.map((plugin) => {
-            const togglePending = pluginTogglePending(plugin);
-            return (
-              <div
-                key={`${plugin.scope}:${plugin.id}`}
-                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
-              >
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  onClick={() => void selectPlugin(plugin.id, plugin.scope)}
-                >
-                  <EntityIcon src={pluginIcon(plugin)} name={plugin.displayName} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="truncate text-sm font-medium text-foreground">
-                        {plugin.displayName}
-                      </span>
-                      {plugin.updateAvailable ? (
-                        <SettingsStatusPill tone="warning">Update available</SettingsStatusPill>
-                      ) : null}
-                      {!plugin.enabled ? (
-                        <SettingsStatusPill tone="neutral">Disabled</SettingsStatusPill>
-                      ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <TabsList>
+            {tabs.map((tab) => {
+              const count = tabCounts[tab.id];
+              return (
+                <TabsTrigger key={tab.id} value={tab.id}>
+                  {tab.label}
+                  {count !== null ? (
+                    <span className="text-xs font-normal tabular-nums text-muted-foreground">
+                      {count}
                     </span>
-                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                      {plugin.interface?.shortDescription || plugin.description}
-                    </span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground">
-                      {plugin.skills.length} skill{plugin.skills.length === 1 ? "" : "s"}
-                      {" · "}
-                      {plugin.mcpServers.length} MCP server
-                      {plugin.mcpServers.length === 1 ? "" : "s"}
-                      {" · "}
-                      {plugin.scope === "workspace" ? "Workspace" : "Library"}
-                      {plugin.marketplace?.category ? ` · ${plugin.marketplace.category}` : ""}
-                    </span>
-                  </span>
-                </button>
-                <Switch
-                  checked={plugin.enabled}
-                  disabled={togglePending}
-                  aria-label={`Enable ${plugin.displayName}`}
-                  onCheckedChange={(enabled) => {
-                    if (enabled) {
-                      void enablePlugin(plugin.id, plugin.scope);
-                    } else {
-                      void disablePlugin(plugin.id, plugin.scope);
-                    }
-                  }}
-                />
-              </div>
-            );
-          })
-        )}
-      </SettingsSection>
-
-      <SettingsSection
-        title="Marketplace"
-        description="Plugins and skills available to install from configured marketplaces."
-      >
-        {pluginMutationError ? (
-          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <SettingsStatusPill tone="danger">Install failed</SettingsStatusPill>
-            <span className="min-w-0 flex-1 truncate text-xs text-destructive">
-              {pluginMutationError}
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => dismissPluginMutationError(workspaceId)}
-            >
-              Dismiss
-            </Button>
-          </div>
-        ) : null}
-        {skillMutationError ? (
-          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <SettingsStatusPill tone="danger">Install failed</SettingsStatusPill>
-            <span className="min-w-0 flex-1 truncate text-xs text-destructive">
-              {skillMutationError}
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => dismissSkillMutationError(workspaceId)}
-            >
-              Dismiss
-            </Button>
-          </div>
-        ) : null}
-        <div className="px-4 py-3.5">
-          {marketplaceLoading ? (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              <Skeleton className="h-28 w-full" />
-              <Skeleton className="h-28 w-full" />
-              <Skeleton className="h-28 w-full" />
+                  ) : null}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+          {searchPlaceholder ? (
+            <div className="relative">
+              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={searchPlaceholder}
+                aria-label={searchPlaceholder}
+                className="h-8 w-56 pl-8"
+              />
             </div>
-          ) : marketplaceEmpty ? (
-            <SettingsEmptyState
-              icon={<StoreIcon />}
-              title="Nothing left to install"
-              description="Every marketplace plugin and skill is already installed, or no marketplace is configured."
-            />
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {availablePlugins.map((plugin: MarketplacePluginEntry) => (
-                <article
-                  key={`plugin:${plugin.id}`}
-                  className="flex min-w-0 flex-col gap-2.5 rounded-lg border border-border/55 bg-background/45 p-3.5"
-                >
-                  <div className="flex items-start gap-3">
-                    <EntityIcon src={pluginIcon(plugin)} name={plugin.displayName} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {plugin.displayName}
-                      </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        Plugin
-                        {plugin.marketplace.category ? ` · ${plugin.marketplace.category}` : ""}
-                      </div>
-                    </div>
-                  </div>
-                  <p className="line-clamp-2 flex-1 text-xs text-muted-foreground">
-                    {plugin.interface?.shortDescription || plugin.description}
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="self-start"
-                    disabled={pluginInstallPending}
-                    onClick={() =>
-                      void installPlugins(plugin.installSource, "user").catch(() => {
-                        // Failures surface via the `pluginMutationError` banner above.
-                      })
-                    }
-                  >
-                    <DownloadIcon data-icon="inline-start" />
-                    Install
-                  </Button>
-                </article>
-              ))}
-              {availableSkills.map((skill: MarketplaceSkillCatalogEntry) => (
-                <article
-                  key={`skill:${skill.id}`}
-                  className="flex min-w-0 flex-col gap-2.5 rounded-lg border border-border/55 bg-background/45 p-3.5"
-                >
-                  <div className="flex items-start gap-3">
-                    <EntityIcon src={skillIcon(skill)} name={skill.displayName} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {skill.interface?.displayName || skill.displayName}
-                      </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        Skill{skill.category ? ` · ${skill.category}` : ""}
-                      </div>
-                    </div>
-                  </div>
-                  <p className="line-clamp-2 flex-1 text-xs text-muted-foreground">
-                    {skill.interface?.shortDescription || skill.description}
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="self-start"
-                    disabled={skillInstallPending}
-                    onClick={() =>
-                      void installSkills(skill.installSource, "global").catch(() => {
-                        // Failures surface via the `skillMutationError` banner above.
-                      })
-                    }
-                  >
-                    <DownloadIcon data-icon="inline-start" />
-                    Install
-                  </Button>
-                </article>
-              ))}
-            </div>
-          )}
+          ) : null}
         </div>
-      </SettingsSection>
 
-      <SettingsSection
-        title="Skills"
-        description="Installed skills across workspace, library, and plugin scopes. Click a skill for details, updates, and removal."
-        action={
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void refreshSkillsCatalog(workspaceId)}
-            >
-              <RefreshCwIcon data-icon="inline-start" />
-              Refresh
-            </Button>
-            <ImportDialog workspaceId={workspaceId} kind="skill" />
-            <InstallSkillDialog workspaceId={workspaceId} />
-          </>
-        }
-      >
-        {skillsError ? (
-          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <SettingsStatusPill tone="danger">Connection issue</SettingsStatusPill>
-            <span className="min-w-0 flex-1 truncate text-xs text-destructive">{skillsError}</span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void refreshSkillsCatalog(workspaceId)}
-            >
-              Retry
-            </Button>
-          </div>
+        {workspaceId && pluginMutationError ? (
+          <MutationErrorBanner
+            message={pluginMutationError}
+            onDismiss={() => dismissPluginMutationError(workspaceId)}
+          />
         ) : null}
-        {skillsLoading && skillsCatalog === null ? (
-          <div className="space-y-3 px-4 py-3.5">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-          </div>
-        ) : skillInstallations.length === 0 && !skillsError ? (
-          <div className="p-4">
-            <SettingsEmptyState
-              icon={<SparklesIcon />}
-              title="No skills installed"
-              description="Install a skill from the marketplace above, a GitHub URL, or import one from another tool."
-            />
-          </div>
-        ) : (
-          skillInstallations.map((installation) => {
-            const displayName = installation.interface?.displayName || installation.name;
-            const togglePending = skillTogglePending(installation);
-            const canToggle = installation.writable && !installation.plugin;
-            return (
-              <div
-                key={installation.installationId}
-                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
-              >
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  onClick={() => void selectSkillInstallation(installation.installationId)}
-                >
-                  <EntityIcon src={skillIcon(installation)} name={displayName} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="truncate text-sm font-medium text-foreground">
-                        {displayName}
-                      </span>
-                      {installation.state !== "effective" ? (
-                        <SettingsStatusPill
-                          tone={installation.state === "invalid" ? "danger" : "neutral"}
-                        >
-                          {skillStateLabel(installation.state)}
-                        </SettingsStatusPill>
-                      ) : null}
-                      {installation.updateAvailable ? (
-                        <SettingsStatusPill tone="warning">Update available</SettingsStatusPill>
-                      ) : null}
-                    </span>
-                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                      {installation.interface?.shortDescription || installation.description}
-                    </span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground">
-                      {scopeLabel(installation.scope)}
-                      {installation.plugin ? ` · ${installation.plugin.displayName}` : ""}
-                      {!installation.writable ? " · Read-only" : ""}
-                    </span>
-                  </span>
-                </button>
-                <Switch
-                  checked={installation.enabled}
-                  disabled={!canToggle || togglePending}
-                  aria-label={`Enable ${displayName}`}
-                  onCheckedChange={(enabled) => {
-                    if (enabled) {
-                      void enableSkillInstallation(installation.installationId);
-                    } else {
-                      void disableSkillInstallation(installation.installationId);
-                    }
-                  }}
-                />
-              </div>
-            );
-          })
-        )}
-      </SettingsSection>
+        {workspaceId && skillMutationError ? (
+          <MutationErrorBanner
+            message={skillMutationError}
+            onDismiss={() => dismissSkillMutationError(workspaceId)}
+          />
+        ) : null}
 
-      <PluginDetailDialog workspaceId={workspaceId} />
-      <SkillDetailDialog workspaceId={workspaceId} />
+        {/* A single panel keyed to the active tab keeps inactive sections
+            fully unmounted without relying on Radix presence transitions. */}
+        <TabsContent value={effectiveTab}>{tabContent[effectiveTab]}</TabsContent>
+      </Tabs>
     </InlineErrorBoundary>
   );
 }

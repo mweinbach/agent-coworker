@@ -73,7 +73,7 @@ describe("withFileLock", () => {
     await expect(fs.stat(lockDir)).rejects.toThrow();
   });
 
-  test("takes over a lock whose owner metadata is expired", async () => {
+  test("never steals a lock from a live owner even when its metadata is expired", async () => {
     const target = await makeTempTarget();
     const lockDir = lockDirPathFor(target);
     await fs.mkdir(lockDir, { recursive: true });
@@ -83,7 +83,35 @@ describe("withFileLock", () => {
       "utf-8",
     );
 
-    const result = await withFileLock(target, async () => "ran", { staleLockMs: 1_000 });
+    // A slow-but-alive owner must surface as an acquire timeout, never a
+    // takeover that would reopen the lost-update race the lock exists to close.
+    await expect(
+      withFileLock(target, async () => "never", {
+        staleLockMs: 1_000,
+        acquireTimeoutMs: 250,
+        retryDelayMs: 10,
+      }),
+    ).rejects.toThrow("Timed out acquiring file lock");
+  });
+
+  test("takes over an expired lock whose owner process is gone", async () => {
+    const target = await makeTempTarget();
+    const lockDir = lockDirPathFor(target);
+    await fs.mkdir(lockDir, { recursive: true });
+    await fs.writeFile(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({ pid: 999_999, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+      "utf-8",
+    );
+
+    const result = await withFileLock(
+      target,
+      async () => "ran",
+      { staleLockMs: 1_000 },
+      {
+        processAlive: () => false,
+      },
+    );
     expect(result).toBe("ran");
   });
 

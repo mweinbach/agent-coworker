@@ -83,10 +83,10 @@ async function cleanupStaleLock(
   const staleCutoff = now() - staleLockMs;
   const owner = await readLockOwner(path.join(lockDir, "owner.json"));
   if (owner) {
-    const createdAtMs = Date.parse(owner.createdAt);
-    const isStaleByTime = !Number.isFinite(createdAtMs) || createdAtMs <= staleCutoff;
-    const isStaleByPid = !processAlive(owner.pid);
-    if (!isStaleByTime && !isStaleByPid) return false;
+    // Never steal a lock whose owner process is still alive — a slow write or
+    // GC pause must not reopen the lost-update race this lock exists to close.
+    // A live-but-slow owner instead surfaces as an acquire timeout upstream.
+    if (processAlive(owner.pid)) return false;
     await fs.rm(lockDir, { recursive: true, force: true });
     return true;
   }

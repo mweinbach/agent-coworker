@@ -375,7 +375,14 @@ export function getKnownResolvedModelMetadata(
     return buildLmStudioPlaceholderMetadata(modelId);
   }
   if (provider === "bedrock") {
-    return getKnownBedrockResolvedModelMetadataSync({ modelId });
+    const known = getKnownBedrockResolvedModelMetadataSync({ modelId });
+    if (known) return known;
+    // A user-configured Bedrock custom ID may be absent from the static/cache
+    // snapshot; resume it as a placeholder instead of migrating to the default.
+    if (isConfiguredCustomModelIdSync(provider, modelId, opts)) {
+      return buildBedrockPlaceholderMetadata(modelId.trim());
+    }
+    return null;
   }
   if (provider === "codex-cli") {
     return getResolvedModelMetadataSync(provider, modelId);

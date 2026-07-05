@@ -15,6 +15,7 @@ import { getAiCoworkerPaths } from "../src/store/connections";
 // so it is provably foreign to nvidia unless configured as a custom model.
 const CROSS_PROVIDER_ID = "zai-org/GLM-5";
 const CUSTOM_ONLY_ID = "acme/experimental-model-1";
+const BEDROCK_CUSTOM_ID = "us.acme.custom-bedrock-v1:0";
 
 let homeWithStore: string;
 let emptyHome: string;
@@ -25,6 +26,7 @@ beforeAll(async () => {
   const paths = getAiCoworkerPaths({ homedir: homeWithStore });
   await upsertCustomModel(paths, "nvidia", CROSS_PROVIDER_ID);
   await upsertCustomModel(paths, "anthropic", CUSTOM_ONLY_ID);
+  await upsertCustomModel(paths, "bedrock", BEDROCK_CUSTOM_ID);
 });
 
 afterAll(async () => {
@@ -113,5 +115,18 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
     });
     expect(resolved).not.toBeNull();
     expect(resolved?.source).toBe("static");
+  });
+
+  test("resolves configured bedrock custom ids missing from the snapshot", () => {
+    const resolved = getKnownResolvedModelMetadata("bedrock", BEDROCK_CUSTOM_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.id).toBe(BEDROCK_CUSTOM_ID);
+    expect(resolved?.provider).toBe("bedrock");
+
+    expect(
+      getKnownResolvedModelMetadata("bedrock", BEDROCK_CUSTOM_ID, { home: emptyHome }),
+    ).toBeNull();
   });
 });

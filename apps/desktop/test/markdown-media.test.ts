@@ -326,6 +326,9 @@ describe("DesktopMarkdown inline images", () => {
 
     expect(html).not.toContain("cowork-media:");
     expect(html).not.toContain("outside%2Fsecret");
+    // The blocked src must be dropped, not fall back to the raw escaping path.
+    expect(html).not.toContain("../outside/secret.png");
+    expect(html).not.toContain("secret.png");
   });
 
   test("keeps non-image markdown paths as file chips, not images", () => {

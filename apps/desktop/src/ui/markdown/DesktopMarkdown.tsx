@@ -1318,10 +1318,13 @@ function DesktopMarkdownImage({
 }: DesktopMarkdownImageProps) {
   // Markdown images are rewritten to cowork-media at the remark stage, but raw
   // HTML <img> tags only materialize after rehype-raw — upgrade those here,
-  // resolving workspace-relative sources against the same base path.
+  // resolving workspace-relative sources against the same base path. Use the
+  // tree resolver so base-escaping paths are dropped ("") rather than falling
+  // back to the original src, matching the remark/rehype rewrite.
   const basePath = useContext(DesktopMarkdownBasePathContext);
   const rawSrc = typeof src === "string" ? src : "";
-  const srcString = rawSrc ? (rewriteDesktopImageUrl(rawSrc, basePath) ?? rawSrc) : "";
+  const rewritten = rawSrc ? rewriteDesktopImageSrcForTree(rawSrc, basePath) : "";
+  const srcString = rewritten === null ? rawSrc : rewritten;
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {

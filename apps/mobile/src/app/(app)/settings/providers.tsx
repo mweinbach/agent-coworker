@@ -170,7 +170,9 @@ export default function ProvidersScreen() {
                 <SectionLabel>Model</SectionLabel>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                   {selectedProviderEntry.models
-                    .filter((model) => model.enabled !== false)
+                    // Keep the active default visible even when it is disabled,
+                    // so its pill still reads as selected.
+                    .filter((model) => model.enabled !== false || model.id === selectedModel)
                     .map((model) => (
                       <ChoicePill
                         key={model.id}
@@ -214,7 +216,13 @@ export default function ProvidersScreen() {
                       <SectionLabel>Models</SectionLabel>
                       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                         {provider.models
-                          .filter((model) => model.enabled !== false)
+                          // Keep this provider's active default visible even
+                          // when it is disabled, so its pill still reads selected.
+                          .filter(
+                            (model) =>
+                              model.enabled !== false ||
+                              (provider.id === selectedProvider && model.id === selectedModel),
+                          )
                           .map((model) => (
                             <ChoicePill
                               key={model.id}

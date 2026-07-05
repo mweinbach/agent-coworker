@@ -178,7 +178,9 @@ export default function WorkspaceGeneralScreen() {
               <SectionLabel>Model</SectionLabel>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                 {providerEntry.models
-                  .filter((model) => model.enabled !== false)
+                  // Hide disabled models, but keep the active default visible so
+                  // its pill still reads as selected even when it is disabled.
+                  .filter((model) => model.enabled !== false || model.id === selectedModel)
                   .map((model) => (
                     <ChoicePill
                       key={model.id}

@@ -46,6 +46,10 @@ type FileLockDeps = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   processAlive?: (pid: number) => boolean;
+  // Test seam: invoked after the lock directory exists but before the exclusive
+  // owner.json write, so a test can simulate a competing process claiming the
+  // directory during the ownerless window. No-op in production.
+  onBeforeOwnerWrite?: () => Promise<void> | void;
 };
 
 function errorCode(error: unknown): string | undefined {
@@ -123,15 +127,39 @@ async function acquireCrossProcessLock(
   const startedAt = deps.now();
 
   while (true) {
+    // Ensure the lock directory exists, but do NOT treat creating it as taking
+    // ownership: an existing directory may be an orphan left by a process that
+    // crashed (or was paused) between mkdir and its owner write, and this
+    // acquirer can legitimately claim it. Ownership is decided solely by the
+    // exclusive owner.json create below.
     try {
       await fs.mkdir(lockDir, { mode: 0o700 });
+    } catch (error) {
+      const code = errorCode(error);
+      // Windows can surface transient EPERM/EACCES while a competing writer
+      // creates or removes the lock directory; treat those like contention.
+      if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") {
+        throw error;
+      }
+    }
+
+    await deps.onBeforeOwnerWrite();
+
+    try {
       const owner: LockOwner = {
         pid: process.pid,
         createdAt: new Date(deps.now()).toISOString(),
       };
+      // The exclusive (wx / O_EXCL) create is the real mutex: at most one writer
+      // can create owner.json in a given directory. Even if a stale-lock reclaim
+      // races with a creator that was paused between mkdir and this write, only
+      // one of them wins the owner file and enters the critical section — closing
+      // the lost-update race an mtime-based ownerless reclaim would otherwise
+      // reopen when the paused creator resumed and overwrote the new owner.
       await fs.writeFile(ownerPath, `${JSON.stringify(owner)}\n`, {
         encoding: "utf-8",
         mode: 0o600,
+        flag: "wx",
       });
       return async () => {
         const liveOwner = await readLockOwner(ownerPath);
@@ -141,13 +169,9 @@ async function acquireCrossProcessLock(
       };
     } catch (error) {
       const code = errorCode(error);
-      // Windows can surface transient EPERM/EACCES while a competing writer
-      // creates or removes the lock directory; treat those like contention.
-      if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") {
-        throw error;
-      }
-
       if (code === "EEXIST") {
+        // Another writer already owns owner.json; reclaim only if that owner is
+        // provably dead or its metadata is stale, otherwise wait it out.
         const recovered = await cleanupStaleLock(
           lockDir,
           opts.staleLockMs,
@@ -155,6 +179,10 @@ async function acquireCrossProcessLock(
           deps.processAlive,
         );
         if (recovered) continue;
+      } else if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") {
+        // ENOENT means the directory was removed under us by a competing reclaim;
+        // EPERM/EACCES are transient Windows contention. Anything else is fatal.
+        throw error;
       }
 
       const waitedMs = deps.now() - startedAt;
@@ -188,6 +216,7 @@ export async function withFileLock<T>(
     now: deps.now ?? (() => Date.now()),
     sleep: deps.sleep ?? defaultSleep,
     processAlive: deps.processAlive ?? defaultProcessAlive,
+    onBeforeOwnerWrite: deps.onBeforeOwnerWrite ?? (() => {}),
   };
 
   const runLocked = async (): Promise<T> => {

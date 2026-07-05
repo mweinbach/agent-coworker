@@ -525,11 +525,15 @@ export async function resolveModelMetadata(
       !getSupportedModel(provider, trimmed)
     ) {
       // Strict resolution (model selection paths): unknown ids are only
-      // accepted when configured by the user or previously discovered from the provider.
-      const custom = await getCustomModelMetadata(provider, trimmed, homeOpts);
-      if (custom) return custom;
+      // accepted when configured by the user or previously discovered from the
+      // provider. Prefer the discovered cache entry over the custom placeholder:
+      // when an id is in both stores the catalog keeps the discovered metadata
+      // (real display/capability/reasoning), so selection must not seed the
+      // session from a generic text-only/non-reasoning custom placeholder.
       const discovered = await getDiscoveredModelMetadata(provider, trimmed, homeOpts);
       if (discovered) return discovered;
+      const custom = await getCustomModelMetadata(provider, trimmed, homeOpts);
+      if (custom) return custom;
       return toResolvedStaticModel(provider, trimmed, opts.source);
     }
     // Placeholder-tolerant resolution (prompt loading before every turn):
@@ -631,11 +635,15 @@ export function getKnownResolvedModelMetadata(
     // provider default. (lmstudio/bedrock/codex-cli return in their own
     // branches above, so `provider` here is a dynamic API provider.)
     if (isDynamicModelProvider(provider)) {
+      // Prefer the discovered cache entry over the custom placeholder: a
+      // custom-managed id that is also in the discovery cache must resume with
+      // its real capabilities (vision/reasoning), matching what the catalog
+      // advertises, instead of a generic placeholder.
+      const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
+      if (discovered) return discovered;
       if (isConfiguredCustomModelIdSync(provider, modelId, opts)) {
         return buildProviderPlaceholderMetadata(provider, modelId.trim());
       }
-      const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
-      if (discovered) return discovered;
     }
     return null;
   }

@@ -36,6 +36,10 @@ const DISCOVERED_VISION_ID = "acme/discovered-vision-1";
 // A discovered reasoning model that advertises reasoning info in the cache;
 // its resolved metadata must keep the provider default's reasoning options.
 const DISCOVERED_REASONING_ID = "acme/discovered-reasoning-1";
+// An id present in BOTH the custom store and the discovery cache (as a vision
+// model). Selection/resume must prefer the richer discovered metadata over the
+// generic custom placeholder so it is not downgraded to text-only.
+const DISCOVERED_AND_CUSTOM_VISION_ID = "acme/dup-vision-1";
 // Custom OpenAI ids: a non-reasoning family id must NOT inherit reasoning
 // defaults, while a reasoning-family id must keep them.
 const CUSTOM_OPENAI_NON_REASONING_ID = "gpt-4o";
@@ -81,6 +85,7 @@ beforeAll(async () => {
   await upsertCustomModel(paths, "bedrock", BEDROCK_CUSTOM_ID);
   await upsertCustomModel(paths, "openai", CUSTOM_OPENAI_NON_REASONING_ID);
   await upsertCustomModel(paths, "openai", CUSTOM_OPENAI_REASONING_ID);
+  await upsertCustomModel(paths, "openai", DISCOVERED_AND_CUSTOM_VISION_ID);
   await writeBedrockDiscoverySnapshot(homeWithStore, BEDROCK_DISCOVERED_ID);
   await writeModelDiscoveryCache(paths, "openai", {
     provider: "openai",
@@ -102,6 +107,12 @@ beforeAll(async () => {
         id: DISCOVERED_REASONING_ID,
         displayName: "Discovered Reasoning",
         reasoning: { defaultEffort: "high", availableEfforts: ["low", "medium", "high"] },
+      },
+      {
+        id: DISCOVERED_AND_CUSTOM_VISION_ID,
+        displayName: "Dup Vision",
+        knowledgeCutoff: "January 1, 2025",
+        supportsImageInput: true,
       },
     ],
   });
@@ -241,6 +252,20 @@ describe("resolveModelMetadata with allowPlaceholder + custom model ids", () => 
       }),
     ).rejects.toThrow(/Unsupported model/);
   });
+
+  test("strict selection prefers discovered metadata over the custom placeholder", async () => {
+    // Strict resolution (no allowPlaceholder) for an id in both stores must
+    // return the discovered vision entry, not the generic custom placeholder,
+    // so model selection does not downgrade it to text-only.
+    const resolved = await resolveModelMetadata("openai", DISCOVERED_AND_CUSTOM_VISION_ID, {
+      source: "model",
+      home: homeWithStore,
+    });
+    expect(resolved.id).toBe(DISCOVERED_AND_CUSTOM_VISION_ID);
+    expect(resolved.supportsImageInput).toBe(true);
+    expect(resolved.displayName).toBe("Dup Vision");
+    expect(resolved.source).toBe("dynamic");
+  });
 });
 
 describe("getKnownResolvedModelMetadata with custom model ids", () => {
@@ -288,6 +313,20 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
     expect(resolved?.supportsImageInput).toBe(true);
     expect(resolved?.displayName).toBe("Discovered Vision");
     expect(resolved?.knowledgeCutoff).toBe("January 1, 2025");
+    expect(resolved?.source).toBe("dynamic");
+  });
+
+  test("prefers discovered metadata over the custom placeholder for a dual-store id", () => {
+    // The id is in BOTH the custom store and the discovery cache. Resume must
+    // seed the richer discovered vision metadata, not the text-only custom
+    // placeholder, so it matches what the catalog advertises.
+    const resolved = getKnownResolvedModelMetadata("openai", DISCOVERED_AND_CUSTOM_VISION_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.id).toBe(DISCOVERED_AND_CUSTOM_VISION_ID);
+    expect(resolved?.supportsImageInput).toBe(true);
+    expect(resolved?.displayName).toBe("Dup Vision");
     expect(resolved?.source).toBe("dynamic");
   });
 

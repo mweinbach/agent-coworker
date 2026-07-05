@@ -115,6 +115,47 @@ describe("withFileLock", () => {
     expect(result).toBe("ran");
   });
 
+  test("a paused creator cannot clobber a lock claimed during its ownerless window", async () => {
+    const target = await makeTempTarget();
+    const lockDir = lockDirPathFor(target);
+    const ownerPath = path.join(lockDir, "owner.json");
+
+    let aEntered = false;
+    // Process A creates the lock directory, then (via the onBeforeOwnerWrite
+    // seam) is paused right before its owner write while a competing live
+    // process B claims the ownerless directory with an exclusive owner file.
+    const aPromise = withFileLock(
+      target,
+      async () => {
+        aEntered = true;
+      },
+      { acquireTimeoutMs: 300, retryDelayMs: 5, staleLockMs: 60_000 },
+      {
+        processAlive: () => true,
+        onBeforeOwnerWrite: async () => {
+          try {
+            await fs.mkdir(lockDir, { recursive: true });
+            await fs.writeFile(
+              ownerPath,
+              JSON.stringify({ pid: 4242, createdAt: new Date().toISOString() }),
+              { encoding: "utf-8", flag: "wx" },
+            );
+          } catch {
+            // Already claimed on a later retry — leave B's owner intact.
+          }
+        },
+      },
+    );
+
+    // A's exclusive owner write must fail against B's owner file, and because B
+    // is alive A must time out instead of stealing or overwriting the lock —
+    // never entering the critical section.
+    await expect(aPromise).rejects.toThrow("Timed out acquiring file lock");
+    expect(aEntered).toBe(false);
+    const owner = JSON.parse(await fs.readFile(ownerPath, "utf-8"));
+    expect(owner.pid).toBe(4242);
+  });
+
   test("times out when a live process holds the lock", async () => {
     const target = await makeTempTarget();
     const lockDir = lockDirPathFor(target);

@@ -192,8 +192,9 @@ describe("getDiscoveredModelMetadataSync", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.providerOptionsDefaults.reasoningEffort).toBeUndefined();
     expect(resolved?.providerOptionsDefaults.reasoningSummary).toBeUndefined();
-    // Non-reasoning provider options survive the strip.
-    expect(resolved?.providerOptionsDefaults.textVerbosity).toBe("medium");
+    // textVerbosity is GPT-5-family only; a non-GPT-5 discovered id must not
+    // carry it either.
+    expect(resolved?.providerOptionsDefaults.textVerbosity).toBeUndefined();
   });
 });
 
@@ -300,11 +301,12 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
     expect(resolved?.id).toBe(CUSTOM_OPENAI_NON_REASONING_ID);
     expect(resolved?.providerOptionsDefaults.reasoningEffort).toBeUndefined();
     expect(resolved?.providerOptionsDefaults.reasoningSummary).toBeUndefined();
-    // Non-reasoning defaults survive.
-    expect(resolved?.providerOptionsDefaults.textVerbosity).toBe("medium");
+    // textVerbosity is GPT-5-family only, so gpt-4o must not carry it either.
+    expect(resolved?.providerOptionsDefaults.textVerbosity).toBeUndefined();
   });
 
-  test("keeps reasoning defaults for a custom reasoning-family OpenAI id", () => {
+  test("keeps reasoning defaults but drops verbosity for a custom o-series OpenAI id", () => {
+    // o3 supports reasoning but NOT verbosity (a GPT-5-family parameter).
     const resolved = getKnownResolvedModelMetadata("openai", CUSTOM_OPENAI_REASONING_ID, {
       home: homeWithStore,
     });
@@ -312,6 +314,7 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
     expect(resolved?.id).toBe(CUSTOM_OPENAI_REASONING_ID);
     expect(resolved?.providerOptionsDefaults.reasoningEffort).toBe("high");
     expect(resolved?.providerOptionsDefaults.reasoningSummary).toBe("detailed");
+    expect(resolved?.providerOptionsDefaults.textVerbosity).toBeUndefined();
   });
 
   test("returns null for unknown ids that are not configured", () => {

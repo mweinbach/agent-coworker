@@ -177,15 +177,21 @@ export function routeAgentConfig(
     }
   }
 
+  const childModelChanged =
+    Boolean(requestedModel) ||
+    effectiveProvider !== parentConfig.provider ||
+    effectiveModel !== parentConfig.model;
   const effectiveReasoningEffort =
     opts.role.modelPolicy?.fixedReasoningEffort ??
     requestedReasoningEffort ??
-    (requestedModel ||
-    effectiveProvider !== parentConfig.provider ||
-    effectiveModel !== parentConfig.model
+    // When the child model differs from the parent, use the child's own default
+    // effort — which is `undefined` for a non-reasoning model (e.g. a custom
+    // gpt-4o). Do NOT fall through to the parent's effort in that case, or the
+    // runtime would send a reasoning payload the child model rejects. Only an
+    // unchanged child model inherits the parent's current effort.
+    (childModelChanged
       ? modelDefaultReasoningEffort(effectiveProvider, effectiveModel, home)
-      : undefined) ??
-    currentReasoningEffort(parentConfig);
+      : currentReasoningEffort(parentConfig));
 
   const resolvedEffectiveModel = getResolvedModelMetadataSync(
     effectiveProvider,

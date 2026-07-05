@@ -77,6 +77,22 @@ const REASONING_PROVIDER_OPTION_KEYS: Record<string, readonly string[]> = {
   anthropic: ["thinking", "effort"],
 };
 
+// GPT-5-family-only provider option keys. Verbosity is documented as a GPT-5
+// parameter, so unlike reasoning (which the o-series also supports) it must be
+// dropped for any non-GPT-5 OpenAI id, or the Responses runtime sends a
+// `text: { verbosity }` payload the model rejects.
+const GPT5_FAMILY_ONLY_PROVIDER_OPTION_KEYS: Record<string, readonly string[]> = {
+  openai: ["textVerbosity"],
+};
+
+// The union of model-gated keys: any of these carried over from a prior model
+// is dropped when the newly-resolved model's defaults do not declare it.
+const MODEL_GATED_PROVIDER_OPTION_KEYS: Record<string, readonly string[]> = {
+  openai: ["reasoningEffort", "reasoningSummary", "textVerbosity"],
+  google: ["thinkingConfig"],
+  anthropic: ["thinking", "effort"],
+};
+
 /**
  * Mirrors the runtime reasoning heuristics (e.g. the OpenAI Responses fallback
  * model in `openaiResponsesModel.ts`): a custom id is only assumed to support
@@ -96,11 +112,22 @@ function customModelIdLikelySupportsReasoning(
   return true;
 }
 
-function stripReasoningProviderOptionDefaults(
+// Verbosity is GPT-5-family only, so an o-series id (which supports reasoning)
+// still must not carry it.
+function customModelIdLikelySupportsGpt5Params(
   provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  modelId: string,
+): boolean {
+  if (provider === "openai") {
+    return modelId.trim().toLowerCase().startsWith("gpt-5");
+  }
+  return true;
+}
+
+function stripProviderOptionKeys(
   defaults: Record<string, unknown>,
+  keys: readonly string[] | undefined,
 ): Record<string, unknown> {
-  const keys = REASONING_PROVIDER_OPTION_KEYS[provider];
   if (!keys) return defaults;
   const next = { ...defaults };
   for (const key of keys) {
@@ -130,7 +157,7 @@ export function reconcileReasoningProviderOptions(
   provider: ProviderName,
   resolvedProviderOptionDefaults: Record<string, unknown>,
 ): unknown {
-  const keys = REASONING_PROVIDER_OPTION_KEYS[provider];
+  const keys = MODEL_GATED_PROVIDER_OPTION_KEYS[provider];
   if (!keys || !isPlainRecord(providerOptions)) return providerOptions;
   const section = providerOptions[provider];
   if (!isPlainRecord(section)) return providerOptions;
@@ -156,9 +183,19 @@ function buildProviderPlaceholderMetadata(
   // derived from the cache's reasoning info instead.
   const supportsReasoning =
     opts.supportsReasoning ?? customModelIdLikelySupportsReasoning(provider, modelId);
-  const providerOptionsDefaults = supportsReasoning
-    ? { ...fallback.providerOptionsDefaults }
-    : stripReasoningProviderOptionDefaults(provider, { ...fallback.providerOptionsDefaults });
+  let providerOptionsDefaults: Record<string, unknown> = { ...fallback.providerOptionsDefaults };
+  if (!supportsReasoning) {
+    providerOptionsDefaults = stripProviderOptionKeys(
+      providerOptionsDefaults,
+      REASONING_PROVIDER_OPTION_KEYS[provider],
+    );
+  }
+  if (!customModelIdLikelySupportsGpt5Params(provider, modelId)) {
+    providerOptionsDefaults = stripProviderOptionKeys(
+      providerOptionsDefaults,
+      GPT5_FAMILY_ONLY_PROVIDER_OPTION_KEYS[provider],
+    );
+  }
   return {
     id: modelId,
     provider,

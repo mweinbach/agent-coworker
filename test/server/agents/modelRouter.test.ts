@@ -94,6 +94,22 @@ describe("routeAgentConfig: no model requested", () => {
     // No model change, no explicit request, so it picks up from parent's current providerOptions
     expect(result.effectiveReasoningEffort).toBe("low");
   });
+
+  test("does not inherit parent reasoning effort when routing to a non-reasoning child model", () => {
+    const parentConfig = makeConfig({
+      provider: "openai",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+      providerOptions: { openai: { reasoningEffort: "high" } },
+    });
+    const role = makeRole();
+    // Child switches to a non-reasoning OpenAI id; its own default effort is
+    // undefined, so the parent's "high" must NOT be inherited (or the runtime
+    // would send a reasoning payload the model rejects).
+    const result = routeAgentConfig(parentConfig, { role, model: "gpt-4o" });
+    expect(result.effectiveModel).toBe("gpt-4o");
+    expect(result.effectiveReasoningEffort).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

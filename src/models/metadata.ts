@@ -109,6 +109,43 @@ function stripReasoningProviderOptionDefaults(
   return next;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Drop reasoning provider options that linger from a previously-selected model
+ * when the newly-resolved model does not declare them in its defaults.
+ *
+ * `prepareModelSelection` spreads the prior config's `providerOptions` into the
+ * new config, so switching a live thread from a reasoning model (e.g. GPT-5,
+ * whose `reasoningEffort`/`reasoningSummary` are set) to a non-reasoning custom
+ * id (e.g. `gpt-4o`) would otherwise forward those stale keys and make the
+ * first OpenAI Responses request send a reasoning payload the model rejects.
+ * A reasoning-capable model keeps the key (present in its resolved defaults),
+ * so a user's explicit effort survives the switch.
+ */
+export function reconcileReasoningProviderOptions(
+  providerOptions: unknown,
+  provider: ProviderName,
+  resolvedProviderOptionDefaults: Record<string, unknown>,
+): unknown {
+  const keys = REASONING_PROVIDER_OPTION_KEYS[provider];
+  if (!keys || !isPlainRecord(providerOptions)) return providerOptions;
+  const section = providerOptions[provider];
+  if (!isPlainRecord(section)) return providerOptions;
+  let changed = false;
+  const nextSection = { ...section };
+  for (const key of keys) {
+    if (key in nextSection && !(key in resolvedProviderOptionDefaults)) {
+      delete nextSection[key];
+      changed = true;
+    }
+  }
+  if (!changed) return providerOptions;
+  return { ...providerOptions, [provider]: nextSection };
+}
+
 function buildProviderPlaceholderMetadata(
   provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
   modelId: string,

@@ -2,7 +2,7 @@ import path from "node:path";
 
 import type { getAiCoworkerPaths } from "../../connect";
 import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
-import { resolveModelMetadata } from "../../models/metadata";
+import { reconcileReasoningProviderOptions, resolveModelMetadata } from "../../models/metadata";
 import {
   authorizeProviderAuth,
   type ConnectProviderHandler,
@@ -193,11 +193,23 @@ export class ProviderAuthManager {
     const shouldClearProviderState =
       currentConfig.provider !== nextProvider || currentConfig.model !== resolvedModel.id;
 
+    // Drop reasoning options carried over from a prior model that the selected
+    // model does not support, so switching a live thread to a non-reasoning
+    // custom id does not forward a stale reasoning payload.
+    const reconciledProviderOptions = reconcileReasoningProviderOptions(
+      currentConfig.providerOptions,
+      nextProvider,
+      resolvedModel.providerOptionsDefaults,
+    ) as AgentConfig["providerOptions"];
+
     const nextConfig: AgentConfig = {
       ...currentConfig,
       provider: nextProvider,
       ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
       model: resolvedModel.id,
+      ...(reconciledProviderOptions !== undefined
+        ? { providerOptions: reconciledProviderOptions }
+        : {}),
       preferredChildModel: normalizedChildRouting.preferredChildModel,
       childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
       preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,

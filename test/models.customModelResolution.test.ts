@@ -9,6 +9,7 @@ import {
   getResolvedModelMetadataSync,
   isConfiguredCustomModelIdSync,
   normalizeModelIdForProvider,
+  reconcileReasoningProviderOptions,
   resolveModelMetadata,
 } from "../src/models/metadata";
 import { upsertCustomModel } from "../src/providers/customModels";
@@ -384,5 +385,43 @@ describe("getResolvedModelMetadataSync with bedrock discovery home", () => {
     expect(resolved.id).toBe(BEDROCK_DISCOVERED_ID);
     // Placeholder metadata uses the id as its display name.
     expect(resolved.displayName).toBe(BEDROCK_DISCOVERED_ID);
+  });
+});
+
+describe("reconcileReasoningProviderOptions", () => {
+  test("drops reasoning keys the resolved model does not declare", () => {
+    const providerOptions = {
+      openai: { reasoningEffort: "high", reasoningSummary: "detailed", textVerbosity: "medium" },
+    };
+    // gpt-4o placeholder defaults carry no reasoning keys → strip the stale ones.
+    const result = reconcileReasoningProviderOptions(providerOptions, "openai", {
+      textVerbosity: "medium",
+    }) as { openai: Record<string, unknown> };
+    expect(result.openai).toEqual({ textVerbosity: "medium" });
+    // Original object is not mutated.
+    expect(providerOptions.openai.reasoningEffort).toBe("high");
+  });
+
+  test("keeps reasoning keys when the resolved model declares them", () => {
+    const providerOptions = {
+      openai: { reasoningEffort: "xhigh", reasoningSummary: "detailed" },
+    };
+    const result = reconcileReasoningProviderOptions(providerOptions, "openai", {
+      reasoningEffort: "high",
+      reasoningSummary: "detailed",
+    });
+    // Reasoning-capable model → the user's explicit effort survives unchanged.
+    expect(result).toBe(providerOptions);
+  });
+
+  test("is a no-op for providers without reasoning keys or missing sections", () => {
+    const providerOptions = { openai: { reasoningEffort: "high" } };
+    // together has no reasoning-key mapping.
+    expect(reconcileReasoningProviderOptions(providerOptions, "together", {})).toBe(
+      providerOptions,
+    );
+    // No openai section to reconcile.
+    const other = { google: { thinkingConfig: {} } };
+    expect(reconcileReasoningProviderOptions(other, "openai", {})).toBe(other);
   });
 });

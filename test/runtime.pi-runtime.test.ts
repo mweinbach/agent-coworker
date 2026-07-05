@@ -6,6 +6,7 @@ import path from "node:path";
 import { z } from "zod";
 import { getAiCoworkerPaths } from "../src/connect";
 import { listSupportedModels } from "../src/models/registry";
+import { upsertCustomModel } from "../src/providers/customModels";
 import { resolveGoogleInteractionsModel } from "../src/runtime/googleInteractionsModel";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { createPiRuntime, __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
@@ -106,6 +107,32 @@ describe("pi runtime regressions", () => {
         cacheWrite: 6.25,
       },
     });
+  });
+
+  test("anthropic runtime model resolution accepts custom model IDs without static PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-anthropic-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "anthropic",
+      model: "claude-custom-20260704",
+      preferredChildModel: "claude-custom-20260704",
+    });
+
+    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "claude-custom-20260704",
+      name: "claude-custom-20260704",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    });
+    // Pricing is unknown for custom IDs: no cost may be inherited from an
+    // unrelated catalog model (e.g. Haiku's rates).
+    expect(resolved.model.cost).toBeUndefined();
   });
 
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
@@ -217,6 +244,42 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.maxTokens).toBe(128000);
   });
 
+  test("openai responses model resolution uses conservative limits for custom IDs", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "gpt-5.5-custom-preview",
+      preferredChildModel: "gpt-5.5-custom-preview",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "gpt-5.5-custom-preview",
+      name: "gpt-5.5-custom-preview",
+      api: "openai-responses",
+      contextWindow: 128000,
+      maxTokens: 16384,
+    });
+  });
+
+  test("openai responses custom IDs use the fallback builder instead of inheriting catalog pricing", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-custom-cost-"));
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "gpt-5.5-custom-preview",
+      preferredChildModel: "gpt-5.5-custom-preview",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    // Unknown IDs must not inherit the first catalog model's (gpt-4) pricing —
+    // cost stays undefined so accounting is conservative rather than wrong.
+    expect(resolved.model.cost).toBeUndefined();
+    // The fallback builder flags gpt-5* IDs as reasoning models.
+    expect(resolved.model.reasoning).toBe(true);
+  });
+
   test("openai responses model resolution keeps supported token limits for gpt-5.4-mini", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-gpt54mini-"));
     const config = makeConfig(homeDir, {
@@ -261,6 +324,26 @@ describe("pi runtime regressions", () => {
 
     expect(resolved.model.id).toBe("gemini-3.1-flash-lite");
     expect(resolved.model.name).toBe("Gemini 3.1 Flash-Lite");
+  });
+
+  test("google interactions model resolution uses fallback metadata for custom IDs", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-google-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "google",
+      model: "gemini-custom-preview",
+      preferredChildModel: "gemini-custom-preview",
+    });
+
+    const resolved = await resolveGoogleInteractionsModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "gemini-custom-preview",
+      name: "gemini-custom-preview",
+      reasoning: true,
+      input: ["text", "audio", "video", "document"],
+      contextWindow: 1048576,
+      maxTokens: 65536,
+    });
   });
 
   test("LM Studio PI model resolution builds a dynamic openai-completions model from live metadata", async () => {
@@ -946,6 +1029,112 @@ describe("pi runtime regressions", () => {
         cacheRead: 0.2,
         cacheWrite: 0,
       },
+    });
+  });
+
+  test("NVIDIA runtime model resolution accepts custom OpenAI-compatible model IDs", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-custom-"));
+    const config = makeConfig(homeDir, {
+      provider: "nvidia",
+      model: "nvidia/custom-preview-model",
+      preferredChildModel: "nvidia/custom-preview-model",
+    });
+
+    const resolved = await withEnv(
+      "NVIDIA_API_KEY",
+      "env-nvidia-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.apiKey).toBe("env-nvidia-key");
+    expect(resolved.model).toMatchObject({
+      id: "nvidia/custom-preview-model",
+      name: "nvidia/custom-preview-model",
+      api: "openai-completions",
+      provider: "nvidia",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+        thinkingFormat: "openai",
+      },
+    });
+  });
+
+  test("NVIDIA runtime resolves a configured custom cross-registry ID under a non-default home", async () => {
+    // "zai-org/GLM-5" is registered under Baseten/Together, so it is provably
+    // foreign to nvidia; the sync normalizer only accepts it when the custom
+    // store is consulted with the session's auth home. makeConfig points
+    // userCoworkDir at homeDir, so resolveAuthHomeDir(config) === homeDir.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-crossreg-"));
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "nvidia", "zai-org/GLM-5");
+    const config = makeConfig(homeDir, {
+      provider: "nvidia",
+      model: "zai-org/GLM-5",
+      preferredChildModel: "zai-org/GLM-5",
+    });
+
+    const resolved = await withEnv(
+      "NVIDIA_API_KEY",
+      "env-nvidia-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.model).toMatchObject({
+      id: "zai-org/GLM-5",
+      provider: "nvidia",
+      api: "openai-completions",
+    });
+  });
+
+  test("OpenAI Responses runtime resolves a configured custom cross-registry ID under a non-default home", async () => {
+    // "zai-org/GLM-5" is registered under Baseten/Together, so it is provably
+    // foreign to openai; the sync normalizer only accepts it when the custom
+    // store is consulted with the session's auth home. Before threading
+    // resolveAuthHomeDir(config), applySupportedOpenAiResponsesModel read the
+    // process home's (empty) store and threw, aborting the turn.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-crossreg-"));
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "openai", "zai-org/GLM-5");
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "zai-org/GLM-5",
+      preferredChildModel: "zai-org/GLM-5",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "zai-org/GLM-5",
+      name: "zai-org/GLM-5",
+      api: "openai-responses",
+      provider: "openai",
+    });
+  });
+
+  test("Google Interactions runtime resolves a configured custom cross-registry ID under a non-default home", async () => {
+    // "zai-org/GLM-5" is provably foreign to google; the sync normalizer only
+    // accepts it when the custom store is consulted with the session's auth
+    // home. Before threading resolveAuthHomeDir(config), resolveGoogleInteractionsModel
+    // read the process home's (empty) store and threw.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-google-crossreg-"));
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "google", "zai-org/GLM-5");
+    const config = makeConfig(homeDir, {
+      provider: "google",
+      model: "zai-org/GLM-5",
+      preferredChildModel: "zai-org/GLM-5",
+    });
+
+    const resolved = await resolveGoogleInteractionsModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "zai-org/GLM-5",
+      name: "zai-org/GLM-5",
     });
   });
 

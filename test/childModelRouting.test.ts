@@ -1,6 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { normalizeChildRoutingConfig, parseChildModelRef } from "../src/models/childModelRouting";
+import { upsertCustomModel } from "../src/providers/customModels";
+import { getAiCoworkerPaths } from "../src/store/connections";
+
+// Registered in the Baseten/Together static registries, so it is foreign to
+// nvidia unless configured as a custom model in the session's auth home.
+const CROSS_PROVIDER_ID = "zai-org/GLM-5";
 
 describe("normalizeChildRoutingConfig", () => {
   test("cross-provider routing treats preferredChildModelRef as canonical", () => {
@@ -61,5 +70,45 @@ describe("normalizeChildRoutingConfig", () => {
     expect(parsed.modelId).toBe("amazon.nova-lite-v1:0");
     expect(parsed.ref).toBe("bedrock:amazon.nova-lite-v1:0");
     expect(parsed.explicitProvider).toBe(false);
+  });
+});
+
+describe("normalizeChildRoutingConfig with a non-default auth home", () => {
+  let homeWithStore: string;
+
+  beforeAll(async () => {
+    homeWithStore = await fs.mkdtemp(path.join(os.tmpdir(), "child-routing-custom-"));
+    await upsertCustomModel(
+      getAiCoworkerPaths({ homedir: homeWithStore }),
+      "nvidia",
+      CROSS_PROVIDER_ID,
+    );
+  });
+
+  afterAll(async () => {
+    await fs.rm(homeWithStore, { recursive: true, force: true });
+  });
+
+  test("accepts a configured custom cross-registry id when the session home is threaded", () => {
+    const normalized = normalizeChildRoutingConfig({
+      provider: "nvidia",
+      model: CROSS_PROVIDER_ID,
+      childModelRoutingMode: "same-provider",
+      source: "test",
+      home: homeWithStore,
+    });
+    expect(normalized.preferredChildModel).toBe(CROSS_PROVIDER_ID);
+    expect(normalized.preferredChildModelRef).toBe(`nvidia:${CROSS_PROVIDER_ID}`);
+  });
+
+  test("rejects the same custom cross-registry id when the home is omitted (process home)", () => {
+    expect(() =>
+      normalizeChildRoutingConfig({
+        provider: "nvidia",
+        model: CROSS_PROVIDER_ID,
+        childModelRoutingMode: "same-provider",
+        source: "test",
+      }),
+    ).toThrow(/Unsupported model/);
   });
 });

@@ -6,6 +6,7 @@ import {
 } from "../../shared/openaiCompatibleOptions";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
+import { resolveAuthHomeDir } from "../../utils/authHome";
 import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
@@ -461,6 +462,8 @@ export class SessionMetadataManager {
                 : baseConfig.preferredChildModelRef,
           allowedChildModelRefs: patch.allowedChildModelRefs ?? baseConfig.allowedChildModelRefs,
           source: "session config",
+          // Validate custom cross-registry ids against this session's auth home.
+          home: resolveAuthHomeDir(baseConfig),
         });
       } catch (err) {
         this.context.emitError(

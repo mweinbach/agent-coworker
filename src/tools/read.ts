@@ -4,7 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 
 import { z } from "zod";
-import { supportsImageInput } from "../models/registry";
+import { modelSupportsImageInputSync } from "../models/metadata";
 import { getAttachmentByteLengthValidationMessage } from "../shared/attachments";
 import {
   googleMultimodalPartTypeForMime,
@@ -56,7 +56,7 @@ export function createReadTool(ctx: ToolContext) {
       );
 
       const mimeType = mimeTypeFromPath(abs);
-      const modelSupportsImages = supportsImageInput(ctx.config.provider, ctx.config.model);
+      const modelSupportsImages = modelSupportsImageInputSync(ctx.config);
       const isGoogleProvider = isGoogleMultimodalProvider(ctx.config);
       const multimodalPartType =
         mimeType &&

@@ -183,6 +183,304 @@ describe("workspace settings sync", () => {
     );
   });
 
+  test("session_config preserves a pending explicit reasoning effort until the server confirms it", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: {
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          composerReasoningEffort: "xhigh",
+        },
+      },
+    }));
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+      "xhigh",
+    );
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: { reasoningEffort: "xhigh" },
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    const confirmedRt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(confirmedRt?.composerReasoningEffort).toBeNull();
+    // The runtime effort is synced to the confirmed value so the selector
+    // (which prefers runtime over config) does not snap back to the old effort.
+    expect(confirmedRt?.requestedReasoningEffort).toBe("xhigh");
+    expect(confirmedRt?.effectiveReasoningEffort).toBe("xhigh");
+  });
+
+  test("session_config clears a pending effort when the server settles a different one", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: {
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    // The user optimistically picked xhigh, but the server settles on "low"
+    // (e.g. clamped/rejected). The pending value must not stay stuck.
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          composerReasoningEffort: "xhigh",
+        },
+      },
+    }));
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: { reasoningEffort: "low" },
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(rt?.composerReasoningEffort).toBeNull();
+    // Runtime synced to the server's authoritative value, not the optimistic one.
+    expect(rt?.requestedReasoningEffort).toBe("low");
+    expect(rt?.effectiveReasoningEffort).toBe("low");
+  });
+
+  test("session_config clears the stale runtime effort when the settled config carries no effort", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: {
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    // The prior turn ran at xhigh (stale runtime effort), and the user then
+    // optimistically picked "high". The server settles a config with NO
+    // reasoningEffort (e.g. switched to a non-reasoning model or cleared it).
+    // Because the selector prefers runtime over config, the stale runtime xhigh
+    // must be cleared or the composer would keep showing xhigh forever.
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          composerReasoningEffort: "high",
+          requestedReasoningEffort: "xhigh",
+          effectiveReasoningEffort: "xhigh",
+        },
+      },
+    }));
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: {},
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(rt?.composerReasoningEffort).toBeNull();
+    // Stale runtime effort cleared so the selector falls through to config/default.
+    expect(rt?.requestedReasoningEffort).toBeNull();
+    expect(rt?.effectiveReasoningEffort).toBeNull();
+  });
+
+  test("session_config compares pending reasoning effort against the draft composer provider", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    // Live session config points at a provider without composer reasoning
+    // options, while the composer draft targets openai.
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          config: {
+            ...(state.threadRuntimeById[threadId] as any).config,
+            provider: "anthropic",
+            model: "claude-opus-4-8",
+          },
+          draftComposerProvider: "openai",
+          draftComposerModel: "gpt-5.2",
+          composerReasoningEffort: "xhigh",
+        } as any,
+      },
+    }));
+
+    const baseConfig = {
+      yolo: false,
+      observabilityEnabled: false,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      enableMemory: true,
+      memoryRequireApproval: false,
+      preferredChildModel: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "openai:gpt-5.2",
+      allowedChildModelRefs: [],
+      maxSteps: 100,
+      toolOutputOverflowChars: 25000,
+    };
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        ...baseConfig,
+        providerOptions: { openai: { reasoningEffort: "medium" } },
+      },
+    });
+    await flushAsyncWork();
+
+    // Unconfirmed for the draft provider: the pending effort must survive
+    // even though the live config provider has no reasoning options.
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+      "xhigh",
+    );
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        ...baseConfig,
+        providerOptions: { openai: { reasoningEffort: "xhigh" } },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBeNull();
+  });
+
   test("ensureServerRunning reactivates disposed JSON-RPC helper state for an existing workspace", async () => {
     primeWorkspaceConnection();
     const { threadId } = seedConnectedThread();

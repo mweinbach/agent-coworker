@@ -15,6 +15,7 @@ import {
   type UpdaterState,
 } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
+import { WorkspaceRootsController } from "./ipc/workspaceRoots";
 import {
   applySystemAppearanceToWindow,
   getInitialWindowAppearanceOptions,
@@ -29,6 +30,10 @@ import {
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { DiagnosticsService } from "./services/diagnostics";
 import { logError, logInfo, logWarn } from "./services/localLogs";
+import {
+  registerDesktopMediaProtocolHandler,
+  registerDesktopMediaSchemePrivileges,
+} from "./services/mediaProtocol";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { createMenuCommandDispatcher } from "./services/menuCommandDispatcher";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
@@ -53,7 +58,7 @@ import {
 import { loadMainWindowBounds, trackMainWindowBounds } from "./services/windowState";
 
 const require = createRequire(import.meta.url);
-const { app, BrowserWindow, Menu, Notification, screen, shell } =
+const { app, BrowserWindow, Menu, Notification, net, protocol, screen, shell } =
   require("electron") as typeof Electron;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -75,6 +80,9 @@ if (process.platform === "win32") {
 // Keep packaged-mode feature resolution consistent across main and preload.
 process.env.COWORK_IS_PACKAGED = String(app.isPackaged);
 applyPublicTelemetryEnv(process.env);
+
+// Must run before app ready so cowork-media images load in renderer <img> tags.
+registerDesktopMediaSchemePrivileges(protocol);
 
 const productAnalytics = new DesktopProductAnalyticsService();
 const cloudSync = new CloudSyncService({
@@ -99,6 +107,9 @@ const serverManager = new ServerManager({
 });
 const mobileRelayBridge = new MobileRelayBridge({ serverManager });
 const persistence = new PersistenceService();
+// Shared between the cowork-media protocol handler and desktop IPC so both
+// enforce (and observe approvals against) the same workspace-root boundary.
+const workspaceRoots = new WorkspaceRootsController(persistence);
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
@@ -724,6 +735,7 @@ if (!gotSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      registerDesktopMediaProtocolHandler(protocol, net, workspaceRoots);
       const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
       await initElectronMainCrashReporting(initialState?.privacyTelemetrySettings);
       let preparedInitialState = initialState;
@@ -764,6 +776,7 @@ if (!gotSingleInstanceLock) {
       registerDesktopIpc({
         mobileRelayBridge,
         persistence,
+        workspaceRoots,
         productAnalytics,
         cloudSync,
         diagnostics,

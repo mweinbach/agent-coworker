@@ -169,16 +169,20 @@ export default function ProvidersScreen() {
               <View style={{ gap: 8 }}>
                 <SectionLabel>Model</SectionLabel>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                  {selectedProviderEntry.models.map((model) => (
-                    <ChoicePill
-                      key={model.id}
-                      label={model.displayName}
-                      selected={model.id === selectedModel}
-                      onPress={() => {
-                        void selectDefaultModel(selectedProviderEntry.id, model.id);
-                      }}
-                    />
-                  ))}
+                  {selectedProviderEntry.models
+                    // Keep the active default visible even when it is disabled,
+                    // so its pill still reads as selected.
+                    .filter((model) => model.enabled !== false || model.id === selectedModel)
+                    .map((model) => (
+                      <ChoicePill
+                        key={model.id}
+                        label={model.displayName}
+                        selected={model.id === selectedModel}
+                        onPress={() => {
+                          void selectDefaultModel(selectedProviderEntry.id, model.id);
+                        }}
+                      />
+                    ))}
                 </View>
               </View>
             ) : null}
@@ -211,18 +215,26 @@ export default function ProvidersScreen() {
                     <View style={{ gap: 8 }}>
                       <SectionLabel>Models</SectionLabel>
                       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                        {provider.models.map((model) => (
-                          <ChoicePill
-                            key={model.id}
-                            label={model.displayName}
-                            selected={
-                              provider.id === selectedProvider && model.id === selectedModel
-                            }
-                            onPress={() => {
-                              void selectDefaultModel(provider.id, model.id);
-                            }}
-                          />
-                        ))}
+                        {provider.models
+                          // Keep this provider's active default visible even
+                          // when it is disabled, so its pill still reads selected.
+                          .filter(
+                            (model) =>
+                              model.enabled !== false ||
+                              (provider.id === selectedProvider && model.id === selectedModel),
+                          )
+                          .map((model) => (
+                            <ChoicePill
+                              key={model.id}
+                              label={model.displayName}
+                              selected={
+                                provider.id === selectedProvider && model.id === selectedModel
+                              }
+                              onPress={() => {
+                                void selectDefaultModel(provider.id, model.id);
+                              }}
+                            />
+                          ))}
                       </View>
                     </View>
                   ) : null}

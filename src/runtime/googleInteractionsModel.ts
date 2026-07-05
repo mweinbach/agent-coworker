@@ -1,5 +1,6 @@
 import { getSavedProviderApiKey } from "../config";
-import { assertSupportedModel } from "../models/registry";
+import { getResolvedModelMetadataSync } from "../models/metadata";
+import { resolveAuthHomeDir } from "../utils/authHome";
 import type { RuntimeRunTurnParams } from "./types";
 
 type GoogleInteractionsModelInputModality = "text" | "image" | "audio" | "video" | "document";
@@ -83,7 +84,14 @@ function resolveGoogleInteractionsModelInfo(modelId: string): GoogleInteractions
   const known = SUPPORTED_GOOGLE_INTERACTIONS_MODELS[modelId];
   if (known) return known;
 
-  throw new Error(`Missing supported Google Interactions model metadata for ${modelId}.`);
+  return {
+    id: modelId,
+    name: modelId,
+    reasoning: true,
+    input: ["text", "audio", "video", "document"],
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  };
 }
 
 function googleInteractionsInputForModel(
@@ -101,7 +109,11 @@ export async function resolveGoogleInteractionsModel(
   params: RuntimeRunTurnParams,
 ): Promise<ResolvedGoogleInteractionsModel> {
   const modelId = params.config.model;
-  const supported = assertSupportedModel("google", modelId, "model");
+  // Custom cross-registry ids are validated against the custom-model store
+  // under the session's auth home; thread it into the sync metadata lookup so a
+  // configured custom id resolves on the first turn under a non-default home.
+  const home = resolveAuthHomeDir(params.config);
+  const supported = getResolvedModelMetadataSync("google", modelId, "model", { home });
   const modelInfo = resolveGoogleInteractionsModelInfo(supported.id);
 
   return {

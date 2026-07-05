@@ -303,6 +303,25 @@ export class SessionProviderService {
   ): Promise<void> {
     await this.session.copyProviderApiKey(provider, sourceProvider);
   }
+
+  async addCustomModel(provider: AgentConfig["provider"], modelId: string): Promise<void> {
+    await this.session.addCustomProviderModel(provider, modelId);
+  }
+
+  async deleteCustomModel(provider: AgentConfig["provider"], modelId: string): Promise<void> {
+    await this.session.deleteCustomProviderModel(provider, modelId);
+  }
+
+  async setModelsEnabled(
+    provider: AgentConfig["provider"],
+    models: ReadonlyArray<{ id: string; enabled: boolean }>,
+  ): Promise<void> {
+    await this.session.setProviderModelsEnabled(provider, models);
+  }
+
+  async resetModelPreferences(provider: AgentConfig["provider"]): Promise<void> {
+    await this.session.resetProviderModelPreferences(provider);
+  }
 }
 
 export class SessionMcpService {

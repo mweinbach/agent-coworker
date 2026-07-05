@@ -281,6 +281,10 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/auth/setApiKey`
   - `cowork/provider/auth/setConfig`
   - `cowork/provider/auth/copyApiKey`
+  - `cowork/provider/customModel/add`
+  - `cowork/provider/customModel/delete`
+  - `cowork/provider/model/setEnabled`
+  - `cowork/provider/model/resetEnabled`
 - runtime diagnostics
   - `cowork/runtime/libreoffice/check`
   - `cowork/runtime/diagnostics/read`
@@ -2133,7 +2137,8 @@ Provider catalog metadata. Sent on connection and after model changes.
       "id": "openai",
       "name": "OpenAI",
       "models": [
-        { "id": "gpt-5.4", "displayName": "GPT-5.4", "knowledgeCutoff": "August 2025", "supportsImageInput": true }
+        { "id": "gpt-5.4", "displayName": "GPT-5.4", "knowledgeCutoff": "August 2025", "supportsImageInput": true },
+        { "id": "gpt-5.6-experimental", "displayName": "GPT 5.6 Experimental", "knowledgeCutoff": "Unknown", "supportsImageInput": false, "enabled": false }
       ],
       "defaultModel": "gpt-5.4"
     },
@@ -2159,6 +2164,8 @@ Provider catalog metadata. Sent on connection and after model changes.
 | `all` | `ProviderCatalogEntry[]` | All available providers with their models |
 | `default` | `Record<string, string>` | Default model per provider (includes current session's selection) |
 | `connected` | `string[]` | Provider IDs that are currently usable. For local providers like LM Studio this can be based on reachability rather than stored auth |
+
+Model entries may carry an optional `enabled` flag. When absent, the model is enabled. `"enabled": false` means the model should be hidden from model pickers, but an explicit selection of a disabled model is still honored at turn time — disabling is a visibility preference, not a hard block. Defaults: open-model aggregator providers (Together AI, NVIDIA, MiniMax, Baseten, Fireworks, Fire Pass, OpenCode) enable a curated cross-provider set — Nemotron 3 Ultra, MiniMax M3, GLM 5.2, Kimi K2.6, DeepSeek V4 Pro, and DeepSeek V4 Flash (matched by model ID, including provider-specific spellings such as `kimi-k2p6`) — falling back to the model registry when a catalog carries none of them. Other providers enable their registry models; user-added custom models and Codex app-server models are always enabled by default. Everything else starts disabled. Clients change preferences with `cowork/provider/model/setEnabled` (params: `cwd?`, `provider`, `models: [{ "id": string, "enabled": boolean }, ...]`) and clear a provider's overrides with `cowork/provider/model/resetEnabled` (params: `cwd?`, `provider`); both return the updated `provider_catalog` event as `{ "event": ... }`. LM Studio is excluded — its model visibility is a client-side concern.
 
 ---
 

@@ -19,6 +19,14 @@ export const jsonRpcProviderRequestSchemas = {
   "cowork/provider/auth/setConfig": jsonRpcControlRequestSchemas["cowork/provider/auth/setConfig"],
   "cowork/provider/auth/copyApiKey":
     jsonRpcControlRequestSchemas["cowork/provider/auth/copyApiKey"],
+  "cowork/provider/customModel/add":
+    jsonRpcControlRequestSchemas["cowork/provider/customModel/add"],
+  "cowork/provider/customModel/delete":
+    jsonRpcControlRequestSchemas["cowork/provider/customModel/delete"],
+  "cowork/provider/model/setEnabled":
+    jsonRpcControlRequestSchemas["cowork/provider/model/setEnabled"],
+  "cowork/provider/model/resetEnabled":
+    jsonRpcControlRequestSchemas["cowork/provider/model/resetEnabled"],
 } as const;
 
 export const jsonRpcProviderResultSchemas = {
@@ -36,4 +44,11 @@ export const jsonRpcProviderResultSchemas = {
   "cowork/provider/auth/setApiKey": jsonRpcControlResultSchemas["cowork/provider/auth/setApiKey"],
   "cowork/provider/auth/setConfig": jsonRpcControlResultSchemas["cowork/provider/auth/setConfig"],
   "cowork/provider/auth/copyApiKey": jsonRpcControlResultSchemas["cowork/provider/auth/copyApiKey"],
+  "cowork/provider/customModel/add": jsonRpcControlResultSchemas["cowork/provider/customModel/add"],
+  "cowork/provider/customModel/delete":
+    jsonRpcControlResultSchemas["cowork/provider/customModel/delete"],
+  "cowork/provider/model/setEnabled":
+    jsonRpcControlResultSchemas["cowork/provider/model/setEnabled"],
+  "cowork/provider/model/resetEnabled":
+    jsonRpcControlResultSchemas["cowork/provider/model/resetEnabled"],
 } as const;

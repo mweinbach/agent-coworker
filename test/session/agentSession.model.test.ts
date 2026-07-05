@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { getAiCoworkerPaths } from "../../src/connect";
+import { upsertCustomModel } from "../../src/providers/customModels";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -240,6 +242,57 @@ describe("AgentSession", () => {
       if (err && err.type === "error") {
         expect(err.message).toContain("Unsupported provider");
       }
+    });
+
+    test("configured custom model IDs can be selected for dynamic providers", async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-custom-model-"));
+      await upsertCustomModel(
+        getAiCoworkerPaths({ homedir: homeDir }),
+        "anthropic",
+        "claude-custom-20260704",
+      );
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(homeDir),
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          preferredChildModel: "claude-sonnet-4-5",
+        },
+      });
+
+      await session.setModel("claude-custom-20260704", "anthropic");
+
+      expect(session.getPublicConfig().provider).toBe("anthropic");
+      expect(session.getPublicConfig().model).toBe("claude-custom-20260704");
+      expect(events.some((event) => event.type === "error")).toBe(false);
+    });
+
+    test("switching to a non-reasoning custom OpenAI model drops stale reasoning options", async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-reasoning-switch-"));
+      await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "openai", "gpt-4o");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(homeDir),
+          provider: "openai",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+          // Prior reasoning-model selection left these in the config.
+          providerOptions: {
+            openai: { reasoningEffort: "high", reasoningSummary: "detailed" },
+          },
+        },
+      });
+
+      await session.setModel("gpt-4o", "openai");
+
+      expect(session.getPublicConfig().model).toBe("gpt-4o");
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      const openaiOptions = session.getSessionConfigEvent().config.providerOptions?.openai as
+        | Record<string, unknown>
+        | undefined;
+      // The stale reasoning options must not survive onto a non-reasoning model.
+      expect(openaiOptions?.reasoningEffort).toBeUndefined();
+      expect(openaiOptions?.reasoningSummary).toBeUndefined();
     });
 
     test("OpenAI-looking model on anthropic emits actionable provider guidance", async () => {

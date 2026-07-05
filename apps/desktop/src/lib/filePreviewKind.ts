@@ -90,6 +90,9 @@ export function mimeForPreviewKind(kind: FilePreviewKind, ext: string): string {
     if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
     if (ext === ".webp") return "image/webp";
     if (ext === ".gif") return "image/gif";
+    if (ext === ".avif") return "image/avif";
+    if (ext === ".bmp") return "image/bmp";
+    if (ext === ".ico") return "image/x-icon";
     return "application/octet-stream";
   }
   return "application/octet-stream";

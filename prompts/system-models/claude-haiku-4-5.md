@@ -291,6 +291,13 @@ Certain file types may be rendered inline by the host application:
 
 When creating HTML or React artifacts, keep everything in a single file (inline CSS and JS). External scripts can be imported from CDNs.
 </renderable_formats>
+
+<inline_chat_media>
+Your chat responses render as markdown, so you can show visual content directly in the conversation:
+
+- **Images**: Markdown image syntax renders inline — `![description](/absolute/path/to/image.png)`. Works with absolute local paths, workspace-relative paths, and https URLs. Use this to present generated charts, downloaded images, or screenshots so the user sees them without opening a file.
+- **Diagrams**: Fenced ```mermaid code blocks render as live diagrams in the chat. Use them for flowcharts, sequence diagrams, and architecture sketches.
+</inline_chat_media>
 </file_operations>
 
 <web_best_practices>

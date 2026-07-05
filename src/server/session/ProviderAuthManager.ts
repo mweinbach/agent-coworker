@@ -2,7 +2,7 @@ import path from "node:path";
 
 import type { getAiCoworkerPaths } from "../../connect";
 import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
-import { resolveModelMetadata } from "../../models/metadata";
+import { reconcileReasoningProviderOptions, resolveModelMetadata } from "../../models/metadata";
 import {
   authorizeProviderAuth,
   type ConnectProviderHandler,
@@ -136,14 +136,16 @@ export class ProviderAuthManager {
 
     const currentConfig = baseConfig ?? this.opts.getConfig();
     const nextProvider = providerRaw ?? currentConfig.provider;
+    // Custom/discovery-cache lookups must resolve against this session's auth
+    // home so tests (and non-default homes) stay deterministic. Thread the same
+    // home into the sync child-routing normalization below.
+    const home = path.dirname(currentConfig.userCoworkDir);
     let resolvedModel: Awaited<ReturnType<typeof resolveModelMetadata>> | undefined;
     try {
       resolvedModel = await resolveModelMetadata(nextProvider, modelId, {
         providerOptions: currentConfig.providerOptions,
         source: "model",
-        // Discovery-cache lookups must resolve against this session's auth home
-        // so tests (and non-default homes) stay deterministic.
-        home: path.dirname(currentConfig.userCoworkDir),
+        home,
       });
     } catch (error) {
       this.opts.emitError(
@@ -169,6 +171,7 @@ export class ProviderAuthManager {
         preferredChildModel: currentConfig.preferredChildModel,
         allowedChildModelRefs: currentConfig.allowedChildModelRefs,
         source: "model selection",
+        home,
       });
     } catch {
       // A stale preferred child target (e.g. persisted before a provider switch)
@@ -180,6 +183,7 @@ export class ProviderAuthManager {
         preferredChildModelRef: `${nextProvider}:${resolvedModel.id}`,
         allowedChildModelRefs: currentConfig.allowedChildModelRefs,
         source: "model selection",
+        home,
       });
     }
     const nextRuntime =
@@ -189,11 +193,23 @@ export class ProviderAuthManager {
     const shouldClearProviderState =
       currentConfig.provider !== nextProvider || currentConfig.model !== resolvedModel.id;
 
+    // Drop reasoning options carried over from a prior model that the selected
+    // model does not support, so switching a live thread to a non-reasoning
+    // custom id does not forward a stale reasoning payload.
+    const reconciledProviderOptions = reconcileReasoningProviderOptions(
+      currentConfig.providerOptions,
+      nextProvider,
+      resolvedModel.providerOptionsDefaults,
+    ) as AgentConfig["providerOptions"];
+
     const nextConfig: AgentConfig = {
       ...currentConfig,
       provider: nextProvider,
       ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
       model: resolvedModel.id,
+      ...(reconciledProviderOptions !== undefined
+        ? { providerOptions: reconciledProviderOptions }
+        : {}),
       preferredChildModel: normalizedChildRouting.preferredChildModel,
       childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
       preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,

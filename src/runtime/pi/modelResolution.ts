@@ -1,16 +1,29 @@
 import { getSavedProviderApiKey } from "../../config";
 import { getResolvedModelMetadataSync } from "../../models/metadata";
-import { getBasetenModelSpec, resolveBasetenApiKey } from "../../providers/basetenShared";
+import {
+  BASETEN_BASE_URL,
+  getBasetenModelSpec,
+  resolveBasetenApiKey,
+} from "../../providers/basetenShared";
 import { bedrockClientConfig, resolveBedrockAuthConfig } from "../../providers/bedrockShared";
 import {
+  FIREWORKS_INFERENCE_BASE_URL,
   getFireworksInferenceModelSpec,
   isFireworksInferenceProvider,
   resolveFireworksInferenceApiKey,
 } from "../../providers/fireworksShared";
 import { prepareLmStudioModelMetadataForInference } from "../../providers/lmstudio/catalog";
 import { lmStudioOpenAiBaseUrl } from "../../providers/lmstudio/client";
-import { getMinimaxModelSpec, resolveMinimaxApiKey } from "../../providers/minimaxShared";
-import { getNvidiaModelSpec, resolveNvidiaApiKey } from "../../providers/nvidiaShared";
+import {
+  getMinimaxModelSpec,
+  MINIMAX_BASE_URL,
+  resolveMinimaxApiKey,
+} from "../../providers/minimaxShared";
+import {
+  getNvidiaModelSpec,
+  NVIDIA_BASE_URL,
+  resolveNvidiaApiKey,
+} from "../../providers/nvidiaShared";
 import {
   getOpenCodeModelPricing,
   getOpenCodeModelSpec,
@@ -20,9 +33,14 @@ import {
   type OpenCodeProviderName,
   resolveOpenCodeApiKey,
 } from "../../providers/opencodeShared";
-import { getTogetherModelSpec, resolveTogetherApiKey } from "../../providers/togetherShared";
+import {
+  getTogetherModelSpec,
+  resolveTogetherApiKey,
+  TOGETHER_BASE_URL,
+} from "../../providers/togetherShared";
 import type { ProviderName } from "../../types";
-import { asRecord, type PiModel, pickKnownPiModel } from "../piRuntimeOptions";
+import { resolveAuthHomeDir } from "../../utils/authHome";
+import { asRecord, type PiModel, pickExactPiModel, pickKnownPiModel } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../types";
 import {
   LM_STUDIO_LOCAL_SENTINEL_API_KEY,
@@ -57,8 +75,9 @@ function applySupportedModelMetadata(
   model: PiModel,
   provider: ProviderName,
   modelId: string,
+  home?: string,
 ): PiModel {
-  const supported = getResolvedModelMetadataSync(provider, modelId, "model");
+  const supported = getResolvedModelMetadataSync(provider, modelId, "model", { home });
   const input: Array<"text" | "image"> = supported.supportsImageInput
     ? ["text", "image"]
     : ["text"];
@@ -97,6 +116,26 @@ function buildLmStudioPiModel(opts: {
       maxTokensField: "max_tokens",
       thinkingFormat: "openai",
     },
+  };
+}
+
+function buildOpenAiCompatibleCustomPiModel(opts: {
+  modelId: string;
+  provider: string;
+  baseUrl: string;
+  compat?: Record<string, unknown>;
+}): PiModel {
+  return {
+    id: opts.modelId,
+    name: opts.modelId,
+    api: "openai-completions",
+    provider: opts.provider,
+    baseUrl: opts.baseUrl,
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 131_072,
+    maxTokens: 8_192,
+    ...(opts.compat ? { compat: opts.compat } : {}),
   };
 }
 
@@ -182,7 +221,7 @@ async function getBedrockPiModel(modelId: string): Promise<PiModel> {
 
 async function getAnthropicPiModel(modelId: string): Promise<PiModel | null> {
   if (modelId === "claude-opus-4-8") {
-    const opus47 = await pickKnownPiModel("anthropic", "claude-opus-4-7");
+    const opus47 = await pickExactPiModel("anthropic", "claude-opus-4-7");
     if (!opus47) return null;
     return {
       ...opus47,
@@ -193,10 +232,25 @@ async function getAnthropicPiModel(modelId: string): Promise<PiModel | null> {
     };
   }
 
-  const model = await pickKnownPiModel("anthropic", modelId);
-  if (model) return model;
+  return await pickExactPiModel("anthropic", modelId);
+}
 
-  return null;
+// Fallback for custom/unknown Anthropic model IDs (configured via the custom
+// model store). Mirrors buildOpenAiCompatibleCustomPiModel: conservative
+// limits and no cost metadata, so usage reporting treats pricing as unknown
+// instead of inheriting an unrelated catalog model's rates.
+function buildAnthropicCustomPiModel(modelId: string): PiModel {
+  return {
+    id: modelId,
+    name: modelId,
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: modelId.toLowerCase().includes("claude"),
+    input: ["text"],
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  };
 }
 
 function getTogetherPiModel(modelId: string): PiModel | null {
@@ -301,13 +355,17 @@ export async function resolvePiModel(
 ): Promise<ResolvedPiRuntimeModel> {
   const modelId = params.config.model;
   const provider = params.config.provider;
+  // Custom cross-registry ids are validated against the custom-model store
+  // under the session's auth home; thread it through every sync metadata
+  // lookup so a configured custom id resolves on the first turn.
+  const home = resolveAuthHomeDir(params.config);
 
   if (provider === "openai") {
     const model = await pickKnownPiModel("openai", modelId);
     if (!model)
       throw new Error(`No PI model metadata available for provider openai (model: ${modelId}).`);
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: getSavedProviderApiKey(params.config, "openai"),
     };
   }
@@ -319,11 +377,9 @@ export async function resolvePiModel(
   }
 
   if (provider === "anthropic") {
-    const model = await getAnthropicPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider anthropic (model: ${modelId}).`);
+    const model = (await getAnthropicPiModel(modelId)) ?? buildAnthropicCustomPiModel(modelId);
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),
     };
   }
@@ -332,17 +388,21 @@ export async function resolvePiModel(
     const auth = await resolveBedrockAuthConfig({ config: params.config });
     const streamOptions = auth ? bedrockClientConfig(auth) : undefined;
     return {
-      model: applySupportedModelMetadata(await getBedrockPiModel(modelId), provider, modelId),
+      model: applySupportedModelMetadata(await getBedrockPiModel(modelId), provider, modelId, home),
       ...(streamOptions ? { streamOptions } : {}),
     };
   }
 
   if (provider === "baseten") {
-    const model = getBasetenPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider baseten (model: ${modelId}).`);
+    const model =
+      getBasetenPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "baseten",
+        baseUrl: BASETEN_BASE_URL,
+      });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveBasetenApiKey({
         savedKey: getSavedProviderApiKey(params.config, "baseten"),
       }),
@@ -350,11 +410,15 @@ export async function resolvePiModel(
   }
 
   if (provider === "together") {
-    const model = getTogetherPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider together (model: ${modelId}).`);
+    const model =
+      getTogetherPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "together",
+        baseUrl: TOGETHER_BASE_URL,
+      });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveTogetherApiKey({
         savedKey: getSavedProviderApiKey(params.config, "together"),
       }),
@@ -362,13 +426,15 @@ export async function resolvePiModel(
   }
 
   if (isFireworksInferenceProvider(provider)) {
-    const model = getFireworksInferencePiModel(provider, modelId);
-    if (!model)
-      throw new Error(
-        `No PI model metadata available for provider ${provider} (model: ${modelId}).`,
-      );
+    const model =
+      getFireworksInferencePiModel(provider, modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider,
+        baseUrl: FIREWORKS_INFERENCE_BASE_URL,
+      });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveFireworksInferenceApiKey(provider, {
         savedKey: getSavedProviderApiKey(params.config, provider),
       }),
@@ -376,11 +442,22 @@ export async function resolvePiModel(
   }
 
   if (provider === "nvidia") {
-    const model = getNvidiaPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider nvidia (model: ${modelId}).`);
+    const model =
+      getNvidiaPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "nvidia",
+        baseUrl: NVIDIA_BASE_URL,
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          maxTokensField: "max_tokens",
+          thinkingFormat: "openai",
+        },
+      });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveNvidiaApiKey({
         savedKey: getSavedProviderApiKey(params.config, "nvidia"),
       }),
@@ -388,11 +465,22 @@ export async function resolvePiModel(
   }
 
   if (provider === "minimax") {
-    const model = getMinimaxPiModel(modelId);
-    if (!model)
-      throw new Error(`No PI model metadata available for provider minimax (model: ${modelId}).`);
+    const model =
+      getMinimaxPiModel(modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "minimax",
+        baseUrl: MINIMAX_BASE_URL,
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          maxTokensField: "max_completion_tokens",
+          thinkingFormat: "openai",
+        },
+      });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveMinimaxApiKey({
         savedKey: getSavedProviderApiKey(params.config, "minimax"),
       }),
@@ -426,13 +514,16 @@ export async function resolvePiModel(
   }
 
   if (isOpenCodeProviderName(provider)) {
-    const model = getOpenCodePiModel(provider, modelId);
-    if (!model)
-      throw new Error(
-        `No PI model metadata available for provider ${provider} (model: ${modelId}).`,
-      );
+    const providerConfig = getOpenCodeProviderConfig(provider);
+    const model =
+      getOpenCodePiModel(provider, modelId) ??
+      buildOpenAiCompatibleCustomPiModel({
+        modelId,
+        provider: "opencode",
+        baseUrl: providerConfig.baseUrl,
+      });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveOpenCodeApiKey(provider, {
         savedKey: getSavedProviderApiKey(params.config, provider),
       }),

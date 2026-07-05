@@ -17,6 +17,7 @@ import {
   isModelDiscoveryCacheFresh,
   modelDiscoveryCachePath,
   readModelDiscoveryCache,
+  readModelDiscoveryCacheSync,
   writeModelDiscoveryCache,
 } from "../../src/providers/modelDiscoveryCache";
 
@@ -116,6 +117,29 @@ describe("providers/modelDiscoveryCache", () => {
     await fs.mkdir(path.dirname(modelDiscoveryCachePath(paths, "openai")), { recursive: true });
     await fs.writeFile(modelDiscoveryCachePath(paths, "openai"), "{ invalid json", "utf-8");
     expect(await readModelDiscoveryCache(paths, "openai")).toBeNull();
+  });
+
+  test("readModelDiscoveryCacheSync mirrors the async reader", async () => {
+    const paths = await tmpPaths("model-cache-sync-");
+    // Missing cache reads as null.
+    expect(readModelDiscoveryCacheSync(paths, "openai")).toBeNull();
+
+    const written = await writeModelDiscoveryCache(paths, "openai", {
+      provider: "openai",
+      source: "api",
+      models: [{ id: "discovered-1", displayName: "Discovered 1" }],
+    });
+    expect(readModelDiscoveryCacheSync(paths, "openai")).toEqual(written);
+    expect(readModelDiscoveryCacheSync(paths, "openai")).toEqual(
+      await readModelDiscoveryCache(paths, "openai"),
+    );
+  });
+
+  test("readModelDiscoveryCacheSync ignores invalid cache files", async () => {
+    const paths = await tmpPaths("model-cache-sync-invalid-");
+    await fs.mkdir(path.dirname(modelDiscoveryCachePath(paths, "openai")), { recursive: true });
+    await fs.writeFile(modelDiscoveryCachePath(paths, "openai"), "{ invalid json", "utf-8");
+    expect(readModelDiscoveryCacheSync(paths, "openai")).toBeNull();
   });
 });
 

@@ -1,7 +1,8 @@
 import { getSavedProviderApiKey } from "../config";
-import { assertSupportedModel } from "../models/registry";
+import { getResolvedModelMetadataSync } from "../models/metadata";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
-import { type PiModel, pickKnownPiModel } from "./piRuntimeOptions";
+import { type PiModel, pickExactPiModel } from "./piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "./types";
 
 type SupportedResponsesModelLimits = Pick<PiModel, "contextWindow" | "maxTokens">;
@@ -19,6 +20,11 @@ const SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS: Record<string, SupportedResponses
   "gpt-5.5": { contextWindow: 1_050_000, maxTokens: 128_000 },
 };
 
+const OPENAI_RESPONSES_FALLBACK_LIMITS: SupportedResponsesModelLimits = {
+  contextWindow: 128_000,
+  maxTokens: 16_384,
+};
+
 type ResolvedOpenAiResponsesModel = {
   model: PiModel;
   apiKey?: string;
@@ -30,20 +36,31 @@ function applySupportedOpenAiResponsesModel(
   provider: "openai",
   modelId: string,
   model: PiModel,
+  home?: string,
 ): PiModel {
-  const supported = assertSupportedModel(provider, modelId, "model");
-  const supportedLimits = SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[supported.id];
-  if (!supportedLimits) {
-    throw new Error(
-      `Missing supported OpenAI Responses model limits for openai model ${supported.id}.`,
-    );
-  }
+  const supported = getResolvedModelMetadataSync(provider, modelId, "model", { home });
+  const supportedLimits =
+    SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[supported.id] ?? OPENAI_RESPONSES_FALLBACK_LIMITS;
   return {
     ...model,
     id: supported.id,
-    name: supported.id,
+    name: supported.displayName,
     input: supported.supportsImageInput ? ["text", "image"] : ["text"],
-    ...(supportedLimits ?? {}),
+    ...supportedLimits,
+  };
+}
+
+function buildOpenAiResponsesFallbackModel(modelId: string): PiModel {
+  return {
+    id: modelId,
+    name: modelId,
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: modelId.toLowerCase().startsWith("o") || modelId.toLowerCase().startsWith("gpt-5"),
+    input: ["text"],
+    contextWindow: OPENAI_RESPONSES_FALLBACK_LIMITS.contextWindow,
+    maxTokens: OPENAI_RESPONSES_FALLBACK_LIMITS.maxTokens,
   };
 }
 
@@ -56,14 +73,16 @@ export async function resolveOpenAiResponsesModel(
   if (provider !== "openai") {
     throw new Error(`Unsupported provider for OpenAI Responses runtime: ${provider}`);
   }
-  const model = await pickKnownPiModel("openai", modelId);
-  if (!model) {
-    throw new Error(
-      `No OpenAI Responses model metadata available for provider openai (model: ${modelId}).`,
-    );
-  }
+  // Custom cross-registry ids are validated against the custom-model store
+  // under the session's auth home; thread it into the sync metadata lookup so a
+  // configured custom id resolves on the first turn under a non-default home.
+  const home = resolveAuthHomeDir(params.config);
+  // Exact match only: unknown/custom IDs must take the fallback builder rather
+  // than inheriting another catalog model's pricing and metadata.
+  const model =
+    (await pickExactPiModel("openai", modelId)) ?? buildOpenAiResponsesFallbackModel(modelId);
   return {
-    model: applySupportedOpenAiResponsesModel(provider, modelId, model),
+    model: applySupportedOpenAiResponsesModel(provider, modelId, model, home),
     apiKey: getSavedProviderApiKey(params.config, "openai"),
   };
 }

@@ -4,12 +4,66 @@ import {
   updateManagedCodexAppServer,
 } from "../../../providers/codexAppServerResolver";
 import type { AgentConfig } from "../../../types";
+import { isProviderName } from "../../../types";
+import { FILE_LOCK_ACQUIRE_TIMEOUT_MS } from "../../../utils/fileLock";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
-import { captureWorkspaceControlOutcome, sendSessionMutationError } from "./outcomes";
+import {
+  captureWorkspaceControlMutationEvents,
+  captureWorkspaceControlOutcome,
+  sendSessionMutationError,
+} from "./outcomes";
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
+
+type ProviderCatalogEvent = Extract<SessionEvent, { type: "provider_catalog" }>;
+
+const isProviderCatalogEvent = (event: SessionEvent): event is ProviderCatalogEvent =>
+  event.type === "provider_catalog";
+
+// Custom-model and model-preference writes go through `withFileLock`, which waits
+// up to FILE_LOCK_ACQUIRE_TIMEOUT_MS for the cross-process store lock before it
+// either writes+emits or throws. The mutation capture must outwait that (plus a
+// margin for the actual write and catalog emit), or it would time out mid-write
+// and drop the catalog the store later emits — leaving the UI showing stale
+// state for a change that actually landed once the lock was released.
+const PROVIDER_STORE_MUTATION_TIMEOUT_MS = FILE_LOCK_ACQUIRE_TIMEOUT_MS + 5_000;
+
+/**
+ * Resolve a provider-catalog mutation to the catalog event the caller expects.
+ *
+ * `captureWorkspaceControlMutationEvents` waits for the action to resolve before
+ * it settles (it only schedules its idle-settle once `actionResolved` is true),
+ * so — unlike `captureWorkspaceControlOutcome`, which resolves on the FIRST
+ * matching event and can therefore return a stale `provider_catalog` emitted by
+ * a concurrent refresh while the store write is still in flight — the collected
+ * events are guaranteed to include the catalog emitted AFTER the store write.
+ * We take the LAST catalog: `addCustomProviderModel` (and its siblings) awaits
+ * the store mutation, then emits, so the final catalog reflects the mutation.
+ */
+function sendProviderCatalogMutationResult(
+  context: JsonRpcRouteContext,
+  ws: Parameters<JsonRpcRouteContext["jsonrpc"]["sendResult"]>[0],
+  id: Parameters<JsonRpcRouteContext["jsonrpc"]["sendResult"]>[1],
+  events: Array<ProviderCatalogEvent | Extract<SessionEvent, { type: "error" }>>,
+): void {
+  const error = events.find(context.utils.isSessionError);
+  if (error) {
+    sendSessionMutationError(context, ws, id, error);
+    return;
+  }
+  const catalogs = events.filter(isProviderCatalogEvent);
+  const event = catalogs.at(-1);
+  if (!event) {
+    context.jsonrpc.sendError(ws, id, {
+      code: JSONRPC_ERROR_CODES.internalError,
+      message: "Provider mutation did not emit a provider_catalog event",
+    });
+    return;
+  }
+  context.jsonrpc.sendResult(ws, id, { event });
+}
 
 // Codex app-server can spend up to one minute starting login, ten minutes
 // waiting for the browser callback, and another minute refreshing the account.
@@ -288,6 +342,102 @@ export function createProviderRouteHandlers(
         return;
       }
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/customModel/add": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      const modelId = typeof params.modelId === "string" ? params.modelId.trim() : "";
+      if (!isProviderName(provider) || !modelId) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider and modelId`,
+        });
+        return;
+      }
+      const events = await captureWorkspaceControlMutationEvents(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.addCustomModel(provider, modelId),
+        isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
+      );
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
+    },
+
+    "cowork/provider/customModel/delete": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      const modelId = typeof params.modelId === "string" ? params.modelId.trim() : "";
+      if (!isProviderName(provider) || !modelId) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider and modelId`,
+        });
+        return;
+      }
+      const events = await captureWorkspaceControlMutationEvents(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.deleteCustomModel(provider, modelId),
+        isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
+      );
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
+    },
+
+    "cowork/provider/model/setEnabled": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      const models = Array.isArray(params.models)
+        ? params.models.flatMap((model) => {
+            if (typeof model !== "object" || model === null) return [];
+            const { id, enabled } = model as Record<string, unknown>;
+            if (typeof id !== "string" || !id.trim() || typeof enabled !== "boolean") return [];
+            return [{ id: id.trim(), enabled }];
+          })
+        : [];
+      const modelsValid =
+        Array.isArray(params.models) && models.length === params.models.length && models.length > 0;
+      if (!isProviderName(provider) || !modelsValid) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider and a non-empty models array of { id, enabled }`,
+        });
+        return;
+      }
+      const events = await captureWorkspaceControlMutationEvents(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.setModelsEnabled(provider, models),
+        isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
+      );
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
+    },
+
+    "cowork/provider/model/resetEnabled": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string" ? params.provider : undefined;
+      if (!isProviderName(provider)) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider`,
+        });
+        return;
+      }
+      const events = await captureWorkspaceControlMutationEvents(
+        context,
+        cwd,
+        async (runtime) => await runtime.provider.resetModelPreferences(provider),
+        isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
+      );
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
   };
 }

@@ -44,6 +44,7 @@ import {
   filterFeedForDeveloperMode,
   getComposerSubmitState,
   resolveComposerBusyPolicy,
+  resolveCurrentReasoningEffort,
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
@@ -80,6 +81,7 @@ export {
   reasoningLabelForMode,
   reasoningPreviewText,
   resolveComposerBusyPolicy,
+  resolveCurrentReasoningEffort,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
 } from "./chat/chatLogic";
@@ -445,11 +447,12 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         !thread.draft && (provider === "openai" || provider === "codex-cli")
           ? (rt.effectiveReasoningEffort ?? rt.requestedReasoningEffort)
           : undefined;
-      const currentEffort =
-        rt.composerReasoningEffort ??
-        runtimeEffort ??
-        configuredEffort ??
-        reasoningConfig.defaultEffort;
+      const currentEffort = resolveCurrentReasoningEffort({
+        composerEffort: rt.composerReasoningEffort,
+        configuredEffort,
+        runtimeEffort,
+        defaultEffort: reasoningConfig.defaultEffort,
+      });
       return {
         provider,
         model,

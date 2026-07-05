@@ -14,6 +14,7 @@ import {
   reasoningLabelForMode,
   reasoningPreviewText,
   resolveComposerBusyPolicy,
+  resolveCurrentReasoningEffort,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
 } from "../src/ui/ChatView";
@@ -36,6 +37,46 @@ describe("desktop reasoning UI helpers", () => {
     expect(shouldToggleReasoningExpanded(" ")).toBe(true);
     expect(shouldToggleReasoningExpanded("Spacebar")).toBe(true);
     expect(shouldToggleReasoningExpanded("Escape")).toBe(false);
+  });
+
+  test("reasoning effort prefers confirmed config over a stale runtime value", () => {
+    // After a confirmed config change, composerReasoningEffort is cleared and
+    // the runtime effort is stale; the selector must follow the config.
+    expect(
+      resolveCurrentReasoningEffort({
+        composerEffort: null,
+        configuredEffort: "high",
+        runtimeEffort: "low",
+        defaultEffort: "medium",
+      }),
+    ).toBe("high");
+    // A pending composer selection still wins over everything.
+    expect(
+      resolveCurrentReasoningEffort({
+        composerEffort: "xhigh",
+        configuredEffort: "high",
+        runtimeEffort: "low",
+        defaultEffort: "medium",
+      }),
+    ).toBe("xhigh");
+    // Runtime only fills in when the config has no configured effort.
+    expect(
+      resolveCurrentReasoningEffort({
+        composerEffort: null,
+        configuredEffort: undefined,
+        runtimeEffort: "low",
+        defaultEffort: "medium",
+      }),
+    ).toBe("low");
+    // Falls back to the model default when nothing else is set.
+    expect(
+      resolveCurrentReasoningEffort({
+        composerEffort: null,
+        configuredEffort: undefined,
+        runtimeEffort: undefined,
+        defaultEffort: "medium",
+      }),
+    ).toBe("medium");
   });
 
   test("hides system feed entries unless developer mode is enabled", () => {

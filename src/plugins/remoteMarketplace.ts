@@ -6,6 +6,7 @@ import type {
 } from "../types";
 import type { PluginInstallMetadata } from "./manifest";
 import { type ParsedMarketplaceDocument, parseRemotePluginMarketplace } from "./marketplace";
+import { fetchConfiguredMarketplaces, type MarketplaceRegistryConfig } from "./marketplaceRegistry";
 
 export const BUILT_IN_MARKETPLACE_REPO = "mweinbach/cowork-skills-plugins";
 const BUILT_IN_MARKETPLACE_REF = "main";
@@ -286,9 +287,25 @@ export async function fetchRemotePluginMarketplace(
 }
 
 export async function fetchMarketplaceInstallMetadataBySourceInput(opts: {
+  config: MarketplaceRegistryConfig;
   input: string;
   fetchImpl?: FetchLike;
 }): Promise<Map<string, PluginMarketplaceInstallMetadata>> {
-  const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
-  return buildMarketplaceInstallMetadataBySourceInput(marketplace, opts.input);
+  const { marketplaces } = await fetchConfiguredMarketplaces({
+    config: opts.config,
+    fetchImpl: opts.fetchImpl,
+  });
+  const metadataByPluginId = new Map<string, PluginMarketplaceInstallMetadata>();
+  for (const { document } of marketplaces) {
+    for (const [pluginId, metadata] of buildMarketplaceInstallMetadataBySourceInput(
+      document,
+      opts.input,
+    )) {
+      // Earlier marketplaces (built-in first) win on plugin-id collisions.
+      if (!metadataByPluginId.has(pluginId)) {
+        metadataByPluginId.set(pluginId, metadata);
+      }
+    }
+  }
+  return metadataByPluginId;
 }

@@ -1093,6 +1093,30 @@ const pluginDetailEventSchema = z
   })
   .passthrough();
 
+const marketplaceListEntrySchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    repo: nonEmptyTrimmedStringSchema,
+    ref: nonEmptyTrimmedStringSchema,
+    url: nonEmptyTrimmedStringSchema,
+    marketplacePath: nonEmptyTrimmedStringSchema,
+    builtIn: z.boolean(),
+    displayName: z.string().optional(),
+    pluginCount: z.number().optional(),
+    skillCount: z.number().optional(),
+    fetchError: z.string().optional(),
+    addedAt: z.string().optional(),
+  })
+  .passthrough();
+
+const marketplacesListEventSchema = z
+  .object({
+    type: z.literal("marketplaces_list"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    marketplaces: z.array(marketplaceListEntrySchema),
+  })
+  .passthrough();
+
 const pluginMutationResultEventSchema = z.union([
   skillsListEventSchema,
   skillsCatalogEventSchema,
@@ -1519,6 +1543,26 @@ const pluginsInstallRequestSchema = z
   })
   .strict();
 
+const marketplacesReadRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const marketplacesAddRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    sourceInput: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const marketplacesRemoveRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    id: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const importListRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1781,6 +1825,9 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/plugins/update": pluginMutationRequestSchema,
   "cowork/plugins/install/preview": pluginsInstallPreviewRequestSchema,
   "cowork/plugins/install": pluginsInstallRequestSchema,
+  "cowork/marketplaces/read": marketplacesReadRequestSchema,
+  "cowork/marketplaces/add": marketplacesAddRequestSchema,
+  "cowork/marketplaces/remove": marketplacesRemoveRequestSchema,
   "cowork/import/list": importListRequestSchema,
   "cowork/import/plugin": importPluginRequestSchema,
   "cowork/import/skill": importSkillRequestSchema,
@@ -1874,6 +1921,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/plugins/update": sessionEventsEnvelope(pluginInstallResultEventSchema),
   "cowork/plugins/install/preview": sessionEventEnvelope(pluginInstallPreviewEventSchema),
   "cowork/plugins/install": sessionEventsEnvelope(pluginInstallResultEventSchema),
+  "cowork/marketplaces/read": sessionEventEnvelope(marketplacesListEventSchema),
+  "cowork/marketplaces/add": sessionEventEnvelope(marketplacesListEventSchema),
+  "cowork/marketplaces/remove": sessionEventEnvelope(marketplacesListEventSchema),
   "cowork/import/list": sessionEventEnvelope(importListEventSchema),
   "cowork/import/plugin": sessionEventsEnvelope(pluginInstallResultEventSchema),
   "cowork/import/skill": sessionEventEnvelope(skillsCatalogEventSchema),

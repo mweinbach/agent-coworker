@@ -16,12 +16,12 @@ import {
   readPluginManifest,
   readPluginSkillSummaries,
 } from "./manifest";
+import { fetchConfiguredMarketplaces } from "./marketplaceRegistry";
 import { readPluginMcpServers } from "./mcp";
 import { isPluginEnabled, isPluginSkillEnabled, readPluginOverrides } from "./overrides";
 import {
   buildMarketplaceCatalogMetadata,
   buildRemoteMarketplaceCatalogEntry,
-  fetchRemotePluginMarketplace,
 } from "./remoteMarketplace";
 
 async function readPluginMcpSummary(
@@ -178,8 +178,20 @@ export async function buildPluginCatalogSnapshot(
 
   const includeRemoteMarketplace = opts.includeRemoteMarketplace ?? false;
   if (includeRemoteMarketplace) {
-    try {
-      const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
+    const { marketplaces, failures } = await fetchConfiguredMarketplaces({
+      config,
+      fetchImpl: opts.fetchImpl,
+    });
+    for (const failure of failures) {
+      // Any failed marketplace makes the available list partial, so clients keep
+      // their cached marketplace rows instead of clearing them.
+      remoteMarketplaceFailed = true;
+      warnings.push(
+        `[plugins] Failed to load remote marketplace ${failure.source.repo}: ${failure.error}`,
+      );
+    }
+    const availablePluginNames = new Set<string>();
+    for (const { document: marketplace } of marketplaces) {
       for (const marketplaceEntry of marketplace.plugins) {
         const sameIdEntries = plugins.filter((plugin) => plugin.id === marketplaceEntry.name);
         const installedEntries = sameIdEntries.filter((plugin) =>
@@ -227,6 +239,11 @@ export async function buildPluginCatalogSnapshot(
         if (!marketplaceEntry.sourceInput) {
           continue;
         }
+        // Same-name available offers dedupe across marketplaces; earlier
+        // marketplaces (built-in first) win.
+        if (availablePluginNames.has(marketplaceEntry.name)) {
+          continue;
+        }
 
         const entry = buildRemoteMarketplaceCatalogEntry({
           marketplace,
@@ -234,11 +251,9 @@ export async function buildPluginCatalogSnapshot(
         });
         if (entry) {
           availablePlugins.push(entry);
+          availablePluginNames.add(marketplaceEntry.name);
         }
       }
-    } catch (error) {
-      remoteMarketplaceFailed = true;
-      warnings.push(`[plugins] Failed to load remote marketplace: ${String(error)}`);
     }
   }
 
@@ -257,22 +272,28 @@ export async function buildPluginCatalogSnapshot(
 }
 
 export async function buildRemoteMarketplacePluginDetail(opts: {
+  config: AgentConfig;
   pluginId: string;
   fetchImpl?: FetchLike;
 }): Promise<MarketplacePluginCatalogEntry | null> {
-  const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
-  const marketplaceEntry = marketplace.plugins.find((entry) => entry.name === opts.pluginId);
-  if (!marketplaceEntry) {
-    return null;
-  }
-  const baseEntry = buildRemoteMarketplaceCatalogEntry({
-    marketplace,
-    plugin: marketplaceEntry,
+  const { marketplaces } = await fetchConfiguredMarketplaces({
+    config: opts.config,
+    fetchImpl: opts.fetchImpl,
   });
-  if (!baseEntry) {
-    return null;
+  for (const { document: marketplace } of marketplaces) {
+    const marketplaceEntry = marketplace.plugins.find((entry) => entry.name === opts.pluginId);
+    if (!marketplaceEntry) {
+      continue;
+    }
+    const baseEntry = buildRemoteMarketplaceCatalogEntry({
+      marketplace,
+      plugin: marketplaceEntry,
+    });
+    if (baseEntry) {
+      return baseEntry;
+    }
   }
-  return baseEntry;
+  return null;
 }
 
 export function resolvePluginCatalogEntry(opts: {

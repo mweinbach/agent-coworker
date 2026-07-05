@@ -327,6 +327,10 @@ Currently implemented `cowork/*` methods include:
   - `cowork/plugins/delete`
   - `cowork/plugins/checkUpdate`
   - `cowork/plugins/update`
+- marketplace registry controls (configure additional plugin/skill marketplaces)
+  - `cowork/marketplaces/read`
+  - `cowork/marketplaces/add`
+  - `cowork/marketplaces/remove`
 - import controls (import plugins/skills already on disk from Claude Code `~/.claude` and Codex `~/.codex`)
   - `cowork/import/list`
   - `cowork/import/plugin`
@@ -381,6 +385,12 @@ A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>
 A marketplace `marketplace.json` may also declare a `skills` array (same entry shape as `plugins`) for standalone skills. These surface in skill catalog snapshots under `availableSkills` (`installed: false`, each with an `installSource` GitHub URL); installed skills stay in `installations`. The `skills_catalog` event sets `availableSkillsPartial: true` whenever the remote marketplace was not fetched (local-only refresh) or the fetch failed, so clients keep their cached available-skill rows instead of clearing them. Install an available skill by passing its `installSource` to `cowork/skills/install` (no new method is required).
 
 Marketplace entries (plugins and skills) may carry optional icon metadata in `interface`: `icon` or `logo` (an image URL or `data:` URI) and `brandColor`. Parsed plugin entries expose them as `availablePlugins[].interface.logo` / `interface.brandColor`; parsed skill entries expose them as `availableSkills[].interface.iconSmall` / `interface.iconLarge`. Installed plugin skills additionally embed `iconSmall` / `iconLarge` `data:` URIs when the skill's `agents/*.yaml` declares `icon_small` / `icon_large` file paths, matching standalone skill catalog behavior.
+
+Marketplace registry controls let a client configure additional marketplaces beyond the built-in one. A marketplace is a public GitHub repository whose manifest lives at `.agents/plugins/marketplace.json` (the built-in layout). User-added marketplaces persist in `~/.cowork/config/marketplaces.json`; the built-in marketplace is implicit — always present, always listed first, never persisted, never removable. Marketplace identity is the lowercase-normalized `owner/repo` slug. Catalog snapshots (`availablePlugins` / `availableSkills`) and update-check annotation aggregate every configured marketplace in list order, deduping same-name offers with earlier marketplaces (built-in first) winning; a single failing marketplace marks the snapshot partial (`availablePluginsPartial` / `availableSkillsPartial`) while the others still contribute rows.
+
+- `cowork/marketplaces/read` — params `{ cwd? }`. Returns `{ event }` where `event.type` is `marketplaces_list` (see [marketplaces_list](#marketplaces_list)). Each entry's `displayName`, `pluginCount`, and `skillCount` come from fetching that marketplace's manifest; when a fetch fails the entry carries `fetchError` instead and omits the counts.
+- `cowork/marketplaces/add` — params `{ cwd?, sourceInput: string }`. `sourceInput` accepts `owner/repo` shorthand, `https://github.com/owner/repo`, or `https://github.com/owner/repo/tree/<ref>` (ref defaults to `main`). The server validates the source by fetching and parsing its manifest before persisting; on failure the request returns a standard error with the underlying fetch/parse message (duplicates — including the built-in marketplace — are rejected). On success the result returns the updated `marketplaces_list` event and the server refreshes the remote-inclusive plugin and skill catalogs so marketplace rows update immediately.
+- `cowork/marketplaces/remove` — params `{ cwd?, id: string }`. Removes a configured marketplace by id. Removing the built-in marketplace or an unknown id returns an error. On success the result returns the updated `marketplaces_list` event and the same catalog refreshes as `cowork/marketplaces/add`.
 
 The import controls let a client browse and copy plugins/skills that already exist on disk from other agent tools:
 
@@ -2741,6 +2751,59 @@ Full plugin catalog snapshot for the desktop plugin manager.
 | `catalog` | `PluginCatalogSnapshot` | Plugin catalog snapshot |
 | `availablePluginsPartial` | `boolean?` | True when `availablePlugins` only reflects a local snapshot and clients should keep stable cached marketplace-only rows until an authoritative remote refresh arrives |
 | `clearedMutationPendingKeys` | `string[]?` | Optional pending plugin mutation keys completed by this refresh; omit on plain catalog reads |
+
+---
+
+### marketplaces_list
+
+Configured marketplace registry snapshot (built-in marketplace first, then user-added marketplaces in file order). Returned by `cowork/marketplaces/read`, `cowork/marketplaces/add`, and `cowork/marketplaces/remove`.
+
+```json
+{
+  "type": "marketplaces_list",
+  "sessionId": "...",
+  "marketplaces": [
+    {
+      "id": "mweinbach/cowork-skills-plugins",
+      "repo": "mweinbach/cowork-skills-plugins",
+      "ref": "main",
+      "url": "https://github.com/mweinbach/cowork-skills-plugins/tree/main",
+      "marketplacePath": ".agents/plugins/marketplace.json",
+      "builtIn": true,
+      "displayName": "Cowork Skills & Plugins",
+      "pluginCount": 4,
+      "skillCount": 12
+    },
+    {
+      "id": "acme/team-marketplace",
+      "repo": "acme/team-marketplace",
+      "ref": "main",
+      "url": "https://github.com/acme/team-marketplace/tree/main",
+      "marketplacePath": ".agents/plugins/marketplace.json",
+      "builtIn": false,
+      "fetchError": "Failed to fetch remote marketplace: 404 Not Found",
+      "addedAt": "2026-07-05T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"marketplaces_list"` | — |
+| `sessionId` | `string` | Session identifier |
+| `marketplaces` | `MarketplaceListEntry[]` | Configured marketplaces, built-in first |
+| `marketplaces[].id` | `string` | Lowercase-normalized `owner/repo` identity |
+| `marketplaces[].repo` | `string` | GitHub `owner/repo` slug |
+| `marketplaces[].ref` | `string` | Git ref the manifest is read from (default `main`) |
+| `marketplaces[].url` | `string` | `https://github.com/{repo}/tree/{ref}` |
+| `marketplaces[].marketplacePath` | `string` | Manifest path inside the repo |
+| `marketplaces[].builtIn` | `boolean` | True only for the implicit built-in marketplace (not removable) |
+| `marketplaces[].displayName` | `string?` | Marketplace display name from its fetched manifest; omitted when the fetch failed |
+| `marketplaces[].pluginCount` | `number?` | Plugin entry count from the fetched manifest; omitted when the fetch failed |
+| `marketplaces[].skillCount` | `number?` | Skill entry count from the fetched manifest; omitted when the fetch failed |
+| `marketplaces[].fetchError` | `string?` | Manifest fetch/parse error; present only when the fetch failed |
+| `marketplaces[].addedAt` | `string?` | ISO timestamp when the user added the marketplace; absent for the built-in entry |
 
 ---
 

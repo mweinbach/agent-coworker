@@ -21,10 +21,10 @@ import {
   readPluginManifest,
   writePluginInstallMetadata,
 } from "./manifest";
+import { listConfiguredMarketplaces, marketplaceIdForRepo } from "./marketplaceRegistry";
 import { readPluginMcpServers } from "./mcp";
 import { clearPluginEnabledOverride, setDefaultPluginRemoved } from "./overrides";
 import {
-  BUILT_IN_MARKETPLACE_REPO,
   canonicalDefaultMarketplacePluginIdForTombstone,
   fetchMarketplaceInstallMetadataBySourceInput,
   isBuiltInMarketplaceSourceInput,
@@ -292,16 +292,24 @@ async function migrateBundledPluginMcpCredentials(opts: {
 }
 
 async function resolveRemoteMarketplaceMetadataByPluginId(opts: {
+  config: AgentConfig;
   input: string;
   materialized: MaterializedPluginSource;
   fetchImpl?: FetchLike;
 }): Promise<Map<string, PluginMarketplaceInstallMetadata>> {
-  if (opts.materialized.descriptor.repo !== BUILT_IN_MARKETPLACE_REPO) {
+  const sourceRepo = opts.materialized.descriptor.repo;
+  if (!sourceRepo) {
     return new Map();
   }
 
   try {
+    const configured = await listConfiguredMarketplaces(opts.config);
+    const sourceRepoId = marketplaceIdForRepo(sourceRepo);
+    if (!configured.some((marketplace) => marketplace.id === sourceRepoId)) {
+      return new Map();
+    }
     return await fetchMarketplaceInstallMetadataBySourceInput({
+      config: opts.config,
       input: opts.input,
       fetchImpl: opts.fetchImpl,
     });
@@ -359,6 +367,7 @@ export async function installPluginsFromSource(opts: {
     const marketplaceMetadataByPluginId =
       opts.marketplaceMetadataByPluginId ??
       (await resolveRemoteMarketplaceMetadataByPluginId({
+        config: opts.config,
         input: opts.input,
         materialized,
         fetchImpl: opts.fetchImpl,

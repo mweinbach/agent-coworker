@@ -442,6 +442,18 @@ export class SessionSkillService {
     await this.session.getSkillInstallation(installationId);
   }
 
+  async listMarketplaces(): Promise<void> {
+    await this.session.listMarketplaces();
+  }
+
+  async addMarketplace(sourceInput: string): Promise<void> {
+    await this.session.addMarketplace(sourceInput);
+  }
+
+  async removeMarketplace(marketplaceId: string): Promise<void> {
+    await this.session.removeMarketplace(marketplaceId);
+  }
+
   async previewInstall(sourceInput: string, targetScope: "project" | "global"): Promise<void> {
     await this.session.previewSkillInstall(sourceInput, targetScope);
   }

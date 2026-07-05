@@ -14,6 +14,11 @@ import {
   installPluginsFromSource,
   updatePluginInstallation,
 } from "../../plugins";
+import {
+  addMarketplace as addMarketplaceToRegistry,
+  buildMarketplaceListEntries,
+  removeMarketplace as removeMarketplaceFromRegistry,
+} from "../../plugins/marketplaceRegistry";
 import { setPluginEnabled } from "../../plugins/overrides";
 import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
 import { getEffectiveInstallationByName } from "../../skills/catalog";
@@ -459,6 +464,97 @@ export class SkillManager {
         `Failed to get plugin catalog: ${String(err)}`,
       );
     }
+  }
+
+  private async emitMarketplacesList() {
+    const marketplaces = await buildMarketplaceListEntries({
+      config: this.context.state.config,
+    });
+    this.context.emit({
+      type: "marketplaces_list",
+      sessionId: this.context.id,
+      marketplaces,
+    });
+  }
+
+  /**
+   * Marketplace mutations change which remote catalogs feed availablePlugins /
+   * availableSkills, so they trigger the same remote-inclusive catalog refreshes
+   * a skill install does and the Marketplace tab updates immediately.
+   */
+  private async refreshCatalogsAfterMarketplaceMutation(clearedMutationPendingKeys: string[]) {
+    this.pluginCatalogService.invalidateRemoteCatalogRefreshes();
+    await this.context.refreshSkillsAcrossWorkspaceSessions({ allWorkspaces: true });
+    await this.emitSkillsCatalog(clearedMutationPendingKeys, { includeRemoteMarketplace: true });
+    await this.pluginCatalogService.emitCatalog(clearedMutationPendingKeys, {
+      includeRemoteMarketplace: true,
+    });
+  }
+
+  async listMarketplaces() {
+    try {
+      await this.emitMarketplacesList();
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list marketplaces: ${String(err)}`,
+      );
+    }
+  }
+
+  async addMarketplace(sourceInput: string) {
+    const normalizedSourceInput = sourceInput.trim();
+    if (!normalizedSourceInput) {
+      this.context.emitError("validation_failed", "session", "Marketplace source is required");
+      return;
+    }
+    await this.withSkillMutationLock(async () => {
+      try {
+        await addMarketplaceToRegistry({
+          config: this.context.state.config,
+          sourceInput: normalizedSourceInput,
+        });
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to add marketplace: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      await this.emitMarketplacesList();
+      await this.refreshCatalogsAfterMarketplaceMutation([
+        this.skillMutationPendingKey("marketplace:add"),
+      ]);
+    });
+  }
+
+  async removeMarketplace(marketplaceIdRaw: string) {
+    const marketplaceId = marketplaceIdRaw.trim();
+    if (!marketplaceId) {
+      this.context.emitError("validation_failed", "session", "Marketplace ID is required");
+      return;
+    }
+    await this.withSkillMutationLock(async () => {
+      try {
+        await removeMarketplaceFromRegistry({
+          config: this.context.state.config,
+          id: marketplaceId,
+        });
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to remove marketplace: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      await this.emitMarketplacesList();
+      await this.refreshCatalogsAfterMarketplaceMutation([
+        this.skillMutationPendingKey("marketplace:remove", marketplaceId),
+      ]);
+    });
   }
 
   async getPlugin(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {

@@ -288,6 +288,67 @@ function createRemoteMarketplaceFetch(
   }) as typeof fetch;
 }
 
+const SECOND_MARKETPLACE_REPO = "acme/extra-market";
+const BUILT_IN_REPO = "mweinbach/cowork-skills-plugins";
+
+async function writeConfiguredMarketplaces(userHome: string, repos: string[]): Promise<void> {
+  const configDir = path.join(userHome, ".cowork", "config");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(
+    path.join(configDir, "marketplaces.json"),
+    `${JSON.stringify({
+      version: 1,
+      marketplaces: repos.map((repo) => ({
+        repo,
+        ref: "main",
+        marketplacePath: ".agents/plugins/marketplace.json",
+        addedAt: "2026-01-01T00:00:00.000Z",
+      })),
+    })}\n`,
+    "utf-8",
+  );
+}
+
+function pluginMarketplaceDoc(name: string, pluginNames: string[]): unknown {
+  return {
+    name,
+    interface: { displayName: `${name} Display` },
+    plugins: pluginNames.map((pluginName) => ({
+      name: pluginName,
+      source: { source: "local", path: `./plugins/${pluginName}` },
+      policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+      category: "Design",
+    })),
+  };
+}
+
+// Serves per-repo marketplace.json docs; a `null` doc fails that repo's fetch.
+function createMultiRepoMarketplaceFetch(docsByRepo: Record<string, unknown>): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    for (const [repo, doc] of Object.entries(docsByRepo)) {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/contents/.agents/plugins/marketplace.json?ref=main`
+      ) {
+        if (doc === null) {
+          return textResponse("boom", 500);
+        }
+        return jsonResponse({
+          type: "file",
+          name: "marketplace.json",
+          path: ".agents/plugins/marketplace.json",
+          download_url: `https://download.test/${repo}/marketplace.json`,
+        });
+      }
+      if (url === `https://download.test/${repo}/marketplace.json` && doc !== null) {
+        return textResponse(JSON.stringify(doc));
+      }
+    }
+    return textResponse("not found", 404);
+  }) as typeof fetch;
+}
+
 function pluginEntry(scope: "workspace" | "user", rootDir: string): PluginCatalogEntry {
   return {
     id: "figma-toolkit",
@@ -344,6 +405,121 @@ describe("plugin catalog and install operations", () => {
       expect(plugin).not.toHaveProperty("manifestPath");
       expect(plugin).not.toHaveProperty("skillsPath");
       expect(plugin).not.toHaveProperty("skills");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("available plugins aggregate across configured marketplaces with earlier marketplaces winning collisions", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-market-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-market-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-market-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writeConfiguredMarketplaces(home, [SECOND_MARKETPLACE_REPO]);
+      const catalog = await buildPluginCatalogSnapshot(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createMultiRepoMarketplaceFetch({
+          [BUILT_IN_REPO]: pluginMarketplaceDoc("built-in", ["shared-toolkit"]),
+          [SECOND_MARKETPLACE_REPO]: pluginMarketplaceDoc("acme-market", [
+            "shared-toolkit",
+            "acme-toolkit",
+          ]),
+        }),
+      });
+
+      expect(catalog.remoteMarketplaceFailed).toBeUndefined();
+      expect(catalog.warnings).toEqual([]);
+      expect(catalog.availablePlugins.map((plugin) => plugin.id).sort()).toEqual([
+        "acme-toolkit",
+        "shared-toolkit",
+      ]);
+      const sharedToolkit = catalog.availablePlugins.find(
+        (plugin) => plugin.id === "shared-toolkit",
+      );
+      expect(sharedToolkit).toMatchObject({
+        marketplace: { name: "built-in" },
+        installSource: `https://github.com/${BUILT_IN_REPO}/tree/main/plugins/shared-toolkit`,
+      });
+      const acmeToolkit = catalog.availablePlugins.find((plugin) => plugin.id === "acme-toolkit");
+      expect(acmeToolkit).toMatchObject({
+        marketplace: { name: "acme-market" },
+        installSource: `https://github.com/${SECOND_MARKETPLACE_REPO}/tree/main/plugins/acme-toolkit`,
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("one failing marketplace sets remoteMarketplaceFailed while the other still loads", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-multi-market-fail-workspace-"),
+    );
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-market-fail-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-market-fail-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writeConfiguredMarketplaces(home, [SECOND_MARKETPLACE_REPO]);
+      const catalog = await buildPluginCatalogSnapshot(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createMultiRepoMarketplaceFetch({
+          [BUILT_IN_REPO]: null,
+          [SECOND_MARKETPLACE_REPO]: pluginMarketplaceDoc("acme-market", ["acme-toolkit"]),
+        }),
+      });
+
+      expect(catalog.remoteMarketplaceFailed).toBe(true);
+      expect(catalog.availablePlugins.map((plugin) => plugin.id)).toEqual(["acme-toolkit"]);
+      expect(catalog.warnings).toEqual([
+        expect.stringContaining(`Failed to load remote marketplace ${BUILT_IN_REPO}`),
+      ]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("remote marketplace plugin detail searches all configured marketplaces", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-multi-market-detail-workspace-"),
+    );
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-market-detail-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-multi-market-detail-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writeConfiguredMarketplaces(home, [SECOND_MARKETPLACE_REPO]);
+      const fetchImpl = createMultiRepoMarketplaceFetch({
+        [BUILT_IN_REPO]: pluginMarketplaceDoc("built-in", []),
+        [SECOND_MARKETPLACE_REPO]: pluginMarketplaceDoc("acme-market", ["acme-toolkit"]),
+      });
+
+      const detail = await buildRemoteMarketplacePluginDetail({
+        config,
+        pluginId: "acme-toolkit",
+        fetchImpl,
+      });
+      expect(detail).toMatchObject({
+        id: "acme-toolkit",
+        installed: false,
+        description: "Available from acme-market Display.",
+      });
+
+      const missing = await buildRemoteMarketplacePluginDetail({
+        config,
+        pluginId: "unknown-toolkit",
+        fetchImpl,
+      });
+      expect(missing).toBeNull();
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -675,6 +851,7 @@ describe("plugin catalog and install operations", () => {
 
     try {
       const detail = await buildRemoteMarketplacePluginDetail({
+        config,
         pluginId: "figma-toolkit",
         fetchImpl,
       });

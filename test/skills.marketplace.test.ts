@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { parsePluginMarketplace, parseRemotePluginMarketplace } from "../src/plugins/marketplace";
 import {
+  BUILT_IN_MARKETPLACE_REPO,
   buildRemoteMarketplaceCatalogEntry,
   buildRemoteMarketplaceSkillCatalogEntry,
 } from "../src/plugins/remoteMarketplace";
@@ -90,6 +91,77 @@ function createSkillMarketplaceFetch(doc: unknown): typeof fetch {
     }
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
+}
+
+const SECOND_MARKETPLACE_REPO = "acme/extra-market";
+
+async function writeConfiguredMarketplaces(userHome: string, repos: string[]): Promise<void> {
+  const configDir = path.join(userHome, ".cowork", "config");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(
+    path.join(configDir, "marketplaces.json"),
+    `${JSON.stringify({
+      version: 1,
+      marketplaces: repos.map((repo) => ({
+        repo,
+        ref: "main",
+        marketplacePath: ".agents/plugins/marketplace.json",
+        addedAt: "2026-01-01T00:00:00.000Z",
+      })),
+    })}\n`,
+    "utf-8",
+  );
+}
+
+// Serves per-repo marketplace.json docs; a `null` doc fails that repo's fetch.
+function createMultiMarketplaceFetch(docsByRepo: Record<string, unknown>): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    for (const [repo, doc] of Object.entries(docsByRepo)) {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/contents/.agents/plugins/marketplace.json?ref=main`
+      ) {
+        if (doc === null) {
+          return new Response("boom", { status: 500 });
+        }
+        return new Response(
+          JSON.stringify({
+            type: "file",
+            name: "marketplace.json",
+            path: ".agents/plugins/marketplace.json",
+            download_url: `https://download.test/${repo}/marketplace.json`,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url === `https://download.test/${repo}/marketplace.json` && doc !== null) {
+        return new Response(JSON.stringify(doc), {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+}
+
+function namedMarketplaceDoc(
+  name: string,
+  skills: Array<{ name: string; sourceHash?: string }>,
+): unknown {
+  return {
+    name,
+    interface: { displayName: `${name} Display` },
+    plugins: [],
+    skills: skills.map((skill) => ({
+      name: skill.name,
+      source: { source: "local", path: `./skills/${skill.name}` },
+      ...(skill.sourceHash ? { sourceHash: skill.sourceHash } : {}),
+      policy: { installation: "AVAILABLE", authentication: "NONE" },
+      category: "Authoring",
+    })),
+  };
 }
 
 function createRawFallbackMarketplaceFetch(doc: unknown): typeof fetch {
@@ -377,6 +449,137 @@ describe("skill marketplace", () => {
       const catalog = await getSkillCatalog(config);
       expect(catalog.availableSkills).toEqual([]);
       expect(catalog.remoteMarketplaceFailed).toBeUndefined();
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("getSkillCatalog aggregates available skills across configured marketplaces", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-multi-ws-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-multi-home-"));
+    const skillsDir = path.join(home, ".cowork", "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+    await writeConfiguredMarketplaces(home, [SECOND_MARKETPLACE_REPO]);
+    const config = makeConfig(workspace, home, skillsDir);
+
+    try {
+      const catalog = await getSkillCatalog(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createMultiMarketplaceFetch({
+          [BUILT_IN_MARKETPLACE_REPO]: namedMarketplaceDoc("built-in", [{ name: "builtin-skill" }]),
+          [SECOND_MARKETPLACE_REPO]: namedMarketplaceDoc("acme-market", [{ name: "acme-skill" }]),
+        }),
+      });
+
+      expect(catalog.remoteMarketplaceFailed).toBeUndefined();
+      expect(catalog.availableSkills.map((skill) => skill.name)).toEqual([
+        "builtin-skill",
+        "acme-skill",
+      ]);
+      expect(catalog.availableSkills[1]).toMatchObject({
+        installSource: `https://github.com/${SECOND_MARKETPLACE_REPO}/tree/main/skills/acme-skill`,
+        marketplace: { name: "acme-market", displayName: "acme-market Display" },
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("getSkillCatalog dedupes same-name available skills with earlier marketplaces winning", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-dedupe-ws-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-dedupe-home-"));
+    const skillsDir = path.join(home, ".cowork", "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+    await writeConfiguredMarketplaces(home, [SECOND_MARKETPLACE_REPO]);
+    const config = makeConfig(workspace, home, skillsDir);
+
+    try {
+      const catalog = await getSkillCatalog(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createMultiMarketplaceFetch({
+          [BUILT_IN_MARKETPLACE_REPO]: namedMarketplaceDoc("built-in", [{ name: "shared-skill" }]),
+          [SECOND_MARKETPLACE_REPO]: namedMarketplaceDoc("acme-market", [{ name: "shared-skill" }]),
+        }),
+      });
+
+      expect(catalog.availableSkills).toHaveLength(1);
+      expect(catalog.availableSkills[0]).toMatchObject({
+        name: "shared-skill",
+        marketplace: { name: "built-in" },
+        installSource: `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/main/skills/shared-skill`,
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("getSkillCatalog keeps a healthy marketplace's entries when another marketplace fails", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-partial-ws-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-partial-home-"));
+    const skillsDir = path.join(home, ".cowork", "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+    await writeConfiguredMarketplaces(home, [SECOND_MARKETPLACE_REPO]);
+    const config = makeConfig(workspace, home, skillsDir);
+
+    try {
+      const catalog = await getSkillCatalog(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createMultiMarketplaceFetch({
+          [BUILT_IN_MARKETPLACE_REPO]: null,
+          [SECOND_MARKETPLACE_REPO]: namedMarketplaceDoc("acme-market", [{ name: "acme-skill" }]),
+        }),
+      });
+
+      expect(catalog.remoteMarketplaceFailed).toBe(true);
+      expect(catalog.availableSkills.map((skill) => skill.name)).toEqual(["acme-skill"]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("getSkillCatalog annotates updates for installations sourced from a second marketplace", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-second-update-ws-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "skill-market-second-update-home-"));
+    const skillsDir = path.join(home, ".cowork", "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+    await writeConfiguredMarketplaces(home, [SECOND_MARKETPLACE_REPO]);
+    await writeSkill(skillsDir, "acme-skill", "Installed from the second marketplace");
+    await writeSkillInstallManifest({
+      skillRoot: path.join(skillsDir, "acme-skill"),
+      installationId: "installed-acme-skill",
+      origin: {
+        kind: "github",
+        repo: SECOND_MARKETPLACE_REPO,
+        ref: "main",
+        subdir: "skills/acme-skill",
+        sourceHash: OLD_SOURCE_HASH,
+      },
+    });
+    const config = makeConfig(workspace, home, skillsDir);
+
+    try {
+      const catalog = await getSkillCatalog(config, {
+        includeRemoteMarketplace: true,
+        fetchImpl: createMultiMarketplaceFetch({
+          [BUILT_IN_MARKETPLACE_REPO]: namedMarketplaceDoc("built-in", []),
+          [SECOND_MARKETPLACE_REPO]: namedMarketplaceDoc("acme-market", [
+            { name: "acme-skill", sourceHash: NEW_SOURCE_HASH },
+          ]),
+        }),
+      });
+
+      expect(catalog.remoteMarketplaceFailed).toBeUndefined();
+      expect(catalog.availableSkills).toEqual([]);
+      expect(catalog.installations[0]).toMatchObject({
+        name: "acme-skill",
+        installedSourceHash: OLD_SOURCE_HASH,
+        latestSourceHash: NEW_SOURCE_HASH,
+        updateAvailable: true,
+      });
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

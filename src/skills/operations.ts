@@ -8,10 +8,8 @@ import {
   replacePluginInstallRoot,
   setPluginSkillEnabled,
 } from "../plugins";
-import {
-  buildRemoteMarketplaceSkillCatalogEntry,
-  fetchRemotePluginMarketplace,
-} from "../plugins/remoteMarketplace";
+import { fetchConfiguredMarketplaces } from "../plugins/marketplaceRegistry";
+import { buildRemoteMarketplaceSkillCatalogEntry } from "../plugins/remoteMarketplace";
 import type {
   AgentConfig,
   MarketplaceSkillCatalogEntry,
@@ -645,19 +643,25 @@ function annotateMarketplaceSkillUpdates(
     sourceHash?: string;
   }>,
 ): SkillCatalogSnapshot {
-  const marketplaceByName = new Map(
-    marketplaceSkills
-      .filter((entry) => entry.sourceInput && entry.sourceHash)
-      .map((entry) => [entry.name, entry]),
-  );
+  // Installations are matched against every configured marketplace's skill
+  // entries by normalized install source; the first (built-in-first) entry wins.
+  const marketplaceBySource = new Map<
+    string,
+    { name: string; sourceInput?: string; sourceHash?: string }
+  >();
+  for (const entry of marketplaceSkills) {
+    if (!entry.sourceInput || !entry.sourceHash) continue;
+    const normalizedSource = normalizeInstallSourceInput(entry.sourceInput);
+    if (!normalizedSource || marketplaceBySource.has(normalizedSource)) continue;
+    marketplaceBySource.set(normalizedSource, entry);
+  }
 
   const annotatedInstallations = catalog.installations.map((installation) => {
     if (installation.plugin) return installation;
-    const marketplaceEntry = marketplaceByName.get(installation.name);
-    if (!marketplaceEntry?.sourceHash) return installation;
     const installedSource = normalizeInstallSourceInput(installSourceFromOrigin(installation));
-    const marketplaceSource = normalizeInstallSourceInput(marketplaceEntry.sourceInput);
-    if (!installedSource || !marketplaceSource || installedSource !== marketplaceSource) {
+    if (!installedSource) return installation;
+    const marketplaceEntry = marketplaceBySource.get(installedSource);
+    if (!marketplaceEntry?.sourceHash || marketplaceEntry.name !== installation.name) {
       return installation;
     }
 
@@ -693,22 +697,43 @@ export async function getSkillCatalog(
   if (!opts.includeRemoteMarketplace) {
     return catalog;
   }
-  // Offer marketplace skills that are not already installed (deduped by name).
+  // Offer marketplace skills that are not already installed (deduped by name);
+  // aggregate across every configured marketplace (built-in first).
   try {
-    const marketplace = await fetchRemotePluginMarketplace({ fetchImpl: opts.fetchImpl });
-    catalog = annotateMarketplaceSkillUpdates(catalog, marketplace.skills);
+    const { marketplaces, failures } = await fetchConfiguredMarketplaces({
+      config,
+      fetchImpl: opts.fetchImpl,
+    });
+    catalog = annotateMarketplaceSkillUpdates(
+      catalog,
+      marketplaces.flatMap(({ document }) => document.skills),
+    );
     const installedNames = new Set(catalog.installations.map((entry) => entry.name));
+    const availableSkillNames = new Set<string>();
     const availableSkills: MarketplaceSkillCatalogEntry[] = [];
-    for (const skillEntry of marketplace.skills) {
-      if (!skillEntry.sourceInput || installedNames.has(skillEntry.name)) {
-        continue;
-      }
-      const entry = buildRemoteMarketplaceSkillCatalogEntry({ marketplace, skill: skillEntry });
-      if (entry) {
-        availableSkills.push(entry);
+    for (const { document: marketplace } of marketplaces) {
+      for (const skillEntry of marketplace.skills) {
+        if (
+          !skillEntry.sourceInput ||
+          installedNames.has(skillEntry.name) ||
+          availableSkillNames.has(skillEntry.name)
+        ) {
+          continue;
+        }
+        const entry = buildRemoteMarketplaceSkillCatalogEntry({ marketplace, skill: skillEntry });
+        if (entry) {
+          availableSkills.push(entry);
+          availableSkillNames.add(skillEntry.name);
+        }
       }
     }
-    return { ...catalog, availableSkills };
+    // Any failed marketplace makes the available list partial so clients keep
+    // cached rows, but successfully fetched marketplaces still contribute.
+    return {
+      ...catalog,
+      availableSkills,
+      ...(failures.length > 0 ? { remoteMarketplaceFailed: true } : {}),
+    };
   } catch {
     // Partial: keep installed skills; signal failure so the client preserves cached rows.
     return { ...catalog, remoteMarketplaceFailed: true };

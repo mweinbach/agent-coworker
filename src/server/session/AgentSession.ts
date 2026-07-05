@@ -854,6 +854,18 @@ export class AgentSession {
     await this.getSkillManager().getPluginsCatalog();
   }
 
+  async listMarketplaces() {
+    await this.getSkillManager().listMarketplaces();
+  }
+
+  async addMarketplace(sourceInput: string) {
+    await this.getSkillManager().addMarketplace(sourceInput);
+  }
+
+  async removeMarketplace(marketplaceId: string) {
+    await this.getSkillManager().removeMarketplace(marketplaceId);
+  }
+
   private async runExternalSkillRefresh(reason: string) {
     await this.refreshSystemPromptWithSkills(reason);
     await this.listSkills();

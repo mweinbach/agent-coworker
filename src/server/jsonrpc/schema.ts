@@ -18,6 +18,10 @@ import {
 } from "./schema.connectors";
 import { jsonRpcCoreRequestSchemas, jsonRpcCoreResultSchemas } from "./schema.core";
 import { jsonRpcImportRequestSchemas, jsonRpcImportResultSchemas } from "./schema.import";
+import {
+  jsonRpcMarketplacesRequestSchemas,
+  jsonRpcMarketplacesResultSchemas,
+} from "./schema.marketplaces";
 import { jsonRpcMemoryRequestSchemas, jsonRpcMemoryResultSchemas } from "./schema.memory";
 import { jsonRpcMiscNotificationSchemas } from "./schema.misc";
 import { jsonRpcMcpRequestSchemas, jsonRpcMcpResultSchemas } from "./schema.mcp";
@@ -64,6 +68,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcMcpRequestSchemas,
   ...jsonRpcPluginsRequestSchemas,
   ...jsonRpcSkillsRequestSchemas,
+  ...jsonRpcMarketplacesRequestSchemas,
   ...jsonRpcImportRequestSchemas,
   ...jsonRpcMemoryRequestSchemas,
   ...jsonRpcBackupsRequestSchemas,
@@ -99,6 +104,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcMcpResultSchemas,
   ...jsonRpcPluginsResultSchemas,
   ...jsonRpcSkillsResultSchemas,
+  ...jsonRpcMarketplacesResultSchemas,
   ...jsonRpcImportResultSchemas,
   ...jsonRpcMemoryResultSchemas,
   ...jsonRpcBackupsResultSchemas,

@@ -112,7 +112,10 @@ export class PluginCatalogService {
       this.resolveInstalledPluginSelection(localCatalog, pluginId, scope);
       return;
     } else {
-      plugin = await buildRemoteMarketplacePluginDetail({ pluginId });
+      plugin = await buildRemoteMarketplacePluginDetail({
+        config: this.context.state.config,
+        pluginId,
+      });
       if (plugin === null) {
         this.resolveInstalledPluginSelection(localCatalog, pluginId, scope);
         return;

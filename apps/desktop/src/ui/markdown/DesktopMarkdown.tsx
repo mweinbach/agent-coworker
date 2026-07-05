@@ -1172,7 +1172,7 @@ function rewriteRawImageSrcInHast(node: HastNode, basePath: string | null): void
  * remark stage. Without it, workspace-relative raw-HTML image srcs are blocked
  * by the harden step before reaching the renderer's img component.
  */
-export function rehypeRewriteDesktopImages(opts?: { basePath?: string | null }) {
+function rehypeRewriteDesktopImages(opts?: { basePath?: string | null }) {
   const basePath = opts?.basePath ?? null;
   return (tree: HastNode) => {
     rewriteRawImageSrcInHast(tree, basePath);

@@ -132,6 +132,14 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
     });
   };
 
+  const resetToDefaults = () => {
+    // Reset discards local intent, so clear optimistic state immediately;
+    // otherwise a still-pending toggle would survive the reconcile and show a
+    // stale checkbox after the server restores defaults.
+    setPendingById({});
+    void resetProviderModelPreferences(provider);
+  };
+
   const submitCustomModel = () => {
     const modelId = customDraft.trim();
     if (!modelId) return;
@@ -167,12 +175,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
           <Button type="button" variant="outline" size="sm" onClick={() => setAllVisible(false)}>
             Disable all
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => void resetProviderModelPreferences(provider)}
-          >
+          <Button type="button" variant="ghost" size="sm" onClick={resetToDefaults}>
             Reset to defaults
           </Button>
         </div>

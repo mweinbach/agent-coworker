@@ -200,4 +200,59 @@ describe("manage models dialog", () => {
       harness.restore();
     }
   });
+
+  test("reset clears in-flight pending toggles so checkboxes reflect the catalog", async () => {
+    const harness = setupJsdom();
+    // setEnabled never resolves, so the optimistic pending entry lingers and
+    // disagrees with the (unchanged) catalog — the scenario the reconcile keeps.
+    useAppStore.setState({
+      setProviderModelsEnabled: (() => new Promise(() => {})) as any,
+      resetProviderModelPreferences: (async () => {}) as any,
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ManageModelsDialog, {
+            provider: "together" as const,
+            onOpenChange: () => {},
+          }),
+        );
+      });
+
+      const doc = harness.dom.window.document;
+      // GLM-5.2 is enabled in the seeded catalog; disable it (pending off).
+      const disable = doc.querySelector<HTMLElement>('[aria-label="Disable zai-org/GLM-5.2"]');
+      expect(disable).not.toBeNull();
+      await act(async () => {
+        disable?.click();
+      });
+      expect(
+        doc.querySelector('[aria-label="Enable zai-org/GLM-5.2"]')?.getAttribute("aria-checked"),
+      ).toBe("false");
+
+      const reset = [...doc.querySelectorAll("button")].find(
+        (el) => el.textContent === "Reset to defaults",
+      );
+      await act(async () => {
+        reset?.click();
+      });
+
+      // After reset the stale pending entry is cleared, so the checkbox tracks
+      // the catalog (still enabled) instead of the abandoned disable.
+      expect(
+        doc.querySelector('[aria-label="Disable zai-org/GLM-5.2"]')?.getAttribute("aria-checked"),
+      ).toBe("true");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

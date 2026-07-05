@@ -13,6 +13,7 @@ import {
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
+import type { CachedModelDiscoveryModel } from "../providers/modelDiscoveryCache";
 import {
   readModelDiscoveryCache,
   readModelDiscoveryCacheSync,
@@ -63,11 +64,64 @@ function toResolvedStaticModel(
   };
 }
 
+/**
+ * Provider-default `providerOptionsDefaults` keys that make a runtime emit a
+ * reasoning/thinking payload. A placeholder for a custom id that does not
+ * support reasoning must not inherit these, or the very first request sends a
+ * reasoning payload the runtime's own fallback model rejects (e.g. a custom
+ * OpenAI `gpt-4o` whose Responses fallback marks `reasoning: false`).
+ */
+const REASONING_PROVIDER_OPTION_KEYS: Record<string, readonly string[]> = {
+  openai: ["reasoningEffort", "reasoningSummary"],
+  google: ["thinkingConfig"],
+  anthropic: ["thinking", "effort"],
+};
+
+/**
+ * Mirrors the runtime reasoning heuristics (e.g. the OpenAI Responses fallback
+ * model in `openaiResponsesModel.ts`): a custom id is only assumed to support
+ * reasoning when its name matches a known reasoning family. Providers without a
+ * heuristic conservatively keep their defaults.
+ */
+function customModelIdLikelySupportsReasoning(
+  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  modelId: string,
+): boolean {
+  if (provider === "openai") {
+    const id = modelId.trim().toLowerCase();
+    return id.startsWith("o") || id.startsWith("gpt-5");
+  }
+  // Other providers have no cheap id-only heuristic; keep their reasoning
+  // defaults rather than risk stripping a payload the model needs.
+  return true;
+}
+
+function stripReasoningProviderOptionDefaults(
+  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  defaults: Record<string, unknown>,
+): Record<string, unknown> {
+  const keys = REASONING_PROVIDER_OPTION_KEYS[provider];
+  if (!keys) return defaults;
+  const next = { ...defaults };
+  for (const key of keys) {
+    delete next[key];
+  }
+  return next;
+}
+
 function buildProviderPlaceholderMetadata(
   provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
   modelId: string,
+  opts: { supportsReasoning?: boolean } = {},
 ): ResolvedModelMetadata {
   const fallback = defaultSupportedModel(provider);
+  // Default to the id heuristic; discovered models pass an explicit decision
+  // derived from the cache's reasoning info instead.
+  const supportsReasoning =
+    opts.supportsReasoning ?? customModelIdLikelySupportsReasoning(provider, modelId);
+  const providerOptionsDefaults = supportsReasoning
+    ? { ...fallback.providerOptionsDefaults }
+    : stripReasoningProviderOptionDefaults(provider, { ...fallback.providerOptionsDefaults });
   return {
     id: modelId,
     provider,
@@ -75,8 +129,40 @@ function buildProviderPlaceholderMetadata(
     knowledgeCutoff: "Unknown",
     supportsImageInput: false,
     promptTemplate: fallback.promptTemplate,
-    providerOptionsDefaults: { ...fallback.providerOptionsDefaults },
+    providerOptionsDefaults,
     source: "dynamic",
+  };
+}
+
+/**
+ * Builds resolved metadata for a model previously discovered from a provider's
+ * live catalog, carrying the cached entry's real capabilities (image input,
+ * display name, knowledge cutoff, reasoning) instead of the generic placeholder.
+ * A reopened session on a cached vision model must not be downgraded to
+ * `supportsImageInput: false`.
+ */
+function buildDiscoveredModelMetadata(
+  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  cached: CachedModelDiscoveryModel,
+): ResolvedModelMetadata {
+  // The cache's reasoning info is the authoritative signal for discovered
+  // models: an entry that advertises a default/available effort supports
+  // reasoning; one without any reasoning info does not, so its placeholder must
+  // not inherit the provider default's reasoning payload (finding 3 overlap).
+  const cacheHasReasoning =
+    !!cached.reasoning &&
+    (cached.reasoning.defaultEffort !== undefined ||
+      (cached.reasoning.availableEfforts?.length ?? 0) > 0);
+  const base = buildProviderPlaceholderMetadata(provider, cached.id, {
+    supportsReasoning: cacheHasReasoning,
+  });
+  return {
+    ...base,
+    displayName: cached.displayName || cached.id,
+    ...(cached.knowledgeCutoff ? { knowledgeCutoff: cached.knowledgeCutoff } : {}),
+    ...(typeof cached.supportsImageInput === "boolean"
+      ? { supportsImageInput: cached.supportsImageInput }
+      : {}),
   };
 }
 
@@ -192,6 +278,11 @@ export function getResolvedModelMetadataSync(
     return (
       getKnownBedrockResolvedModelMetadataSync({
         modelId: normalizeModelIdForProvider(provider, modelId, source, opts),
+        // Forward the session's auth home so a Bedrock model in the discovery
+        // snapshot under a non-default home resolves with its cached metadata
+        // instead of falling back to a placeholder (mirrors the sync resume
+        // path in getKnownResolvedModelMetadata).
+        ...(opts.home ? { home: opts.home } : {}),
       }) ??
       buildBedrockPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source, opts))
     );
@@ -238,9 +329,10 @@ export function getResolvedModelMetadataSync(
 }
 
 /**
- * Placeholder metadata for a model previously discovered from the provider's
- * live catalog (persisted under `~/.cowork/cache/models/<provider>.json`).
- * Returns null when the id is not present in the discovery cache.
+ * Metadata for a model previously discovered from the provider's live catalog
+ * (persisted under `~/.cowork/cache/models/<provider>.json`), carrying the
+ * cached entry's real capabilities. Returns null when the id is not present in
+ * the discovery cache.
  */
 export async function getDiscoveredModelMetadata(
   provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
@@ -253,34 +345,36 @@ export async function getDiscoveredModelMetadata(
     if (!cached) return null;
     const match = cached.models.find((model) => model.id === modelId || model.model === modelId);
     if (!match) return null;
-    return buildProviderPlaceholderMetadata(provider, modelId);
+    return buildDiscoveredModelMetadata(provider, match);
   } catch {
     return null;
   }
 }
 
 /**
- * Synchronous membership check against the persisted model-discovery cache
- * (`~/.cowork/cache/models/<provider>.json`). Mirrors
+ * Synchronous counterpart to {@link getDiscoveredModelMetadata}. Mirrors
  * {@link isConfiguredCustomModelIdSync}: sync resume paths must accept ids the
  * user selected after they were discovered from the provider's live catalog,
- * even though they are absent from the static registry and the custom store.
- * Read-only and tolerant: any missing/invalid cache reads as "not discovered".
+ * even though they are absent from the static registry and the custom store,
+ * and must carry the cached entry's real capabilities rather than a generic
+ * placeholder. Read-only and tolerant: any missing/invalid cache reads as null.
  */
-export function isDiscoveredModelIdSync(
+export function getDiscoveredModelMetadataSync(
   provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
   modelId: string,
   opts: { home?: string } = {},
-): boolean {
+): ResolvedModelMetadata | null {
   const trimmed = modelId.trim();
-  if (!trimmed) return false;
+  if (!trimmed) return null;
   try {
     const paths = getAiCoworkerPaths(opts.home ? { homedir: opts.home } : {});
     const cached = readModelDiscoveryCacheSync(paths, provider);
-    if (!cached) return false;
-    return cached.models.some((model) => model.id === trimmed || model.model === trimmed);
+    if (!cached) return null;
+    const match = cached.models.find((model) => model.id === trimmed || model.model === trimmed);
+    if (!match) return null;
+    return buildDiscoveredModelMetadata(provider, match);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -439,9 +533,8 @@ export function getKnownResolvedModelMetadata(
       if (isConfiguredCustomModelIdSync(provider, modelId, opts)) {
         return buildProviderPlaceholderMetadata(provider, modelId.trim());
       }
-      if (isDiscoveredModelIdSync(provider, modelId, opts)) {
-        return buildProviderPlaceholderMetadata(provider, modelId.trim());
-      }
+      const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
+      if (discovered) return discovered;
     }
     return null;
   }

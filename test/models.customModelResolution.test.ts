@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  getDiscoveredModelMetadataSync,
   getKnownResolvedModelMetadata,
+  getResolvedModelMetadataSync,
   isConfiguredCustomModelIdSync,
-  isDiscoveredModelIdSync,
   normalizeModelIdForProvider,
   resolveModelMetadata,
 } from "../src/models/metadata";
@@ -26,6 +27,17 @@ const BEDROCK_DISCOVERED_ID = "us.acme.discovered-bedrock-v1:0";
 // registry and not in the custom-model store.
 const DISCOVERED_ID = "acme/discovered-only-1";
 const DISCOVERED_MODEL_FIELD_ID = "acme/discovered-model-field";
+// A discovered vision model that advertises image input in the cache; a
+// reopened session must preserve `supportsImageInput: true` rather than
+// downgrading to the generic placeholder's `false`.
+const DISCOVERED_VISION_ID = "acme/discovered-vision-1";
+// A discovered reasoning model that advertises reasoning info in the cache;
+// its resolved metadata must keep the provider default's reasoning options.
+const DISCOVERED_REASONING_ID = "acme/discovered-reasoning-1";
+// Custom OpenAI ids: a non-reasoning family id must NOT inherit reasoning
+// defaults, while a reasoning-family id must keep them.
+const CUSTOM_OPENAI_NON_REASONING_ID = "gpt-4o";
+const CUSTOM_OPENAI_REASONING_ID = "o3-preview-custom";
 
 async function writeBedrockDiscoverySnapshot(homedir: string, modelId: string): Promise<void> {
   const paths = getAiCoworkerPaths({ homedir });
@@ -65,6 +77,8 @@ beforeAll(async () => {
   await upsertCustomModel(paths, "nvidia", CROSS_PROVIDER_ID);
   await upsertCustomModel(paths, "anthropic", CUSTOM_ONLY_ID);
   await upsertCustomModel(paths, "bedrock", BEDROCK_CUSTOM_ID);
+  await upsertCustomModel(paths, "openai", CUSTOM_OPENAI_NON_REASONING_ID);
+  await upsertCustomModel(paths, "openai", CUSTOM_OPENAI_REASONING_ID);
   await writeBedrockDiscoverySnapshot(homeWithStore, BEDROCK_DISCOVERED_ID);
   await writeModelDiscoveryCache(paths, "openai", {
     provider: "openai",
@@ -75,6 +89,17 @@ beforeAll(async () => {
         id: DISCOVERED_MODEL_FIELD_ID,
         model: DISCOVERED_MODEL_FIELD_ID,
         displayName: "Model Field",
+      },
+      {
+        id: DISCOVERED_VISION_ID,
+        displayName: "Discovered Vision",
+        knowledgeCutoff: "January 1, 2025",
+        supportsImageInput: true,
+      },
+      {
+        id: DISCOVERED_REASONING_ID,
+        displayName: "Discovered Reasoning",
+        reasoning: { defaultEffort: "high", availableEfforts: ["low", "medium", "high"] },
       },
     ],
   });
@@ -114,22 +139,60 @@ describe("isConfiguredCustomModelIdSync", () => {
   });
 });
 
-describe("isDiscoveredModelIdSync", () => {
+describe("getDiscoveredModelMetadataSync", () => {
   test("finds ids present in the discovery cache and rejects everything else", () => {
-    expect(isDiscoveredModelIdSync("openai", DISCOVERED_ID, { home: homeWithStore })).toBe(true);
+    expect(
+      getDiscoveredModelMetadataSync("openai", DISCOVERED_ID, { home: homeWithStore })?.id,
+    ).toBe(DISCOVERED_ID);
     // Trailing/leading whitespace is trimmed before matching.
-    expect(isDiscoveredModelIdSync("openai", `  ${DISCOVERED_ID}  `, { home: homeWithStore })).toBe(
-      true,
-    );
+    expect(
+      getDiscoveredModelMetadataSync("openai", `  ${DISCOVERED_ID}  `, { home: homeWithStore })?.id,
+    ).toBe(DISCOVERED_ID);
     // Matches against the `model` field too, not just `id`.
     expect(
-      isDiscoveredModelIdSync("openai", DISCOVERED_MODEL_FIELD_ID, { home: homeWithStore }),
-    ).toBe(true);
-    expect(isDiscoveredModelIdSync("openai", "not-in-cache", { home: homeWithStore })).toBe(false);
+      getDiscoveredModelMetadataSync("openai", DISCOVERED_MODEL_FIELD_ID, { home: homeWithStore })
+        ?.id,
+    ).toBe(DISCOVERED_MODEL_FIELD_ID);
+    expect(
+      getDiscoveredModelMetadataSync("openai", "not-in-cache", { home: homeWithStore }),
+    ).toBeNull();
     // Wrong provider's cache does not contain the id.
-    expect(isDiscoveredModelIdSync("nvidia", DISCOVERED_ID, { home: homeWithStore })).toBe(false);
+    expect(
+      getDiscoveredModelMetadataSync("nvidia", DISCOVERED_ID, { home: homeWithStore }),
+    ).toBeNull();
     // A home without any discovery cache reads as "not discovered".
-    expect(isDiscoveredModelIdSync("openai", DISCOVERED_ID, { home: emptyHome })).toBe(false);
+    expect(getDiscoveredModelMetadataSync("openai", DISCOVERED_ID, { home: emptyHome })).toBeNull();
+  });
+
+  test("carries the cached entry's capabilities for a discovered vision model", () => {
+    const resolved = getDiscoveredModelMetadataSync("openai", DISCOVERED_VISION_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.supportsImageInput).toBe(true);
+    expect(resolved?.displayName).toBe("Discovered Vision");
+    expect(resolved?.knowledgeCutoff).toBe("January 1, 2025");
+    expect(resolved?.source).toBe("dynamic");
+  });
+
+  test("keeps reasoning defaults when the cached entry advertises reasoning", () => {
+    const resolved = getDiscoveredModelMetadataSync("openai", DISCOVERED_REASONING_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.providerOptionsDefaults.reasoningEffort).toBe("high");
+    expect(resolved?.providerOptionsDefaults.reasoningSummary).toBe("detailed");
+  });
+
+  test("drops reasoning defaults when the cached entry has no reasoning info", () => {
+    const resolved = getDiscoveredModelMetadataSync("openai", DISCOVERED_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.providerOptionsDefaults.reasoningEffort).toBeUndefined();
+    expect(resolved?.providerOptionsDefaults.reasoningSummary).toBeUndefined();
+    // Non-reasoning provider options survive the strip.
+    expect(resolved?.providerOptionsDefaults.textVerbosity).toBe("medium");
   });
 });
 
@@ -211,6 +274,45 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
     expect(getKnownResolvedModelMetadata("openai", DISCOVERED_ID, { home: emptyHome })).toBeNull();
   });
 
+  test("preserves cached vision capability when resuming a discovered model", () => {
+    // A reopened session on a cached vision model must keep supportsImageInput:
+    // true instead of being downgraded to the generic placeholder's false.
+    const resolved = getKnownResolvedModelMetadata("openai", DISCOVERED_VISION_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.id).toBe(DISCOVERED_VISION_ID);
+    expect(resolved?.supportsImageInput).toBe(true);
+    expect(resolved?.displayName).toBe("Discovered Vision");
+    expect(resolved?.knowledgeCutoff).toBe("January 1, 2025");
+    expect(resolved?.source).toBe("dynamic");
+  });
+
+  test("drops reasoning defaults for a custom non-reasoning OpenAI id", () => {
+    // A custom gpt-4o (non-reasoning) must not inherit the provider default's
+    // reasoning payload, or the first Responses request fails because the
+    // runtime fallback model marks reasoning: false.
+    const resolved = getKnownResolvedModelMetadata("openai", CUSTOM_OPENAI_NON_REASONING_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.id).toBe(CUSTOM_OPENAI_NON_REASONING_ID);
+    expect(resolved?.providerOptionsDefaults.reasoningEffort).toBeUndefined();
+    expect(resolved?.providerOptionsDefaults.reasoningSummary).toBeUndefined();
+    // Non-reasoning defaults survive.
+    expect(resolved?.providerOptionsDefaults.textVerbosity).toBe("medium");
+  });
+
+  test("keeps reasoning defaults for a custom reasoning-family OpenAI id", () => {
+    const resolved = getKnownResolvedModelMetadata("openai", CUSTOM_OPENAI_REASONING_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.id).toBe(CUSTOM_OPENAI_REASONING_ID);
+    expect(resolved?.providerOptionsDefaults.reasoningEffort).toBe("high");
+    expect(resolved?.providerOptionsDefaults.reasoningSummary).toBe("detailed");
+  });
+
   test("returns null for unknown ids that are not configured", () => {
     expect(
       getKnownResolvedModelMetadata("anthropic", CUSTOM_ONLY_ID, { home: emptyHome }),
@@ -258,5 +360,29 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
     expect(
       getKnownResolvedModelMetadata("bedrock", BEDROCK_DISCOVERED_ID, { home: emptyHome }),
     ).toBeNull();
+  });
+});
+
+describe("getResolvedModelMetadataSync with bedrock discovery home", () => {
+  test("resolves a discovered bedrock id from the snapshot when opts.home is passed", () => {
+    // Before threading opts.home into getKnownBedrockResolvedModelMetadataSync,
+    // the bedrock branch read the process home's (empty) snapshot and fell back
+    // to a generic placeholder even when the caller passed the session home.
+    const resolved = getResolvedModelMetadataSync("bedrock", BEDROCK_DISCOVERED_ID, "model", {
+      home: homeWithStore,
+    });
+    expect(resolved.id).toBe(BEDROCK_DISCOVERED_ID);
+    expect(resolved.provider).toBe("bedrock");
+    expect(resolved.displayName).toBe("Discovered Bedrock");
+    expect(resolved.source).toBe("dynamic");
+  });
+
+  test("falls back to a placeholder when the session home lacks the snapshot", () => {
+    const resolved = getResolvedModelMetadataSync("bedrock", BEDROCK_DISCOVERED_ID, "model", {
+      home: emptyHome,
+    });
+    expect(resolved.id).toBe(BEDROCK_DISCOVERED_ID);
+    // Placeholder metadata uses the id as its display name.
+    expect(resolved.displayName).toBe(BEDROCK_DISCOVERED_ID);
   });
 });

@@ -1,0 +1,258 @@
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+
+import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
+import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { setupJsdom } from "./jsdomHarness";
+
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({}));
+mock.module("../src/lib/agentSocket", () => ({
+  JsonRpcSocket: NoopJsonRpcSocket,
+}));
+
+const { useAppStore } = await import("../src/app/store");
+const { ManageModelsDialog } = await import("../src/ui/settings/pages/ManageModelsDialog");
+
+const CATALOG = [
+  {
+    id: "together",
+    name: "Together AI",
+    models: [
+      { id: "zai-org/GLM-5.2", displayName: "GLM 5.2" },
+      { id: "some-org/obscure-model", displayName: "Obscure Model", enabled: false },
+      {
+        id: "my-custom-model",
+        displayName: "my-custom-model",
+        runtimeOptions: { source: "custom" },
+      },
+    ],
+    defaultModel: "zai-org/GLM-5.2",
+  },
+] as any;
+
+describe("manage models dialog", () => {
+  beforeEach(() => {
+    useAppStore.setState({ providerCatalog: CATALOG });
+  });
+
+  test("lists every model with its enabled state and custom badge", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ManageModelsDialog, {
+            provider: "together" as const,
+            onOpenChange: () => {},
+          }),
+        );
+      });
+
+      const doc = harness.dom.window.document;
+      expect(doc.body.textContent).toContain("Manage Together AI models");
+      expect(doc.body.textContent).toContain("2 of 3 enabled");
+      expect(doc.body.textContent).toContain("GLM 5.2");
+      expect(doc.body.textContent).toContain("Obscure Model");
+      expect(doc.body.textContent).toContain("Custom");
+
+      const checkboxes = [...doc.querySelectorAll('[role="checkbox"]')];
+      expect(checkboxes).toHaveLength(3);
+      expect(checkboxes.map((el) => el.getAttribute("aria-checked"))).toEqual([
+        "true",
+        "false",
+        "true",
+      ]);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("toggling a checkbox sends the model preference update", async () => {
+    const harness = setupJsdom();
+    const calls: Array<{ provider: string; models: unknown }> = [];
+    useAppStore.setState({
+      // Mirror the real action: the RPC response carries the refreshed
+      // catalog, so apply the change to providerCatalog before resolving.
+      setProviderModelsEnabled: (async (
+        provider: string,
+        models: Array<{ id: string; enabled: boolean }>,
+      ) => {
+        calls.push({ provider, models });
+        const changed = new Map(models.map((model) => [model.id, model.enabled] as const));
+        useAppStore.setState((s: any) => ({
+          providerCatalog: s.providerCatalog.map((entry: any) =>
+            entry.id === provider
+              ? {
+                  ...entry,
+                  models: entry.models.map((model: any) =>
+                    changed.has(model.id) ? { ...model, enabled: changed.get(model.id) } : model,
+                  ),
+                }
+              : entry,
+          ),
+        }));
+        return true;
+      }) as any,
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ManageModelsDialog, {
+            provider: "together" as const,
+            onOpenChange: () => {},
+          }),
+        );
+      });
+
+      const doc = harness.dom.window.document;
+      const disableTarget = doc.querySelector<HTMLElement>(
+        '[aria-label="Disable zai-org/GLM-5.2"]',
+      );
+      expect(disableTarget).not.toBeNull();
+      await act(async () => {
+        disableTarget?.click();
+      });
+
+      expect(calls).toEqual([
+        { provider: "together", models: [{ id: "zai-org/GLM-5.2", enabled: false }] },
+      ]);
+      expect(disableTarget?.getAttribute("aria-checked")).toBe("false");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("enable all sends a bulk update for the filtered set and reset clears overrides", async () => {
+    const harness = setupJsdom();
+    const setCalls: Array<{ provider: string; models: unknown }> = [];
+    const resetCalls: string[] = [];
+    useAppStore.setState({
+      setProviderModelsEnabled: (async (provider: string, models: unknown) => {
+        setCalls.push({ provider, models });
+        return true;
+      }) as any,
+      resetProviderModelPreferences: (async (provider: string) => {
+        resetCalls.push(provider);
+      }) as any,
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ManageModelsDialog, {
+            provider: "together" as const,
+            onOpenChange: () => {},
+          }),
+        );
+      });
+
+      const doc = harness.dom.window.document;
+      const buttons = [...doc.querySelectorAll("button")];
+      const enableAll = buttons.find((el) => el.textContent === "Enable all");
+      const reset = buttons.find((el) => el.textContent === "Reset to defaults");
+      expect(enableAll).toBeDefined();
+      expect(reset).toBeDefined();
+
+      await act(async () => {
+        enableAll?.click();
+      });
+      expect(setCalls).toEqual([
+        {
+          provider: "together",
+          models: [
+            { id: "zai-org/GLM-5.2", enabled: true },
+            { id: "some-org/obscure-model", enabled: true },
+            { id: "my-custom-model", enabled: true },
+          ],
+        },
+      ]);
+
+      await act(async () => {
+        reset?.click();
+      });
+      expect(resetCalls).toEqual(["together"]);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("reset clears in-flight pending toggles so checkboxes reflect the catalog", async () => {
+    const harness = setupJsdom();
+    // setEnabled never resolves, so the optimistic pending entry lingers and
+    // disagrees with the (unchanged) catalog — the scenario the reconcile keeps.
+    useAppStore.setState({
+      setProviderModelsEnabled: (() => new Promise(() => {})) as any,
+      resetProviderModelPreferences: (async () => {}) as any,
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ManageModelsDialog, {
+            provider: "together" as const,
+            onOpenChange: () => {},
+          }),
+        );
+      });
+
+      const doc = harness.dom.window.document;
+      // GLM-5.2 is enabled in the seeded catalog; disable it (pending off).
+      const disable = doc.querySelector<HTMLElement>('[aria-label="Disable zai-org/GLM-5.2"]');
+      expect(disable).not.toBeNull();
+      await act(async () => {
+        disable?.click();
+      });
+      expect(
+        doc.querySelector('[aria-label="Enable zai-org/GLM-5.2"]')?.getAttribute("aria-checked"),
+      ).toBe("false");
+
+      const reset = [...doc.querySelectorAll("button")].find(
+        (el) => el.textContent === "Reset to defaults",
+      );
+      await act(async () => {
+        reset?.click();
+      });
+
+      // After reset the stale pending entry is cleared, so the checkbox tracks
+      // the catalog (still enabled) instead of the abandoned disable.
+      expect(
+        doc.querySelector('[aria-label="Disable zai-org/GLM-5.2"]')?.getAttribute("aria-checked"),
+      ).toBe("true");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+});

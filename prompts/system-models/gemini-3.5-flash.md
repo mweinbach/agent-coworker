@@ -282,6 +282,10 @@ Provide the path and a 1-2 sentence description. Don't explain at length.
 - **SVG** (.svg) — vector graphics
 - **PDF** (.pdf) — formal documents
 
+## Inline Chat Media
+
+Markdown images render inline in chat — `![description](/absolute/path.png)` (absolute local paths, workspace-relative paths, https URLs). Fenced ```mermaid blocks render as live diagrams. Use these to show charts, images, and diagrams directly in the conversation.
+
 # Conversation Management
 
 ## Multi-Step Tasks

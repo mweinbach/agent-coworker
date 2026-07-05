@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url);
 const { ipcMain } = require("electron") as typeof Electron;
 
 export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
-  const workspaceRoots = new WorkspaceRootsController(deps.persistence);
+  const workspaceRoots = deps.workspaceRoots ?? new WorkspaceRootsController(deps.persistence);
   const context = {
     deps,
     workspaceRoots,

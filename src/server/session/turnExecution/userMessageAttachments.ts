@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
-import { supportsImageInput } from "../../../models/registry";
+import { modelSupportsImageInputSync } from "../../../models/metadata";
 import {
   decodeBase64Strict,
   getAttachmentCountValidationMessage,
@@ -408,8 +408,7 @@ export function createUserMessageAttachmentHelpers(
     resolvedUploadsDir = await resolveUploadsDirectory();
 
     const provider = config.provider;
-    const model = config.model;
-    const modelSupportsImages = supportsImageInput(provider, model);
+    const modelSupportsImages = modelSupportsImageInputSync(config);
     const isGoogleProvider = provider === "google";
 
     const usedNames = new Set<string>();
@@ -632,7 +631,7 @@ export function createUserMessageAttachmentHelpers(
 
     const config = context.state.config;
     const multimodalUploadedByteLengths: number[] = [];
-    const modelSupportsImages = supportsImageInput(config.provider, config.model);
+    const modelSupportsImages = modelSupportsImageInputSync(config);
     const isGoogleProvider = config.provider === "google";
     for (const attachment of uploadedAttachments) {
       const uploadedFile = await resolveUploadedAttachmentPath(attachment.path);

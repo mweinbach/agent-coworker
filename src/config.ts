@@ -8,11 +8,13 @@ import { getAiCoworkerPaths } from "./connect";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
+  getCustomModelMetadata,
   getDiscoveredModelMetadata,
   getResolvedModelMetadataSync,
   isDynamicModelProvider,
   isRuntimeDiscoveryProvider,
   normalizeModelIdForProvider,
+  reconcileReasoningProviderOptions,
   resolveDefaultModelMetadata,
   resolveModelMetadata,
 } from "./models/metadata";
@@ -155,8 +157,11 @@ function mergeProviderOptionDefaults(
   provider: ProviderName,
   modelId: string,
   providerOptions: Record<string, any> | undefined,
+  home?: string,
 ): Record<string, any> | undefined {
-  const defaults = getResolvedModelMetadataSync(provider, modelId, "model").providerOptionsDefaults;
+  const defaults = getResolvedModelMetadataSync(provider, modelId, "model", {
+    home,
+  }).providerOptionsDefaults;
   const current = isPlainObject(providerOptions)
     ? (deepMerge({}, providerOptions) as Record<string, any>)
     : undefined;
@@ -174,10 +179,22 @@ function mergeProviderOptionDefaults(
     return Object.keys(current).length > 0 ? current : undefined;
   }
 
-  return {
+  const result = {
     ...(current ?? {}),
     [provider]: mergedProviderOptions,
   };
+  // A workspace/user config that retained reasoning keys (e.g. reasoningEffort)
+  // from a previously-selected reasoning model would otherwise survive the merge
+  // over the resolved defaults and reintroduce them on a non-reasoning custom id
+  // (e.g. gpt-4o) — making the Responses runtime send a reasoning payload that
+  // fails. Strip reasoning keys the model's defaults do not declare; a
+  // reasoning-capable model keeps its explicit effort (present in defaults).
+  const reconciled = reconcileReasoningProviderOptions(
+    result,
+    provider,
+    (defaults ?? {}) as Record<string, unknown>,
+  );
+  return isPlainObject(reconciled) ? (reconciled as Record<string, any>) : result;
 }
 
 async function resolveConfiguredModelMetadata(
@@ -538,6 +555,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
         (value): value is string => typeof value === "string",
       ),
       source: "config",
+      home: homedir,
     });
   } catch (error) {
     console.warn(`[config] Ignoring invalid child model routing config: ${String(error)}`);
@@ -549,13 +567,22 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     !getSupportedModel(provider, normalizedChildRouting.preferredChildModel)
   ) {
     // Same strictness as the main model: unknown preferred child ids are only
-    // kept when they were previously discovered from the provider.
+    // kept when they were previously discovered from the provider OR the user
+    // configured them as a custom model for this provider.
+    const homeOpts = homedir ? { home: homedir } : {};
     const discovered = await getDiscoveredModelMetadata(
       provider,
       normalizedChildRouting.preferredChildModel,
-      homedir ? { home: homedir } : {},
+      homeOpts,
     );
-    if (!discovered) {
+    const custom = discovered
+      ? null
+      : await getCustomModelMetadata(
+          provider,
+          normalizedChildRouting.preferredChildModel,
+          homeOpts,
+        );
+    if (!discovered && !custom) {
       console.warn(
         `[config] Ignoring unsupported preferred child model "${normalizedChildRouting.preferredChildModel}" for provider ${provider}; using "${supportedModel.id}".`,
       );
@@ -759,6 +786,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     provider,
     supportedModel.id,
     providerOptions as Record<string, any> | undefined,
+    homedir,
   );
 
   const mergedModelSettings = parseLayer(
@@ -843,6 +871,9 @@ export function getModel(config: AgentConfig, id?: string) {
     config.provider,
     modelId,
     id ? "model override" : "model",
+    // Custom cross-registry ids are only accepted when the session's auth home
+    // (not the process home) is consulted for the custom-model store.
+    { home: resolveAuthHomeDir(config) },
   );
   const savedKey = getSavedProviderApiKey(config, config.provider);
   return getModelForProvider(config, normalizedModelId, savedKey);

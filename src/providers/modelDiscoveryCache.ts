@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -231,6 +232,24 @@ export async function readModelDiscoveryCache(
 ): Promise<ModelDiscoveryCacheFile | null> {
   try {
     const raw = await fs.readFile(modelDiscoveryCachePath(paths, provider), "utf-8");
+    return normalizeCacheFile(JSON.parse(raw), provider);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Synchronous counterpart to {@link readModelDiscoveryCache}. Sync resolution
+ * paths (persisted session resume) cannot await the async reader but must still
+ * accept model ids the user previously discovered from a provider's live
+ * catalog. Read-only and tolerant: any missing/invalid cache reads as null.
+ */
+export function readModelDiscoveryCacheSync(
+  paths: AiCoworkerPaths,
+  provider: ProviderName,
+): ModelDiscoveryCacheFile | null {
+  try {
+    const raw = readFileSync(modelDiscoveryCachePath(paths, provider), "utf-8");
     return normalizeCacheFile(JSON.parse(raw), provider);
   } catch {
     return null;

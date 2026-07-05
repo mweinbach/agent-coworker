@@ -8,6 +8,7 @@ import type { HarnessContextStore } from "../../sessionContext/HarnessContextSto
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { getAiCoworkerPaths } from "../../store/connections";
 import type { AgentConfig } from "../../types";
+import { resolveAuthHomeDir } from "../../utils/authHome";
 import type { SessionEvent } from "../protocol";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { writePersistedSessionSnapshot } from "../sessionStore";
@@ -74,7 +75,15 @@ export function createAgentSessionFromPersisted(
   // before the next turn. Agent sessions keep their persisted role-specific
   // prompt because loadSystemPromptWithSkills only builds the root prompt.
   const regenerateRootSystemPrompt = persisted.sessionKind === "root";
-  const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
+  // Resolve against the session's auth home (not the process home) so custom
+  // model IDs configured under a non-default homedir survive resume.
+  const resolvedPersistedModel = getKnownResolvedModelMetadata(
+    persisted.provider,
+    persisted.model,
+    {
+      home: resolveAuthHomeDir(opts.baseConfig),
+    },
+  );
   const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
   const migratedUnsupportedModel =
     resolvedPersistedModel === null && !isRuntimeDiscoveryProvider(persisted.provider);

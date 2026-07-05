@@ -1,5 +1,6 @@
 import { normalizeModelIdForProvider } from "../models/metadata";
 import type { AgentConfig, ProviderName } from "../types";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 import { anthropicProvider } from "./anthropic";
 import { antigravityProvider } from "./antigravity";
@@ -73,7 +74,11 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
 };
 
 export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string) {
-  const normalizedModelId = normalizeModelIdForProvider(config.provider, modelId);
+  const normalizedModelId = normalizeModelIdForProvider(config.provider, modelId, "model", {
+    // Read the custom-model store from the session's auth home, not the
+    // process home, so configured cross-registry ids are accepted.
+    home: resolveAuthHomeDir(config),
+  });
   return PROVIDERS[config.provider].createModel({ config, modelId: normalizedModelId, savedKey });
 }
 

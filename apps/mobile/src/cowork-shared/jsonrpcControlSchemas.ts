@@ -192,6 +192,7 @@ export const providerCatalogModelEntrySchema = z
       .optional(),
     runtimeOptions: z.record(z.string(), z.unknown()).optional(),
     runtimeOverrides: z.record(z.string(), z.unknown()).optional(),
+    enabled: z.boolean().optional(),
   })
   .strict();
 

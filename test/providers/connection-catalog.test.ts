@@ -7,7 +7,9 @@ import {
   getProviderCatalog,
   listProviderCatalogEntries,
 } from "../../src/providers/connectionCatalog";
+import { upsertCustomModel } from "../../src/providers/customModels";
 import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
+import { setModelPreferences } from "../../src/providers/modelPreferences";
 import { PROVIDER_NAMES } from "../../src/types";
 
 const noCodexAccount = async () => ({
@@ -28,6 +30,7 @@ async function staticCatalogTestOptions(prefix: string) {
   const paths = getAiCoworkerPaths({ homedir: home });
   const store = emptyConnectionStore();
   return {
+    home,
     paths,
     store,
     env: {} as NodeJS.ProcessEnv,
@@ -41,6 +44,35 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+// Mirrors the curated cross-provider default set for open-model aggregators:
+// only these models stay enabled by default; the rest are flagged disabled and
+// the entry default model is repaired to the first enabled one.
+const CURATED_OPEN_DEFAULT_ID =
+  /^(?:nemotron-3-ultra|minimax-m3|glm-5\.2|kimi-k2[.p]6|deepseek-v4-pro|deepseek-v4-flash)(?:$|[-.])/;
+
+type ExpectedCatalogEntry = {
+  id: string;
+  name: string;
+  models: Array<Record<string, unknown> & { id: string }>;
+  defaultModel: string;
+};
+
+function withCuratedOpenDefaults(entry: ExpectedCatalogEntry): ExpectedCatalogEntry {
+  const models = entry.models.map((model) => {
+    const lastSegment = model.id.toLowerCase().split("/").pop() ?? "";
+    return CURATED_OPEN_DEFAULT_ID.test(lastSegment) ? model : { ...model, enabled: false };
+  });
+  const defaultStillEnabled = models.some(
+    (model) => model.id === entry.defaultModel && model.enabled !== true && !("enabled" in model),
+  );
+  const firstEnabled = models.find((model) => !("enabled" in model))?.id ?? entry.defaultModel;
+  return {
+    ...entry,
+    models,
+    defaultModel: defaultStillEnabled ? entry.defaultModel : firstEnabled,
+  };
 }
 
 describe("providers/connectionCatalog", () => {
@@ -125,8 +157,7 @@ describe("providers/connectionCatalog", () => {
       readStore: staticOpts.readStore,
     });
 
-    expect(payload.default["opencode-go"]).toBe("glm-5");
-    expect(payload.all).toContainEqual({
+    const expectedOpenCodeGo = withCuratedOpenDefaults({
       id: "opencode-go",
       name: "OpenCode Go",
       models: [
@@ -241,8 +272,10 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "glm-5",
     });
-    expect(payload.default["opencode-zen"]).toBe("glm-5");
-    expect(payload.all).toContainEqual({
+    expect(payload.default["opencode-go"]).toBe(expectedOpenCodeGo.defaultModel);
+    expect(payload.all).toContainEqual(expectedOpenCodeGo);
+
+    const expectedOpenCodeZen = withCuratedOpenDefaults({
       id: "opencode-zen",
       name: "OpenCode Zen",
       models: [
@@ -525,6 +558,8 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "glm-5",
     });
+    expect(payload.default["opencode-zen"]).toBe(expectedOpenCodeZen.defaultModel);
+    expect(payload.all).toContainEqual(expectedOpenCodeZen);
   });
 
   test("lists Baseten in the provider catalog with the expected model set", async () => {
@@ -610,8 +645,7 @@ describe("providers/connectionCatalog", () => {
       readStore: staticOpts.readStore,
     });
 
-    expect(payload.default.fireworks).toBe("accounts/fireworks/models/kimi-k2p6");
-    expect(payload.all).toContainEqual({
+    const expectedFireworks = withCuratedOpenDefaults({
       id: "fireworks",
       name: "Fireworks AI",
       models: [
@@ -648,6 +682,9 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "accounts/fireworks/models/kimi-k2p6",
     });
+    expect(payload.default.fireworks).toBe(expectedFireworks.defaultModel);
+    expect(expectedFireworks.defaultModel).toBe("accounts/fireworks/models/kimi-k2p6");
+    expect(payload.all).toContainEqual(expectedFireworks);
   });
 
   test("lists Fire Pass in the provider catalog with the expected model set", async () => {
@@ -698,6 +735,391 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "nvidia/nemotron-3-super-120b-a12b",
     });
+  });
+
+  test("merges configured custom model IDs into provider catalogs", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-custom-models-");
+    await upsertCustomModel(staticOpts.paths, "nvidia", "nvidia/custom-nemotron-preview");
+    await upsertCustomModel(staticOpts.paths, "anthropic", "claude-custom-20260704");
+
+    const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    const nvidia = payload.all.find((entry) => entry.id === "nvidia");
+    const anthropic = payload.all.find((entry) => entry.id === "anthropic");
+    expect(payload.default.nvidia).toBe("nvidia/nemotron-3-super-120b-a12b");
+    expect(nvidia?.models).toContainEqual({
+      id: "nvidia/custom-nemotron-preview",
+      displayName: "nvidia/custom-nemotron-preview",
+      description: "Custom model ID",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+      runtimeOptions: { source: "custom" },
+    });
+    expect(anthropic?.models).toContainEqual({
+      id: "claude-custom-20260704",
+      displayName: "claude-custom-20260704",
+      description: "Custom model ID",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+      runtimeOptions: { source: "custom" },
+    });
+  });
+
+  test("exposes a reasoning block for a custom OpenAI reasoning id but not a non-reasoning one", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-custom-reasoning-");
+    await upsertCustomModel(staticOpts.paths, "openai", "o3-preview-custom");
+    await upsertCustomModel(staticOpts.paths, "openai", "gpt-4o");
+
+    const payload = await getProviderCatalog({
+      homedir: staticOpts.home,
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const reasoningModel = openai?.models.find((model) => model.id === "o3-preview-custom");
+    const nonReasoningModel = openai?.models.find((model) => model.id === "gpt-4o");
+    // A custom reasoning id (o-family) advertises a selector-ready reasoning block
+    // so the desktop reasoning selector renders even though it is not in the
+    // static registry; a non-reasoning custom id (gpt-4o) advertises none.
+    expect(reasoningModel?.runtimeOptions?.source).toBe("custom");
+    expect(reasoningModel?.reasoning?.defaultEffort).toBeDefined();
+    expect((reasoningModel?.reasoning?.availableEfforts ?? []).length).toBeGreaterThan(0);
+    expect(nonReasoningModel?.reasoning).toBeUndefined();
+  });
+
+  test("marks catalog models that duplicate a custom ID as custom-managed", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-custom-dupe-");
+    await upsertCustomModel(staticOpts.paths, "anthropic", "claude-opus-4-8");
+
+    const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    const anthropic = payload.all.find((entry) => entry.id === "anthropic");
+    const matches = anthropic?.models.filter((model) => model.id === "claude-opus-4-8") ?? [];
+    expect(matches).toHaveLength(1);
+    // Discovered/static metadata is kept; only the custom marker is added so
+    // clients can offer removal of the store entry.
+    expect(matches[0]?.runtimeOptions?.source).toBe("custom");
+    expect(matches[0]?.displayName).not.toBe("claude-opus-4-8");
+    expect(matches[0]?.description).not.toBe("Custom model ID");
+  });
+
+  test("marks discovered non-curated models as disabled by default", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-default-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await upsertCustomModel(paths, "openai", "my-custom-model");
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-5.4", object: "model", owned_by: "openai" },
+            { id: "gpt-5.6-experimental", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const byId = new Map(openai?.models.map((model) => [model.id, model] as const));
+    expect(byId.get("gpt-5.4")?.enabled).toBeUndefined();
+    expect(byId.get("gpt-5.6-experimental")?.enabled).toBe(false);
+    expect(byId.get("my-custom-model")?.enabled).toBeUndefined();
+  });
+
+  test("model preference overrides flip enabled state and repair the default model", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-override-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await setModelPreferences(paths, "openai", [
+      { id: "gpt-5.4", enabled: false },
+      { id: "gpt-5.6-experimental", enabled: true },
+    ]);
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-5.4", object: "model", owned_by: "openai" },
+            { id: "gpt-5.6-experimental", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const byId = new Map(openai?.models.map((model) => [model.id, model] as const));
+    expect(byId.get("gpt-5.4")?.enabled).toBe(false);
+    expect(byId.get("gpt-5.6-experimental")?.enabled).toBeUndefined();
+    expect(openai?.defaultModel).toBe("gpt-5.6-experimental");
+    expect(payload.default.openai).toBe("gpt-5.6-experimental");
+  });
+
+  test("keeps every model enabled when curation misses discovery and no overrides exist", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-failopen-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-totally-unknown-alpha", object: "model", owned_by: "openai" },
+            { id: "gpt-totally-unknown-beta", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    expect(openai?.models.length).toBe(2);
+    expect(openai?.models.every((model) => model.enabled === undefined)).toBe(true);
+  });
+
+  test("fail-open catalog disables only the single toggled model, not the whole catalog", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-failopen-one-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    // Disable exactly one unknown model. Previously this recorded one override,
+    // which flipped fail-open off and marked every OTHER model disabled by its
+    // (all-false) registry default — hiding the whole catalog.
+    await setModelPreferences(paths, "openai", [
+      { id: "gpt-totally-unknown-alpha", enabled: false },
+    ]);
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-totally-unknown-alpha", object: "model", owned_by: "openai" },
+            { id: "gpt-totally-unknown-beta", object: "model", owned_by: "openai" },
+            { id: "gpt-totally-unknown-gamma", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const byId = new Map(openai?.models.map((model) => [model.id, model] as const));
+    expect(byId.get("gpt-totally-unknown-alpha")?.enabled).toBe(false);
+    // Every other model stays enabled (enabled !== false).
+    expect(byId.get("gpt-totally-unknown-beta")?.enabled).not.toBe(false);
+    expect(byId.get("gpt-totally-unknown-gamma")?.enabled).not.toBe(false);
+  });
+
+  test("first-party static catalogs keep registry models enabled without preference flags", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-prefs-static-");
+    const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      platform: "linux",
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    const firstParty = ["openai", "anthropic", "google", "bedrock", "codex-cli", "antigravity"];
+    for (const entry of payload.all.filter((candidate) => firstParty.includes(candidate.id))) {
+      for (const model of entry.models) {
+        expect(model.enabled).toBeUndefined();
+      }
+    }
+  });
+
+  test("open-model aggregators default to the curated cross-provider model set", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-curated-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.together.xyz/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "zai-org/GLM-5.2", object: "model" },
+            { id: "moonshotai/Kimi-K2.6", object: "model" },
+            { id: "MiniMaxAI/MiniMax-M3", object: "model" },
+            { id: "deepseek-ai/DeepSeek-V4-Pro", object: "model" },
+            { id: "nvidia/nemotron-3-ultra-550b-a55b", object: "model" },
+            { id: "Qwen/Qwen3.5-397B-A17B", object: "model" },
+            { id: "some-org/other-chat-model", object: "model" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          together: {
+            service: "together",
+            mode: "api_key",
+            apiKey: "together-test-key",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const together = payload.all.find((entry) => entry.id === "together");
+    const enabledIds = together?.models
+      .filter((model) => model.enabled !== false)
+      .map((model) => model.id)
+      .sort();
+    expect(enabledIds).toEqual([
+      "MiniMaxAI/MiniMax-M3",
+      "deepseek-ai/DeepSeek-V4-Pro",
+      "moonshotai/Kimi-K2.6",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "zai-org/GLM-5.2",
+    ]);
+    // Registry models that are not in the curated set start disabled too.
+    expect(together?.models.find((model) => model.id === "Qwen/Qwen3.5-397B-A17B")?.enabled).toBe(
+      false,
+    );
+  });
+
+  test("open-model aggregators without any curated match fall back to registry defaults", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-fallback-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.together.xyz/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "Qwen/Qwen3.5-397B-A17B", object: "model" },
+            { id: "some-org/other-chat-model", object: "model" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          together: {
+            service: "together",
+            mode: "api_key",
+            apiKey: "together-test-key",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const together = payload.all.find((entry) => entry.id === "together");
+    expect(
+      together?.models.find((model) => model.id === "Qwen/Qwen3.5-397B-A17B")?.enabled,
+    ).toBeUndefined();
+    expect(
+      together?.models.find((model) => model.id === "some-org/other-chat-model")?.enabled,
+    ).toBe(false);
   });
 
   test("lists MiniMax in the provider catalog with the expected model set", async () => {

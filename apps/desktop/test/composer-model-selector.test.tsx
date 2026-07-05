@@ -169,4 +169,129 @@ describe("ComposerModelSelector", () => {
 
     expect(selections).toEqual([{ provider: "openai", model: "gpt-5.4" }]);
   });
+
+  test("custom model entry saves and selects a custom provider model", async () => {
+    const selections: ComposerModelSelection[] = [];
+    const added: ComposerModelSelection[] = [];
+    useAppStore.setState({
+      addCustomProviderModel: async (provider, model) => {
+        added.push({ provider, model });
+        return true;
+      },
+    });
+    await renderSelector({
+      defaultOpen: true,
+      onChange: (selection) => {
+        selections.push(selection);
+      },
+    });
+
+    const body = harness.dom.window.document.body;
+    const customEntry = Array.from(
+      body.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
+    ).find((node) => node.textContent?.includes("Custom model ID"));
+    if (!customEntry) throw new Error("missing custom model option");
+    await act(async () => {
+      customEntry.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const input = body.querySelector<HTMLInputElement>('input[data-slot="input"]');
+    if (!input) throw new Error("missing custom model input");
+    await act(async () => {
+      const valueSetter = Object.getOwnPropertyDescriptor(
+        harness.dom.window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      valueSetter?.call(input, "gpt-5.5-custom");
+      input.dispatchEvent(new harness.dom.window.InputEvent("input", { bubbles: true }));
+      input.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+    });
+
+    const saveButton = Array.from(body.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Save",
+    );
+    if (!saveButton) throw new Error("missing save button");
+    await act(async () => {
+      saveButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(added).toEqual([{ provider: "openai", model: "gpt-5.5-custom" }]);
+    expect(selections).toEqual([{ provider: "openai", model: "gpt-5.5-custom" }]);
+  });
+
+  test("a selected but disabled built-in model is not labeled (custom)", async () => {
+    // gpt-5.4 is a real catalog model that the user disabled; it drops out of
+    // the picker choices but the current selection must still show without the
+    // "(custom)" suffix reserved for user-added custom IDs.
+    useAppStore.setState({
+      providerCatalog: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [
+            {
+              id: "gpt-5.5",
+              displayName: "GPT-5.5",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+            {
+              id: "gpt-5.4",
+              displayName: "GPT-5.4",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+              enabled: false,
+            },
+          ],
+          defaultModel: "gpt-5.5",
+        },
+      ],
+      providerConnected: ["openai"],
+    } as any);
+
+    await act(async () => {
+      root.render(
+        createElement(ComposerModelSelector, {
+          provider: "openai",
+          model: "gpt-5.4",
+          modelDisplayNames: MODEL_DISPLAY_NAMES,
+          defaultOpen: true,
+          onChange: () => {},
+        }),
+      );
+    });
+
+    const body = harness.dom.window.document.body;
+    const items = Array.from(body.querySelectorAll('[data-slot="command-item"]')).map((node) =>
+      node.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    const currentRow = items.find((text) => text?.includes("GPT-5.4"));
+    expect(currentRow).toBeDefined();
+    expect(currentRow).not.toContain("(custom)");
+  });
+
+  test("a selected custom ID absent from the catalog is labeled (custom)", async () => {
+    await act(async () => {
+      root.render(
+        createElement(ComposerModelSelector, {
+          provider: "openai",
+          model: "gpt-5.5-typed-custom",
+          modelDisplayNames: MODEL_DISPLAY_NAMES,
+          defaultOpen: true,
+          onChange: () => {},
+        }),
+      );
+    });
+
+    const body = harness.dom.window.document.body;
+    const items = Array.from(body.querySelectorAll('[data-slot="command-item"]')).map((node) =>
+      node.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(
+      items.some((text) => text?.includes("gpt-5.5-typed-custom") && text?.includes("(custom)")),
+    ).toBe(true);
+  });
 });

@@ -1,16 +1,19 @@
 import path from "node:path";
 
 import { type AiCoworkerPaths, getAiCoworkerPaths, readConnectionStore } from "../connect";
+import { getResolvedModelMetadataSync } from "../models/metadata";
 import {
   defaultSupportedModel,
   getSupportedModel,
   listSupportedModels,
   type SupportedModel,
 } from "../models/registry";
+import { supportsCustomModelIds } from "../shared/customModels";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
 } from "../shared/googleThinking";
+import { supportsModelPreferences } from "../shared/modelPreferences";
 import type { CatalogReasoningEffort } from "../shared/openaiCompatibleOptions";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
@@ -19,6 +22,7 @@ import { BASETEN_BASE_URL, resolveBasetenApiKey } from "./basetenShared";
 import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { openAiReasoningConfigForSupportedModel } from "./catalog";
 import { type listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
+import { type CustomModelEntry, readCustomModelStore } from "./customModels";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
   isFireworksInferenceProvider,
@@ -44,6 +48,7 @@ import {
   readModelDiscoveryCache,
   writeModelDiscoveryCache,
 } from "./modelDiscoveryCache";
+import { readModelPreferencesStore } from "./modelPreferences";
 import { NVIDIA_BASE_URL, resolveNvidiaApiKey } from "./nvidiaShared";
 import {
   getOpenCodeDisplayName,
@@ -74,6 +79,8 @@ export type ProviderCatalogModelEntry = Pick<
   };
   runtimeOptions?: Record<string, unknown>;
   runtimeOverrides?: Record<string, unknown>;
+  /** Omitted when enabled; `false` hides the model from pickers without blocking explicit use. */
+  enabled?: boolean;
 };
 
 export type ProviderCatalogEntry = {
@@ -384,6 +391,182 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
     models: listSupportedModels(provider).map(staticCatalogModelEntry),
     defaultModel: defaultSupportedModel(provider).id,
   };
+}
+
+function customModelToCatalogEntry(
+  model: CustomModelEntry,
+  provider: ProviderName,
+  home?: string,
+): ProviderCatalogModelEntry {
+  // Resolve the custom id through the same placeholder resolution model selection
+  // uses, so a custom reasoning id (e.g. `o3-preview-custom` or a `gpt-5...`
+  // deployment) advertises a reasoning block. Without it the catalog entry has no
+  // reasoning metadata and desktop `reasoningConfigFromCatalog()` — which only
+  // falls back to static-registry models — cannot offer an effort selector even
+  // though the runtime treats the model as reasoning-capable.
+  const resolved = getResolvedModelMetadataSync(
+    provider,
+    model.id,
+    "custom catalog model",
+    home ? { home } : {},
+  );
+  // Derive strictly from the resolved reasoning defaults (keyed by
+  // `reasoningEffort` for OpenAI-compatible providers), so a custom id whose
+  // reasoning defaults were stripped as unproven does not advertise a selector
+  // the runtime would not honor.
+  const openAiReasoning = openAiReasoningConfigForSupportedModel({
+    providerOptionsDefaults: resolved.providerOptionsDefaults,
+    supportedReasoningEfforts: undefined,
+  });
+  const reasoning = openAiReasoning
+    ? {
+        defaultEffort: openAiReasoning.defaultEffort,
+        availableEfforts: uniqueCatalogEfforts(openAiReasoning.availableEfforts),
+      }
+    : undefined;
+  return {
+    id: model.id,
+    displayName: model.displayName ?? model.id,
+    description: "Custom model ID",
+    knowledgeCutoff: "Unknown",
+    supportsImageInput: false,
+    ...(reasoning ? { reasoning } : {}),
+    runtimeOptions: { source: "custom" },
+  };
+}
+
+function mergeCustomModelsIntoCatalogEntry(
+  entry: ProviderCatalogEntry,
+  customModelsByProvider: Awaited<ReturnType<typeof readCustomModelStore>>["providers"],
+  home?: string,
+): ProviderCatalogEntry {
+  if (!supportsCustomModelIds(entry.id)) return entry;
+  const customModels = customModelsByProvider[entry.id] ?? [];
+  if (customModels.length === 0) return entry;
+  const customIds = new Set(customModels.map((model) => model.id));
+  const existingIds = new Set(entry.models.map((model) => model.id));
+  // A custom ID that also exists in the catalog keeps its discovered metadata
+  // but is still marked as custom-managed, so clients can surface the store
+  // entry for removal instead of leaving it invisible.
+  const models = entry.models.map((model) =>
+    customIds.has(model.id)
+      ? { ...model, runtimeOptions: { ...model.runtimeOptions, source: "custom" } }
+      : model,
+  );
+  const annotated = entry.models.some((model) => customIds.has(model.id));
+  const additions = customModels
+    .filter((model) => !existingIds.has(model.id))
+    .map((model) => customModelToCatalogEntry(model, entry.id, home));
+  if (!annotated && additions.length === 0) return entry;
+  return {
+    ...entry,
+    models: [...models, ...additions],
+    defaultModel: entry.defaultModel || additions[0]?.id || "",
+  };
+}
+
+// Cross-provider default-enabled set for open-model aggregator catalogs.
+// Matched against the last path segment of the model id (case-insensitive),
+// so together's "moonshotai/Kimi-K2.6" and opencode's "kimi-k2.6" both hit.
+const CURATED_OPEN_MODEL_DEFAULT_PATTERNS: readonly RegExp[] = [
+  /^nemotron-3-ultra(?:$|[-.])/,
+  /^minimax-m3(?:$|[-.])/,
+  /^glm-5\.2(?:$|[-.])/,
+  // Fireworks spells version dots with "p" (kimi-k2p6), so accept both.
+  /^kimi-k2[.p]6(?:$|[-.])/,
+  /^deepseek-v4-pro(?:$|[-.])/,
+  /^deepseek-v4-flash(?:$|[-.])/,
+];
+
+const CURATED_OPEN_MODEL_PROVIDERS = new Set<ProviderName>([
+  "together",
+  "nvidia",
+  "minimax",
+  "baseten",
+  "fireworks",
+  "firepass",
+  "opencode-go",
+  "opencode-zen",
+]);
+
+function isCuratedOpenModelDefault(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  const lastSegment = normalized.split("/").pop() ?? normalized;
+  return CURATED_OPEN_MODEL_DEFAULT_PATTERNS.some((pattern) => pattern.test(lastSegment));
+}
+
+function applyModelPreferencesToCatalogEntry(
+  entry: ProviderCatalogEntry,
+  preferencesByProvider: Awaited<ReturnType<typeof readModelPreferencesStore>>["providers"],
+  customModelsByProvider: Awaited<ReturnType<typeof readCustomModelStore>>["providers"],
+): ProviderCatalogEntry {
+  if (!supportsModelPreferences(entry.id)) return entry;
+  if (entry.models.length === 0) return entry;
+
+  const overrides = new Map(
+    (preferencesByProvider[entry.id] ?? []).map((pref) => [pref.id, pref.enabled] as const),
+  );
+  const customIds = new Set(
+    (supportsCustomModelIds(entry.id) ? (customModelsByProvider[entry.id] ?? []) : []).map(
+      (model) => model.id,
+    ),
+  );
+
+  // Codex app-server discovery reflects the user's actual account entitlements,
+  // so its models stay enabled by default. Open-model aggregators default to
+  // the curated cross-provider list; everything else uses the model registry.
+  const discoveryIsAuthoritative = entry.id === "codex-cli";
+
+  // The curated rule only applies when the catalog actually carries at least
+  // one of the curated defaults; otherwise the registry rule keeps the
+  // provider from going dark.
+  const useCuratedOpenDefaults =
+    CURATED_OPEN_MODEL_PROVIDERS.has(entry.id) &&
+    entry.models.some((model) => isCuratedOpenModelDefault(model.id));
+
+  // The per-model default-enabled decision IGNORING any user overrides. This is
+  // what determines whether curation/discovery/custom actually matched the
+  // catalog, so it must be computed independently of the overrides map.
+  const isDefaultEnabled = (modelId: string): boolean =>
+    discoveryIsAuthoritative ||
+    (useCuratedOpenDefaults
+      ? isCuratedOpenModelDefault(modelId)
+      : getSupportedModel(entry.id, modelId) !== null) ||
+    customIds.has(modelId);
+
+  // Fail open when curation/discovery/custom match NONE of the discovered
+  // models. Without this, disabling a single model records one override, which
+  // would otherwise flip every other model to its (all-false) registry default
+  // and hide the whole catalog. Under fail-open every model defaults to enabled,
+  // so an explicit `{id, enabled: false}` override hides only that one model.
+  const failOpen = !entry.models.some((model) => isDefaultEnabled(model.id));
+
+  const enabledById = new Map<string, boolean>();
+  for (const model of entry.models) {
+    const defaultEnabled = failOpen ? true : isDefaultEnabled(model.id);
+    enabledById.set(model.id, overrides.get(model.id) ?? defaultEnabled);
+  }
+
+  // With no user preferences the fail-open catalog is unchanged, so return the
+  // entry untouched (models keep `enabled: undefined`); an explicit disable-all
+  // sticks because those overrides are already folded into `enabledById`.
+  if (failOpen && overrides.size === 0) return entry;
+
+  const anyEnabled = [...enabledById.values()].some(Boolean);
+  const models = entry.models.map((model) =>
+    enabledById.get(model.id) === false ? { ...model, enabled: false } : model,
+  );
+
+  let defaultModel = entry.defaultModel;
+  if (defaultModel && anyEnabled && enabledById.get(defaultModel) === false) {
+    const registryDefaultId = defaultSupportedModel(entry.id).id;
+    defaultModel =
+      enabledById.get(registryDefaultId) === true
+        ? registryDefaultId
+        : (models.find((model) => model.enabled !== false)?.id ?? defaultModel);
+  }
+
+  return { ...entry, models, defaultModel };
 }
 
 function resolveApiModelDiscoveryKey(opts: {
@@ -721,7 +904,10 @@ export async function listProviderCatalogEntries(
     refresh?: boolean;
   } = {},
 ): Promise<ProviderCatalogEntry[]> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
+  const home = opts.homedir ?? resolveAuthHomeDir();
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: home });
+  const customModelStore = await readCustomModelStore(paths);
+  const modelPreferencesStore = await readModelPreferencesStore(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
     providerOptions: opts.providerOptions,
@@ -764,14 +950,23 @@ export async function listProviderCatalogEntries(
   }
   return PROVIDER_NAMES.filter(
     (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
-  ).map((provider) => {
-    if (provider === "bedrock") return bedrock.entry;
-    if (provider === "lmstudio") return lmstudio.entry;
-    if (provider === "codex-cli") return codex;
-    const apiEntry = apiEntries.get(provider);
-    if (apiEntry) return apiEntry;
-    return staticCatalogEntry(provider);
-  });
+  )
+    .map((provider) => {
+      if (provider === "bedrock") return bedrock.entry;
+      if (provider === "lmstudio") return lmstudio.entry;
+      if (provider === "codex-cli") return codex;
+      const apiEntry = apiEntries.get(provider);
+      if (apiEntry) return apiEntry;
+      return staticCatalogEntry(provider);
+    })
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers, home))
+    .map((entry) =>
+      applyModelPreferencesToCatalogEntry(
+        entry,
+        modelPreferencesStore.providers,
+        customModelStore.providers,
+      ),
+    );
 }
 
 export async function getProviderCatalog(
@@ -789,11 +984,14 @@ export async function getProviderCatalog(
     refresh?: boolean;
   } = {},
 ): Promise<ProviderCatalogPayload> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
+  const home = opts.homedir ?? resolveAuthHomeDir();
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: home });
   const readStore = opts.readStore ?? readConnectionStore;
   const readCodexAppServerAccountImpl =
     opts.readCodexAppServerAccountImpl ?? readCodexAppServerAccount;
   const store = await readStore(paths);
+  const customModelStore = await readCustomModelStore(paths);
+  const modelPreferencesStore = await readModelPreferencesStore(paths);
   const codexHome = codexHomeFromPaths(paths);
   const bedrock = await bedrockCatalogEntry({
     paths,
@@ -841,14 +1039,23 @@ export async function getProviderCatalog(
   );
   const all = PROVIDER_NAMES.filter(
     (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
-  ).map((provider) => {
-    if (provider === "bedrock") return bedrock.entry;
-    if (provider === "lmstudio") return lmstudio.entry;
-    if (provider === "codex-cli") return codex;
-    const apiEntry = apiEntries.get(provider);
-    if (apiEntry) return apiEntry;
-    return staticCatalogEntry(provider);
-  });
+  )
+    .map((provider) => {
+      if (provider === "bedrock") return bedrock.entry;
+      if (provider === "lmstudio") return lmstudio.entry;
+      if (provider === "codex-cli") return codex;
+      const apiEntry = apiEntries.get(provider);
+      if (apiEntry) return apiEntry;
+      return staticCatalogEntry(provider);
+    })
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers, home))
+    .map((entry) =>
+      applyModelPreferencesToCatalogEntry(
+        entry,
+        modelPreferencesStore.providers,
+        customModelStore.providers,
+      ),
+    );
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
   const connected = PROVIDER_NAMES.filter((provider) => {

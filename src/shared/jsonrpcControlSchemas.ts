@@ -207,6 +207,7 @@ const providerCatalogModelEntrySchema = z
       .optional(),
     runtimeOptions: z.record(z.string(), z.unknown()).optional(),
     runtimeOverrides: z.record(z.string(), z.unknown()).optional(),
+    enabled: z.boolean().optional(),
   })
   .strict();
 
@@ -1222,6 +1223,38 @@ const providerStatusRefreshRequestSchema = z
   })
   .strict();
 
+const providerCustomModelMutationRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+    modelId: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const providerModelSetEnabledRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+    models: z
+      .array(
+        z
+          .object({
+            id: nonEmptyTrimmedStringSchema,
+            enabled: z.boolean(),
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+
+const providerModelResetEnabledRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+  })
+  .strict();
+
 const providerCodexAppServerStatusRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1698,6 +1731,10 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/auth/setApiKey": providerAuthSetApiKeyRequestSchema,
   "cowork/provider/auth/setConfig": providerAuthSetConfigRequestSchema,
   "cowork/provider/auth/copyApiKey": providerAuthCopyApiKeyRequestSchema,
+  "cowork/provider/customModel/add": providerCustomModelMutationRequestSchema,
+  "cowork/provider/customModel/delete": providerCustomModelMutationRequestSchema,
+  "cowork/provider/model/setEnabled": providerModelSetEnabledRequestSchema,
+  "cowork/provider/model/resetEnabled": providerModelResetEnabledRequestSchema,
   "cowork/mcp/servers/read": mcpServersReadRequestSchema,
   "cowork/mcp/server/upsert": mcpServerUpsertRequestSchema,
   "cowork/mcp/server/delete": mcpServerDeleteRequestSchema,
@@ -1783,6 +1820,10 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/auth/setApiKey": sessionEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/setConfig": sessionEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/copyApiKey": sessionEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/customModel/add": sessionEventEnvelope(providerCatalogEventSchema),
+  "cowork/provider/customModel/delete": sessionEventEnvelope(providerCatalogEventSchema),
+  "cowork/provider/model/setEnabled": sessionEventEnvelope(providerCatalogEventSchema),
+  "cowork/provider/model/resetEnabled": sessionEventEnvelope(providerCatalogEventSchema),
   "cowork/mcp/servers/read": sessionEventEnvelope(mcpServersEventSchema),
   "cowork/mcp/server/upsert": sessionEventEnvelope(mcpServersEventSchema),
   "cowork/mcp/server/delete": sessionEventEnvelope(mcpServersEventSchema),

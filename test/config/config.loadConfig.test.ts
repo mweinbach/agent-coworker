@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { defaultModelForProvider, getModel } from "../../src/config";
+import { getAiCoworkerPaths } from "../../src/connect";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
+import { upsertCustomModel } from "../../src/providers/customModels";
 import {
   fs,
   loadConfig,
@@ -1332,6 +1334,45 @@ describe("loadConfig", () => {
       env: { COWORK_IS_PACKAGED: "true", COWORK_ENABLE_TASKS: "1" },
     });
     expect(packagedEnv.tasksEnabled).toBe(true);
+  });
+
+  test("preserves a custom-only preferred child model under a non-default home", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    await upsertCustomModel(
+      getAiCoworkerPaths({ homedir: home }),
+      "nvidia",
+      "nvidia/custom-child-x",
+    );
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      provider: "nvidia",
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      preferredChildModel: "nvidia/custom-child-x",
+      childModelRoutingMode: "same-provider",
+    });
+
+    const cfg = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+
+    // Without threading the home into the post-normalization guard, this
+    // custom-only child (not in the discovery cache) would be reset to the
+    // main model.
+    expect(cfg.preferredChildModel).toBe("nvidia/custom-child-x");
+  });
+
+  test("loads a custom cross-registry main model under a non-default home without throwing", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    // "zai-org/GLM-5" is foreign to nvidia (registered under Baseten/Together);
+    // mergeProviderOptionDefaults' sync normalize would throw as unsupported
+    // unless the session home is threaded into it.
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: home }), "nvidia", "zai-org/GLM-5");
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      provider: "nvidia",
+      model: "zai-org/GLM-5",
+    });
+
+    const cfg = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+
+    expect(cfg.provider).toBe("nvidia");
+    expect(cfg.model).toBe("zai-org/GLM-5");
   });
 });
 

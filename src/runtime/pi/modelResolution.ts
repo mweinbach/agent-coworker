@@ -39,6 +39,7 @@ import {
   TOGETHER_BASE_URL,
 } from "../../providers/togetherShared";
 import type { ProviderName } from "../../types";
+import { resolveAuthHomeDir } from "../../utils/authHome";
 import { asRecord, type PiModel, pickExactPiModel, pickKnownPiModel } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../types";
 import {
@@ -74,8 +75,9 @@ function applySupportedModelMetadata(
   model: PiModel,
   provider: ProviderName,
   modelId: string,
+  home?: string,
 ): PiModel {
-  const supported = getResolvedModelMetadataSync(provider, modelId, "model");
+  const supported = getResolvedModelMetadataSync(provider, modelId, "model", { home });
   const input: Array<"text" | "image"> = supported.supportsImageInput
     ? ["text", "image"]
     : ["text"];
@@ -353,13 +355,17 @@ export async function resolvePiModel(
 ): Promise<ResolvedPiRuntimeModel> {
   const modelId = params.config.model;
   const provider = params.config.provider;
+  // Custom cross-registry ids are validated against the custom-model store
+  // under the session's auth home; thread it through every sync metadata
+  // lookup so a configured custom id resolves on the first turn.
+  const home = resolveAuthHomeDir(params.config);
 
   if (provider === "openai") {
     const model = await pickKnownPiModel("openai", modelId);
     if (!model)
       throw new Error(`No PI model metadata available for provider openai (model: ${modelId}).`);
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: getSavedProviderApiKey(params.config, "openai"),
     };
   }
@@ -373,7 +379,7 @@ export async function resolvePiModel(
   if (provider === "anthropic") {
     const model = (await getAnthropicPiModel(modelId)) ?? buildAnthropicCustomPiModel(modelId);
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),
     };
   }
@@ -382,7 +388,7 @@ export async function resolvePiModel(
     const auth = await resolveBedrockAuthConfig({ config: params.config });
     const streamOptions = auth ? bedrockClientConfig(auth) : undefined;
     return {
-      model: applySupportedModelMetadata(await getBedrockPiModel(modelId), provider, modelId),
+      model: applySupportedModelMetadata(await getBedrockPiModel(modelId), provider, modelId, home),
       ...(streamOptions ? { streamOptions } : {}),
     };
   }
@@ -396,7 +402,7 @@ export async function resolvePiModel(
         baseUrl: BASETEN_BASE_URL,
       });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveBasetenApiKey({
         savedKey: getSavedProviderApiKey(params.config, "baseten"),
       }),
@@ -412,7 +418,7 @@ export async function resolvePiModel(
         baseUrl: TOGETHER_BASE_URL,
       });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveTogetherApiKey({
         savedKey: getSavedProviderApiKey(params.config, "together"),
       }),
@@ -428,7 +434,7 @@ export async function resolvePiModel(
         baseUrl: FIREWORKS_INFERENCE_BASE_URL,
       });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveFireworksInferenceApiKey(provider, {
         savedKey: getSavedProviderApiKey(params.config, provider),
       }),
@@ -451,7 +457,7 @@ export async function resolvePiModel(
         },
       });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveNvidiaApiKey({
         savedKey: getSavedProviderApiKey(params.config, "nvidia"),
       }),
@@ -474,7 +480,7 @@ export async function resolvePiModel(
         },
       });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveMinimaxApiKey({
         savedKey: getSavedProviderApiKey(params.config, "minimax"),
       }),
@@ -517,7 +523,7 @@ export async function resolvePiModel(
         baseUrl: providerConfig.baseUrl,
       });
     return {
-      model: applySupportedModelMetadata(model, provider, modelId),
+      model: applySupportedModelMetadata(model, provider, modelId, home),
       apiKey: resolveOpenCodeApiKey(provider, {
         savedKey: getSavedProviderApiKey(params.config, provider),
       }),

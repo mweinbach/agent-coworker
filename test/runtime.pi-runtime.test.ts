@@ -6,6 +6,7 @@ import path from "node:path";
 import { z } from "zod";
 import { getAiCoworkerPaths } from "../src/connect";
 import { listSupportedModels } from "../src/models/registry";
+import { upsertCustomModel } from "../src/providers/customModels";
 import { resolveGoogleInteractionsModel } from "../src/runtime/googleInteractionsModel";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { createPiRuntime, __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
@@ -1063,6 +1064,32 @@ describe("pi runtime regressions", () => {
         maxTokensField: "max_tokens",
         thinkingFormat: "openai",
       },
+    });
+  });
+
+  test("NVIDIA runtime resolves a configured custom cross-registry ID under a non-default home", async () => {
+    // "zai-org/GLM-5" is registered under Baseten/Together, so it is provably
+    // foreign to nvidia; the sync normalizer only accepts it when the custom
+    // store is consulted with the session's auth home. makeConfig points
+    // userCoworkDir at homeDir, so resolveAuthHomeDir(config) === homeDir.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-crossreg-"));
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "nvidia", "zai-org/GLM-5");
+    const config = makeConfig(homeDir, {
+      provider: "nvidia",
+      model: "zai-org/GLM-5",
+      preferredChildModel: "zai-org/GLM-5",
+    });
+
+    const resolved = await withEnv(
+      "NVIDIA_API_KEY",
+      "env-nvidia-key",
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.model).toMatchObject({
+      id: "zai-org/GLM-5",
+      provider: "nvidia",
+      api: "openai-completions",
     });
   });
 

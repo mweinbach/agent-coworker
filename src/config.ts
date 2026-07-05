@@ -8,6 +8,7 @@ import { getAiCoworkerPaths } from "./connect";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
+  getCustomModelMetadata,
   getDiscoveredModelMetadata,
   getResolvedModelMetadataSync,
   isDynamicModelProvider,
@@ -155,8 +156,11 @@ function mergeProviderOptionDefaults(
   provider: ProviderName,
   modelId: string,
   providerOptions: Record<string, any> | undefined,
+  home?: string,
 ): Record<string, any> | undefined {
-  const defaults = getResolvedModelMetadataSync(provider, modelId, "model").providerOptionsDefaults;
+  const defaults = getResolvedModelMetadataSync(provider, modelId, "model", {
+    home,
+  }).providerOptionsDefaults;
   const current = isPlainObject(providerOptions)
     ? (deepMerge({}, providerOptions) as Record<string, any>)
     : undefined;
@@ -550,13 +554,22 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     !getSupportedModel(provider, normalizedChildRouting.preferredChildModel)
   ) {
     // Same strictness as the main model: unknown preferred child ids are only
-    // kept when they were previously discovered from the provider.
+    // kept when they were previously discovered from the provider OR the user
+    // configured them as a custom model for this provider.
+    const homeOpts = homedir ? { home: homedir } : {};
     const discovered = await getDiscoveredModelMetadata(
       provider,
       normalizedChildRouting.preferredChildModel,
-      homedir ? { home: homedir } : {},
+      homeOpts,
     );
-    if (!discovered) {
+    const custom = discovered
+      ? null
+      : await getCustomModelMetadata(
+          provider,
+          normalizedChildRouting.preferredChildModel,
+          homeOpts,
+        );
+    if (!discovered && !custom) {
       console.warn(
         `[config] Ignoring unsupported preferred child model "${normalizedChildRouting.preferredChildModel}" for provider ${provider}; using "${supportedModel.id}".`,
       );
@@ -760,6 +773,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     provider,
     supportedModel.id,
     providerOptions as Record<string, any> | undefined,
+    homedir,
   );
 
   const mergedModelSettings = parseLayer(

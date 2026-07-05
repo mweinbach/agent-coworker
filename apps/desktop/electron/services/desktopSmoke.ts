@@ -42,7 +42,11 @@ type DesktopSmokeWaiter = {
 };
 
 export type DesktopSmokeJsonRpcConnection = {
-  sendRequest: (method: string, params?: unknown) => Promise<DesktopSmokeJsonRpcMessage>;
+  sendRequest: (
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number },
+  ) => Promise<DesktopSmokeJsonRpcMessage>;
   waitFor: (
     predicate: (message: DesktopSmokeJsonRpcMessage) => boolean,
     options: DesktopSmokeWaitOptions,
@@ -67,6 +71,7 @@ export type RunDesktopSmokePromptLoadCheckOptions = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const TURN_START_TIMEOUT_MS = 180_000;
 const TURN_COMPLETION_TIMEOUT_MS = 30_000;
 const DESKTOP_SMOKE_CLIENT_NAME = "desktop-smoke";
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
@@ -192,11 +197,16 @@ export async function connectDesktopSmokeJsonRpc(
   };
 
   let nextId = 0;
-  const sendRequest = async (method: string, params?: unknown) => {
+  const sendRequest = async (
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number },
+  ) => {
     const id = ++nextId;
     ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
     const response = await waitFor((message) => message.id === id, {
       label: `response to ${method}`,
+      timeoutMs: options?.timeoutMs,
     });
     if (response.error) {
       const code = typeof response.error.code === "number" ? ` (${response.error.code})` : "";
@@ -265,10 +275,16 @@ export async function runDesktopSmokePromptLoadCheck(
       },
     });
 
-    const turnStartedResponse = await rpc.sendRequest("turn/start", {
-      threadId,
-      input: "Desktop smoke packaged turn check",
-    });
+    const turnStartedResponse = await rpc.sendRequest(
+      "turn/start",
+      {
+        threadId,
+        input: "Desktop smoke packaged turn check",
+      },
+      {
+        timeoutMs: TURN_START_TIMEOUT_MS,
+      },
+    );
     const turnId = (turnStartedResponse.result as { turn?: { id?: string } } | undefined)?.turn?.id;
     if (!turnId) {
       throw new Error("Desktop smoke turn/start did not return a turn id");

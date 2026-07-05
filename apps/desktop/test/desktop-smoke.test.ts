@@ -236,14 +236,18 @@ describe("desktop smoke JSON-RPC helper", () => {
 describe("runDesktopSmokePromptLoadCheck", () => {
   test("runs the expected thread and turn sequence", async () => {
     const calls: string[] = [];
-    const sendRequestCalls: Array<{ method: string; params: unknown }> = [];
+    const sendRequestCalls: Array<{
+      method: string;
+      options?: { timeoutMs?: number };
+      params: unknown;
+    }> = [];
     const waitForCalls: Array<{ label: string; timeoutMs?: number }> = [];
     let closeCalls = 0;
 
     const rpc: DesktopSmokeJsonRpcConnection = {
-      async sendRequest(method, params) {
+      async sendRequest(method, params, options) {
         calls.push(`send:${method}`);
-        sendRequestCalls.push({ method, params });
+        sendRequestCalls.push({ method, options, params });
         if (method === "thread/start") {
           return { result: { thread: { id: "thread-1" } } };
         }
@@ -294,10 +298,12 @@ describe("runDesktopSmokePromptLoadCheck", () => {
     expect(sendRequestCalls).toEqual([
       {
         method: "thread/start",
+        options: undefined,
         params: { cwd: "/workspace" },
       },
       {
         method: "cowork/session/config/set",
+        options: undefined,
         params: {
           threadId: "thread-1",
           config: {
@@ -307,6 +313,7 @@ describe("runDesktopSmokePromptLoadCheck", () => {
       },
       {
         method: "turn/start",
+        options: { timeoutMs: 180_000 },
         params: {
           threadId: "thread-1",
           input: "Desktop smoke packaged turn check",

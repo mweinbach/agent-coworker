@@ -461,6 +461,10 @@ export type AppStoreState = {
   checkSkillInstallationUpdate: (installationId: string) => Promise<void>;
   updateSkillInstallation: (installationId: string) => Promise<void>;
   dismissSkillMutationError: (workspaceId?: string) => void;
+  refreshMarketplaces: (workspaceId?: string) => Promise<void>;
+  addMarketplace: (sourceInput: string) => Promise<void>;
+  removeMarketplace: (id: string) => Promise<void>;
+  dismissMarketplaceMutationError: (workspaceId?: string) => void;
 
   refreshResearchList: () => Promise<void>;
   selectResearch: (researchId: string | null) => Promise<void>;

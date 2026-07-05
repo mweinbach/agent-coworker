@@ -408,6 +408,9 @@ export function createControlSocketHelpers(
                 skillMutationError: null,
                 pluginMutationPendingKeys: {},
                 pluginMutationError: null,
+                marketplacesLoading: false,
+                marketplaceMutationPendingKeys: {},
+                marketplaceMutationError: null,
                 workspaceBackupsLoading: false,
                 workspaceBackupsError: workspaceRuntime.workspaceBackupsError,
                 workspaceBackupPendingActionKeys: {},
@@ -1202,6 +1205,21 @@ export function createControlSocketHelpers(
         clearedMutationPendingKeys,
         workspaceRuntimeBefore,
       );
+      return;
+    }
+
+    if (evt.type === "marketplaces_list") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            marketplaces: evt.marketplaces,
+            marketplacesLoading: false,
+            marketplacesError: null,
+          },
+        },
+      }));
       return;
     }
 

@@ -12,18 +12,28 @@ import {
 import type { WorkspaceRuntime } from "../types";
 import { resolveManagementWorkspaceId } from "../workspaceDisplayTargets";
 
-export type MutationDomain = "skill" | "plugin";
+export type MutationDomain = "skill" | "plugin" | "marketplace";
 
 function mutationPendingField(
   domain: MutationDomain,
-): keyof Pick<WorkspaceRuntime, "skillMutationPendingKeys" | "pluginMutationPendingKeys"> {
-  return domain === "plugin" ? "pluginMutationPendingKeys" : "skillMutationPendingKeys";
+): keyof Pick<
+  WorkspaceRuntime,
+  "skillMutationPendingKeys" | "pluginMutationPendingKeys" | "marketplaceMutationPendingKeys"
+> {
+  if (domain === "plugin") return "pluginMutationPendingKeys";
+  if (domain === "marketplace") return "marketplaceMutationPendingKeys";
+  return "skillMutationPendingKeys";
 }
 
 function mutationErrorField(
   domain: MutationDomain,
-): keyof Pick<WorkspaceRuntime, "skillMutationError" | "pluginMutationError"> {
-  return domain === "plugin" ? "pluginMutationError" : "skillMutationError";
+): keyof Pick<
+  WorkspaceRuntime,
+  "skillMutationError" | "pluginMutationError" | "marketplaceMutationError"
+> {
+  if (domain === "plugin") return "pluginMutationError";
+  if (domain === "marketplace") return "marketplaceMutationError";
+  return "skillMutationError";
 }
 
 export function mutationPendingKey(action: string, id?: string): string {

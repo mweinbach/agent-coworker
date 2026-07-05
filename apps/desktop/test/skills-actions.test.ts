@@ -272,7 +272,7 @@ describe("skill store actions", () => {
       other: true,
     });
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
-      "Unable to preview skill install.",
+      "JSON-RPC workspace socket is unavailable",
     );
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications).toHaveLength(1);
@@ -285,13 +285,13 @@ describe("skill store actions", () => {
 
     await expect(
       createSkillActions(set, get).installSkills("owner/repo", "global"),
-    ).rejects.toThrow("Unable to install skills.");
+    ).rejects.toThrow("JSON-RPC workspace socket is unavailable");
 
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
       other: true,
     });
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
-      "Unable to install skills.",
+      "JSON-RPC workspace socket is unavailable",
     );
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.notifications).toHaveLength(1);
@@ -317,7 +317,7 @@ describe("skill store actions", () => {
 
     await expect(
       createSkillActions(set, get).installSkills("owner/repo", "global"),
-    ).rejects.toThrow("Unable to install skills.");
+    ).rejects.toThrow("request failed");
 
     expect(waiterPendingKey).toBe("install:global");
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);

@@ -471,6 +471,11 @@ export type ImportRuntimeState = {
   error: string | null;
 };
 
+export type MarketplacesListEntry = Extract<
+  SessionEvent,
+  { type: "marketplaces_list" }
+>["marketplaces"][number];
+
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
@@ -519,6 +524,11 @@ export type WorkspaceRuntime = {
   skillMutationError: string | null;
   pluginMutationPendingKeys: Record<string, true>;
   pluginMutationError: string | null;
+  marketplaces: MarketplacesListEntry[] | null;
+  marketplacesLoading: boolean;
+  marketplacesError: string | null;
+  marketplaceMutationPendingKeys: Record<string, true>;
+  marketplaceMutationError: string | null;
   importItemsByKey: Record<string, ImportRuntimeState>;
   importPendingKeys: Record<string, true>;
   memories: MemoryListEntry[];

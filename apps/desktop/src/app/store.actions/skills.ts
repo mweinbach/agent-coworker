@@ -251,15 +251,17 @@ export function createSkillActions(
       const cwd = workspacePath(workspaceId);
       const key = mutationPendingKey("preview");
       setMutationPending(set, workspaceId, "skill", key);
+      const rpcError: { message?: string } = {};
       const ok = await requestJsonRpcControlEvent(
         get,
         set,
         workspaceId,
         "cowork/skills/install/preview",
         { cwd, sourceInput, targetScope },
+        rpcError,
       );
       if (!ok) {
-        const detail = "Unable to preview skill install.";
+        const detail = rpcError.message?.trim() || "Unable to preview skill install.";
         clearFailedMutationSend(set, workspaceId, key, detail, { skillMutationError: detail });
       }
     },
@@ -280,13 +282,21 @@ export function createSkillActions(
         reject: installPromise.reject,
       });
 
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/install", {
-        cwd,
-        sourceInput,
-        targetScope,
-      });
+      const rpcError: { message?: string } = {};
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/skills/install",
+        {
+          cwd,
+          sourceInput,
+          targetScope,
+        },
+        rpcError,
+      );
       if (!ok) {
-        const detail = "Unable to install skills.";
+        const detail = rpcError.message?.trim() || "Unable to install skills.";
         if (existing) {
           RUNTIME.skillInstallWaiters.set(workspaceId, existing);
         } else {

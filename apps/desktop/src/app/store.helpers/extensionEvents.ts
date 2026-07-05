@@ -93,6 +93,15 @@ function clearedPluginMutationKeys(
   );
 }
 
+function clearedMarketplaceMutationKeys(
+  workspaceRuntimeBefore: WorkspaceRuntime | undefined,
+  clearedMutationPendingKeys: readonly string[],
+): boolean {
+  return clearedMutationPendingKeys.some(
+    (key) => workspaceRuntimeBefore?.marketplaceMutationPendingKeys[key] === true,
+  );
+}
+
 export function shouldResolveSkillInstallWaiter(
   workspaceId: string,
   clearedMutationPendingKeys: readonly string[],
@@ -166,11 +175,18 @@ export function applySkillsCatalogEvent(
       workspaceRuntime.pluginMutationPendingKeys,
       clearedMutationPendingKeys,
     ),
+    marketplaceMutationPendingKeys: omitMutationPendingKeys(
+      workspaceRuntime.marketplaceMutationPendingKeys,
+      clearedMutationPendingKeys,
+    ),
     ...(clearedSkillMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
       ? { skillMutationError: null }
       : {}),
     ...(clearedPluginMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
       ? { pluginMutationError: null }
+      : {}),
+    ...(clearedMarketplaceMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
+      ? { marketplaceMutationError: null }
       : {}),
     selectedSkillInstallationId: selectedInstallation ? selectedInstallationId : null,
     selectedSkillInstallation: selectedInstallation,
@@ -208,8 +224,15 @@ export function applyPluginsCatalogEvent(
       workspaceRuntime.pluginMutationPendingKeys,
       clearedMutationPendingKeys,
     ),
+    marketplaceMutationPendingKeys: omitMutationPendingKeys(
+      workspaceRuntime.marketplaceMutationPendingKeys,
+      clearedMutationPendingKeys,
+    ),
     ...(clearedPluginMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
       ? { pluginMutationError: null }
+      : {}),
+    ...(clearedMarketplaceMutationKeys(workspaceRuntimeBefore, clearedMutationPendingKeys)
+      ? { marketplaceMutationError: null }
       : {}),
     selectedPluginId: selectedPlugin ? selectedPluginId : null,
     selectedPluginScope: selectedPlugin?.scope ?? null,

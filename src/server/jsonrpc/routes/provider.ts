@@ -8,9 +8,53 @@ import { isProviderName } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
-import { captureWorkspaceControlOutcome, sendSessionMutationError } from "./outcomes";
+import {
+  captureWorkspaceControlMutationEvents,
+  captureWorkspaceControlOutcome,
+  sendSessionMutationError,
+} from "./outcomes";
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
+
+type ProviderCatalogEvent = Extract<SessionEvent, { type: "provider_catalog" }>;
+
+const isProviderCatalogEvent = (event: SessionEvent): event is ProviderCatalogEvent =>
+  event.type === "provider_catalog";
+
+/**
+ * Resolve a provider-catalog mutation to the catalog event the caller expects.
+ *
+ * `captureWorkspaceControlMutationEvents` waits for the action to resolve before
+ * it settles (it only schedules its idle-settle once `actionResolved` is true),
+ * so — unlike `captureWorkspaceControlOutcome`, which resolves on the FIRST
+ * matching event and can therefore return a stale `provider_catalog` emitted by
+ * a concurrent refresh while the store write is still in flight — the collected
+ * events are guaranteed to include the catalog emitted AFTER the store write.
+ * We take the LAST catalog: `addCustomProviderModel` (and its siblings) awaits
+ * the store mutation, then emits, so the final catalog reflects the mutation.
+ */
+function sendProviderCatalogMutationResult(
+  context: JsonRpcRouteContext,
+  ws: Parameters<JsonRpcRouteContext["jsonrpc"]["sendResult"]>[0],
+  id: Parameters<JsonRpcRouteContext["jsonrpc"]["sendResult"]>[1],
+  events: Array<ProviderCatalogEvent | Extract<SessionEvent, { type: "error" }>>,
+): void {
+  const error = events.find(context.utils.isSessionError);
+  if (error) {
+    sendSessionMutationError(context, ws, id, error);
+    return;
+  }
+  const catalogs = events.filter(isProviderCatalogEvent);
+  const event = catalogs.at(-1);
+  if (!event) {
+    context.jsonrpc.sendError(ws, id, {
+      code: JSONRPC_ERROR_CODES.internalError,
+      message: "Provider mutation did not emit a provider_catalog event",
+    });
+    return;
+  }
+  context.jsonrpc.sendResult(ws, id, { event });
+}
 
 // Codex app-server can spend up to one minute starting login, ten minutes
 // waiting for the browser callback, and another minute refreshing the account.
@@ -303,18 +347,13 @@ export function createProviderRouteHandlers(
         });
         return;
       }
-      const outcome = await captureWorkspaceControlOutcome(
+      const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
         async (runtime) => await runtime.provider.addCustomModel(provider, modelId),
-        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
-          event.type === "provider_catalog",
+        isProviderCatalogEvent,
       );
-      if (context.utils.isSessionError(outcome)) {
-        sendSessionMutationError(context, ws, message.id, outcome);
-        return;
-      }
-      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
 
     "cowork/provider/customModel/delete": async (ws, message) => {
@@ -329,18 +368,13 @@ export function createProviderRouteHandlers(
         });
         return;
       }
-      const outcome = await captureWorkspaceControlOutcome(
+      const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
         async (runtime) => await runtime.provider.deleteCustomModel(provider, modelId),
-        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
-          event.type === "provider_catalog",
+        isProviderCatalogEvent,
       );
-      if (context.utils.isSessionError(outcome)) {
-        sendSessionMutationError(context, ws, message.id, outcome);
-        return;
-      }
-      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
 
     "cowork/provider/model/setEnabled": async (ws, message) => {
@@ -364,18 +398,13 @@ export function createProviderRouteHandlers(
         });
         return;
       }
-      const outcome = await captureWorkspaceControlOutcome(
+      const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
         async (runtime) => await runtime.provider.setModelsEnabled(provider, models),
-        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
-          event.type === "provider_catalog",
+        isProviderCatalogEvent,
       );
-      if (context.utils.isSessionError(outcome)) {
-        sendSessionMutationError(context, ws, message.id, outcome);
-        return;
-      }
-      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
 
     "cowork/provider/model/resetEnabled": async (ws, message) => {
@@ -389,18 +418,13 @@ export function createProviderRouteHandlers(
         });
         return;
       }
-      const outcome = await captureWorkspaceControlOutcome(
+      const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
         async (runtime) => await runtime.provider.resetModelPreferences(provider),
-        (event): event is Extract<SessionEvent, { type: "provider_catalog" }> =>
-          event.type === "provider_catalog",
+        isProviderCatalogEvent,
       );
-      if (context.utils.isSessionError(outcome)) {
-        sendSessionMutationError(context, ws, message.id, outcome);
-        return;
-      }
-      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+      sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
   };
 }

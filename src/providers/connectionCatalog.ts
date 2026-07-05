@@ -483,19 +483,6 @@ function applyModelPreferencesToCatalogEntry(
   // so its models stay enabled by default. Open-model aggregators default to
   // the curated cross-provider list; everything else uses the model registry.
   const discoveryIsAuthoritative = entry.id === "codex-cli";
-  const computeEnabled = (useCuratedOpenDefaults: boolean) => {
-    const map = new Map<string, boolean>();
-    for (const model of entry.models) {
-      const defaultEnabled =
-        discoveryIsAuthoritative ||
-        (useCuratedOpenDefaults
-          ? isCuratedOpenModelDefault(model.id)
-          : getSupportedModel(entry.id, model.id) !== null) ||
-        customIds.has(model.id);
-      map.set(model.id, overrides.get(model.id) ?? defaultEnabled);
-    }
-    return map;
-  };
 
   // The curated rule only applies when the catalog actually carries at least
   // one of the curated defaults; otherwise the registry rule keeps the
@@ -503,13 +490,36 @@ function applyModelPreferencesToCatalogEntry(
   const useCuratedOpenDefaults =
     CURATED_OPEN_MODEL_PROVIDERS.has(entry.id) &&
     entry.models.some((model) => isCuratedOpenModelDefault(model.id));
-  const enabledById = computeEnabled(useCuratedOpenDefaults);
 
-  // Fail open when curation and discovery do not overlap and the user has not
-  // expressed any preference for this provider; an explicit disable-all sticks.
+  // The per-model default-enabled decision IGNORING any user overrides. This is
+  // what determines whether curation/discovery/custom actually matched the
+  // catalog, so it must be computed independently of the overrides map.
+  const isDefaultEnabled = (modelId: string): boolean =>
+    discoveryIsAuthoritative ||
+    (useCuratedOpenDefaults
+      ? isCuratedOpenModelDefault(modelId)
+      : getSupportedModel(entry.id, modelId) !== null) ||
+    customIds.has(modelId);
+
+  // Fail open when curation/discovery/custom match NONE of the discovered
+  // models. Without this, disabling a single model records one override, which
+  // would otherwise flip every other model to its (all-false) registry default
+  // and hide the whole catalog. Under fail-open every model defaults to enabled,
+  // so an explicit `{id, enabled: false}` override hides only that one model.
+  const failOpen = !entry.models.some((model) => isDefaultEnabled(model.id));
+
+  const enabledById = new Map<string, boolean>();
+  for (const model of entry.models) {
+    const defaultEnabled = failOpen ? true : isDefaultEnabled(model.id);
+    enabledById.set(model.id, overrides.get(model.id) ?? defaultEnabled);
+  }
+
+  // With no user preferences the fail-open catalog is unchanged, so return the
+  // entry untouched (models keep `enabled: undefined`); an explicit disable-all
+  // sticks because those overrides are already folded into `enabledById`.
+  if (failOpen && overrides.size === 0) return entry;
+
   const anyEnabled = [...enabledById.values()].some(Boolean);
-  if (!anyEnabled && overrides.size === 0) return entry;
-
   const models = entry.models.map((model) =>
     enabledById.get(model.id) === false ? { ...model, enabled: false } : model,
   );

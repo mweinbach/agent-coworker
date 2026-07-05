@@ -386,6 +386,31 @@ describe("getResolvedModelMetadataSync with bedrock discovery home", () => {
     // Placeholder metadata uses the id as its display name.
     expect(resolved.displayName).toBe(BEDROCK_DISCOVERED_ID);
   });
+
+  test("consults the discovery cache for a dynamic-provider id so vision is preserved on the first turn", () => {
+    // Before the dynamic branch consulted the discovery cache, a model that
+    // existed only in the cache (e.g. a discovered vision id) resolved to the
+    // generic placeholder with supportsImageInput:false on the first turn,
+    // silently downgrading it to text-only even though the cache advertised
+    // image input.
+    const resolved = getResolvedModelMetadataSync("openai", DISCOVERED_VISION_ID, "model", {
+      home: homeWithStore,
+    });
+    expect(resolved.id).toBe(DISCOVERED_VISION_ID);
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.supportsImageInput).toBe(true);
+    expect(resolved.displayName).toBe("Discovered Vision");
+    expect(resolved.source).toBe("dynamic");
+  });
+
+  test("still falls back to the placeholder when a dynamic id is absent from the cache", () => {
+    const resolved = getResolvedModelMetadataSync("openai", "acme/never-discovered", "model", {
+      home: emptyHome,
+    });
+    expect(resolved.id).toBe("acme/never-discovered");
+    expect(resolved.supportsImageInput).toBe(false);
+    expect(resolved.displayName).toBe("acme/never-discovered");
+  });
 });
 
 describe("reconcileReasoningProviderOptions", () => {

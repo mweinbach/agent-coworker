@@ -1145,6 +1145,51 @@ describe("loadConfig", () => {
     expect(cfg.providerOptions).not.toHaveProperty("opencode-go");
   });
 
+  test("strips stale reasoning providerOptions for a non-reasoning custom model", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    // gpt-4o is a non-reasoning custom OpenAI id: its resolved defaults carry no
+    // reasoning keys, so reasoningEffort/reasoningSummary lingering from a
+    // previously-selected GPT-5 model must be dropped or the Responses runtime
+    // would send a reasoning payload the model rejects.
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: home }), "openai", "gpt-4o");
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      provider: "openai",
+      model: "gpt-4o",
+      providerOptions: {
+        openai: {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+        },
+      },
+    });
+
+    const cfg = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+
+    expect(cfg.model).toBe("gpt-4o");
+    expect(cfg.providerOptions?.openai?.reasoningEffort).toBeUndefined();
+    expect(cfg.providerOptions?.openai?.reasoningSummary).toBeUndefined();
+  });
+
+  test("keeps an explicit reasoning effort for a reasoning-capable model", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    // gpt-5.4 is a reasoning model: reasoningEffort is present in its resolved
+    // defaults, so a user's explicit effort must survive reconciliation.
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      provider: "openai",
+      model: "gpt-5.4",
+      providerOptions: {
+        openai: {
+          reasoningEffort: "low",
+        },
+      },
+    });
+
+    const cfg = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+
+    expect(cfg.model).toBe("gpt-5.4");
+    expect(cfg.providerOptions?.openai?.reasoningEffort).toBe("low");
+  });
+
   test("loads modelSettings maxRetries from config and allows env overrides", async () => {
     const { cwd, home } = await makeTmpDirs();
 

@@ -78,6 +78,39 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("provider custom model add returns a catalog emitted after the store write completes", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      // The route now collects mutation events and returns the LAST provider_catalog,
+      // which is guaranteed to be emitted after upsertCustomModel resolves — so a
+      // concurrent catalog read emitted mid-write can no longer resolve the call
+      // before the id is durably written. The returned catalog must therefore
+      // always contain the newly-added custom id.
+      const response = await rpc.request("cowork/provider/customModel/add", {
+        cwd: tmpDir,
+        provider: "nvidia",
+        modelId: "nvidia/race-guard-model",
+      });
+
+      expect(response.result.event.type).toBe("provider_catalog");
+      const nvidia = response.result.event.all.find(
+        (entry: { id?: string }) => entry.id === "nvidia",
+      );
+      expect(nvidia?.models).toContainEqual(
+        expect.objectContaining({
+          id: "nvidia/race-guard-model",
+          runtimeOptions: { source: "custom" },
+        }),
+      );
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("provider model setEnabled and resetEnabled round-trip through the provider_catalog payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

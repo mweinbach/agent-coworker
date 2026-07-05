@@ -923,6 +923,57 @@ describe("providers/connectionCatalog", () => {
     expect(openai?.models.every((model) => model.enabled === undefined)).toBe(true);
   });
 
+  test("fail-open catalog disables only the single toggled model, not the whole catalog", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-prefs-failopen-one-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    // Disable exactly one unknown model. Previously this recorded one override,
+    // which flipped fail-open off and marked every OTHER model disabled by its
+    // (all-false) registry default — hiding the whole catalog.
+    await setModelPreferences(paths, "openai", [
+      { id: "gpt-totally-unknown-alpha", enabled: false },
+    ]);
+    const fetchImpl = mock(async (url: string | URL | Request) => {
+      if (String(url) === "https://api.openai.com/v1/models") {
+        return jsonResponse({
+          object: "list",
+          data: [
+            { id: "gpt-totally-unknown-alpha", object: "model", owned_by: "openai" },
+            { id: "gpt-totally-unknown-beta", object: "model", owned_by: "openai" },
+            { id: "gpt-totally-unknown-gamma", object: "model", owned_by: "openai" },
+          ],
+        });
+      }
+      throw new Error(`unexpected model list URL: ${String(url)}`);
+    });
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {} as NodeJS.ProcessEnv,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          openai: {
+            service: "openai",
+            mode: "api_key",
+            apiKey: "sk-test",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const byId = new Map(openai?.models.map((model) => [model.id, model] as const));
+    expect(byId.get("gpt-totally-unknown-alpha")?.enabled).toBe(false);
+    // Every other model stays enabled (enabled !== false).
+    expect(byId.get("gpt-totally-unknown-beta")?.enabled).not.toBe(false);
+    expect(byId.get("gpt-totally-unknown-gamma")?.enabled).not.toBe(false);
+  });
+
   test("first-party static catalogs keep registry models enabled without preference flags", async () => {
     const staticOpts = await staticCatalogTestOptions("connection-catalog-prefs-static-");
     const payload = await getProviderCatalog({

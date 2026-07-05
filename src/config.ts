@@ -14,6 +14,7 @@ import {
   isDynamicModelProvider,
   isRuntimeDiscoveryProvider,
   normalizeModelIdForProvider,
+  reconcileReasoningProviderOptions,
   resolveDefaultModelMetadata,
   resolveModelMetadata,
 } from "./models/metadata";
@@ -178,10 +179,22 @@ function mergeProviderOptionDefaults(
     return Object.keys(current).length > 0 ? current : undefined;
   }
 
-  return {
+  const result = {
     ...(current ?? {}),
     [provider]: mergedProviderOptions,
   };
+  // A workspace/user config that retained reasoning keys (e.g. reasoningEffort)
+  // from a previously-selected reasoning model would otherwise survive the merge
+  // over the resolved defaults and reintroduce them on a non-reasoning custom id
+  // (e.g. gpt-4o) — making the Responses runtime send a reasoning payload that
+  // fails. Strip reasoning keys the model's defaults do not declare; a
+  // reasoning-capable model keeps its explicit effort (present in defaults).
+  const reconciled = reconcileReasoningProviderOptions(
+    result,
+    provider,
+    (defaults ?? {}) as Record<string, unknown>,
+  );
+  return isPlainObject(reconciled) ? (reconciled as Record<string, any>) : result;
 }
 
 async function resolveConfiguredModelMetadata(

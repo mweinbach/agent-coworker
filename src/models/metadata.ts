@@ -357,6 +357,14 @@ export function getResolvedModelMetadataSync(
         source: "static",
       };
     }
+    // A non-static id may still exist in the provider's discovery cache with its
+    // real capabilities (vision, reasoning). Consult it before falling back to a
+    // generic placeholder so the first turn does not silently drop image input
+    // or reasoning — mirrors the resume path in getKnownResolvedModelMetadata.
+    // lmstudio/bedrock/codex-cli are handled in earlier branches, so `provider`
+    // narrows to the type getDiscoveredModelMetadataSync accepts.
+    const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
+    if (discovered) return discovered;
     return buildProviderPlaceholderMetadata(
       provider,
       normalizeModelIdForProvider(provider, modelId, source, opts),

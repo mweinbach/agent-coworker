@@ -7,8 +7,10 @@ import type { ComponentProps, ReactNode } from "react";
 import {
   Children,
   cloneElement,
+  createContext,
   isValidElement,
   memo,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -1146,6 +1148,37 @@ export function remarkRewriteDesktopFileLinks(opts?: { basePath?: string | null 
   };
 }
 
+function rewriteRawImageSrcInHast(node: HastNode, basePath: string | null): void {
+  if (
+    node.type === "element" &&
+    node.tagName === "img" &&
+    typeof node.properties?.src === "string"
+  ) {
+    const mediaSrc = rewriteDesktopImageSrcForTree(node.properties.src, basePath);
+    if (mediaSrc !== null) {
+      node.properties.src = mediaSrc;
+    }
+  }
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      rewriteRawImageSrcInHast(child, basePath);
+    }
+  }
+}
+
+/**
+ * Rehype plugin (runs after rehype-raw, before sanitize/harden) that upgrades
+ * raw HTML `<img>` sources the same way markdown images are rewritten at the
+ * remark stage. Without it, workspace-relative raw-HTML image srcs are blocked
+ * by the harden step before reaching the renderer's img component.
+ */
+export function rehypeRewriteDesktopImages(opts?: { basePath?: string | null }) {
+  const basePath = opts?.basePath ?? null;
+  return (tree: HastNode) => {
+    rewriteRawImageSrcInHast(tree, basePath);
+  };
+}
+
 async function openDesktopMessageLink(href: string): Promise<void> {
   const localPath = decodeDesktopLocalFileHref(href);
   if (localPath) {
@@ -1248,6 +1281,11 @@ export function DesktopMessageLink({
   );
 }
 
+// Raw HTML <img> tags materialize only after rehype-raw, bypassing the remark
+// image rewrite, so the img component needs the workspace base path to resolve
+// relative sources the same way markdown images are resolved.
+const DesktopMarkdownBasePathContext = createContext<string | null>(null);
+
 type DesktopMarkdownImageProps = ComponentProps<"img"> & { node?: unknown };
 
 function imageFallbackLabel(
@@ -1279,9 +1317,11 @@ function DesktopMarkdownImage({
   ...props
 }: DesktopMarkdownImageProps) {
   // Markdown images are rewritten to cowork-media at the remark stage, but raw
-  // HTML <img> tags only materialize after rehype-raw — upgrade those here.
+  // HTML <img> tags only materialize after rehype-raw — upgrade those here,
+  // resolving workspace-relative sources against the same base path.
+  const basePath = useContext(DesktopMarkdownBasePathContext);
   const rawSrc = typeof src === "string" ? src : "";
-  const srcString = rawSrc ? (rewriteDesktopImageUrl(rawSrc) ?? rawSrc) : "";
+  const srcString = rawSrc ? (rewriteDesktopImageUrl(rawSrc, basePath) ?? rawSrc) : "";
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -1497,6 +1537,18 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   const desktopFileLinksPlugin = useMemo<
     [typeof remarkRewriteDesktopFileLinks, { basePath: string | null }]
   >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
+  // Rewrite raw-HTML <img> srcs after rehype-raw but before sanitize/harden so
+  // workspace-relative raw images survive to the renderer's img component.
+  const desktopRehypePlugins = useMemo<PluggableList>(
+    () =>
+      rehypePlugins ?? [
+        defaultRehypePlugins.raw,
+        [rehypeRewriteDesktopImages, { basePath: desktopBasePath }],
+        [rehypeSanitize, desktopSanitizeSchema],
+        defaultRehypePlugins.harden,
+      ],
+    [rehypePlugins, desktopBasePath],
+  );
   const resolvedControls = useMemo(
     () =>
       controls === false
@@ -1520,47 +1572,49 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   );
 
   return (
-    <Streamdown
-      {...restProps}
-      controls={resolvedControls}
-      mermaid={resolvedMermaid}
-      children={normalizeDesktopMarkdownChildren(
-        children,
-        normalizeDisplayCitations,
-        citationUrlsByIndex,
-        citationSources,
-        citationAnnotations,
-        fallbackToSourcesFooter,
-      )}
-      className={cn(
-        "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
-        // GFM tables: fill the bubble, wrap cell text (~3 lines) before horizontal scroll.
-        "[&_table]:w-full [&_table]:min-w-0 [&_table]:table-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_th]:align-top [&_th]:whitespace-normal [&_th]:break-words [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:whitespace-normal [&_td]:break-words",
-        // Streamdown wraps GFM tables in a card even with controls disabled — flatten it.
-        "[&_[data-streamdown=table-wrapper]]:my-0 [&_[data-streamdown=table-wrapper]]:w-full [&_[data-streamdown=table-wrapper]]:max-w-full [&_[data-streamdown=table-wrapper]]:gap-0 [&_[data-streamdown=table-wrapper]]:rounded-none [&_[data-streamdown=table-wrapper]]:border-0 [&_[data-streamdown=table-wrapper]]:bg-transparent [&_[data-streamdown=table-wrapper]]:p-0",
-        "[&_[data-streamdown=table-wrapper]>div]:max-w-full [&_[data-streamdown=table-wrapper]>div]:overflow-x-auto [&_[data-streamdown=table-wrapper]>div]:rounded-none [&_[data-streamdown=table-wrapper]>div]:border-0 [&_[data-streamdown=table-wrapper]>div]:bg-transparent",
-        "[&_[data-streamdown=table]]:w-full [&_[data-streamdown=table]]:min-w-0 [&_[data-streamdown=table]]:table-auto [&_[data-streamdown=table]]:border-0",
-        "[&_[data-streamdown=table-header-cell]]:min-w-[5rem] [&_[data-streamdown=table-header-cell]]:max-w-[13rem] [&_[data-streamdown=table-header-cell]]:px-2 [&_[data-streamdown=table-header-cell]]:py-1 [&_[data-streamdown=table-header-cell]]:align-top [&_[data-streamdown=table-header-cell]]:whitespace-normal [&_[data-streamdown=table-header-cell]]:break-words [&_[data-streamdown=table-header-cell]]:[overflow-wrap:anywhere]",
-        "[&_[data-streamdown=table-cell]]:min-w-[5rem] [&_[data-streamdown=table-cell]]:max-w-[13rem] [&_[data-streamdown=table-cell]]:px-2 [&_[data-streamdown=table-cell]]:py-1 [&_[data-streamdown=table-cell]]:align-top [&_[data-streamdown=table-cell]]:whitespace-normal [&_[data-streamdown=table-cell]]:break-words [&_[data-streamdown=table-cell]]:leading-snug [&_[data-streamdown=table-cell]]:[overflow-wrap:anywhere]",
-        className,
-      )}
-      components={{
-        ...components,
-        a: DesktopMessageLink,
-        cite: DesktopCitationChip,
-        img: DesktopMarkdownImage,
-        pre: PreWithCopy,
-      }}
-      plugins={{
-        ...streamdownPlugins,
-        ...plugins,
-      }}
-      remarkPlugins={
-        remarkPlugins
-          ? [...remarkPlugins, desktopFileLinksPlugin]
-          : [defaultRemarkPlugins.gfm, desktopFileLinksPlugin]
-      }
-      rehypePlugins={rehypePlugins ?? defaultDesktopRehypePlugins}
-    />
+    <DesktopMarkdownBasePathContext.Provider value={desktopBasePath}>
+      <Streamdown
+        {...restProps}
+        controls={resolvedControls}
+        mermaid={resolvedMermaid}
+        children={normalizeDesktopMarkdownChildren(
+          children,
+          normalizeDisplayCitations,
+          citationUrlsByIndex,
+          citationSources,
+          citationAnnotations,
+          fallbackToSourcesFooter,
+        )}
+        className={cn(
+          "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
+          // GFM tables: fill the bubble, wrap cell text (~3 lines) before horizontal scroll.
+          "[&_table]:w-full [&_table]:min-w-0 [&_table]:table-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_th]:align-top [&_th]:whitespace-normal [&_th]:break-words [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:whitespace-normal [&_td]:break-words",
+          // Streamdown wraps GFM tables in a card even with controls disabled — flatten it.
+          "[&_[data-streamdown=table-wrapper]]:my-0 [&_[data-streamdown=table-wrapper]]:w-full [&_[data-streamdown=table-wrapper]]:max-w-full [&_[data-streamdown=table-wrapper]]:gap-0 [&_[data-streamdown=table-wrapper]]:rounded-none [&_[data-streamdown=table-wrapper]]:border-0 [&_[data-streamdown=table-wrapper]]:bg-transparent [&_[data-streamdown=table-wrapper]]:p-0",
+          "[&_[data-streamdown=table-wrapper]>div]:max-w-full [&_[data-streamdown=table-wrapper]>div]:overflow-x-auto [&_[data-streamdown=table-wrapper]>div]:rounded-none [&_[data-streamdown=table-wrapper]>div]:border-0 [&_[data-streamdown=table-wrapper]>div]:bg-transparent",
+          "[&_[data-streamdown=table]]:w-full [&_[data-streamdown=table]]:min-w-0 [&_[data-streamdown=table]]:table-auto [&_[data-streamdown=table]]:border-0",
+          "[&_[data-streamdown=table-header-cell]]:min-w-[5rem] [&_[data-streamdown=table-header-cell]]:max-w-[13rem] [&_[data-streamdown=table-header-cell]]:px-2 [&_[data-streamdown=table-header-cell]]:py-1 [&_[data-streamdown=table-header-cell]]:align-top [&_[data-streamdown=table-header-cell]]:whitespace-normal [&_[data-streamdown=table-header-cell]]:break-words [&_[data-streamdown=table-header-cell]]:[overflow-wrap:anywhere]",
+          "[&_[data-streamdown=table-cell]]:min-w-[5rem] [&_[data-streamdown=table-cell]]:max-w-[13rem] [&_[data-streamdown=table-cell]]:px-2 [&_[data-streamdown=table-cell]]:py-1 [&_[data-streamdown=table-cell]]:align-top [&_[data-streamdown=table-cell]]:whitespace-normal [&_[data-streamdown=table-cell]]:break-words [&_[data-streamdown=table-cell]]:leading-snug [&_[data-streamdown=table-cell]]:[overflow-wrap:anywhere]",
+          className,
+        )}
+        components={{
+          ...components,
+          a: DesktopMessageLink,
+          cite: DesktopCitationChip,
+          img: DesktopMarkdownImage,
+          pre: PreWithCopy,
+        }}
+        plugins={{
+          ...streamdownPlugins,
+          ...plugins,
+        }}
+        remarkPlugins={
+          remarkPlugins
+            ? [...remarkPlugins, desktopFileLinksPlugin]
+            : [defaultRemarkPlugins.gfm, desktopFileLinksPlugin]
+        }
+        rehypePlugins={desktopRehypePlugins}
+      />
+    </DesktopMarkdownBasePathContext.Provider>
   );
 });

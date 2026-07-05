@@ -17,6 +17,7 @@ import {
   type CatalogVisibilityOptions,
   customModelPlaceholderForProvider,
   encodeProviderModelSelection,
+  isCustomCatalogModelEntry,
   modelChoicesFromCatalog,
   modelDescriptionsFromCatalog,
   resolveModelDisplayLabel,
@@ -108,6 +109,17 @@ export function ComposerModelSelector({
   );
   const selectedValue = encodeProviderModelSelection(provider, model);
   const triggerLabel = model ? resolveModelDisplayLabel(provider, model, modelDisplayNames) : "";
+  // A selected model can drop out of the filtered choices either because it is
+  // a user-added custom ID or because it is a built-in that is currently
+  // disabled. Only the former should be labeled "(custom)".
+  const currentModelIsCustom = useMemo(() => {
+    if (!model) return false;
+    const entry = providerCatalog
+      .find((e) => e.id === provider)
+      ?.models.find((m) => m.id === model);
+    // Absent from the catalog entirely → a typed custom/unknown id.
+    return entry ? isCustomCatalogModelEntry(entry) : true;
+  }, [providerCatalog, provider, model]);
 
   const [open, setOpen] = useState(defaultOpen);
   const [customDialogOpen, setCustomDialogOpen] = useState(false);
@@ -192,12 +204,12 @@ export function ComposerModelSelector({
                   {showCurrentCustom ? (
                     <CommandItem
                       key={selectedValue}
-                      value={`${selectedValue} custom ${displayProviderName(p)}`}
+                      value={`${selectedValue}${currentModelIsCustom ? " custom" : ""} ${displayProviderName(p)}`}
                       title={model}
                       onSelect={() => selectModel(p, model)}
                     >
                       <ComposerModelOption
-                        label={`${resolveModelDisplayLabel(p, model, modelDisplayNames)} (custom)`}
+                        label={`${resolveModelDisplayLabel(p, model, modelDisplayNames)}${currentModelIsCustom ? " (custom)" : ""}`}
                         selected
                       />
                     </CommandItem>
@@ -212,7 +224,10 @@ export function ComposerModelSelector({
                         "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
                       )}
                       onClick={() =>
-                        openCustomModelEditor(p, p === provider && showCurrentCustom ? model : "")
+                        openCustomModelEditor(
+                          p,
+                          p === provider && showCurrentCustom && currentModelIsCustom ? model : "",
+                        )
                       }
                     >
                       <PlusIcon className="mr-2 size-3.5 shrink-0 text-muted-foreground" />

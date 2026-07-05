@@ -301,6 +301,33 @@ describe("DesktopMarkdown inline images", () => {
     expect(html).toContain('src="https://example.com/x.png"');
   });
 
+  test("resolves workspace-relative raw HTML images against desktopBasePath", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        DesktopMarkdown,
+        { desktopBasePath: "/Users/test/ws" },
+        '<img src="outputs/plot.png" alt="raw rel">',
+      ),
+    );
+
+    expect(html).toContain(
+      `src="cowork-media://media?path=${encodeURIComponent("/Users/test/ws/outputs/plot.png")}"`,
+    );
+  });
+
+  test("does not build cowork-media URLs for raw HTML images escaping desktopBasePath", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        DesktopMarkdown,
+        { desktopBasePath: "/Users/test/ws" },
+        '<img src="../outside/secret.png" alt="escape">',
+      ),
+    );
+
+    expect(html).not.toContain("cowork-media:");
+    expect(html).not.toContain("outside%2Fsecret");
+  });
+
   test("keeps non-image markdown paths as file chips, not images", () => {
     const html = renderToStaticMarkup(
       createElement(DesktopMarkdown, null, "[doc](/Users/test/report.pdf)"),

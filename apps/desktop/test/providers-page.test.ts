@@ -249,6 +249,48 @@ describe("desktop providers page", () => {
     expect(html).toContain("All models are disabled");
   });
 
+  test("does not claim all disabled when custom models remain enabled", () => {
+    useAppStore.setState({
+      providerStatusByName: {
+        together: {
+          provider: "together",
+          authorized: true,
+          verified: true,
+          mode: "api_key",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+      providerCatalog: [
+        {
+          id: "together",
+          name: "Together AI",
+          models: [
+            { id: "zai-org/GLM-5.2", displayName: "GLM 5.2", enabled: false },
+            {
+              id: "my-custom-model",
+              displayName: "my-custom-model",
+              runtimeOptions: { source: "custom" },
+            },
+          ],
+          defaultModel: "my-custom-model",
+        },
+      ] as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:together",
+        surface: "models",
+      }),
+    );
+
+    // One built-in disabled, one custom enabled → 1 of 2 enabled, no all-disabled hint.
+    expect(html).toContain("1 of 2 enabled");
+    expect(html).not.toContain("All models are disabled");
+  });
+
   test("renders a dedicated Exa Search settings card", () => {
     const html = renderToStaticMarkup(
       createElement(ProvidersPage, {

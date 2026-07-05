@@ -1173,7 +1173,10 @@ export function ProvidersPage({
                     {hiddenPreviewCount > 0 ? (
                       <Badge variant="outline">+{hiddenPreviewCount} more</Badge>
                     ) : null}
-                    {modelPreviewIds.length === 0 ? (
+                    {enabledModelCount === 0 ? (
+                      // Key off the enabled count (custom + standard), not the
+                      // standard-only preview chips, so enabled custom models
+                      // don't get mislabeled as "all disabled".
                       <div className="text-xs text-muted-foreground">
                         All models are disabled. Use Manage models to enable some.
                       </div>

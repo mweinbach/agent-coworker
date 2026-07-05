@@ -10,6 +10,7 @@ import {
   OPENAI_COMPATIBLE_PROVIDER_NAMES,
 } from "../../shared/openaiCompatibleOptions";
 import { type AgentConfig, defaultRuntimeNameForProvider, type ProviderName } from "../../types";
+import { resolveAuthHomeDir } from "../../utils/authHome";
 
 import type { AgentRoleDefinition } from "./roles";
 
@@ -45,11 +46,13 @@ function currentReasoningEffort(config: AgentConfig): AgentReasoningEffort | und
 function modelDefaultReasoningEffort(
   provider: ProviderName,
   model: string,
+  home?: string,
 ): AgentReasoningEffort | undefined {
   const defaults = getResolvedModelMetadataSync(
     provider,
     model,
     "child model",
+    home ? { home } : {},
   ).providerOptionsDefaults;
   const section = isPlainObject(defaults) ? defaults : {};
   return isOpenAiReasoningEffort(section.reasoningEffort) ? section.reasoningEffort : undefined;
@@ -59,6 +62,7 @@ function applyReasoningEffort(
   config: AgentConfig,
   provider: ProviderName,
   effectiveReasoningEffort: AgentReasoningEffort | undefined,
+  home?: string,
 ): AgentConfig["providerOptions"] {
   const nextProviderOptions = isPlainObject(config.providerOptions)
     ? { ...config.providerOptions }
@@ -67,6 +71,7 @@ function applyReasoningEffort(
     provider,
     config.model,
     "child model",
+    home ? { home } : {},
   ).providerOptionsDefaults;
   if (Object.keys(modelDefaults).length > 0) {
     const nextSection = isPlainObject(nextProviderOptions[provider])
@@ -117,6 +122,10 @@ export function routeAgentConfig(
   const requestedModel = opts.model?.trim() || undefined;
   const requestedReasoningEffort = opts.reasoningEffort;
   const connectedProviders = new Set(opts.connectedProviders ?? []);
+  // Custom cross-registry ids are validated against the custom-model store under
+  // the session's auth home; resolve it once and thread it through every sync
+  // model-id normalize/resolve call below.
+  const home = resolveAuthHomeDir(parentConfig);
 
   let effectiveProvider = parentConfig.provider;
   let effectiveModel = parentConfig.model;
@@ -127,12 +136,16 @@ export function routeAgentConfig(
       parentConfig.provider,
       opts.role.modelPolicy.fixedModel,
       "child role model",
+      { home },
     );
   } else if (requestedModel) {
     const requestedTarget = parseChildModelRef(
       requestedModel,
       parentConfig.provider,
       "child model",
+      {
+        home,
+      },
     );
     if (requestedTarget.provider === parentConfig.provider) {
       if (
@@ -170,7 +183,7 @@ export function routeAgentConfig(
     (requestedModel ||
     effectiveProvider !== parentConfig.provider ||
     effectiveModel !== parentConfig.model
-      ? modelDefaultReasoningEffort(effectiveProvider, effectiveModel)
+      ? modelDefaultReasoningEffort(effectiveProvider, effectiveModel, home)
       : undefined) ??
     currentReasoningEffort(parentConfig);
 
@@ -178,6 +191,7 @@ export function routeAgentConfig(
     effectiveProvider,
     effectiveModel,
     "child model",
+    { home },
   );
   const normalizedChildRouting = normalizeChildRoutingConfig({
     provider: effectiveProvider,
@@ -187,6 +201,7 @@ export function routeAgentConfig(
     allowedChildModelRefs: parentConfig.allowedChildModelRefs,
     preferredChildModel: parentConfig.preferredChildModel,
     source: "child agent",
+    home,
   });
 
   return {
@@ -204,6 +219,7 @@ export function routeAgentConfig(
         { ...parentConfig, provider: effectiveProvider, model: resolvedEffectiveModel.id },
         effectiveProvider,
         effectiveReasoningEffort,
+        home,
       ),
     },
     ...(requestedModel ? { requestedModel } : {}),

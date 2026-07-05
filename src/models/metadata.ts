@@ -13,7 +13,10 @@ import {
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
-import { readModelDiscoveryCache } from "../providers/modelDiscoveryCache";
+import {
+  readModelDiscoveryCache,
+  readModelDiscoveryCacheSync,
+} from "../providers/modelDiscoveryCache";
 import { supportsCustomModelIds } from "../shared/customModels";
 import { getAiCoworkerPaths } from "../store/connections";
 import type { ProviderName } from "../types";
@@ -178,15 +181,19 @@ export function getResolvedModelMetadataSync(
   provider: ProviderName,
   modelId: string,
   source = "model",
+  opts: { home?: string } = {},
 ): ResolvedModelMetadata {
   if (provider === "lmstudio") {
-    return buildLmStudioPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source));
+    return buildLmStudioPlaceholderMetadata(
+      normalizeModelIdForProvider(provider, modelId, source, opts),
+    );
   }
   if (provider === "bedrock") {
     return (
       getKnownBedrockResolvedModelMetadataSync({
-        modelId: normalizeModelIdForProvider(provider, modelId, source),
-      }) ?? buildBedrockPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source))
+        modelId: normalizeModelIdForProvider(provider, modelId, source, opts),
+      }) ??
+      buildBedrockPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source, opts))
     );
   }
   if (provider === "codex-cli") {
@@ -205,7 +212,7 @@ export function getResolvedModelMetadataSync(
     }
     return buildProviderPlaceholderMetadata(
       provider,
-      normalizeModelIdForProvider(provider, modelId, source),
+      normalizeModelIdForProvider(provider, modelId, source, opts),
     );
   }
   if (isDynamicModelProvider(provider)) {
@@ -224,7 +231,7 @@ export function getResolvedModelMetadataSync(
     }
     return buildProviderPlaceholderMetadata(
       provider,
-      normalizeModelIdForProvider(provider, modelId, source),
+      normalizeModelIdForProvider(provider, modelId, source, opts),
     );
   }
   return toResolvedStaticModel(provider, modelId, source);
@@ -249,6 +256,31 @@ export async function getDiscoveredModelMetadata(
     return buildProviderPlaceholderMetadata(provider, modelId);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Synchronous membership check against the persisted model-discovery cache
+ * (`~/.cowork/cache/models/<provider>.json`). Mirrors
+ * {@link isConfiguredCustomModelIdSync}: sync resume paths must accept ids the
+ * user selected after they were discovered from the provider's live catalog,
+ * even though they are absent from the static registry and the custom store.
+ * Read-only and tolerant: any missing/invalid cache reads as "not discovered".
+ */
+export function isDiscoveredModelIdSync(
+  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  modelId: string,
+  opts: { home?: string } = {},
+): boolean {
+  const trimmed = modelId.trim();
+  if (!trimmed) return false;
+  try {
+    const paths = getAiCoworkerPaths(opts.home ? { homedir: opts.home } : {});
+    const cached = readModelDiscoveryCacheSync(paths, provider);
+    if (!cached) return false;
+    return cached.models.some((model) => model.id === trimmed || model.model === trimmed);
+  } catch {
+    return false;
   }
 }
 
@@ -390,13 +422,17 @@ export function getKnownResolvedModelMetadata(
   const model = getSupportedModel(provider, modelId);
   if (!model) {
     // Persisted sessions may reference a model id the user configured in the
-    // custom-model store; resume with it instead of silently migrating the
-    // session to the provider default.
-    if (
-      isDynamicModelProvider(provider) &&
-      isConfiguredCustomModelIdSync(provider, modelId, opts)
-    ) {
-      return buildProviderPlaceholderMetadata(provider, modelId.trim());
+    // custom-model store or previously discovered from the provider's live
+    // catalog; resume with it instead of silently migrating the session to the
+    // provider default. (lmstudio/bedrock/codex-cli return in their own
+    // branches above, so `provider` here is a dynamic API provider.)
+    if (isDynamicModelProvider(provider)) {
+      if (isConfiguredCustomModelIdSync(provider, modelId, opts)) {
+        return buildProviderPlaceholderMetadata(provider, modelId.trim());
+      }
+      if (isDiscoveredModelIdSync(provider, modelId, opts)) {
+        return buildProviderPlaceholderMetadata(provider, modelId.trim());
+      }
     }
     return null;
   }

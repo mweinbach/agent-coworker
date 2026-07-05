@@ -538,6 +538,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
         (value): value is string => typeof value === "string",
       ),
       source: "config",
+      home: homedir,
     });
   } catch (error) {
     console.warn(`[config] Ignoring invalid child model routing config: ${String(error)}`);
@@ -843,6 +844,9 @@ export function getModel(config: AgentConfig, id?: string) {
     config.provider,
     modelId,
     id ? "model override" : "model",
+    // Custom cross-registry ids are only accepted when the session's auth home
+    // (not the process home) is consulted for the custom-model store.
+    { home: resolveAuthHomeDir(config) },
   );
   const savedKey = getSavedProviderApiKey(config, config.provider);
   return getModelForProvider(config, normalizedModelId, savedKey);

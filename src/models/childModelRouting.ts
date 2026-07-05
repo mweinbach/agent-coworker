@@ -21,6 +21,7 @@ export function parseChildModelRef(
   raw: string,
   defaultProvider?: ProviderName,
   source = "child model",
+  opts: { home?: string } = {},
 ): ParsedChildModelRef {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -32,7 +33,7 @@ export function parseChildModelRef(
     if (!defaultProvider) {
       throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
     }
-    const modelId = normalizeModelIdForProvider(defaultProvider, trimmed, source);
+    const modelId = normalizeModelIdForProvider(defaultProvider, trimmed, source, opts);
     return {
       provider: defaultProvider,
       modelId,
@@ -47,7 +48,7 @@ export function parseChildModelRef(
     if (!defaultProvider) {
       throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
     }
-    const modelId = normalizeModelIdForProvider(defaultProvider, trimmed, source);
+    const modelId = normalizeModelIdForProvider(defaultProvider, trimmed, source, opts);
     return {
       provider: defaultProvider,
       modelId,
@@ -59,7 +60,7 @@ export function parseChildModelRef(
     throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
   }
 
-  const modelId = normalizeModelIdForProvider(providerRaw, modelRaw, source);
+  const modelId = normalizeModelIdForProvider(providerRaw, modelRaw, source, opts);
   return {
     provider: providerRaw,
     modelId,
@@ -72,11 +73,12 @@ function normalizeAllowedChildModelRefs(
   refs: readonly string[] | undefined,
   defaultProvider: ProviderName,
   source = "allowed child model",
+  opts: { home?: string } = {},
 ): string[] {
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const raw of refs ?? []) {
-    const parsed = parseChildModelRef(raw, defaultProvider, source);
+    const parsed = parseChildModelRef(raw, defaultProvider, source, opts);
     if (seen.has(parsed.ref)) continue;
     seen.add(parsed.ref);
     normalized.push(parsed.ref);
@@ -88,6 +90,7 @@ function legacyPreferredChildModelForProvider(
   provider: ProviderName,
   currentModel: string,
   preferredChildModelRef?: string,
+  opts: { home?: string } = {},
 ): string {
   if (!preferredChildModelRef) return currentModel;
   try {
@@ -95,6 +98,7 @@ function legacyPreferredChildModelForProvider(
       preferredChildModelRef,
       provider,
       "preferred child model ref",
+      opts,
     );
     return parsed.provider === provider ? parsed.modelId : currentModel;
   } catch {
@@ -106,13 +110,14 @@ function normalizeLegacyPreferredChildModel(
   provider: ProviderName,
   currentModel: string,
   preferredChildModel?: string | null,
+  opts: { home?: string } = {},
 ): string {
   const trimmed = preferredChildModel?.trim();
   if (!trimmed) {
     return currentModel;
   }
   try {
-    return normalizeModelIdForProvider(provider, trimmed, "preferred child model");
+    return normalizeModelIdForProvider(provider, trimmed, "preferred child model", opts);
   } catch {
     return currentModel;
   }
@@ -126,6 +131,7 @@ export function normalizeChildRoutingConfig(opts: {
   preferredChildModelRef?: string | null;
   allowedChildModelRefs?: readonly string[] | null;
   source?: string;
+  home?: string;
 }): {
   childModelRoutingMode: ChildModelRoutingMode;
   preferredChildModel: string;
@@ -133,20 +139,26 @@ export function normalizeChildRoutingConfig(opts: {
   allowedChildModelRefs: string[];
 } {
   const source = opts.source ?? "child model routing";
+  // Custom cross-registry ids are validated against the custom-model store,
+  // which lives under the session's auth home. Thread it through every nested
+  // normalize/parse call so non-default homes accept configured ids.
+  const homeOpts = opts.home ? { home: opts.home } : {};
   const mode = isChildModelRoutingMode(opts.childModelRoutingMode)
     ? opts.childModelRoutingMode
     : "same-provider";
-  const fallbackModelId = normalizeModelIdForProvider(opts.provider, opts.model, "model");
+  const fallbackModelId = normalizeModelIdForProvider(opts.provider, opts.model, "model", homeOpts);
   const fallbackRef = childModelRef(opts.provider, fallbackModelId);
   const allowedChildModelRefs = normalizeAllowedChildModelRefs(
     opts.allowedChildModelRefs ?? undefined,
     opts.provider,
     `${source} allowlist entry`,
+    homeOpts,
   );
   const preferredChildModel = normalizeLegacyPreferredChildModel(
     opts.provider,
     fallbackModelId,
     opts.preferredChildModel,
+    homeOpts,
   );
 
   let preferredRef = fallbackRef;
@@ -162,6 +174,7 @@ export function normalizeChildRoutingConfig(opts: {
           rawPreferredRef,
           opts.provider,
           `${source} preferred child target`,
+          homeOpts,
         ).ref;
       } catch {
         preferredRef = fallbackRef;
@@ -188,12 +201,14 @@ export function normalizeChildRoutingConfig(opts: {
         rawPreferredTarget,
         opts.provider,
         `${source} preferred child target`,
+        homeOpts,
       ).ref;
     }
     const parsedPreferred = parseChildModelRef(
       preferredRef,
       opts.provider,
       `${source} preferred child target`,
+      homeOpts,
     );
     preferredRef = parsedPreferred.provider === opts.provider ? parsedPreferred.ref : fallbackRef;
   }
@@ -204,8 +219,8 @@ export function normalizeChildRoutingConfig(opts: {
       mode === "cross-provider-allowlist"
         ? typeof opts.preferredChildModel === "string" && opts.preferredChildModel.trim()
           ? preferredChildModel
-          : legacyPreferredChildModelForProvider(opts.provider, opts.model, preferredRef)
-        : legacyPreferredChildModelForProvider(opts.provider, opts.model, preferredRef),
+          : legacyPreferredChildModelForProvider(opts.provider, opts.model, preferredRef, homeOpts)
+        : legacyPreferredChildModelForProvider(opts.provider, opts.model, preferredRef, homeOpts),
     preferredChildModelRef: preferredRef,
     allowedChildModelRefs,
   };

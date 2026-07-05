@@ -1,5 +1,6 @@
 import { getSavedProviderApiKey } from "../config";
 import { getResolvedModelMetadataSync } from "../models/metadata";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 import { type PiModel, pickExactPiModel } from "./piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "./types";
@@ -35,8 +36,9 @@ function applySupportedOpenAiResponsesModel(
   provider: "openai",
   modelId: string,
   model: PiModel,
+  home?: string,
 ): PiModel {
-  const supported = getResolvedModelMetadataSync(provider, modelId, "model");
+  const supported = getResolvedModelMetadataSync(provider, modelId, "model", { home });
   const supportedLimits =
     SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[supported.id] ?? OPENAI_RESPONSES_FALLBACK_LIMITS;
   return {
@@ -71,12 +73,16 @@ export async function resolveOpenAiResponsesModel(
   if (provider !== "openai") {
     throw new Error(`Unsupported provider for OpenAI Responses runtime: ${provider}`);
   }
+  // Custom cross-registry ids are validated against the custom-model store
+  // under the session's auth home; thread it into the sync metadata lookup so a
+  // configured custom id resolves on the first turn under a non-default home.
+  const home = resolveAuthHomeDir(params.config);
   // Exact match only: unknown/custom IDs must take the fallback builder rather
   // than inheriting another catalog model's pricing and metadata.
   const model =
     (await pickExactPiModel("openai", modelId)) ?? buildOpenAiResponsesFallbackModel(modelId);
   return {
-    model: applySupportedOpenAiResponsesModel(provider, modelId, model),
+    model: applySupportedOpenAiResponsesModel(provider, modelId, model, home),
     apiKey: getSavedProviderApiKey(params.config, "openai"),
   };
 }

@@ -8,6 +8,7 @@ import {
   isConfiguredCustomModelIdSync,
   isDiscoveredModelIdSync,
   normalizeModelIdForProvider,
+  resolveModelMetadata,
 } from "../src/models/metadata";
 import { upsertCustomModel } from "../src/providers/customModels";
 import { writeModelDiscoveryCache } from "../src/providers/modelDiscoveryCache";
@@ -18,10 +19,41 @@ import { getAiCoworkerPaths } from "../src/store/connections";
 const CROSS_PROVIDER_ID = "zai-org/GLM-5";
 const CUSTOM_ONLY_ID = "acme/experimental-model-1";
 const BEDROCK_CUSTOM_ID = "us.acme.custom-bedrock-v1:0";
+// A Bedrock id present only in the discovery snapshot (e.g. a provisioned or
+// imported ARN not in the static registry and not in the custom-model store).
+const BEDROCK_DISCOVERED_ID = "us.acme.discovered-bedrock-v1:0";
 // A discovered id lives only in the discovery cache: not in the static
 // registry and not in the custom-model store.
 const DISCOVERED_ID = "acme/discovered-only-1";
 const DISCOVERED_MODEL_FIELD_ID = "acme/discovered-model-field";
+
+async function writeBedrockDiscoverySnapshot(homedir: string, modelId: string): Promise<void> {
+  const paths = getAiCoworkerPaths({ homedir });
+  await fs.mkdir(paths.configDir, { recursive: true });
+  const cacheFile = {
+    version: 1,
+    snapshots: {
+      "test-fingerprint": {
+        authFingerprint: "test-fingerprint",
+        updatedAt: new Date().toISOString(),
+        models: [
+          {
+            id: modelId,
+            displayName: "Discovered Bedrock",
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: false,
+            sourceKind: "provisioned",
+          },
+        ],
+      },
+    },
+  };
+  await fs.writeFile(
+    path.join(paths.configDir, "bedrock-models.json"),
+    JSON.stringify(cacheFile),
+    "utf-8",
+  );
+}
 
 let homeWithStore: string;
 let emptyHome: string;
@@ -33,6 +65,7 @@ beforeAll(async () => {
   await upsertCustomModel(paths, "nvidia", CROSS_PROVIDER_ID);
   await upsertCustomModel(paths, "anthropic", CUSTOM_ONLY_ID);
   await upsertCustomModel(paths, "bedrock", BEDROCK_CUSTOM_ID);
+  await writeBedrockDiscoverySnapshot(homeWithStore, BEDROCK_DISCOVERED_ID);
   await writeModelDiscoveryCache(paths, "openai", {
     provider: "openai",
     source: "api",
@@ -117,6 +150,33 @@ describe("normalizeModelIdForProvider with custom model ids", () => {
   });
 });
 
+describe("resolveModelMetadata with allowPlaceholder + custom model ids", () => {
+  test("accepts a configured custom cross-registry id under a non-default home (prompt load path)", async () => {
+    // Prompt loading before every turn calls resolveModelMetadata with
+    // allowPlaceholder: true. Before threading opts.home into the placeholder
+    // fall-through, the sync normalizer read the process home's (empty) custom
+    // store and rejected the foreign id, aborting the turn before the runtime
+    // fallback could run.
+    const resolved = await resolveModelMetadata("nvidia", CROSS_PROVIDER_ID, {
+      allowPlaceholder: true,
+      source: "model",
+      home: homeWithStore,
+    });
+    expect(resolved.id).toBe(CROSS_PROVIDER_ID);
+    expect(resolved.provider).toBe("nvidia");
+  });
+
+  test("still rejects a foreign id when the session home lacks the custom store", async () => {
+    await expect(
+      resolveModelMetadata("nvidia", CROSS_PROVIDER_ID, {
+        allowPlaceholder: true,
+        source: "model",
+        home: emptyHome,
+      }),
+    ).rejects.toThrow(/Unsupported model/);
+  });
+});
+
 describe("getKnownResolvedModelMetadata with custom model ids", () => {
   test("resolves configured custom ids instead of migrating to the default", () => {
     const resolved = getKnownResolvedModelMetadata("anthropic", CUSTOM_ONLY_ID, {
@@ -178,6 +238,25 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
 
     expect(
       getKnownResolvedModelMetadata("bedrock", BEDROCK_CUSTOM_ID, { home: emptyHome }),
+    ).toBeNull();
+  });
+
+  test("resolves a discovered bedrock id from the snapshot under a non-default home", () => {
+    // The discovery snapshot lives only under homeWithStore. Before threading
+    // opts.home into getKnownBedrockResolvedModelMetadataSync, this read the
+    // process home's (empty) cache and returned null, migrating the session to
+    // the provider default on resume.
+    const resolved = getKnownResolvedModelMetadata("bedrock", BEDROCK_DISCOVERED_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.id).toBe(BEDROCK_DISCOVERED_ID);
+    expect(resolved?.provider).toBe("bedrock");
+    expect(resolved?.source).toBe("dynamic");
+
+    // A home without the discovery snapshot cannot resolve the discovered id.
+    expect(
+      getKnownResolvedModelMetadata("bedrock", BEDROCK_DISCOVERED_ID, { home: emptyHome }),
     ).toBeNull();
   });
 });

@@ -314,8 +314,11 @@ export async function resolveModelMetadata(
     log?: (line: string) => void;
   } = {},
 ): Promise<ResolvedModelMetadata> {
+  const homeOpts = opts.home ? { home: opts.home } : {};
   if (provider === "codex-cli") {
-    return getResolvedModelMetadataSync(provider, modelId, opts.source);
+    // codex-cli is not custom-capable, but thread the home harmlessly for
+    // consistency with the other sync resolution paths below.
+    return getResolvedModelMetadataSync(provider, modelId, opts.source, homeOpts);
   }
 
   if (provider !== "lmstudio" && provider !== "bedrock") {
@@ -328,17 +331,17 @@ export async function resolveModelMetadata(
     ) {
       // Strict resolution (model selection paths): unknown ids are only
       // accepted when configured by the user or previously discovered from the provider.
-      const custom = await getCustomModelMetadata(provider, trimmed, {
-        ...(opts.home ? { home: opts.home } : {}),
-      });
+      const custom = await getCustomModelMetadata(provider, trimmed, homeOpts);
       if (custom) return custom;
-      const discovered = await getDiscoveredModelMetadata(provider, trimmed, {
-        ...(opts.home ? { home: opts.home } : {}),
-      });
+      const discovered = await getDiscoveredModelMetadata(provider, trimmed, homeOpts);
       if (discovered) return discovered;
       return toResolvedStaticModel(provider, trimmed, opts.source);
     }
-    return getResolvedModelMetadataSync(provider, modelId, opts.source);
+    // Placeholder-tolerant resolution (prompt loading before every turn):
+    // thread the session home so a configured custom cross-registry id is
+    // accepted by the sync normalizer's custom-store lookup instead of
+    // aborting the turn before the runtime fallback runs.
+    return getResolvedModelMetadataSync(provider, modelId, opts.source, homeOpts);
   }
 
   const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);
@@ -407,7 +410,13 @@ export function getKnownResolvedModelMetadata(
     return buildLmStudioPlaceholderMetadata(modelId);
   }
   if (provider === "bedrock") {
-    const known = getKnownBedrockResolvedModelMetadataSync({ modelId });
+    // Read the Bedrock discovery snapshot from the session's auth home (not the
+    // process home) so a model discovered under a non-default homedir resumes
+    // with its cached metadata instead of migrating to the provider default.
+    const known = getKnownBedrockResolvedModelMetadataSync({
+      modelId,
+      ...(opts.home ? { home: opts.home } : {}),
+    });
     if (known) return known;
     // A user-configured Bedrock custom ID may be absent from the static/cache
     // snapshot; resume it as a placeholder instead of migrating to the default.

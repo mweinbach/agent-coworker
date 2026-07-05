@@ -34,6 +34,7 @@ import {
 } from "./shared/openaiCompatibleOptions";
 import { discoverSkillsForConfig } from "./skills";
 import type { AgentConfig, ProviderName } from "./types";
+import { resolveAuthHomeDir } from "./utils/authHome";
 import { sameWorkspacePath } from "./utils/workspacePath";
 import { buildWorkspaceMapSection } from "./workspace/map";
 
@@ -92,6 +93,9 @@ async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
     allowPlaceholder: true,
     providerOptions: config.providerOptions,
     source: "model",
+    // Resolve against the session's auth home so a configured custom
+    // cross-registry id is accepted during prompt loading instead of aborting.
+    home: resolveAuthHomeDir(config),
     log: (line) => console.warn(line),
   });
   const modelSystemPath = path.join(config.builtInDir, "prompts", modelMetadata.promptTemplate);
@@ -277,7 +281,12 @@ export function buildSpawnAgentPromptBody(
   profileLines: readonly string[] = [],
 ): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
-  const currentModel = getResolvedModelMetadataSync(config.provider, config.model, "model");
+  // Resolve custom cross-registry ids against the session's auth home so the
+  // spawn-agent prompt reflects configured custom models under a non-default home.
+  const home = resolveAuthHomeDir(config);
+  const currentModel = getResolvedModelMetadataSync(config.provider, config.model, "model", {
+    home,
+  });
   const roleLines = buildSpawnAgentRolePromptLines().join("\n");
   const whenToUseLines = SPAWN_AGENT_WHEN_TO_USE.map(
     (item) => `- **${item.label}**: ${item.description}`,
@@ -289,11 +298,12 @@ export function buildSpawnAgentPromptBody(
   const crossProviderRefs = (config.allowedChildModelRefs ?? [])
     .map((ref) => {
       try {
-        const parsed = parseChildModelRef(ref, config.provider, "child target");
+        const parsed = parseChildModelRef(ref, config.provider, "child target", { home });
         const supported = getResolvedModelMetadataSync(
           parsed.provider,
           parsed.modelId,
           "child target",
+          { home },
         );
         const bestFor =
           getChildAgentModelInfo(parsed.provider, parsed.modelId)?.bestFor ??
@@ -588,6 +598,9 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     allowPlaceholder: true,
     providerOptions: config.providerOptions,
     source: "model",
+    // Resolve against the session's auth home so a configured custom
+    // cross-registry id is accepted during prompt loading instead of aborting.
+    home: resolveAuthHomeDir(config),
     log: (line) => console.warn(line),
   });
   const systemPath = await resolveSystemTemplatePath(config);

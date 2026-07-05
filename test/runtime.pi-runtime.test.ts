@@ -1093,6 +1093,51 @@ describe("pi runtime regressions", () => {
     });
   });
 
+  test("OpenAI Responses runtime resolves a configured custom cross-registry ID under a non-default home", async () => {
+    // "zai-org/GLM-5" is registered under Baseten/Together, so it is provably
+    // foreign to openai; the sync normalizer only accepts it when the custom
+    // store is consulted with the session's auth home. Before threading
+    // resolveAuthHomeDir(config), applySupportedOpenAiResponsesModel read the
+    // process home's (empty) store and threw, aborting the turn.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-crossreg-"));
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "openai", "zai-org/GLM-5");
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "zai-org/GLM-5",
+      preferredChildModel: "zai-org/GLM-5",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "zai-org/GLM-5",
+      name: "zai-org/GLM-5",
+      api: "openai-responses",
+      provider: "openai",
+    });
+  });
+
+  test("Google Interactions runtime resolves a configured custom cross-registry ID under a non-default home", async () => {
+    // "zai-org/GLM-5" is provably foreign to google; the sync normalizer only
+    // accepts it when the custom store is consulted with the session's auth
+    // home. Before threading resolveAuthHomeDir(config), resolveGoogleInteractionsModel
+    // read the process home's (empty) store and threw.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-google-crossreg-"));
+    await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "google", "zai-org/GLM-5");
+    const config = makeConfig(homeDir, {
+      provider: "google",
+      model: "zai-org/GLM-5",
+      preferredChildModel: "zai-org/GLM-5",
+    });
+
+    const resolved = await resolveGoogleInteractionsModel(makeParams(config));
+
+    expect(resolved.model).toMatchObject({
+      id: "zai-org/GLM-5",
+      name: "zai-org/GLM-5",
+    });
+  });
+
   test("opencode-zen runtime model resolution returns explicit MiniMax M2.5 PI metadata", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-minimax-"));
     const config = makeConfig(homeDir, {

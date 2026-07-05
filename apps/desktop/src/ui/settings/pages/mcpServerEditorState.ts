@@ -1,4 +1,8 @@
-export type EditorState = { mode: "create" } | { mode: "edit"; name: string };
+export type EditableMcpSource = "user" | "workspace";
+
+export type EditorState =
+  | { mode: "create" }
+  | { mode: "edit"; name: string; source: EditableMcpSource };
 
 function getEditingServerName(editorState: EditorState | null): string | null {
   return editorState?.mode === "edit" ? editorState.name : null;
@@ -6,11 +10,11 @@ function getEditingServerName(editorState: EditorState | null): string | null {
 
 export function getMcpEditorTitle(editorState: EditorState | null): string {
   const editingName = getEditingServerName(editorState);
-  return editingName ? `Edit ${editingName}` : "Connect to a custom MCP";
+  return editingName ? `Edit ${editingName}` : "Add connector";
 }
 
 export function getMcpEditorSubmitLabel(editorState: EditorState | null): string {
-  return getEditingServerName(editorState) ? "Save changes" : "Add server";
+  return getEditingServerName(editorState) ? "Save changes" : "Add connector";
 }
 
 export function getPreviousNameForUpsert(editorState: EditorState | null): string | undefined {
@@ -18,7 +22,7 @@ export function getPreviousNameForUpsert(editorState: EditorState | null): strin
 }
 
 export function createMcpAutoValidateScheduler(
-  validate: (workspaceId: string, name: string) => void | Promise<void>,
+  validate: (workspaceId: string, name: string, source: EditableMcpSource) => void | Promise<void>,
   {
     delayMs = 500,
     setTimeoutFn = setTimeout,
@@ -32,11 +36,11 @@ export function createMcpAutoValidateScheduler(
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   return {
-    schedule(workspaceId: string, name: string) {
+    schedule(workspaceId: string, name: string, source: EditableMcpSource) {
       if (timer !== null) clearTimeoutFn(timer);
       timer = setTimeoutFn(() => {
         timer = null;
-        void validate(workspaceId, name);
+        void validate(workspaceId, name, source);
       }, delayMs);
     },
     cancel() {

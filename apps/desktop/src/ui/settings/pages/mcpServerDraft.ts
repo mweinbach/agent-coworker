@@ -31,7 +31,7 @@ export function defaultDraftState(): DraftState {
     name: "",
     enabled: true,
     icon: "",
-    transportType: "stdio",
+    transportType: "http",
     command: "",
     args: "",
     cwd: "",
@@ -156,17 +156,20 @@ function parseKeyValueMap(value: string): Record<string, string> | undefined {
 export function formatTransport(server: MCPServerConfig): string {
   if (server.transport.type === "stdio") {
     const args = server.transport.args?.length ? ` ${server.transport.args.join(" ")}` : "";
-    return `stdio: ${server.transport.command}${args}`;
+    return `${server.transport.command}${args}`;
   }
-  return `${server.transport.type}: ${server.transport.url}`;
+  return server.transport.url;
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  user: "Personal",
+  workspace: "Project",
+  plugin: "Plugin",
+  system: "Built-in",
+};
+
 export function sourceLabel(source: string): string {
-  if (source === "workspace") return "workspace";
-  if (source === "user") return "user";
-  if (source === "system") return "system";
-  if (source === "plugin") return "plugin";
-  return source;
+  return SOURCE_LABELS[source] ?? source;
 }
 
 export function draftFromServer(server: MCPServerConfig): DraftState {

@@ -13,7 +13,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import type { WorkspaceRuntime } from "../../../app/types";
-import { resolveProjectWorkspaceId } from "../../../app/workspaceDisplayTargets";
+import {
+  resolveManagementWorkspaceId,
+  resolveProjectWorkspaceId,
+} from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -22,7 +25,9 @@ import {
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { Field, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
+import { RadioGroup, RadioGroupItem } from "../../../components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -47,6 +52,7 @@ import {
 } from "./mcpServerDraft";
 import {
   createMcpAutoValidateScheduler,
+  type EditableMcpSource,
   type EditorState,
   getMcpEditorSubmitLabel,
   getMcpEditorTitle,
@@ -78,6 +84,65 @@ function serverSortKey(server: { name: string; source: string }): string {
   return `${order}:${server.name.toLowerCase()}`;
 }
 
+function editableSource(source: RuntimeMcpServer["source"]): EditableMcpSource | null {
+  return source === "user" || source === "workspace" ? source : null;
+}
+
+/** Tools register internally as `mcp__{server}__{tool}`; show only the tool name. */
+function displayToolName(toolName: string, serverName: string): string {
+  const namespacePrefix = `mcp__${serverName}__`;
+  return toolName.startsWith(namespacePrefix) ? toolName.slice(namespacePrefix.length) : toolName;
+}
+
+const AUTH_MODE_LABELS: Record<string, string> = {
+  none: "None",
+  missing: "Not connected",
+  api_key: "API key",
+  oauth: "OAuth",
+  oauth_pending: "OAuth sign-in pending",
+  error: "Error",
+};
+
+function authModeLabel(mode: string): string {
+  return AUTH_MODE_LABELS[mode] ?? mode;
+}
+
+type ConnectionKind = "remote" | "local";
+
+const CONNECTION_KIND_OPTIONS: Array<{
+  value: ConnectionKind;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "remote",
+    label: "Remote server",
+    description: "Connect to a hosted service by URL",
+  },
+  {
+    value: "local",
+    label: "Local command",
+    description: "Run a connector on this computer (advanced)",
+  },
+];
+
+const LOCATION_OPTIONS: Array<{
+  value: EditableMcpSource;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "user",
+    label: "All projects",
+    description: "Available in every project and chat on this computer.",
+  },
+  {
+    value: "workspace",
+    label: "Only this project",
+    description: "Stored with this project and available only here.",
+  },
+];
+
 export function McpServersPage() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -91,25 +156,38 @@ export function McpServersPage() {
   const callbackWorkspaceMcpServerAuth = useAppStore((s) => s.callbackWorkspaceMcpServerAuth);
   const setWorkspaceMcpServerApiKey = useAppStore((s) => s.setWorkspaceMcpServerApiKey);
 
-  const workspace = useMemo(() => {
+  // Project workspace, when one is unambiguously in scope. Custom connectors
+  // must stay manageable even when only one-off chat workspaces exist, so the
+  // page falls back to any workspace with a live control connection.
+  const projectWorkspace = useMemo(() => {
     const workspaceId = resolveProjectWorkspaceId(workspaces, selectedWorkspaceId);
     return workspaceId ? (workspaces.find((entry) => entry.id === workspaceId) ?? null) : null;
   }, [workspaces, selectedWorkspaceId]);
+  const workspace = useMemo(() => {
+    const workspaceId = resolveManagementWorkspaceId(workspaces, selectedWorkspaceId);
+    return workspaceId ? (workspaces.find((entry) => entry.id === workspaceId) ?? null) : null;
+  }, [workspaces, selectedWorkspaceId]);
+  const canChooseLocation = projectWorkspace !== null;
+
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
 
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [draft, setDraft] = useState<DraftState>(defaultDraftState);
+  const [createLocation, setCreateLocation] = useState<EditableMcpSource>("user");
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
   const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
   const [validationServerKeyByName, setValidationServerKeyByName] = useState<
     Record<string, string>
   >({});
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [editorAdvancedOpen, setEditorAdvancedOpen] = useState(false);
+  const [configFilesOpen, setConfigFilesOpen] = useState(false);
   const autoValidateSchedulerRef = useRef(
-    createMcpAutoValidateScheduler((workspaceId: string, name: string) => {
-      void validateWorkspaceMcpServer(workspaceId, name, "user");
-    }),
+    createMcpAutoValidateScheduler(
+      (workspaceId: string, name: string, source: EditableMcpSource) => {
+        void validateWorkspaceMcpServer(workspaceId, name, source);
+      },
+    ),
   );
 
   const clearAutoValidateTimer = useCallback(() => {
@@ -174,12 +252,15 @@ export function McpServersPage() {
     clearAutoValidateTimer();
     setEditorState({ mode: "create" });
     setDraft(defaultDraftState());
+    setCreateLocation("user");
+    setEditorAdvancedOpen(false);
   };
 
-  const openEditEditor = (server: MCPServerConfig) => {
+  const openEditEditor = (server: MCPServerConfig, source: EditableMcpSource) => {
     clearAutoValidateTimer();
-    setEditorState({ mode: "edit", name: server.name });
+    setEditorState({ mode: "edit", name: server.name, source });
     setDraft(draftFromServer(server));
+    setEditorAdvancedOpen(false);
   };
 
   const toggleExpand = (key: string) => {
@@ -194,12 +275,42 @@ export function McpServersPage() {
     void validateWorkspaceMcpServer(workspaceId, server.name, server.source);
   };
 
+  const connectionKind: ConnectionKind = draft.transportType === "stdio" ? "local" : "remote";
+
+  const setConnectionKind = (kind: ConnectionKind) => {
+    setDraft((prev) => ({
+      ...prev,
+      transportType: kind === "local" ? "stdio" : "http",
+    }));
+  };
+
+  const submitDraft = () => {
+    if (!workspace) return;
+    const next = buildServerFromDraft(draft);
+    if (!next) return;
+    const workspaceId = workspace.id;
+    const previousName = getPreviousNameForUpsert(editorState);
+    const source: EditableMcpSource =
+      editorState?.mode === "edit"
+        ? editorState.source
+        : canChooseLocation
+          ? createLocation
+          : "user";
+    void upsertWorkspaceMcpServer(workspaceId, next, previousName, source);
+    setValidationServerKeyByName((prev) => ({
+      ...prev,
+      [next.name]: serverIdentityKey({ name: next.name, source }),
+    }));
+    autoValidateSchedulerRef.current.schedule(workspaceId, next.name, source);
+    resetDraft({ clearAutoValidate: false });
+  };
+
   const [parent] = useAutoAnimate();
 
   return (
     <SettingsSection
-      title="MCP servers"
-      description="Model Context Protocol servers from every config layer: user, workspace, plugin, and system."
+      title="Connectors"
+      description="Connect Cowork to external tools and services using MCP."
       action={
         workspace ? (
           <Button
@@ -210,7 +321,7 @@ export function McpServersPage() {
             onClick={openCreateEditor}
           >
             <PlusIcon data-icon="inline-start" />
-            Add server
+            Add connector
           </Button>
         ) : undefined
       }
@@ -223,234 +334,361 @@ export function McpServersPage() {
             if (!open) resetDraft();
           }}
         >
-          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{getMcpEditorTitle(editorState)}</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input
-                  placeholder="Server name"
-                  value={draft.name}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
-                />
-                <Select
-                  value={draft.transportType}
-                  onValueChange={(value) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      transportType: value as DraftState["transportType"],
-                    }))
-                  }
-                >
-                  <SelectTrigger aria-label="Transport type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="stdio">stdio</SelectItem>
-                    <SelectItem value="http">http</SelectItem>
-                    <SelectItem value="sse">sse</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {draft.transportType === "stdio" ? (
-                <>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <Input
-                      placeholder="Command"
-                      value={draft.command}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, command: event.target.value }))
-                      }
-                    />
-                    <Input
-                      placeholder="Args (shell-style, optional)"
-                      value={draft.args}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, args: event.target.value }))
-                      }
-                    />
-                    <Input
-                      placeholder="CWD (optional)"
-                      value={draft.cwd}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, cwd: event.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-muted-foreground">
-                      Environment variables (one KEY=VALUE per line, optional)
-                    </div>
-                    <Textarea
-                      placeholder={"API_TOKEN=secret\nDEBUG=1"}
-                      aria-label="Environment variables"
-                      className="min-h-16 font-mono text-xs"
-                      value={draft.env}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, env: event.target.value }))
-                      }
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
+          {editorState !== null ? (
+            <DialogContent forceMount className="max-w-2xl max-h-[85vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{getMcpEditorTitle(editorState)}</DialogTitle>
+              </DialogHeader>
+              <div className="flex flex-col gap-5 py-2">
+                <Field>
+                  <FieldLabel htmlFor="mcp-connector-name">Name</FieldLabel>
                   <Input
-                    placeholder="Server URL"
-                    value={draft.url}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, url: event.target.value }))}
+                    id="mcp-connector-name"
+                    placeholder="e.g. Linear, Notion, GitHub"
+                    value={draft.name}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, name: event.target.value }))
+                    }
                   />
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-muted-foreground">
-                      HTTP headers (one KEY=VALUE per line, optional)
-                    </div>
-                    <Textarea
-                      placeholder={"x-tenant=team-a\nauthorization=Bearer token"}
-                      aria-label="HTTP headers"
-                      className="min-h-16 font-mono text-xs"
-                      value={draft.headers}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, headers: event.target.value }))
-                      }
-                    />
-                  </div>
-                </>
-              )}
+                </Field>
 
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input
-                  placeholder="Icon URL (optional)"
-                  aria-label="Icon URL"
-                  value={draft.icon}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, icon: event.target.value }))}
-                />
-                <Input
-                  placeholder="Retries (optional)"
-                  value={draft.retries}
-                  onChange={(event) =>
-                    setDraft((prev) => ({ ...prev, retries: event.target.value }))
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
-                <span className="text-sm">Required server</span>
-                <Switch
-                  aria-label="Required server"
-                  checked={draft.required}
-                  onCheckedChange={(checked) =>
-                    setDraft((prev) => ({ ...prev, required: toBool(checked) }))
-                  }
-                />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <Select
-                  value={draft.authType}
-                  onValueChange={(value) =>
-                    setDraft((prev) => ({ ...prev, authType: value as DraftState["authType"] }))
-                  }
-                >
-                  <SelectTrigger aria-label="Auth type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">none</SelectItem>
-                    <SelectItem value="api_key">api_key</SelectItem>
-                    <SelectItem value="oauth">oauth</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {draft.authType === "oauth" ? (
-                  <Select
-                    value={draft.oauthMode}
+                <Field>
+                  <FieldLabel>Connection type</FieldLabel>
+                  <RadioGroup
+                    value={connectionKind}
                     onValueChange={(value) =>
-                      setDraft((prev) => ({ ...prev, oauthMode: value as "auto" | "code" }))
+                      setConnectionKind(value === "local" ? "local" : "remote")
                     }
+                    className="grid gap-2 sm:grid-cols-2"
                   >
-                    <SelectTrigger aria-label="OAuth mode">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">auto</SelectItem>
-                      <SelectItem value="code">code</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    {CONNECTION_KIND_OPTIONS.map((option) => (
+                      <label
+                        key={option.value}
+                        htmlFor={`mcp-connection-${option.value}`}
+                        className={cn(
+                          "flex cursor-pointer items-start gap-3 rounded-lg border border-border/70 p-3 transition-colors hover:bg-muted/40",
+                          connectionKind === option.value && "border-primary/55 bg-primary/5",
+                        )}
+                      >
+                        <RadioGroupItem
+                          id={`mcp-connection-${option.value}`}
+                          value={option.value}
+                          aria-label={option.label}
+                          className="mt-0.5"
+                        />
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <span className="text-sm font-medium text-foreground">
+                            {option.label}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {option.description}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </Field>
+
+                {connectionKind === "remote" ? (
+                  <>
+                    <Field>
+                      <FieldLabel htmlFor="mcp-server-url">Server URL</FieldLabel>
+                      <Input
+                        id="mcp-server-url"
+                        placeholder="https://example.com/mcp"
+                        value={draft.url}
+                        onChange={(event) =>
+                          setDraft((prev) => ({ ...prev, url: event.target.value }))
+                        }
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="mcp-auth-type">Authentication</FieldLabel>
+                      <Select
+                        value={draft.authType}
+                        onValueChange={(value) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            authType: value as DraftState["authType"],
+                          }))
+                        }
+                      >
+                        <SelectTrigger id="mcp-auth-type" aria-label="Authentication">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          <SelectItem value="api_key">API key</SelectItem>
+                          <SelectItem value="oauth">OAuth — sign in with your account</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </>
+                ) : (
+                  <>
+                    <Field>
+                      <FieldLabel htmlFor="mcp-command">Command</FieldLabel>
+                      <Input
+                        id="mcp-command"
+                        placeholder="e.g. npx my-connector"
+                        value={draft.command}
+                        onChange={(event) =>
+                          setDraft((prev) => ({ ...prev, command: event.target.value }))
+                        }
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="mcp-args">Arguments (optional)</FieldLabel>
+                      <Input
+                        id="mcp-args"
+                        placeholder="--flag value"
+                        value={draft.args}
+                        onChange={(event) =>
+                          setDraft((prev) => ({ ...prev, args: event.target.value }))
+                        }
+                      />
+                    </Field>
+                  </>
+                )}
+
+                {isCreating && canChooseLocation ? (
+                  <Field>
+                    <FieldLabel>Where should this be available?</FieldLabel>
+                    <RadioGroup
+                      value={createLocation}
+                      onValueChange={(value) =>
+                        setCreateLocation(value === "workspace" ? "workspace" : "user")
+                      }
+                      className="gap-2"
+                    >
+                      {LOCATION_OPTIONS.map((option) => (
+                        <label
+                          key={option.value}
+                          htmlFor={`mcp-location-${option.value}`}
+                          className={cn(
+                            "flex cursor-pointer items-start gap-3 rounded-lg border border-border/70 p-3 transition-colors hover:bg-muted/40",
+                            createLocation === option.value && "border-primary/55 bg-primary/5",
+                          )}
+                        >
+                          <RadioGroupItem
+                            id={`mcp-location-${option.value}`}
+                            value={option.value}
+                            aria-label={option.label}
+                            className="mt-0.5"
+                          />
+                          <span className="flex min-w-0 flex-col gap-0.5">
+                            <span className="text-sm font-medium text-foreground">
+                              {option.label}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {option.description}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </RadioGroup>
+                  </Field>
                 ) : null}
-              </div>
 
-              {draft.authType === "api_key" ? (
-                <div className="grid gap-3 md:grid-cols-3">
-                  <Input
-                    placeholder="Header name (optional)"
-                    value={draft.headerName}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, headerName: event.target.value }))
-                    }
-                  />
-                  <Input
-                    placeholder="Prefix (optional)"
-                    value={draft.prefix}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, prefix: event.target.value }))
-                    }
-                  />
-                  <Input
-                    placeholder="Key id (optional)"
-                    value={draft.keyId}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, keyId: event.target.value }))
-                    }
-                  />
+                <Collapsible open={editorAdvancedOpen} onOpenChange={setEditorAdvancedOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="-ml-2 h-8 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronRightIcon
+                        className={cn(
+                          "size-4 transition-transform",
+                          editorAdvancedOpen && "rotate-90",
+                        )}
+                      />
+                      Advanced
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="flex flex-col gap-4 pt-3">
+                      {connectionKind === "remote" ? (
+                        <>
+                          <Field>
+                            <FieldLabel htmlFor="mcp-headers">
+                              HTTP headers (one KEY=VALUE per line, optional)
+                            </FieldLabel>
+                            <Textarea
+                              id="mcp-headers"
+                              placeholder={"x-tenant=team-a\nauthorization=Bearer token"}
+                              aria-label="HTTP headers"
+                              className="min-h-16 font-mono text-xs"
+                              value={draft.headers}
+                              onChange={(event) =>
+                                setDraft((prev) => ({ ...prev, headers: event.target.value }))
+                              }
+                            />
+                          </Field>
+                          <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                            <span className="flex flex-col gap-0.5">
+                              <span className="text-sm">Use legacy SSE transport</span>
+                              <span className="text-xs text-muted-foreground">
+                                Only for older servers that don't support streamable HTTP.
+                              </span>
+                            </span>
+                            <Switch
+                              aria-label="Use legacy SSE transport"
+                              checked={draft.transportType === "sse"}
+                              onCheckedChange={(checked) =>
+                                setDraft((prev) => ({
+                                  ...prev,
+                                  transportType: toBool(checked) ? "sse" : "http",
+                                }))
+                              }
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <Field>
+                            <FieldLabel htmlFor="mcp-env">
+                              Environment variables (one KEY=VALUE per line, optional)
+                            </FieldLabel>
+                            <Textarea
+                              id="mcp-env"
+                              placeholder={"API_TOKEN=secret\nDEBUG=1"}
+                              aria-label="Environment variables"
+                              className="min-h-16 font-mono text-xs"
+                              value={draft.env}
+                              onChange={(event) =>
+                                setDraft((prev) => ({ ...prev, env: event.target.value }))
+                              }
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor="mcp-cwd">Working directory (optional)</FieldLabel>
+                            <Input
+                              id="mcp-cwd"
+                              placeholder="/path/to/directory"
+                              value={draft.cwd}
+                              onChange={(event) =>
+                                setDraft((prev) => ({ ...prev, cwd: event.target.value }))
+                              }
+                            />
+                          </Field>
+                        </>
+                      )}
+
+                      {connectionKind === "remote" && draft.authType === "api_key" ? (
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <Input
+                            placeholder="Header name (optional)"
+                            aria-label="API key header name"
+                            value={draft.headerName}
+                            onChange={(event) =>
+                              setDraft((prev) => ({ ...prev, headerName: event.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="Prefix (optional)"
+                            aria-label="API key prefix"
+                            value={draft.prefix}
+                            onChange={(event) =>
+                              setDraft((prev) => ({ ...prev, prefix: event.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="Key id (optional)"
+                            aria-label="API key id"
+                            value={draft.keyId}
+                            onChange={(event) =>
+                              setDraft((prev) => ({ ...prev, keyId: event.target.value }))
+                            }
+                          />
+                        </div>
+                      ) : null}
+
+                      {connectionKind === "remote" && draft.authType === "oauth" ? (
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <Select
+                            value={draft.oauthMode}
+                            onValueChange={(value) =>
+                              setDraft((prev) => ({ ...prev, oauthMode: value as "auto" | "code" }))
+                            }
+                          >
+                            <SelectTrigger aria-label="OAuth mode">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="auto">Automatic</SelectItem>
+                              <SelectItem value="code">Paste a code</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Input
+                            placeholder="Scope (optional)"
+                            aria-label="OAuth scope"
+                            value={draft.scope}
+                            onChange={(event) =>
+                              setDraft((prev) => ({ ...prev, scope: event.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="Resource (optional)"
+                            aria-label="OAuth resource"
+                            value={draft.resource}
+                            onChange={(event) =>
+                              setDraft((prev) => ({ ...prev, resource: event.target.value }))
+                            }
+                          />
+                        </div>
+                      ) : null}
+
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <Input
+                          placeholder="Icon URL (optional)"
+                          aria-label="Icon URL"
+                          value={draft.icon}
+                          onChange={(event) =>
+                            setDraft((prev) => ({ ...prev, icon: event.target.value }))
+                          }
+                        />
+                        <Input
+                          placeholder="Retries (optional)"
+                          aria-label="Retries"
+                          value={draft.retries}
+                          onChange={(event) =>
+                            setDraft((prev) => ({ ...prev, retries: event.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                        <span className="flex flex-col gap-0.5">
+                          <span className="text-sm">Required</span>
+                          <span className="text-xs text-muted-foreground">
+                            Treat sessions as broken when this connector fails to start.
+                          </span>
+                        </span>
+                        <Switch
+                          aria-label="Required"
+                          checked={draft.required}
+                          onCheckedChange={(checked) =>
+                            setDraft((prev) => ({ ...prev, required: toBool(checked) }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" onClick={submitDraft}>
+                    {getMcpEditorSubmitLabel(editorState)}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => resetDraft()}>
+                    Cancel
+                  </Button>
                 </div>
-              ) : null}
-
-              {draft.authType === "oauth" ? (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <Input
-                    placeholder="Scope (optional)"
-                    value={draft.scope}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, scope: event.target.value }))
-                    }
-                  />
-                  <Input
-                    placeholder="Resource (optional)"
-                    value={draft.resource}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, resource: event.target.value }))
-                    }
-                  />
-                </div>
-              ) : null}
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  onClick={() => {
-                    if (!workspace) return;
-                    const next = buildServerFromDraft(draft);
-                    if (!next) return;
-                    const workspaceId = workspace.id;
-                    const previousName = getPreviousNameForUpsert(editorState);
-                    void upsertWorkspaceMcpServer(workspaceId, next, previousName, "user");
-                    setValidationServerKeyByName((prev) => ({
-                      ...prev,
-                      [next.name]: serverIdentityKey({ name: next.name, source: "user" }),
-                    }));
-                    autoValidateSchedulerRef.current.schedule(workspaceId, next.name);
-                    resetDraft({ clearAutoValidate: false });
-                  }}
-                >
-                  {getMcpEditorSubmitLabel(editorState)}
-                </Button>
-                <Button type="button" variant="outline" onClick={() => resetDraft()}>
-                  Cancel
-                </Button>
               </div>
-            </div>
-          </DialogContent>
+            </DialogContent>
+          ) : null}
         </Dialog>
       ) : null}
 
@@ -459,13 +697,13 @@ export function McpServersPage() {
           <div className="p-4">
             <SettingsEmptyState
               icon={<ServerIcon />}
-              title="No MCP servers configured"
-              description="Add a server to give Cowork extra tools, or install a plugin that ships one."
+              title="No connectors yet"
+              description="Connect Cowork to tools like Linear, Notion, or GitHub by adding a connector."
               action={
                 workspace ? (
                   <Button type="button" variant="outline" size="sm" onClick={openCreateEditor}>
                     <PlusIcon data-icon="inline-start" />
-                    Add server
+                    Add connector
                   </Button>
                 ) : undefined
               }
@@ -476,7 +714,7 @@ export function McpServersPage() {
           const serverKey = serverIdentityKey(server);
           const draftKey = workspace ? mcpCredentialDraftKey(workspace.id, server) : serverKey;
           const validation = validationByServerKey[serverKey];
-          const canEdit = server.source === "user";
+          const editSource = editableSource(server.source);
           const apiKeyDraft = apiKeyByName[draftKey] ?? "";
           const oauthCode = oauthCodeByName[draftKey] ?? "";
           const isExpanded = expandedServers[serverKey] ?? false;
@@ -485,6 +723,11 @@ export function McpServersPage() {
             server.source !== "system" &&
             (server.source !== "plugin" ||
               (Boolean(server.pluginId) && Boolean(server.pluginScope)));
+          const validationTools =
+            validation?.ok && Array.isArray(validation.tools) ? validation.tools : [];
+          const availableToolCount = validation?.ok
+            ? (validation.toolCount ?? validationTools.length)
+            : 0;
 
           return (
             <div
@@ -509,11 +752,11 @@ export function McpServersPage() {
                   <span className="truncate text-sm font-medium text-foreground">
                     {server.name}
                   </span>
-                  <Badge variant="secondary" className="h-5 text-[10px] uppercase">
+                  <Badge variant="secondary" className="h-5 text-[10px]">
                     {sourceLabel(server.source)}
                   </Badge>
                   {!serverEnabled ? (
-                    <Badge variant="secondary" className="h-5 text-[10px] uppercase">
+                    <Badge variant="secondary" className="h-5 text-[10px]">
                       Disabled
                     </Badge>
                   ) : null}
@@ -545,7 +788,7 @@ export function McpServersPage() {
                       }}
                     />
                   </div>
-                  {canEdit && (
+                  {editSource ? (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -553,24 +796,24 @@ export function McpServersPage() {
                       className="h-8 w-8 text-muted-foreground hover:text-foreground"
                       onPointerDown={(event) => {
                         event.stopPropagation();
-                        openEditEditor(server);
+                        openEditEditor(server, editSource);
                       }}
                       onClick={(event) => {
                         event.stopPropagation();
-                        openEditEditor(server);
+                        openEditEditor(server, editSource);
                       }}
                     >
                       <SettingsIcon className="size-4" />
                     </Button>
-                  )}
+                  ) : null}
                 </div>
               </div>
 
               {isExpanded && (
-                <div className="space-y-4 px-11 pb-4 text-xs">
+                <div className="flex flex-col gap-4 px-11 pb-4 text-xs">
                   <div className="grid grid-cols-[120px_1fr] items-center gap-2">
                     <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Command
+                      Connection
                     </span>
                     <span className="inline-block w-fit rounded bg-muted/30 px-2 py-1 font-mono text-[11px]">
                       {formatTransport(server)}
@@ -579,15 +822,17 @@ export function McpServersPage() {
 
                   <div className="grid grid-cols-[120px_1fr] items-center gap-2">
                     <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Auth Mode
+                      Authentication
                     </span>
-                    <span className="text-[13px] text-foreground">{server.authMode}</span>
+                    <span className="text-[13px] text-foreground">
+                      {authModeLabel(server.authMode)}
+                    </span>
                   </div>
 
                   {server.authMessage && (
                     <div className="grid grid-cols-[120px_1fr] items-center gap-2">
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Auth Status
+                        Status
                       </span>
                       <span className="text-[13px] text-foreground">{server.authMessage}</span>
                     </div>
@@ -596,13 +841,10 @@ export function McpServersPage() {
                   {validation && (
                     <div className="grid grid-cols-[120px_1fr] items-center gap-2">
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Last Check
+                        Last check
                       </span>
                       <span className="text-[13px] text-foreground">
-                        {validation.ok ? "Passed" : "Failed"} ({validation.mode})
-                        {typeof validation.toolCount === "number"
-                          ? ` • ${validation.toolCount} tools`
-                          : ""}
+                        {validation.ok ? "Passed" : "Failed"}
                         {typeof validation.latencyMs === "number"
                           ? ` • ${validation.latencyMs}ms`
                           : ""}
@@ -610,26 +852,33 @@ export function McpServersPage() {
                     </div>
                   )}
 
-                  {validation?.ok &&
-                    Array.isArray(validation.tools) &&
-                    validation.tools.length > 0 && (
-                      <div className="mt-2 grid grid-cols-[120px_1fr] items-start gap-2">
-                        <span className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                          Available Tools
+                  {validation?.ok && availableToolCount > 0 && (
+                    <div className="mt-2 grid grid-cols-[120px_1fr] items-start gap-2">
+                      <span className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Tools
+                      </span>
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[11px] text-muted-foreground">
+                          {availableToolCount === 1
+                            ? "1 tool available"
+                            : `${availableToolCount} tools available`}
                         </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {validation.tools.map((t) => (
-                            <div
-                              key={t.name}
-                              className="group relative flex cursor-default items-center rounded-sm border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-xs text-foreground"
-                              title={t.description || t.name}
-                            >
-                              {t.name}
-                            </div>
-                          ))}
-                        </div>
+                        {validationTools.length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {validationTools.map((t) => (
+                              <div
+                                key={t.name}
+                                className="group relative flex cursor-default items-center rounded-sm border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-xs text-foreground"
+                                title={t.description || t.name}
+                              >
+                                {displayToolName(t.name, server.name)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
-                    )}
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-2 pt-2">
                     <Button
@@ -639,9 +888,9 @@ export function McpServersPage() {
                       className="h-7 border-transparent bg-muted/40 text-xs text-foreground shadow-none hover:bg-muted/60"
                       onClick={() => workspace && validateServer(workspace.id, server)}
                     >
-                      Validate Connection
+                      Test connection
                     </Button>
-                    {canEdit && (
+                    {editSource ? (
                       <Button
                         type="button"
                         variant="destructive"
@@ -650,23 +899,22 @@ export function McpServersPage() {
                         onClick={async () => {
                           if (!workspace) return;
                           const confirmed = await confirmAction({
-                            title: "Delete server",
-                            message: `Delete the "${server.name}" MCP server?`,
-                            detail:
-                              "This server will be removed from your workspace configuration.",
-                            confirmLabel: "Delete",
+                            title: "Remove connector",
+                            message: `Remove "${server.name}"?`,
+                            detail: "Cowork will no longer be able to use this connector.",
+                            confirmLabel: "Remove",
                             cancelLabel: "Cancel",
                             kind: "warning",
                             defaultAction: "cancel",
                           });
                           if (confirmed) {
-                            void deleteWorkspaceMcpServer(workspace.id, server.name, "user");
+                            void deleteWorkspaceMcpServer(workspace.id, server.name, editSource);
                           }
                         }}
                       >
-                        Delete Server
+                        Remove
                       </Button>
-                    )}
+                    ) : null}
                   </div>
 
                   {server.auth?.type === "oauth" ? (
@@ -689,7 +937,7 @@ export function McpServersPage() {
                       </Button>
                       <Input
                         className="h-7 max-w-64 text-xs"
-                        placeholder="Paste OAuth code (optional)"
+                        placeholder="Paste sign-in code (optional)"
                         value={oauthCode}
                         onChange={(event) =>
                           setOauthCodeByName((prev) => ({
@@ -743,7 +991,7 @@ export function McpServersPage() {
                           )
                         }
                       >
-                        Set key
+                        Save key
                       </Button>
                     </div>
                   ) : null}
@@ -754,7 +1002,7 @@ export function McpServersPage() {
         })}
       </div>
 
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+      <Collapsible open={configFilesOpen} onOpenChange={setConfigFilesOpen}>
         <CollapsibleTrigger asChild>
           <Button
             type="button"
@@ -762,14 +1010,14 @@ export function McpServersPage() {
             className="h-auto w-full justify-start gap-2 rounded-none px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-transparent hover:text-foreground"
           >
             <WrenchIcon className="size-4" />
-            <span>Config files</span>
+            <span>Advanced: config files</span>
             <ChevronDownIcon
-              className={cn("ml-auto size-4 transition-transform", advancedOpen && "rotate-180")}
+              className={cn("ml-auto size-4 transition-transform", configFilesOpen && "rotate-180")}
             />
           </Button>
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="space-y-2 px-4 pb-4 text-xs">
+          <div className="flex flex-col gap-2 px-4 pb-4 text-xs">
             {files.map((file) => (
               <div
                 key={file.path}

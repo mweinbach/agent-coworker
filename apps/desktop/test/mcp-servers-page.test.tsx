@@ -18,12 +18,38 @@ const { McpServersPage, mcpCredentialDraftKey } = await import(
 
 const defaultActions = {
   requestWorkspaceMcpServers: useAppStore.getState().requestWorkspaceMcpServers,
+  upsertWorkspaceMcpServer: useAppStore.getState().upsertWorkspaceMcpServer,
+  deleteWorkspaceMcpServer: useAppStore.getState().deleteWorkspaceMcpServer,
   setWorkspaceMcpServerEnabled: useAppStore.getState().setWorkspaceMcpServerEnabled,
   validateWorkspaceMcpServer: useAppStore.getState().validateWorkspaceMcpServer,
   authorizeWorkspaceMcpServerAuth: useAppStore.getState().authorizeWorkspaceMcpServerAuth,
   callbackWorkspaceMcpServerAuth: useAppStore.getState().callbackWorkspaceMcpServerAuth,
   setWorkspaceMcpServerApiKey: useAppStore.getState().setWorkspaceMcpServerApiKey,
 };
+
+type InputChangeProps = {
+  onChange?: (event: { target: HTMLInputElement; currentTarget: HTMLInputElement }) => void;
+};
+
+function setInputValue(
+  harness: ReturnType<typeof setupJsdom>,
+  input: HTMLInputElement,
+  value: string,
+) {
+  const setter = Object.getOwnPropertyDescriptor(
+    harness.dom.window.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(input, value);
+  // The Bun preload imports React before jsdom exists, so direct DOM events
+  // alone do not reliably drive controlled fields; call the React prop too.
+  const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+  const props = propsKey
+    ? ((input as unknown as Record<string, unknown>)[propsKey] as InputChangeProps)
+    : {};
+  props.onChange?.({ target: input, currentTarget: input });
+  input.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+}
 
 describe("MCP servers settings page", () => {
   beforeEach(() => {
@@ -124,11 +150,11 @@ describe("MCP servers settings page", () => {
         source: "user",
         enabled: true,
       });
-      expect(container.textContent).not.toContain("Command");
+      expect(container.textContent).not.toContain("Connection");
 
       // All config layers are listed now, including system servers.
       expect(container.textContent).toContain("builtin");
-      expect(container.textContent).toContain("system");
+      expect(container.textContent).toContain("Built-in");
     } finally {
       if (root) {
         await act(async () => {
@@ -205,7 +231,7 @@ describe("MCP servers settings page", () => {
       const editButton = container.querySelector('[aria-label="Edit grep"]');
       expect(editButton).not.toBeNull();
 
-      expect(container.textContent).not.toContain("Command");
+      expect(container.textContent).not.toContain("Connection");
       expect(editButton).not.toBeNull();
     } finally {
       if (root) {
@@ -295,7 +321,7 @@ describe("MCP servers settings page", () => {
         rowButtons[0]?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(container.textContent?.match(/Command/g) ?? []).toHaveLength(1);
+      expect(container.textContent?.match(/Connection/g) ?? []).toHaveLength(1);
     } finally {
       if (root) {
         await act(async () => {
@@ -486,7 +512,7 @@ describe("MCP servers settings page", () => {
       });
 
       const validateButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
-        button.textContent?.includes("Validate Connection"),
+        button.textContent?.includes("Test connection"),
       );
       expect(validateButtons).toHaveLength(2);
       await act(async () => {
@@ -520,8 +546,9 @@ describe("MCP servers settings page", () => {
         }));
       });
 
-      expect(container.textContent?.match(/Last Check/g) ?? []).toHaveLength(1);
-      expect(container.textContent?.match(/Passed \(none\)/g) ?? []).toHaveLength(1);
+      expect(container.textContent?.match(/Last check/g) ?? []).toHaveLength(1);
+      expect(container.textContent?.match(/Passed/g) ?? []).toHaveLength(1);
+      expect(container.textContent).toContain("2 tools available");
     } finally {
       if (root) {
         await act(async () => {
@@ -615,7 +642,7 @@ describe("MCP servers settings page", () => {
       });
 
       const setKeyButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
-        button.textContent?.includes("Set key"),
+        button.textContent?.includes("Save key"),
       );
       expect(setKeyButtons).toHaveLength(2);
       await act(async () => {
@@ -625,6 +652,313 @@ describe("MCP servers settings page", () => {
       });
 
       expect(setApiKey).toHaveBeenCalledWith("ws-1", "grep", "", "user");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("adds a personal connector when only one-off chat workspaces exist", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const requestMcpServers = mock(async () => {});
+    const upsertServer = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "chat-1",
+              name: "New chat",
+              path: "/tmp/.cowork/chats/chat-1",
+              workspaceKind: "oneOffChat",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "chat-1",
+          workspaceRuntimeById: {
+            "chat-1": {
+              ...useAppStore.getState().workspaceRuntimeById["chat-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: requestMcpServers,
+          upsertWorkspaceMcpServer: upsertServer,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      expect(requestMcpServers).toHaveBeenCalledWith("chat-1");
+
+      const doc = harness.dom.window.document;
+      const addButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Add connector"),
+      );
+      expect(addButton).toBeDefined();
+
+      await act(async () => {
+        addButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const dialog = doc.querySelector('[role="dialog"]');
+      expect(dialog).not.toBeNull();
+      expect(dialog?.textContent).toContain("Add connector");
+      expect(dialog?.textContent).not.toContain("Where should this be available?");
+
+      const nameInput = doc.getElementById("mcp-connector-name");
+      const urlInput = doc.getElementById("mcp-server-url");
+      if (!nameInput || !urlInput) throw new Error("missing connector editor inputs");
+
+      await act(async () => {
+        setInputValue(harness, nameInput as HTMLInputElement, "Linear");
+        setInputValue(harness, urlInput as HTMLInputElement, "https://mcp.linear.app/mcp");
+      });
+
+      const submitButton = Array.from(dialog?.querySelectorAll("button") ?? []).find(
+        (button) => button.textContent === "Add connector",
+      );
+      expect(submitButton).toBeDefined();
+
+      await act(async () => {
+        submitButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(upsertServer).toHaveBeenCalledWith(
+        "chat-1",
+        {
+          name: "Linear",
+          transport: { type: "http", url: "https://mcp.linear.app/mcp" },
+          auth: { type: "none" },
+        },
+        undefined,
+        "user",
+      );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("adds a project connector when Only this project is selected", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const upsertServer = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "project-1",
+              name: "Project",
+              path: "/tmp/project",
+              workspaceKind: "project",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "project-1",
+          workspaceRuntimeById: {
+            "project-1": {
+              ...useAppStore.getState().workspaceRuntimeById["project-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+          upsertWorkspaceMcpServer: upsertServer,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      const doc = harness.dom.window.document;
+      const addButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Add connector"),
+      );
+      expect(addButton).toBeDefined();
+
+      await act(async () => {
+        addButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const dialog = doc.querySelector('[role="dialog"]');
+      expect(dialog).not.toBeNull();
+      expect(dialog?.textContent).toContain("Where should this be available?");
+
+      const allProjectsRadio = doc.getElementById("mcp-location-user");
+      const onlyProjectRadio = doc.getElementById("mcp-location-workspace");
+      expect(allProjectsRadio?.getAttribute("aria-checked")).toBe("true");
+      expect(onlyProjectRadio).not.toBeNull();
+
+      await act(async () => {
+        onlyProjectRadio?.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+      expect(onlyProjectRadio?.getAttribute("aria-checked")).toBe("true");
+
+      const nameInput = doc.getElementById("mcp-connector-name");
+      const urlInput = doc.getElementById("mcp-server-url");
+      if (!nameInput || !urlInput) throw new Error("missing connector editor inputs");
+
+      await act(async () => {
+        setInputValue(harness, nameInput as HTMLInputElement, "Notion");
+        setInputValue(harness, urlInput as HTMLInputElement, "https://mcp.notion.com/mcp");
+      });
+
+      const submitButton = Array.from(dialog?.querySelectorAll("button") ?? []).find(
+        (button) => button.textContent === "Add connector",
+      );
+      expect(submitButton).toBeDefined();
+
+      await act(async () => {
+        submitButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(upsertServer).toHaveBeenCalledWith(
+        "project-1",
+        {
+          name: "Notion",
+          transport: { type: "http", url: "https://mcp.notion.com/mcp" },
+          auth: { type: "none" },
+        },
+        undefined,
+        "workspace",
+      );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("workspace-source rows are editable and removed with their own source", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const deleteServer = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace",
+              path: "/tmp/workspace",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              ...useAppStore.getState().workspaceRuntimeById["ws-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [
+                {
+                  name: "project-tool",
+                  transport: { type: "http", url: "https://project.example.test" },
+                  enabled: true,
+                  source: "workspace",
+                  inherited: false,
+                  authMode: "none",
+                  authScope: "workspace",
+                  authMessage: "",
+                },
+              ],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+          deleteWorkspaceMcpServer: deleteServer,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      expect(container.textContent).toContain("Project");
+      expect(container.querySelector('[aria-label="Edit project-tool"]')).not.toBeNull();
+
+      const rowButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("project-tool"),
+      );
+      expect(rowButton).toBeDefined();
+      await act(async () => {
+        rowButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const removeButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Remove",
+      );
+      expect(removeButton).toBeDefined();
+      await act(async () => {
+        removeButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(deleteServer).toHaveBeenCalledWith("ws-1", "project-tool", "workspace");
     } finally {
       if (root) {
         await act(async () => {

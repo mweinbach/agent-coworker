@@ -26,9 +26,7 @@ const FEATURE_GATED_BUILTIN_SKILLS: Record<string, (config: AgentConfig) => bool
 function isBuiltInSkillRoot(config: AgentConfig, rootDir: string): boolean {
   const builtInSkillsDir = path.resolve(config.builtInDir, "skills");
   const resolvedRoot = path.resolve(rootDir);
-  return (
-    resolvedRoot === builtInSkillsDir || resolvedRoot.startsWith(builtInSkillsDir + path.sep)
-  );
+  return resolvedRoot === builtInSkillsDir || resolvedRoot.startsWith(builtInSkillsDir + path.sep);
 }
 
 function featureGateFor(

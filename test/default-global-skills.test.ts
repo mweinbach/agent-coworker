@@ -7,6 +7,7 @@ import { deletePluginInstallation } from "../src/plugins/operations";
 import { setPluginEnabled } from "../src/plugins/overrides";
 import {
   type DefaultSkillSpec,
+  defaultGlobalSkillsFailureFile,
   __internal as defaultGlobalSkillsInternal,
   defaultGlobalSkillsStateFile,
   ensureDefaultGlobalSkillsInstalled,
@@ -485,6 +486,17 @@ describe("default global skills bootstrap", () => {
         await fs.access(path.join(home, ".cowork", "skills", name, "legacy.txt"));
       }
 
+      // Age the recorded failure past the retry backoff so the next attempt proceeds.
+      await fs.writeFile(
+        defaultGlobalSkillsFailureFile(home),
+        `${JSON.stringify({
+          version: 1,
+          failedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+          message: "offline",
+        })}\n`,
+        "utf-8",
+      );
+
       const migrated = await ensureDefaultGlobalSkillsReady({
         homedir: home,
         config,
@@ -683,6 +695,169 @@ describe("default global skills bootstrap", () => {
       expect(overrides.plugins?.["workspace-tools"]).toBe(false);
       expect(overrides.removedDefaultPlugins?.["workspace-tools"]).toBeUndefined();
     } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("bootstrap failure writes a failure file and skips network retries within the backoff window", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-failure-backoff-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }];
+    const config = makeConfig(workspace, home);
+    const env = {};
+
+    try {
+      let failingFetchCalls = 0;
+      const failed = await ensureDefaultGlobalSkillsReady({
+        homedir: home,
+        config,
+        plugins: skills,
+        env,
+        fetchImpl: (async () => {
+          failingFetchCalls += 1;
+          throw new Error("rate limited");
+        }) as typeof fetch,
+      });
+
+      expect(failed).toBeNull();
+      expect(failingFetchCalls).toBeGreaterThan(0);
+      const failureFile = defaultGlobalSkillsFailureFile(home);
+      const failureState = JSON.parse(await fs.readFile(failureFile, "utf-8")) as {
+        version: number;
+        failedAt: string;
+        message: string;
+      };
+      expect(failureState.version).toBe(1);
+      expect(failureState.message).toContain("rate limited");
+      expect(Number.isFinite(Date.parse(failureState.failedAt))).toBe(true);
+
+      defaultGlobalSkillsInternal.resetForTests();
+
+      let retryFetchCalls = 0;
+      const logs: string[] = [];
+      const skipped = await ensureDefaultGlobalSkillsReady({
+        homedir: home,
+        config,
+        plugins: skills,
+        env,
+        log: (line) => logs.push(line),
+        fetchImpl: (async () => {
+          retryFetchCalls += 1;
+          throw new Error("backoff should prevent network fetches");
+        }) as typeof fetch,
+      });
+
+      expect(retryFetchCalls).toBe(0);
+      expect(skipped?.status).toBe("already_installed");
+      expect(skipped?.installed).toEqual([]);
+      expect(logs.some((line) => line.includes("Default skill bootstrap skipped"))).toBe(true);
+      await fs.access(failureFile);
+    } finally {
+      defaultGlobalSkillsInternal.resetForTests();
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("force bypasses the bootstrap failure backoff and success clears the failure file", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-failure-force-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }];
+    const config = makeConfig(workspace, home);
+    const failureFile = defaultGlobalSkillsFailureFile(home);
+    const { tree, files } = createMarketplaceFixture(["alpha"]);
+    const fetchCalls: string[] = [];
+    const baseFetch = createGitHubFetchStub(tree, files);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      fetchCalls.push(String(input));
+      return await baseFetch(input);
+    }) as typeof fetch;
+
+    try {
+      await fs.mkdir(path.dirname(failureFile), { recursive: true });
+      await fs.writeFile(
+        failureFile,
+        `${JSON.stringify({
+          version: 1,
+          failedAt: new Date().toISOString(),
+          message: "rate limited",
+        })}\n`,
+        "utf-8",
+      );
+
+      const result = await ensureDefaultGlobalSkillsReady({
+        homedir: home,
+        config,
+        plugins: skills,
+        env: {},
+        force: true,
+        fetchImpl,
+      });
+
+      expect(result?.status).toBe("installed");
+      expect(result?.installed).toEqual(["alpha"]);
+      expect(fetchCalls.length).toBeGreaterThan(0);
+      await expect(fs.access(failureFile)).rejects.toBeDefined();
+    } finally {
+      defaultGlobalSkillsInternal.resetForTests();
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("retries after the backoff window and keeps the state-file fast path unaffected", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-failure-expiry-"));
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
+    const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }];
+    const config = makeConfig(workspace, home);
+    const failureFile = defaultGlobalSkillsFailureFile(home);
+    const { tree, files } = createMarketplaceFixture(["alpha"]);
+    const writeFailureFile = async (failedAt: string) => {
+      await fs.mkdir(path.dirname(failureFile), { recursive: true });
+      await fs.writeFile(
+        failureFile,
+        `${JSON.stringify({ version: 1, failedAt, message: "rate limited" })}\n`,
+        "utf-8",
+      );
+    };
+
+    try {
+      await writeFailureFile(new Date(Date.now() - 31 * 60 * 1000).toISOString());
+
+      const retried = await ensureDefaultGlobalSkillsReady({
+        homedir: home,
+        config,
+        plugins: skills,
+        env: {},
+        fetchImpl: createGitHubFetchStub(tree, files),
+      });
+
+      expect(retried?.status).toBe("installed");
+      expect(retried?.installed).toEqual(["alpha"]);
+      await expect(fs.access(failureFile)).rejects.toBeDefined();
+
+      defaultGlobalSkillsInternal.resetForTests();
+      await writeFailureFile(new Date().toISOString());
+
+      let fastPathFetchCalls = 0;
+      const fastPath = await ensureDefaultGlobalSkillsReady({
+        homedir: home,
+        config,
+        plugins: skills,
+        env: {},
+        fetchImpl: (async () => {
+          fastPathFetchCalls += 1;
+          throw new Error("fast path should not fetch");
+        }) as typeof fetch,
+      });
+
+      expect(fastPathFetchCalls).toBe(0);
+      expect(fastPath?.status).toBe("already_installed");
+      expect(fastPath?.skippedExisting).toEqual(["alpha"]);
+      await expect(fs.access(failureFile)).rejects.toBeDefined();
+    } finally {
+      defaultGlobalSkillsInternal.resetForTests();
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(workspace, { recursive: true, force: true });
     }

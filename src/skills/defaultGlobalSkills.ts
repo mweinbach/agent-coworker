@@ -17,7 +17,10 @@ import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
 import { type AgentConfig, isInstalledPluginCatalogEntry } from "../types";
 
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
+const DEFAULT_SKILLS_FAILURE_FILE = "default-global-skills.failure.json";
 const INSTALL_STATE_VERSION = 1;
+const FAILURE_STATE_VERSION = 1;
+const BOOTSTRAP_FAILURE_BACKOFF_MS = 30 * 60 * 1000;
 const bootstrapPromises = new Map<
   string,
   Promise<EnsureDefaultGlobalSkillsInstalledResult | null>
@@ -28,6 +31,12 @@ type DefaultGlobalSkillsState = {
   marketplace: string;
   installedAt: string;
   plugins: string[];
+};
+
+type DefaultGlobalSkillsFailureState = {
+  version: number;
+  failedAt: string;
+  message: string;
 };
 
 export type DefaultSkillSpec = {
@@ -85,6 +94,65 @@ function defaultStateFileForHomedir(homedir?: string): string {
 
 export function defaultGlobalSkillsStateFile(homedir?: string): string {
   return defaultStateFileForHomedir(homedir);
+}
+
+function defaultFailureFileForHomedir(homedir?: string): string {
+  const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
+  return path.join(paths.configDir, DEFAULT_SKILLS_FAILURE_FILE);
+}
+
+export function defaultGlobalSkillsFailureFile(homedir?: string): string {
+  return defaultFailureFileForHomedir(homedir);
+}
+
+async function readFailureState(
+  failureFile: string,
+): Promise<DefaultGlobalSkillsFailureState | null> {
+  try {
+    const raw = await fs.readFile(failureFile, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<DefaultGlobalSkillsFailureState>;
+    if (
+      parsed.version !== FAILURE_STATE_VERSION ||
+      typeof parsed.failedAt !== "string" ||
+      typeof parsed.message !== "string"
+    ) {
+      return null;
+    }
+    return { version: parsed.version, failedAt: parsed.failedAt, message: parsed.message };
+  } catch {
+    return null;
+  }
+}
+
+async function writeFailureState(failureFile: string, message: string): Promise<void> {
+  const state: DefaultGlobalSkillsFailureState = {
+    version: FAILURE_STATE_VERSION,
+    failedAt: new Date().toISOString(),
+    message,
+  };
+  try {
+    await fs.mkdir(path.dirname(failureFile), { recursive: true });
+    await fs.writeFile(failureFile, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+  } catch {
+    // Best-effort: failure-state persistence must never mask the original bootstrap error.
+  }
+}
+
+async function clearFailureState(failureFile: string): Promise<void> {
+  try {
+    await fs.rm(failureFile, { force: true });
+  } catch {
+    // Best-effort: a stale failure file only delays the next retry window.
+  }
+}
+
+function isWithinFailureBackoff(
+  failureState: DefaultGlobalSkillsFailureState,
+  now: number = Date.now(),
+): boolean {
+  const failedAtMs = Date.parse(failureState.failedAt);
+  if (!Number.isFinite(failedAtMs)) return false;
+  return now - failedAtMs < BOOTSTRAP_FAILURE_BACKOFF_MS;
 }
 
 function isTruthy(value: string | undefined): boolean {
@@ -170,9 +238,9 @@ export async function ensureDefaultGlobalSkillsReady(opts: {
     try {
       return await ensureDefaultGlobalSkillsInstalled(opts);
     } catch (error) {
-      opts.log?.(
-        `Default skill bootstrap failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      opts.log?.(`Default skill bootstrap failed: ${message}`);
+      await writeFailureState(defaultFailureFileForHomedir(opts.homedir), message);
       return null;
     } finally {
       bootstrapPromises.delete(promiseKey);
@@ -195,6 +263,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const paths = getAiCoworkerPaths(opts.homedir ? { homedir: opts.homedir } : {});
   const stateFile = defaultStateFileForHomedir(opts.homedir);
+  const failureFile = defaultFailureFileForHomedir(opts.homedir);
 
   await ensureAiCoworkerHome(paths);
 
@@ -225,6 +294,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
         recordedPluginIds: new Set(requestedPluginIds),
         log: opts.log,
       });
+      await clearFailureState(failureFile);
       return {
         status: "already_installed",
         pluginsDir: opts.config.userPluginsDir ?? "",
@@ -277,6 +347,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       recordedPluginIds,
       log: opts.log,
     });
+    await clearFailureState(failureFile);
 
     return {
       status: "already_installed",
@@ -286,6 +357,25 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       skippedExisting,
       skippedRemoved,
     };
+  }
+
+  if (!opts.force) {
+    // Failed bootstraps back off before any network work so repeated workspace
+    // server starts cannot burn the unauthenticated GitHub rate limit.
+    const failureState = await readFailureState(failureFile);
+    if (failureState && isWithinFailureBackoff(failureState)) {
+      opts.log?.(
+        `Default skill bootstrap skipped: last attempt failed ${failureState.failedAt}; retrying after 30 minutes.`,
+      );
+      return {
+        status: "already_installed",
+        pluginsDir: opts.config.userPluginsDir ?? "",
+        stateFile,
+        installed,
+        skippedExisting,
+        skippedRemoved,
+      };
+    }
   }
 
   const marketplace = await fetchRemotePluginMarketplace({ fetchImpl });
@@ -327,6 +417,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     recordedPluginIds,
     log: opts.log,
   });
+  await clearFailureState(failureFile);
 
   return {
     status: installed.length > 0 ? "installed" : "already_installed",

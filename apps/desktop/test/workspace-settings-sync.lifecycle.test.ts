@@ -335,6 +335,74 @@ describe("workspace settings sync", () => {
     expect(rt?.effectiveReasoningEffort).toBe("low");
   });
 
+  test("session_config clears the stale runtime effort when the settled config carries no effort", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: {
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    // The prior turn ran at xhigh (stale runtime effort), and the user then
+    // optimistically picked "high". The server settles a config with NO
+    // reasoningEffort (e.g. switched to a non-reasoning model or cleared it).
+    // Because the selector prefers runtime over config, the stale runtime xhigh
+    // must be cleared or the composer would keep showing xhigh forever.
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          composerReasoningEffort: "high",
+          requestedReasoningEffort: "xhigh",
+          effectiveReasoningEffort: "xhigh",
+        },
+      },
+    }));
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: {},
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(rt?.composerReasoningEffort).toBeNull();
+    // Stale runtime effort cleared so the selector falls through to config/default.
+    expect(rt?.requestedReasoningEffort).toBeNull();
+    expect(rt?.effectiveReasoningEffort).toBeNull();
+  });
+
   test("session_config compares pending reasoning effort against the draft composer provider", async () => {
     primeWorkspaceConnection();
     const { threadId, sessionId } = seedConnectedThread();

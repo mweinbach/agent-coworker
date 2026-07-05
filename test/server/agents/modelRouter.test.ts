@@ -110,6 +110,44 @@ describe("routeAgentConfig: no model requested", () => {
     expect(result.effectiveModel).toBe("gpt-4o");
     expect(result.effectiveReasoningEffort).toBeUndefined();
   });
+
+  test("drops inherited reasoning provider options when routing to a non-reasoning child", () => {
+    const parentConfig = makeConfig({
+      provider: "openai",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+      // A GPT-5 parent carries both reasoning keys in its providerOptions.
+      providerOptions: { openai: { reasoningEffort: "high", reasoningSummary: "detailed" } },
+    });
+    const role = makeRole();
+    // The routed child config starts from a copy of the parent's providerOptions,
+    // so without reconciliation the gpt-4o child would still carry the stale
+    // reasoning keys and its first Responses request would send a reasoning
+    // payload the model rejects.
+    const result = routeAgentConfig(parentConfig, { role, model: "gpt-4o" });
+    expect(result.effectiveModel).toBe("gpt-4o");
+    const openaiOptions = (result.config.providerOptions as Record<string, unknown> | undefined)
+      ?.openai as Record<string, unknown> | undefined;
+    expect(openaiOptions?.reasoningEffort).toBeUndefined();
+    expect(openaiOptions?.reasoningSummary).toBeUndefined();
+  });
+
+  test("keeps reasoning provider options when routing to a reasoning child", () => {
+    const parentConfig = makeConfig({
+      provider: "openai",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+      providerOptions: { openai: { reasoningEffort: "high" } },
+    });
+    const role = makeRole();
+    // gpt-5.2 is a reasoning model (declares reasoningEffort in its defaults), so
+    // its effort must survive the route rather than being reconciled away.
+    const result = routeAgentConfig(parentConfig, { role, model: "gpt-5.2" });
+    expect(result.effectiveModel).toBe("gpt-5.2");
+    const openaiOptions = (result.config.providerOptions as Record<string, unknown> | undefined)
+      ?.openai as Record<string, unknown> | undefined;
+    expect(openaiOptions?.reasoningEffort).toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

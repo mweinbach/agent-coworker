@@ -3,7 +3,11 @@ import {
   normalizeChildRoutingConfig,
   parseChildModelRef,
 } from "../../models/childModelRouting";
-import { getResolvedModelMetadataSync, normalizeModelIdForProvider } from "../../models/metadata";
+import {
+  getResolvedModelMetadataSync,
+  normalizeModelIdForProvider,
+  reconcileReasoningProviderOptions,
+} from "../../models/metadata";
 import type { AgentReasoningEffort } from "../../shared/agents";
 import {
   isOpenAiReasoningEffort,
@@ -221,12 +225,22 @@ export function routeAgentConfig(
       preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
       allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
       knowledgeCutoff: resolvedEffectiveModel.knowledgeCutoff,
-      providerOptions: applyReasoningEffort(
-        { ...parentConfig, provider: effectiveProvider, model: resolvedEffectiveModel.id },
+      // `applyReasoningEffort` starts from a copy of the parent's providerOptions,
+      // so routing a reasoning parent (e.g. GPT-5 carrying reasoningEffort/
+      // reasoningSummary) to a non-reasoning child (e.g. a custom/discovered
+      // gpt-4o) would leave those stale keys behind and make the child's first
+      // Responses request send a reasoning payload it rejects. Reconcile against
+      // the child model's own resolved defaults to drop keys it does not declare.
+      providerOptions: reconcileReasoningProviderOptions(
+        applyReasoningEffort(
+          { ...parentConfig, provider: effectiveProvider, model: resolvedEffectiveModel.id },
+          effectiveProvider,
+          effectiveReasoningEffort,
+          home,
+        ),
         effectiveProvider,
-        effectiveReasoningEffort,
-        home,
-      ),
+        resolvedEffectiveModel.providerOptionsDefaults,
+      ) as AgentConfig["providerOptions"],
     },
     ...(requestedModel ? { requestedModel } : {}),
     effectiveProvider,

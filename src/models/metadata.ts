@@ -20,7 +20,8 @@ import {
 } from "../providers/modelDiscoveryCache";
 import { supportsCustomModelIds } from "../shared/customModels";
 import { getAiCoworkerPaths } from "../store/connections";
-import type { ProviderName } from "../types";
+import type { AgentConfig, ProviderName } from "../types";
+import { resolveAuthHomeDir } from "../utils/authHome";
 import type { ResolvedModelMetadata } from "./metadataTypes";
 import {
   assertSupportedModel,
@@ -408,6 +409,24 @@ export function getResolvedModelMetadataSync(
     );
   }
   return toResolvedStaticModel(provider, modelId, source);
+}
+
+/**
+ * True when the config's model accepts image input, resolved through the same
+ * dynamic metadata the catalog and runtime use (static registry → discovery
+ * cache → custom store) rather than the static-only `supportsImageInput`
+ * registry lookup. This keeps image-upload materialization and the `read` tool's
+ * visual-content gate aligned with a discovered vision model's real capability
+ * instead of downgrading a cache-only model to text-only. Threads the session's
+ * auth home so the discovery cache resolves under a non-default homedir.
+ */
+export function modelSupportsImageInputSync(
+  config: Pick<AgentConfig, "provider" | "model" | "skillsDirs"> &
+    Partial<Pick<AgentConfig, "userCoworkDir">>,
+): boolean {
+  return getResolvedModelMetadataSync(config.provider, config.model, "image input gate", {
+    home: resolveAuthHomeDir(config),
+  }).supportsImageInput;
 }
 
 /**

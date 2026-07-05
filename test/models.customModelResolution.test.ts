@@ -8,6 +8,7 @@ import {
   getKnownResolvedModelMetadata,
   getResolvedModelMetadataSync,
   isConfiguredCustomModelIdSync,
+  modelSupportsImageInputSync,
   normalizeModelIdForProvider,
   reconcileReasoningProviderOptions,
   resolveModelMetadata,
@@ -413,6 +414,31 @@ describe("getResolvedModelMetadataSync with bedrock discovery home", () => {
     expect(resolved.id).toBe("acme/never-discovered");
     expect(resolved.supportsImageInput).toBe(false);
     expect(resolved.displayName).toBe("acme/never-discovered");
+  });
+});
+
+describe("modelSupportsImageInputSync", () => {
+  // The attachment-materialization and `read`-tool image gates route through this
+  // helper (not the static-registry-only supportsImageInput), so a discovered
+  // vision model advertises image support and its uploads/reads keep visual
+  // content instead of being downgraded to path-only text.
+  const configFor = (home: string, model: string) => ({
+    provider: "openai" as const,
+    model,
+    skillsDirs: [],
+    userCoworkDir: path.join(home, ".cowork"),
+  });
+
+  test("returns true for a discovered vision model in the cache", () => {
+    expect(modelSupportsImageInputSync(configFor(homeWithStore, DISCOVERED_VISION_ID))).toBe(true);
+  });
+
+  test("returns false for a discovered non-vision model", () => {
+    expect(modelSupportsImageInputSync(configFor(homeWithStore, DISCOVERED_ID))).toBe(false);
+  });
+
+  test("returns false for a dynamic id absent from the cache under an empty home", () => {
+    expect(modelSupportsImageInputSync(configFor(emptyHome, DISCOVERED_VISION_ID))).toBe(false);
   });
 });
 

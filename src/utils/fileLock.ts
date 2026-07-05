@@ -14,7 +14,14 @@ import { z } from "zod";
  * on an in-process queue so they never contend on the filesystem loop.
  */
 
-const DEFAULT_ACQUIRE_TIMEOUT_MS = 10_000;
+/**
+ * Longest a `withFileLock` caller waits to acquire the cross-process lock before
+ * throwing. Exported so callers that surface store writes through a bounded
+ * response (e.g. JSON-RPC mutation captures) can wait at least this long and not
+ * time out while the write is still legitimately in progress behind the lock.
+ */
+export const FILE_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
+const DEFAULT_ACQUIRE_TIMEOUT_MS = FILE_LOCK_ACQUIRE_TIMEOUT_MS;
 const DEFAULT_RETRY_DELAY_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 10_000;
 

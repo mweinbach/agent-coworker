@@ -5,6 +5,7 @@ import {
 } from "../../../providers/codexAppServerResolver";
 import type { AgentConfig } from "../../../types";
 import { isProviderName } from "../../../types";
+import { FILE_LOCK_ACQUIRE_TIMEOUT_MS } from "../../../utils/fileLock";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
@@ -20,6 +21,14 @@ type ProviderCatalogEvent = Extract<SessionEvent, { type: "provider_catalog" }>;
 
 const isProviderCatalogEvent = (event: SessionEvent): event is ProviderCatalogEvent =>
   event.type === "provider_catalog";
+
+// Custom-model and model-preference writes go through `withFileLock`, which waits
+// up to FILE_LOCK_ACQUIRE_TIMEOUT_MS for the cross-process store lock before it
+// either writes+emits or throws. The mutation capture must outwait that (plus a
+// margin for the actual write and catalog emit), or it would time out mid-write
+// and drop the catalog the store later emits — leaving the UI showing stale
+// state for a change that actually landed once the lock was released.
+const PROVIDER_STORE_MUTATION_TIMEOUT_MS = FILE_LOCK_ACQUIRE_TIMEOUT_MS + 5_000;
 
 /**
  * Resolve a provider-catalog mutation to the catalog event the caller expects.
@@ -352,6 +361,7 @@ export function createProviderRouteHandlers(
         cwd,
         async (runtime) => await runtime.provider.addCustomModel(provider, modelId),
         isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
       );
       sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
@@ -373,6 +383,7 @@ export function createProviderRouteHandlers(
         cwd,
         async (runtime) => await runtime.provider.deleteCustomModel(provider, modelId),
         isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
       );
       sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
@@ -403,6 +414,7 @@ export function createProviderRouteHandlers(
         cwd,
         async (runtime) => await runtime.provider.setModelsEnabled(provider, models),
         isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
       );
       sendProviderCatalogMutationResult(context, ws, message.id, events);
     },
@@ -423,6 +435,7 @@ export function createProviderRouteHandlers(
         cwd,
         async (runtime) => await runtime.provider.resetModelPreferences(provider),
         isProviderCatalogEvent,
+        { timeoutMs: PROVIDER_STORE_MUTATION_TIMEOUT_MS },
       );
       sendProviderCatalogMutationResult(context, ws, message.id, events);
     },

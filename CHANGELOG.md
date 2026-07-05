@@ -4,6 +4,70 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.8 - 2026-07-05
+
+### Added
+
+- **Plugin-bundled skill management from plugin detail dialog** — Plugin-owned
+  skill installations no longer clutter the Skills tab (the tab count matches
+  installed user skills only); they are managed from the plugin's detail
+  dialog, which now renders proper display names instead of raw namespaced
+  ids, skill and plugin logos with monogram fallbacks, concise descriptions,
+  live per-skill enable switches wired to the existing installation toggle
+  routes, non-zero-only stat tiles, and humanized action labels.
+- **Tabbed Tool Access catalog with search** — Replaces the stacked
+  Plugins/Marketplace/Skills/Connectors/Search mega-list with a quiet tab bar
+  (Plugins, Skills, Connectors, Marketplace, flag-gated Apps, Search) showing
+  per-tab counts and an adaptive search input that filters the active catalog.
+  Mutation-error banners render under the tab bar so failures are visible from
+  any tab, and only the active category mounts. Adds quiet TabsList/TabsTrigger
+  primitives.
+- **Restored custom MCP servers and redesigned Connectors UI** — Custom MCP
+  servers could no longer be added when the selected workspace was a one-off
+  chat (or projects were ambiguous): the page hid the entire add/edit UI when
+  no project workspace resolved, and workspace-layer servers were read-only.
+  The page now anchors to any connected workspace, offers an "All projects" /
+  "Only this project" location choice when a project is in scope, and lets
+  users edit and remove both personal and project servers. The surface is
+  reframed for consumers as "Connectors" with a guided add dialog (remote URL
+  first, local command as advanced), human auth labels, personal/project
+  badges, test-connection wording, and namespaced tool ids shortened to plain
+  tool names.
+- **Feature-gated built-in task and memories skills** — The bundled task and
+  memories skills are backend services owned by task mode and advanced memory.
+  They are now only discoverable to agents (prompt, skill tool, slash
+  commands) while the owning feature is enabled, and they never appear in the
+  user-facing skill management catalog, so users cannot disable a service a
+  feature depends on. User/project skills sharing those names are unaffected.
+  Also refreshes `docs/mcp-guide.md`: corrects the `mcp-servers.json` schema,
+  replaces legacy method names with the `cowork/mcp/*` JSON-RPC methods, and
+  documents the future deferred tool exposure / tool search seam.
+
+### Fixed
+
+- **Tool access management anchored to chat workspaces, install errors
+  surfaced** — The plugin/skill catalog and its store mutations resolved
+  their target via the project-only workspace resolver, so chat-only users
+  saw a dead "Pick a workspace" state and marketplace installs silently
+  no-oped. A shared management resolver now falls back to the selected (or
+  any) workspace, project-scoped install/import targets hide for chat
+  anchors, and skill/plugin install failures render as dismissible banners
+  instead of vanishing into a swallowed promise rejection. Also restores the
+  real `addWorkspace` store action leaked by a settings-nav test, which broke
+  workspace-startup tests in full-suite runs.
+- **Back off failed default plugin bootstrap for 30 minutes** — A failed
+  default-plugin bootstrap (marketplace hash mismatch, GitHub rate limit)
+  used to retry on every workspace server start, re-downloading the full
+  plugin tree via the GitHub Contents API and exhausting the unauthenticated
+  rate limit — which then broke user-initiated skill and plugin installs.
+  Failures now persist to `~/.cowork/config/default-global-skills.failure.json`
+  and further attempts are skipped for 30 minutes (force bypasses; success
+  clears the record).
+- **Extended desktop release smoke turn startup timeout** — The desktop
+  smoke JSON-RPC helper now waits longer for `turn/start` during packaged
+  first-run startup while leaving ordinary helper requests on the short
+  default timeout, keeping the slower Windows ARM64 first-run path healthy.
+
 ## 1.2.7 - 2026-07-05
 
 ### Added

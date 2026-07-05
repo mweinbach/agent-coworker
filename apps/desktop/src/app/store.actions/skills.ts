@@ -14,6 +14,7 @@ import {
 import { isOneOffChatWorkspace } from "../types";
 import {
   clearFailedMutationSend,
+  dismissMutationError,
   managementWorkspaceIdFor,
   mutationPendingKey,
   refreshSharedWorkspaceState as refreshSharedWorkspaceStateFor,
@@ -41,6 +42,7 @@ export function createSkillActions(
   | "copySkillInstallation"
   | "checkSkillInstallationUpdate"
   | "updateSkillInstallation"
+  | "dismissSkillMutationError"
 > {
   const workspacePath = (workspaceId: string): string | undefined =>
     workspacePathFor(get, workspaceId);
@@ -107,6 +109,7 @@ export function createSkillActions(
             ...s.workspaceRuntimeById[workspaceId],
             skillCatalogLoading: true,
             skillCatalogError: null,
+            skillMutationError: null,
           },
         },
       }));
@@ -451,6 +454,10 @@ export function createSkillActions(
         { cwd, installationId },
       );
       if (!ok) return;
+    },
+
+    dismissSkillMutationError: (targetWorkspaceId?: string) => {
+      dismissMutationError(get, set, "skill", targetWorkspaceId);
     },
 
     updateSkillInstallation: async (installationId: string) => {

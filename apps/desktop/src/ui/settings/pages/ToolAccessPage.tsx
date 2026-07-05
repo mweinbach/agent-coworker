@@ -2,7 +2,7 @@ import { DownloadIcon, PackageIcon, RefreshCwIcon, SparklesIcon, StoreIcon } fro
 import { useEffect, useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
-import { resolveProjectWorkspaceId } from "../../../app/workspaceDisplayTargets";
+import { resolveManagementWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { Switch } from "../../../components/ui/switch";
@@ -65,6 +65,8 @@ export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string
   const disableSkillInstallation = useAppStore((s) => s.disableSkillInstallation);
   const installPlugins = useAppStore((s) => s.installPlugins);
   const installSkills = useAppStore((s) => s.installSkills);
+  const dismissPluginMutationError = useAppStore((s) => s.dismissPluginMutationError);
+  const dismissSkillMutationError = useAppStore((s) => s.dismissSkillMutationError);
 
   useEffect(() => {
     void refreshPluginsCatalog();
@@ -77,6 +79,8 @@ export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string
   const skillsLoading = runtime?.skillCatalogLoading ?? false;
   const pluginsError = runtime?.pluginsError ?? null;
   const skillsError = runtime?.skillCatalogError ?? null;
+  const pluginMutationError = runtime?.pluginMutationError ?? null;
+  const skillMutationError = runtime?.skillMutationError ?? null;
   const pluginPendingKeys = runtime?.pluginMutationPendingKeys ?? {};
   const skillPendingKeys = runtime?.skillMutationPendingKeys ?? {};
 
@@ -233,6 +237,36 @@ export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string
         title="Marketplace"
         description="Plugins and skills available to install from configured marketplaces."
       >
+        {pluginMutationError ? (
+          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+            <SettingsStatusPill tone="danger">Install failed</SettingsStatusPill>
+            <span className="min-w-0 flex-1 truncate text-xs text-destructive">
+              {pluginMutationError}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => dismissPluginMutationError(workspaceId)}
+            >
+              Dismiss
+            </Button>
+          </div>
+        ) : null}
+        {skillMutationError ? (
+          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+            <SettingsStatusPill tone="danger">Install failed</SettingsStatusPill>
+            <span className="min-w-0 flex-1 truncate text-xs text-destructive">
+              {skillMutationError}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => dismissSkillMutationError(workspaceId)}
+            >
+              Dismiss
+            </Button>
+          </div>
+        ) : null}
         <div className="px-4 py-3.5">
           {marketplaceLoading ? (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -275,7 +309,9 @@ export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string
                     className="self-start"
                     disabled={pluginInstallPending}
                     onClick={() =>
-                      void installPlugins(plugin.installSource, "user").catch(() => {})
+                      void installPlugins(plugin.installSource, "user").catch(() => {
+                        // Failures surface via the `pluginMutationError` banner above.
+                      })
                     }
                   >
                     <DownloadIcon data-icon="inline-start" />
@@ -309,7 +345,9 @@ export function ToolAccessCatalogSections({ workspaceId }: { workspaceId: string
                     className="self-start"
                     disabled={skillInstallPending}
                     onClick={() =>
-                      void installSkills(skill.installSource, "global").catch(() => {})
+                      void installSkills(skill.installSource, "global").catch(() => {
+                        // Failures surface via the `skillMutationError` banner above.
+                      })
                     }
                   >
                     <DownloadIcon data-icon="inline-start" />
@@ -437,7 +475,7 @@ export function useToolAccessCatalogWorkspaceId(): string | null {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   return useMemo(
-    () => resolveProjectWorkspaceId(workspaces, selectedWorkspaceId),
+    () => resolveManagementWorkspaceId(workspaces, selectedWorkspaceId),
     [workspaces, selectedWorkspaceId],
   );
 }

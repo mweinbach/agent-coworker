@@ -2,6 +2,7 @@ import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { isOneOffChatWorkspace } from "../../../app/types";
 import { Button } from "../../../components/ui/button";
 import {
   Dialog,
@@ -120,6 +121,12 @@ export function InstallSkillDialog({
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const previewSkillInstall = useAppStore((s) => s.previewSkillInstall);
   const installSkills = useAppStore((s) => s.installSkills);
+  const anchorWorkspace = useAppStore(
+    (s) => s.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,
+  );
+  // One-off chat anchors have no project directory, so only the global scope
+  // (~/.cowork/skills) is a valid install target.
+  const projectScopeAvailable = !isOneOffChatWorkspace(anchorWorkspace);
 
   const rt = wsRtById[workspaceId];
   const mutationBlocked = rt?.skillsMutationBlocked ?? false;
@@ -246,14 +253,16 @@ export function InstallSkillDialog({
             />
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handlePreview("project")}
-                  type="button"
-                >
-                  Preview in Workspace
-                </Button>
+                {projectScopeAvailable ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handlePreview("project")}
+                    type="button"
+                  >
+                    Preview in Workspace
+                  </Button>
+                ) : null}
                 <Button
                   variant="outline"
                   size="sm"
@@ -264,14 +273,16 @@ export function InstallSkillDialog({
                 </Button>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  disabled={disableInstallForScope("project")}
-                  onClick={() => void handleInstall("project")}
-                  type="button"
-                >
-                  Install to Workspace
-                </Button>
+                {projectScopeAvailable ? (
+                  <Button
+                    size="sm"
+                    disabled={disableInstallForScope("project")}
+                    onClick={() => void handleInstall("project")}
+                    type="button"
+                  >
+                    Install to Workspace
+                  </Button>
+                ) : null}
                 <Button
                   size="sm"
                   variant="secondary"
@@ -363,7 +374,7 @@ export function InstallSkillDialog({
                 {mutationBlockedReason}
               </div>
             ) : null}
-            {showPreview ? (
+            {showPreview && projectScopeAvailable ? (
               <div className="text-[11px] text-muted-foreground">
                 To install to{" "}
                 {lastPreviewTargetScope === "project" ? "Cowork Library" : "workspace"}, run a new

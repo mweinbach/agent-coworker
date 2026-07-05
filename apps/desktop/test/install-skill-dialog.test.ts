@@ -196,6 +196,63 @@ describe("install skill dialog", () => {
     ).toBe(false);
   });
 
+  test("install dialog hides project-scope targets for one-off chat anchors", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "New chat",
+          path: "/tmp/home/.cowork/chats/chat-1",
+          workspaceKind: "oneOffChat",
+          createdAt: "2026-03-30T00:00:00.000Z",
+          lastOpenedAt: "2026-03-30T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": defaultWorkspaceRuntime(),
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(
+          createElement(InstallSkillDialog, {
+            workspaceId: "ws-1",
+            initialOpen: true,
+          }),
+        );
+      });
+
+      const dialogText = harness.dom.window.document.body.textContent ?? "";
+      expect(dialogText).toContain("Install skill from source");
+      expect(dialogText).not.toContain("Preview in Workspace");
+      expect(dialogText).not.toContain("Install to Workspace");
+      expect(dialogText).toContain("Preview in Library");
+      expect(dialogText).toContain("Install to Cowork Library");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("install dialog renders skill previews and labels the source field", async () => {
     const previousState = useAppStore.getState();
     const preview = {

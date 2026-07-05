@@ -35,6 +35,25 @@ export function resolveProjectWorkspaceId(
   return projectWorkspaces.length === 1 ? (projectWorkspaces[0]?.id ?? null) : null;
 }
 
+/**
+ * Workspace anchor for management surfaces (plugin/skill/MCP catalogs and
+ * mutations). Prefers an unambiguous project workspace, but user/global-scoped
+ * management must stay available when only one-off chat workspaces exist, so
+ * it falls back to the selected workspace and then any workspace at all.
+ */
+export function resolveManagementWorkspaceId(
+  workspaces: Array<Pick<WorkspaceRecord, "id" | "workspaceKind">>,
+  selectedWorkspaceId: string | null,
+): string | null {
+  const projectWorkspaceId = resolveProjectWorkspaceId(workspaces, selectedWorkspaceId);
+  if (projectWorkspaceId) {
+    return projectWorkspaceId;
+  }
+  const selectedWorkspace =
+    workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null;
+  return selectedWorkspace?.id ?? workspaces[0]?.id ?? null;
+}
+
 export function resolveWorkspaceDisplayTargets(
   workspaces: WorkspaceRecord[],
   selectedWorkspaceId: string | null,

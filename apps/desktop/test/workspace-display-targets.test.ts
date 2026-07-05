@@ -4,6 +4,7 @@ import type { WorkspaceRecord } from "../src/app/types";
 import {
   CHATS_WORKSPACE_TARGET_ID,
   parentDirectoryPath,
+  resolveManagementWorkspaceId,
   resolveProjectWorkspaceId,
   resolveWorkspaceDisplayTargets,
   workspaceDisplayLabel,
@@ -94,6 +95,37 @@ describe("workspace display targets", () => {
     expect(resolveProjectWorkspaceId(workspaces, "chat-1")).toBeNull();
     expect(resolveProjectWorkspaceId([workspaces[0]], "chat-1")).toBeNull();
     expect(resolveProjectWorkspaceId([workspaces[0], workspaces[1]], "chat-1")).toBe("project-1");
+  });
+
+  test("management anchor falls back to a chat workspace when no project is unambiguous", () => {
+    const chat1 = workspace({
+      id: "chat-1",
+      name: "New chat",
+      path: "/tmp/home/.cowork/chats/chat-1",
+      workspaceKind: "oneOffChat",
+    });
+    const chat2 = workspace({
+      id: "chat-2",
+      name: "New chat",
+      path: "/tmp/home/.cowork/chats/chat-2",
+      workspaceKind: "oneOffChat",
+    });
+    const project1 = workspace({ id: "project-1", name: "Cowork", path: "/Users/me/Cowork" });
+    const project2 = workspace({ id: "project-2", name: "GoogleIO", path: "/Users/me/GoogleIO" });
+
+    // Unambiguous project resolution wins, matching resolveProjectWorkspaceId.
+    expect(resolveManagementWorkspaceId([chat1, project1, project2], "project-2")).toBe(
+      "project-2",
+    );
+    expect(resolveManagementWorkspaceId([chat1, project1], "chat-1")).toBe("project-1");
+
+    // Selected chat with zero or ambiguous projects anchors on the chat itself.
+    expect(resolveManagementWorkspaceId([chat1, chat2], "chat-2")).toBe("chat-2");
+    expect(resolveManagementWorkspaceId([chat1, project1, project2], "chat-1")).toBe("chat-1");
+
+    // No selection falls back to the first workspace; empty stays null.
+    expect(resolveManagementWorkspaceId([chat1, chat2], null)).toBe("chat-1");
+    expect(resolveManagementWorkspaceId([], null)).toBeNull();
   });
 
   test("labels one-off chat metadata as Chats", () => {

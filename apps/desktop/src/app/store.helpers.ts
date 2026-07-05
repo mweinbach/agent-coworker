@@ -440,6 +440,7 @@ export type AppStoreState = {
   deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   checkPluginUpdate: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
   updatePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  dismissPluginMutationError: (workspaceId?: string) => void;
   listImportable: (source: ImportSource, kind: ImportableKind) => Promise<void>;
   importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
   importSkill: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
@@ -459,6 +460,7 @@ export type AppStoreState = {
   ) => Promise<void>;
   checkSkillInstallationUpdate: (installationId: string) => Promise<void>;
   updateSkillInstallation: (installationId: string) => Promise<void>;
+  dismissSkillMutationError: (workspaceId?: string) => void;
 
   refreshResearchList: () => Promise<void>;
   selectResearch: (researchId: string | null) => Promise<void>;

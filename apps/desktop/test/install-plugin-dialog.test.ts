@@ -206,6 +206,73 @@ describe("install plugin dialog", () => {
     }
   });
 
+  test("new plugin dialog hides workspace-scope targets for one-off chat anchors", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    useAppStore.setState({
+      ...baseWorkspaceState(),
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "New chat",
+          path: "/tmp/home/.cowork/chats/chat-1",
+          workspaceKind: "oneOffChat",
+          createdAt: "2026-03-30T00:00:00.000Z",
+          lastOpenedAt: "2026-03-30T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      workspaceRuntimeById: {
+        [workspaceId]: defaultWorkspaceRuntime(),
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).attachEvent = () => {};
+      (
+        harness.dom.window.HTMLElement.prototype as {
+          attachEvent?: () => void;
+          detachEvent?: () => void;
+        }
+      ).detachEvent = () => {};
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(InstallPluginDialog, { workspaceId, initialOpen: true }));
+        await flushUi();
+      });
+
+      const dialogText = harness.dom.window.document.body.textContent ?? "";
+      expect(dialogText).toContain("Install plugin from source");
+      expect(dialogText).not.toContain("Preview in Workspace");
+      expect(dialogText).not.toContain("Install to Workspace");
+      expect(dialogText).toContain("Preview in Library");
+      expect(dialogText).toContain("Install to Library");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("new plugin dialog renders a single error banner for plugin mutation failures", async () => {
     const previousState = useAppStore.getState();
     let root: ReturnType<typeof createRoot> | null = null;

@@ -755,6 +755,9 @@ describe("settings nav (store)", () => {
   });
 
   test("openSkills does not add a workspace for ambiguous one-off chat targets", async () => {
+    // Zustand actions live in store state and the store module is shared
+    // across test files, so the real action must be restored afterwards.
+    const originalAddWorkspace = useAppStore.getState().addWorkspace;
     const addWorkspace = mock(async () => {});
     useAppStore.setState({
       desktopFeatureFlags: {
@@ -819,14 +822,18 @@ describe("settings nav (store)", () => {
       addWorkspace,
     });
 
-    await useAppStore.getState().openSkills();
-    const state = useAppStore.getState();
-    expect(state.view).toBe("settings");
-    expect(state.settingsPage).toBe("toolAccess");
-    expect(state.selectedWorkspaceId).toBe("chat-ws-1");
-    expect(state.selectedThreadId).toBe("chat-thread-1");
-    expect(state.notifications).toHaveLength(0);
-    expect(addWorkspace).not.toHaveBeenCalled();
+    try {
+      await useAppStore.getState().openSkills();
+      const state = useAppStore.getState();
+      expect(state.view).toBe("settings");
+      expect(state.settingsPage).toBe("toolAccess");
+      expect(state.selectedWorkspaceId).toBe("chat-ws-1");
+      expect(state.selectedThreadId).toBe("chat-thread-1");
+      expect(state.notifications).toHaveLength(0);
+      expect(addWorkspace).not.toHaveBeenCalled();
+    } finally {
+      useAppStore.setState({ addWorkspace: originalAddWorkspace });
+    }
   });
 
   test("openSkills asks for a workspace instead of opening empty Tool Access", async () => {

@@ -10,7 +10,7 @@ import {
   type StoreSet,
 } from "../store.helpers";
 import type { WorkspaceRuntime } from "../types";
-import { resolveProjectWorkspaceId } from "../workspaceDisplayTargets";
+import { resolveManagementWorkspaceId } from "../workspaceDisplayTargets";
 
 export type MutationDomain = "skill" | "plugin";
 
@@ -79,6 +79,32 @@ export function clearMutationPending(
   });
 }
 
+export function dismissMutationError(
+  get: StoreGet,
+  set: StoreSet,
+  domain: MutationDomain,
+  targetWorkspaceId?: string,
+): void {
+  const workspaceId = targetWorkspaceId ?? managementWorkspaceIdFor(get);
+  if (!workspaceId) return;
+  const errorField = mutationErrorField(domain);
+  set((s) => {
+    const runtime = s.workspaceRuntimeById[workspaceId];
+    if (!runtime || runtime[errorField] === null) {
+      return {};
+    }
+    return {
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...runtime,
+          [errorField]: null,
+        },
+      },
+    };
+  });
+}
+
 export const workspacePathFor = (get: StoreGet, workspaceId: string): string | undefined =>
   ((get() as { workspaces?: Array<{ id: string; path: string }> }).workspaces ?? []).find(
     (workspace) => workspace.id === workspaceId,
@@ -86,7 +112,7 @@ export const workspacePathFor = (get: StoreGet, workspaceId: string): string | u
 
 export const managementWorkspaceIdFor = (get: StoreGet): string | null => {
   const state = get();
-  return resolveProjectWorkspaceId(state.workspaces ?? [], state.selectedWorkspaceId);
+  return resolveManagementWorkspaceId(state.workspaces ?? [], state.selectedWorkspaceId);
 };
 
 export function clearFailedMutationSend(

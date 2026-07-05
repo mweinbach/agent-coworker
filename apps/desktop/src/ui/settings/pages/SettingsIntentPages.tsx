@@ -43,8 +43,8 @@ export function ToolAccessSettingsPage() {
       ) : (
         <SettingsEmptyState
           icon={<PackageIcon />}
-          title="Pick a workspace"
-          description="Select a workspace to load plugin, skill, and MCP server catalogs."
+          title="No workspaces yet"
+          description="Add a project or start a chat first to load plugin, skill, and MCP server catalogs."
         />
       )}
       <McpServersPage />

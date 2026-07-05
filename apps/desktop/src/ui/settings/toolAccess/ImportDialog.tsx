@@ -9,6 +9,7 @@ import {
 import { useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { isOneOffChatWorkspace } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -83,12 +84,14 @@ function ImportItemCard({
   kind,
   globalPending,
   workspacePending,
+  workspaceScopeAvailable,
   onImport,
 }: {
   item: ImportableItem;
   kind: ImportableKind;
   globalPending: boolean;
   workspacePending: boolean;
+  workspaceScopeAvailable: boolean;
   onImport: (item: ImportableItem, targetScope: "workspace" | "user") => void;
 }) {
   const hasDiagnostics = item.diagnostics.length > 0;
@@ -148,16 +151,18 @@ function ImportItemCard({
             {globalPending ? <Spinner className="mr-1.5 h-3.5 w-3.5" /> : null}
             {item.alreadyInstalledGlobal ? "In Global" : "Import to Global"}
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            type="button"
-            disabled={item.alreadyInstalledWorkspace || workspacePending}
-            onClick={() => onImport(item, "workspace")}
-          >
-            {workspacePending ? <Spinner className="mr-1.5 h-3.5 w-3.5" /> : null}
-            {item.alreadyInstalledWorkspace ? "In Workspace" : "Import to Workspace"}
-          </Button>
+          {workspaceScopeAvailable ? (
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={item.alreadyInstalledWorkspace || workspacePending}
+              onClick={() => onImport(item, "workspace")}
+            >
+              {workspacePending ? <Spinner className="mr-1.5 h-3.5 w-3.5" /> : null}
+              {item.alreadyInstalledWorkspace ? "In Workspace" : "Import to Workspace"}
+            </Button>
+          ) : null}
         </div>
       )}
     </div>
@@ -165,7 +170,13 @@ function ImportItemCard({
 }
 
 /** Pick a local folder and copy its bundle into Global or Workspace. */
-function FolderImportPanel({ kind }: { kind: ImportableKind }) {
+function FolderImportPanel({
+  kind,
+  workspaceScopeAvailable,
+}: {
+  kind: ImportableKind;
+  workspaceScopeAvailable: boolean;
+}) {
   const installSkills = useAppStore((state) => state.installSkills);
   const installPlugins = useAppStore((state) => state.installPlugins);
   const [folderPath, setFolderPath] = useState<string | null>(null);
@@ -252,16 +263,18 @@ function FolderImportPanel({ kind }: { kind: ImportableKind }) {
               {busyScope === "user" ? <Spinner className="mr-1.5 h-3.5 w-3.5" /> : null}
               Import to Global
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              type="button"
-              disabled={busyScope !== null}
-              onClick={() => void doImport("workspace")}
-            >
-              {busyScope === "workspace" ? <Spinner className="mr-1.5 h-3.5 w-3.5" /> : null}
-              Import to Workspace
-            </Button>
+            {workspaceScopeAvailable ? (
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                disabled={busyScope !== null}
+                onClick={() => void doImport("workspace")}
+              >
+                {busyScope === "workspace" ? <Spinner className="mr-1.5 h-3.5 w-3.5" /> : null}
+                Import to Workspace
+              </Button>
+            ) : null}
           </div>
         </div>
       ) : (
@@ -298,6 +311,12 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
   const listImportable = useAppStore((state) => state.listImportable);
   const importPlugin = useAppStore((state) => state.importPlugin);
   const importSkill = useAppStore((state) => state.importSkill);
+  const anchorWorkspace = useAppStore(
+    (state) => state.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,
+  );
+  // One-off chat anchors have no project directory, so imports can only
+  // target the Global (user) scope.
+  const workspaceScopeAvailable = !isOneOffChatWorkspace(anchorWorkspace);
 
   const homeSource: ImportSource | null = tab === "folder" ? null : tab;
   const state = homeSource
@@ -359,7 +378,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
 
           <div className="flex-1 overflow-y-auto px-6 py-4">
             {tab === "folder" ? (
-              <FolderImportPanel kind={kind} />
+              <FolderImportPanel kind={kind} workspaceScopeAvailable={workspaceScopeAvailable} />
             ) : isLoading ? (
               <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
                 <Spinner /> Scanning {SOURCE_LABELS[tab]}…
@@ -401,6 +420,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
                     kind={kind}
                     globalPending={pendingKeys[itemPendingKey(item, "user")] === true}
                     workspacePending={pendingKeys[itemPendingKey(item, "workspace")] === true}
+                    workspaceScopeAvailable={workspaceScopeAvailable}
                     onImport={onImport}
                   />
                 ))}

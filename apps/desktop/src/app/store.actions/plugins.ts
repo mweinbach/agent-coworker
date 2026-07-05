@@ -15,6 +15,7 @@ import {
 import {
   clearFailedMutationSend,
   clearMutationPending,
+  dismissMutationError,
   managementWorkspaceIdFor,
   mutationPendingKey,
   refreshSharedWorkspaceState,
@@ -46,6 +47,7 @@ export function createPluginActions(
   | "deletePlugin"
   | "checkPluginUpdate"
   | "updatePlugin"
+  | "dismissPluginMutationError"
 > {
   const resolvePluginScopeForMutation = (
     workspaceId: string,
@@ -143,6 +145,7 @@ export function createPluginActions(
             ...s.workspaceRuntimeById[workspaceId],
             pluginsLoading: true,
             pluginsError: null,
+            pluginMutationError: null,
           },
         },
       }));
@@ -353,6 +356,10 @@ export function createPluginActions(
 
     deletePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
       await runPluginMutation("delete", pluginId, scope);
+    },
+
+    dismissPluginMutationError: (targetWorkspaceId?: string) => {
+      dismissMutationError(get, set, "plugin", targetWorkspaceId);
     },
 
     checkPluginUpdate: async (pluginId: string, scope?: PluginSelection["scope"]) => {

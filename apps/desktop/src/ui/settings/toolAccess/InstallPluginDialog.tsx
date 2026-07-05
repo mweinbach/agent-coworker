@@ -2,6 +2,7 @@ import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { isOneOffChatWorkspace } from "../../../app/types";
 import { Button } from "../../../components/ui/button";
 import {
   Dialog,
@@ -113,6 +114,12 @@ export function InstallPluginDialog({
   const runtime = useAppStore((state) => state.workspaceRuntimeById[workspaceId]);
   const previewPluginInstall = useAppStore((state) => state.previewPluginInstall);
   const installPlugins = useAppStore((state) => state.installPlugins);
+  const anchorWorkspace = useAppStore(
+    (state) => state.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,
+  );
+  // One-off chat anchors have no project directory, so only the user scope
+  // (~/.cowork/plugins) is a valid install target.
+  const workspaceScopeAvailable = !isOneOffChatWorkspace(anchorWorkspace);
 
   const pluginPreview = runtime?.selectedPluginPreview ?? null;
   const pluginInstallInFlight = Object.keys(runtime?.pluginMutationPendingKeys ?? {}).some((key) =>
@@ -236,14 +243,16 @@ export function InstallPluginDialog({
             />
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handlePreview("workspace")}
-                  type="button"
-                >
-                  Preview in Workspace
-                </Button>
+                {workspaceScopeAvailable ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handlePreview("workspace")}
+                    type="button"
+                  >
+                    Preview in Workspace
+                  </Button>
+                ) : null}
                 <Button
                   variant="outline"
                   size="sm"
@@ -254,14 +263,16 @@ export function InstallPluginDialog({
                 </Button>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  disabled={disableInstallForScope("workspace")}
-                  onClick={() => void handleInstall("workspace")}
-                  type="button"
-                >
-                  Install to Workspace
-                </Button>
+                {workspaceScopeAvailable ? (
+                  <Button
+                    size="sm"
+                    disabled={disableInstallForScope("workspace")}
+                    onClick={() => void handleInstall("workspace")}
+                    type="button"
+                  >
+                    Install to Workspace
+                  </Button>
+                ) : null}
                 <Button
                   size="sm"
                   variant="secondary"
@@ -350,7 +361,7 @@ export function InstallPluginDialog({
                 {lastMutationTargetScope === "workspace" ? "workspace" : "library"}.
               </div>
             ) : null}
-            {showPreview ? (
+            {showPreview && workspaceScopeAvailable ? (
               <div className="text-[11px] text-muted-foreground">
                 To install to {lastPreviewTargetScope === "workspace" ? "library" : "workspace"},
                 run a new preview for that scope first.

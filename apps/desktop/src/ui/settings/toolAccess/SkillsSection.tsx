@@ -51,15 +51,18 @@ export function SkillsSection({
   const skillsError = runtime?.skillCatalogError ?? null;
   const skillPendingKeys = runtime?.skillMutationPendingKeys ?? {};
 
+  // Plugin-owned installations are managed from the plugin's detail dialog.
   const skillInstallations = useMemo(() => {
-    return [...(skillsCatalog?.installations ?? [])].sort((left, right) => {
-      const leftActive = left.state === "effective" ? 0 : 1;
-      const rightActive = right.state === "effective" ? 0 : 1;
-      if (leftActive !== rightActive) return leftActive - rightActive;
-      return `${left.name}:${left.scope}:${left.installationId}`.localeCompare(
-        `${right.name}:${right.scope}:${right.installationId}`,
-      );
-    });
+    return (skillsCatalog?.installations ?? [])
+      .filter((installation) => !installation.plugin)
+      .sort((left, right) => {
+        const leftActive = left.state === "effective" ? 0 : 1;
+        const rightActive = right.state === "effective" ? 0 : 1;
+        if (leftActive !== rightActive) return leftActive - rightActive;
+        return `${left.name}:${left.scope}:${left.installationId}`.localeCompare(
+          `${right.name}:${right.scope}:${right.installationId}`,
+        );
+      });
   }, [skillsCatalog]);
 
   const normalizedQuery = filterQuery.trim().toLowerCase();
@@ -83,7 +86,7 @@ export function SkillsSection({
     <>
       <SettingsSection
         title="Skills"
-        description="Installed skills across workspace, library, and plugin scopes. Click a skill for details, updates, and removal."
+        description="Skills installed in this project or your library. Skills bundled by plugins are managed from the plugin."
         action={
           <>
             <Button
@@ -132,7 +135,7 @@ export function SkillsSection({
           visibleInstallations.map((installation) => {
             const displayName = installation.interface?.displayName || installation.name;
             const togglePending = skillTogglePending(installation);
-            const canToggle = installation.writable && !installation.plugin;
+            const canToggle = installation.writable;
             return (
               <div
                 key={installation.installationId}
@@ -165,7 +168,6 @@ export function SkillsSection({
                     </span>
                     <span className="mt-0.5 block text-xs text-muted-foreground">
                       {scopeLabel(installation.scope)}
-                      {installation.plugin ? ` · ${installation.plugin.displayName}` : ""}
                       {!installation.writable ? " · Read-only" : ""}
                     </span>
                   </span>

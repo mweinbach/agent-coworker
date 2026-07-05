@@ -110,7 +110,11 @@ export function ToolAccessTabs() {
   // countless instead of flashing a misleading zero.
   const tabCounts: Record<ToolAccessTabId, number | null> = {
     plugins: pluginsCatalog ? pluginsCatalog.plugins.length : null,
-    skills: skillsCatalog ? skillsCatalog.installations.length : null,
+    // Plugin-owned skill installations are managed from the plugin detail
+    // dialog, so the Skills tab only counts standalone installations.
+    skills: skillsCatalog
+      ? skillsCatalog.installations.filter((installation) => !installation.plugin).length
+      : null,
     connectors: mcpServerCount > 0 ? mcpServerCount : null,
     marketplace:
       pluginsCatalog && skillsCatalog

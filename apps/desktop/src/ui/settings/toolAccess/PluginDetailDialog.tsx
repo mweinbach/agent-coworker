@@ -1,4 +1,4 @@
-import { ExternalLinkIcon, PackageIcon } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
@@ -11,8 +11,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../../components/ui/dialog";
+import { Switch } from "../../../components/ui/switch";
 import { confirmAction, revealPath } from "../../../lib/desktopCommands";
-import { isInstalledPluginCatalogEntry } from "../../../lib/wsProtocol";
+import {
+  isInstalledPluginCatalogEntry,
+  type SkillInstallationEntry,
+} from "../../../lib/wsProtocol";
+import { EntityIcon, SettingsStatTile } from "../SettingsPrimitives";
+import { pluginIcon, pluginSkillDisplayName, skillIcon } from "./catalogShared";
 import { actionPending } from "./skillUtils";
 
 function pluginScopeLabel(scope: "workspace" | "user"): string {
@@ -32,15 +38,42 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
   const deletePlugin = useAppStore((s) => s.deletePlugin);
   const checkPluginUpdate = useAppStore((s) => s.checkPluginUpdate);
   const updatePlugin = useAppStore((s) => s.updatePlugin);
+  const enableSkillInstallation = useAppStore((s) => s.enableSkillInstallation);
+  const disableSkillInstallation = useAppStore((s) => s.disableSkillInstallation);
 
   const plugin = runtime?.selectedPlugin ?? null;
   const pluginId = runtime?.selectedPluginId ?? null;
   const pluginsLoading = runtime?.pluginsLoading ?? false;
+  const skillsCatalog = runtime?.skillsCatalog ?? null;
+  const skillPendingKeys = runtime?.skillMutationPendingKeys ?? {};
 
   const installedPlugin = plugin && isInstalledPluginCatalogEntry(plugin) ? plugin : null;
   const skillCount = installedPlugin?.skills.length ?? 0;
   const mcpCount = installedPlugin?.mcpServers.length ?? 0;
   const appCount = installedPlugin?.apps.length ?? 0;
+  const statTiles = [
+    { label: "Skills", value: skillCount },
+    { label: "MCP Servers", value: mcpCount },
+    { label: "Apps", value: appCount },
+  ].filter((stat) => stat.value > 0);
+
+  // The skills catalog is the toggle source of truth: plugin-owned skill
+  // installations carry the plugin's namespaced skill name plus a `plugin`
+  // owner with the plugin id and scope (see src/skills/catalog.ts).
+  const skillInstallationsByName = useMemo(() => {
+    const byName = new Map<string, SkillInstallationEntry>();
+    if (!installedPlugin) return byName;
+    for (const installation of skillsCatalog?.installations ?? []) {
+      if (installation.plugin?.pluginId !== installedPlugin.id) continue;
+      if (installation.plugin.scope !== installedPlugin.scope) continue;
+      byName.set(installation.name, installation);
+    }
+    return byName;
+  }, [installedPlugin, skillsCatalog]);
+
+  const skillTogglePending = (installationId: string) =>
+    skillPendingKeys[`enable:${installationId}`] === true ||
+    skillPendingKeys[`disable:${installationId}`] === true;
 
   const marketLabel = useMemo(() => {
     if (!plugin?.marketplace) return null;
@@ -128,9 +161,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               <DialogHeader className="space-y-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border/50 bg-muted/40 text-foreground">
-                      <PackageIcon className="h-6 w-6" />
-                    </div>
+                    <EntityIcon src={pluginIcon(plugin)} name={plugin.displayName} size="lg" />
                     <div className="space-y-1">
                       <DialogTitle className="text-xl">{plugin.displayName}</DialogTitle>
                       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -197,49 +228,51 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                 </div>
               ) : null}
 
-              {installedPlugin ? (
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="rounded-lg border border-border/60 bg-muted/15 p-4">
-                    <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                      Skills
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold">{skillCount}</div>
-                  </div>
-                  <div className="rounded-lg border border-border/60 bg-muted/15 p-4">
-                    <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                      MCP Servers
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold">{mcpCount}</div>
-                  </div>
-                  <div className="rounded-lg border border-border/60 bg-muted/15 p-4">
-                    <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                      Apps
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold">{appCount}</div>
-                  </div>
+              {installedPlugin && statTiles.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {statTiles.map((stat) => (
+                    <SettingsStatTile key={stat.label} label={stat.label} value={stat.value} />
+                  ))}
                 </div>
               ) : null}
 
               {installedPlugin && installedPlugin.skills.length > 0 ? (
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold">Bundled Skills</h3>
-                  <div className="space-y-2">
-                    {installedPlugin.skills.map((skill) => (
-                      <div
-                        key={skill.name}
-                        className="rounded-lg border border-border/60 bg-muted/10 px-3 py-2"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-medium">{skill.name}</div>
-                            <div className="text-xs text-muted-foreground">{skill.description}</div>
+                  <div className="divide-y divide-border/30 overflow-hidden rounded-lg border border-border/60 bg-card/85">
+                    {installedPlugin.skills.map((skill) => {
+                      const displayName = pluginSkillDisplayName(installedPlugin.id, skill);
+                      const installation = skillInstallationsByName.get(skill.name) ?? null;
+                      const togglePending = installation
+                        ? skillTogglePending(installation.installationId)
+                        : false;
+                      return (
+                        <div key={skill.name} className="flex items-center gap-3 px-4 py-3">
+                          <EntityIcon src={skillIcon(skill)} name={displayName} />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium text-foreground">
+                              {displayName}
+                            </div>
+                            <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                              {skill.interface?.shortDescription || skill.description}
+                            </div>
                           </div>
-                          <Badge variant={skill.enabled ? "default" : "secondary"}>
-                            {skill.enabled ? "Enabled" : "Disabled"}
-                          </Badge>
+                          <Switch
+                            checked={installation?.enabled ?? skill.enabled}
+                            disabled={installation === null || togglePending}
+                            aria-label={`Enable ${displayName}`}
+                            onCheckedChange={(enabled) => {
+                              if (!installation) return;
+                              if (enabled) {
+                                void enableSkillInstallation(installation.installationId);
+                              } else {
+                                void disableSkillInstallation(installation.installationId);
+                              }
+                            }}
+                          />
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </section>
               ) : null}
@@ -299,7 +332,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                       void handleInstallPlugin(plugin.installSource ?? "", plugin.scope)
                     }
                   >
-                    {installPending ? "Installing..." : "Install Plugin"}
+                    {installPending ? "Installing..." : "Install plugin"}
                   </Button>
                 ) : installedPlugin?.enabled ? (
                   <Button
@@ -308,7 +341,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={disablePending}
                     onClick={() => void disablePlugin(plugin.id, plugin.scope)}
                   >
-                    {disablePending ? "Disabling..." : "Disable Plugin"}
+                    {disablePending ? "Disabling..." : "Disable plugin"}
                   </Button>
                 ) : installedPlugin ? (
                   <Button
@@ -317,7 +350,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={enablePending}
                     onClick={() => void enablePlugin(plugin.id, plugin.scope)}
                   >
-                    {enablePending ? "Enabling..." : "Enable Plugin"}
+                    {enablePending ? "Enabling..." : "Enable plugin"}
                   </Button>
                 ) : null}
                 {installedPlugin?.installSource ? (
@@ -327,7 +360,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={checkUpdatePending}
                     onClick={() => void handleCheckPluginUpdate(plugin.id, plugin.scope)}
                   >
-                    {checkUpdatePending ? "Checking..." : "Check Update"}
+                    {checkUpdatePending ? "Checking..." : "Check for updates"}
                   </Button>
                 ) : null}
                 {installedPlugin?.installSource && installedPlugin.updateAvailable ? (
@@ -337,7 +370,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={installPending || updatePending}
                     onClick={() => void handleUpdatePlugin(plugin.id, plugin.scope)}
                   >
-                    {updatePending ? "Updating..." : "Update Plugin"}
+                    {updatePending ? "Updating..." : "Update plugin"}
                   </Button>
                 ) : null}
                 {installedPlugin ? (
@@ -347,11 +380,11 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={deletePending}
                     onClick={async () => {
                       const confirmed = await confirmAction({
-                        title: "Delete plugin",
-                        message: `Delete ${plugin.displayName}? This removes the plugin and its bundled skills from this scope.`,
+                        title: "Remove plugin",
+                        message: `Remove ${plugin.displayName}? This removes the plugin and its bundled skills from this scope.`,
                         detail: plugin.id,
                         kind: "warning",
-                        confirmLabel: "Delete Plugin",
+                        confirmLabel: "Remove plugin",
                         cancelLabel: "Cancel",
                         defaultAction: "cancel",
                       });
@@ -359,7 +392,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                       void deletePlugin(plugin.id, plugin.scope);
                     }}
                   >
-                    {deletePending ? "Deleting..." : "Delete Plugin"}
+                    {deletePending ? "Removing..." : "Remove plugin"}
                   </Button>
                 ) : null}
               </div>

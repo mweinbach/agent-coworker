@@ -94,6 +94,24 @@ function skillInstallation(installationId: string, name: string): SkillInstallat
   };
 }
 
+function pluginSkillInstallation(pluginId: string, rawName: string): SkillInstallationEntry {
+  return {
+    ...skillInstallation(`plugin:user:${pluginId}:${rawName}`, `${pluginId}:${rawName}`),
+    writable: false,
+    managed: false,
+    effective: false,
+    state: "shadowed",
+    plugin: {
+      pluginId,
+      name: pluginId,
+      displayName: "Workspace Tools",
+      scope: "user",
+      discoveryKind: "marketplace",
+      rootDir: `/tmp/plugins/${pluginId}`,
+    },
+  };
+}
+
 function marketplaceSkill(id: string, displayName: string): MarketplaceSkillEntry {
   return {
     id,
@@ -330,6 +348,72 @@ describe("tool access tabs", () => {
       });
 
       expect(findTab(harness, "Apps")).toBeDefined();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("skills tab excludes plugin-owned installations from the count and list", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            plugins: [installedPlugin("workspace-tools", "Workspace Tools")],
+            availablePlugins: [],
+            warnings: [],
+          },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [
+              skillInstallation("skill-1", "skill-one"),
+              pluginSkillInstallation("workspace-tools", "documents"),
+              pluginSkillInstallation("workspace-tools", "presentations"),
+            ],
+            availableSkills: [],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      // Plugin-owned installations are managed from the plugin detail dialog,
+      // so the tab count only reflects the standalone installation.
+      expect(findTab(harness, "Skills").textContent).toBe("Skills1");
+
+      await selectTab(harness, "Skills");
+
+      const bodyText = harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText).toContain("skill-one");
+      expect(bodyText).not.toContain("workspace-tools:documents");
+      expect(bodyText).not.toContain("workspace-tools:presentations");
     } finally {
       if (root) {
         await act(async () => {

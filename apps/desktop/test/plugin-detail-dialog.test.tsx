@@ -189,7 +189,7 @@ describe("plugin detail dialog", () => {
       });
 
       const enableButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("Enable Plugin"),
+        (button) => button.textContent?.includes("Enable plugin"),
       );
       if (!(enableButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing enable plugin button");
@@ -204,11 +204,167 @@ describe("plugin detail dialog", () => {
       expect(disablePluginMock).not.toHaveBeenCalled();
       const pageText = harness.dom.window.document.body.textContent ?? "";
       expect(pageText).toContain("Bundled Skills");
-      expect(pageText).toContain("workspace-tools:documents");
-      expect(pageText).toContain("workspace-tools:presentations");
-      expect(pageText).toContain("workspace-tools:spreadsheets");
+      // Namespaced skill ids render as prettified display names.
+      expect(pageText).toContain("Documents");
+      expect(pageText).toContain("Presentations");
+      expect(pageText).toContain("Spreadsheets");
+      expect(pageText).not.toContain("workspace-tools:documents");
       expect(pageText).toContain("Bundled MCP Servers");
       expect(pageText).toContain("Bundled Apps");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("wires bundled skill switches to skill installation toggles", async () => {
+    const enableSkillInstallationMock = mock(async (_installationId: string) => {});
+    const disableSkillInstallationMock = mock(async (_installationId: string) => {});
+    const previousState = useAppStore.getState();
+
+    const pluginOwner = {
+      pluginId: "workspace-tools",
+      name: "workspace-tools",
+      displayName: "Workspace Tools",
+      scope: "workspace",
+      discoveryKind: "marketplace",
+      rootDir: "/tmp/workspace/.agents/plugins/workspace-tools",
+    };
+    const skillInstallation = (rawName: string, enabled: boolean) => ({
+      installationId: `plugin:workspace:workspace-tools:${rawName}`,
+      name: `workspace-tools:${rawName}`,
+      description: `Create ${rawName}`,
+      scope: "project",
+      enabled,
+      writable: false,
+      managed: false,
+      effective: false,
+      state: enabled ? "shadowed" : "disabled",
+      rootDir: `/tmp/workspace/.agents/plugins/workspace-tools/skills/${rawName}`,
+      skillPath: `/tmp/workspace/.agents/plugins/workspace-tools/skills/${rawName}/SKILL.md`,
+      path: `/tmp/workspace/.agents/plugins/workspace-tools/skills/${rawName}`,
+      triggers: [],
+      descriptionSource: "frontmatter",
+      diagnostics: [],
+      plugin: pluginOwner,
+    });
+
+    useAppStore.setState({
+      ...previousState,
+      enableSkillInstallation:
+        enableSkillInstallationMock as typeof previousState.enableSkillInstallation,
+      disableSkillInstallation:
+        disableSkillInstallationMock as typeof previousState.disableSkillInstallation,
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          selectedPluginId: "workspace-tools",
+          selectedPluginScope: "workspace",
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [
+              skillInstallation("documents", true),
+              skillInstallation("presentations", false),
+            ],
+            availableSkills: [],
+          },
+          selectedPlugin: {
+            id: "workspace-tools",
+            name: "workspace-tools",
+            displayName: "Workspace Tools",
+            description: "Create and edit workspace artifacts.",
+            scope: "workspace",
+            discoveryKind: "marketplace",
+            installed: true,
+            enabled: true,
+            rootDir: "/tmp/workspace/.agents/plugins/workspace-tools",
+            manifestPath:
+              "/tmp/workspace/.agents/plugins/workspace-tools/.codex-plugin/plugin.json",
+            skillsPath: "/tmp/workspace/.agents/plugins/workspace-tools/skills",
+            skills: [
+              {
+                name: "workspace-tools:documents",
+                rawName: "documents",
+                description: "Create documents",
+                enabled: true,
+              },
+              {
+                name: "workspace-tools:presentations",
+                rawName: "presentations",
+                description: "Create presentations",
+                enabled: false,
+              },
+              {
+                name: "workspace-tools:orphaned-skill",
+                rawName: "orphaned-skill",
+                description: "No catalog installation",
+                enabled: true,
+              },
+            ],
+            mcpServers: [],
+            apps: [],
+            warnings: [],
+          },
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginDetailDialog, { workspaceId: "ws-1" }));
+      });
+
+      const findSwitch = (label: string) => {
+        const el = harness.dom.window.document.querySelector(
+          `[role="switch"][aria-label="${label}"]`,
+        );
+        if (!(el instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error(`missing switch ${label}`);
+        }
+        return el;
+      };
+
+      const documentsSwitch = findSwitch("Enable Documents");
+      expect(documentsSwitch.getAttribute("aria-checked")).toBe("true");
+      await act(async () => {
+        documentsSwitch.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+      expect(disableSkillInstallationMock).toHaveBeenCalledWith(
+        "plugin:workspace:workspace-tools:documents",
+      );
+
+      const presentationsSwitch = findSwitch("Enable Presentations");
+      expect(presentationsSwitch.getAttribute("aria-checked")).toBe("false");
+      await act(async () => {
+        presentationsSwitch.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+      expect(enableSkillInstallationMock).toHaveBeenCalledWith(
+        "plugin:workspace:workspace-tools:presentations",
+      );
+
+      // Skills without a matching catalog installation render a disabled switch.
+      const orphanSwitch = findSwitch("Enable Orphaned Skill");
+      expect(orphanSwitch.hasAttribute("disabled")).toBe(true);
     } finally {
       if (root) {
         await act(async () => {
@@ -288,7 +444,7 @@ describe("plugin detail dialog", () => {
   test("handles rejected install and update actions from detail buttons", async () => {
     const scenarios = [
       {
-        buttonText: "Install Plugin",
+        buttonText: "Install plugin",
         action: "install" as const,
         plugin: {
           id: "marketplace-tools",
@@ -309,7 +465,7 @@ describe("plugin detail dialog", () => {
         },
       },
       {
-        buttonText: "Update Plugin",
+        buttonText: "Update plugin",
         action: "update" as const,
         plugin: {
           id: "marketplace-tools",
@@ -464,10 +620,12 @@ describe("plugin detail dialog", () => {
       });
 
       const buttons = Array.from(harness.dom.window.document.querySelectorAll("button"));
-      expect(buttons.some((button) => button.textContent?.includes("Update Plugin"))).toBe(false);
-      const checkButton = buttons.find((button) => button.textContent?.includes("Check Update"));
+      expect(buttons.some((button) => button.textContent?.includes("Update plugin"))).toBe(false);
+      const checkButton = buttons.find((button) =>
+        button.textContent?.includes("Check for updates"),
+      );
       if (!(checkButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing Check Update button");
+        throw new Error("missing Check for updates button");
       }
 
       await act(async () => {
@@ -535,9 +693,9 @@ describe("plugin detail dialog", () => {
 
       const pageText = harness.dom.window.document.body.textContent ?? "";
       expect(pageText).toContain("Catalog Only");
-      expect(pageText).not.toContain("Install Plugin");
-      expect(pageText).not.toContain("Enable Plugin");
-      expect(pageText).not.toContain("Disable Plugin");
+      expect(pageText).not.toContain("Install plugin");
+      expect(pageText).not.toContain("Enable plugin");
+      expect(pageText).not.toContain("Disable plugin");
     } finally {
       if (root) {
         await act(async () => {

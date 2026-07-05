@@ -12,9 +12,11 @@ import {
   SettingsSection,
   SettingsStatusPill,
 } from "../SettingsPrimitives";
+import { AddMarketplaceDialog } from "./AddMarketplaceDialog";
 import { matchesQuery, NoMatchesState, skillIcon } from "./catalogShared";
 import { ImportDialog } from "./ImportDialog";
 import { InstallSkillDialog } from "./InstallSkillDialog";
+import { AvailableSkillsGrid, MarketplaceSourcesList } from "./marketplaceCatalog";
 import { SkillDetailDialog } from "./SkillDetailDialog";
 import { scopeLabel } from "./skillUtils";
 
@@ -83,7 +85,7 @@ export function SkillsSection({
     skillPendingKeys[`disable:${installation.installationId}`] === true;
 
   return (
-    <>
+    <div className="flex flex-col gap-5">
       <SettingsSection
         title="Skills"
         description="Skills installed in this project or your library. Skills bundled by plugins are managed from the plugin."
@@ -189,7 +191,15 @@ export function SkillsSection({
           })
         )}
       </SettingsSection>
+      <SettingsSection
+        title="Marketplace"
+        description="Skills available to install from your marketplaces."
+        action={<AddMarketplaceDialog workspaceId={workspaceId} />}
+      >
+        <AvailableSkillsGrid workspaceId={workspaceId} filterQuery={filterQuery} />
+      </SettingsSection>
+      <MarketplaceSourcesList workspaceId={workspaceId} />
       <SkillDetailDialog workspaceId={workspaceId} />
-    </>
+    </div>
   );
 }

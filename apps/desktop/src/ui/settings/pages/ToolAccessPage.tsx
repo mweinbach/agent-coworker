@@ -8,7 +8,6 @@ import { Input } from "../../../components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
 import { SettingsEmptyState, SettingsStatusPill } from "../SettingsPrimitives";
-import { MarketplaceSection } from "../toolAccess/MarketplaceSection";
 import { PluginsSection } from "../toolAccess/PluginsSection";
 import { SkillsSection } from "../toolAccess/SkillsSection";
 import { McpServersPage } from "./McpServersPage";
@@ -16,14 +15,7 @@ import { OpenAiNativeConnectorsPage } from "./OpenAiNativeConnectorsPage";
 import { ProvidersPage } from "./ProvidersPage";
 import { SearchSettingsCard } from "./WorkspacesPage";
 
-const TOOL_ACCESS_TAB_IDS = [
-  "plugins",
-  "skills",
-  "connectors",
-  "marketplace",
-  "apps",
-  "search",
-] as const;
+const TOOL_ACCESS_TAB_IDS = ["plugins", "skills", "connectors", "apps", "search"] as const;
 
 type ToolAccessTabId = (typeof TOOL_ACCESS_TAB_IDS)[number];
 
@@ -36,7 +28,6 @@ const TAB_SEARCH_PLACEHOLDER: Record<ToolAccessTabId, string | null> = {
   plugins: "Search plugins…",
   skills: "Search skills…",
   connectors: "Search connectors…",
-  marketplace: "Search marketplace…",
   apps: null,
   search: null,
 };
@@ -116,10 +107,6 @@ export function ToolAccessTabs() {
       ? skillsCatalog.installations.filter((installation) => !installation.plugin).length
       : null,
     connectors: mcpServerCount > 0 ? mcpServerCount : null,
-    marketplace:
-      pluginsCatalog && skillsCatalog
-        ? pluginsCatalog.availablePlugins.length + skillsCatalog.availableSkills.length
-        : null,
     apps: appsCount > 0 ? appsCount : null,
     search: null,
   };
@@ -128,7 +115,6 @@ export function ToolAccessTabs() {
     { id: "plugins", label: "Plugins" },
     { id: "skills", label: "Skills" },
     { id: "connectors", label: "Connectors" },
-    { id: "marketplace", label: "Marketplace" },
     ...(openAiNativeConnectorsAvailable ? [{ id: "apps" as const, label: "Apps" }] : []),
     { id: "search", label: "Search" },
   ];
@@ -152,11 +138,6 @@ export function ToolAccessTabs() {
       <CatalogEmptyState />
     ),
     connectors: <McpServersPage filterQuery={searchQuery} />,
-    marketplace: workspaceId ? (
-      <MarketplaceSection workspaceId={workspaceId} filterQuery={searchQuery} />
-    ) : (
-      <CatalogEmptyState />
-    ),
     apps: <OpenAiNativeConnectorsPage />,
     search: (
       <div className="flex flex-col gap-5">

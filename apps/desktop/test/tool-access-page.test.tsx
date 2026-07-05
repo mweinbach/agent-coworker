@@ -151,6 +151,10 @@ function catalogActionMocks(previousState: ReturnType<typeof useAppStore.getStat
     requestWorkspaceMcpServers: mock(
       async (_workspaceId: string) => {},
     ) as typeof previousState.requestWorkspaceMcpServers,
+    // The Skills tab mounts the marketplace sources list, which refreshes on mount.
+    refreshMarketplaces: mock(
+      async (_workspaceId?: string) => {},
+    ) as typeof previousState.refreshMarketplaces,
   };
 }
 
@@ -333,7 +337,8 @@ describe("tool access tabs", () => {
       expect(findTab(harness, "Plugins").textContent).toBe("Plugins2");
       expect(findTab(harness, "Skills").textContent).toBe("Skills1");
       expect(findTab(harness, "Connectors").textContent).toBe("Connectors1");
-      expect(findTab(harness, "Marketplace").textContent).toBe("Marketplace2");
+      // Marketplace content lives inside the Plugins and Skills tabs now.
+      expect(() => findTab(harness, "Marketplace")).toThrow("missing tab Marketplace");
       // The Search tab has no count.
       expect(findTab(harness, "Search").textContent).toBe("Search");
       expect(() => findTab(harness, "Apps")).toThrow("missing tab Apps");
@@ -565,6 +570,302 @@ describe("tool access tabs", () => {
     }
   });
 
+  test("skills tab hosts the marketplace grid, add-marketplace action, and sources", async () => {
+    const previousState = useAppStore.getState();
+    const installSkillsMock = mock(
+      async (_sourceInput: string, _targetScope: "project" | "global") => {},
+    );
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      installSkills: installSkillsMock as typeof previousState.installSkills,
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: { plugins: [], availablePlugins: [], warnings: [] },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [skillInstallation("skill-1", "skill-one")],
+            availableSkills: [marketplaceSkill("imagegen", "Imagegen")],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      await selectTab(harness, "Skills");
+
+      const bodyText = () => harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText()).toContain("Skills available to install from your marketplaces.");
+      expect(bodyText()).toContain("Imagegen");
+      expect(bodyText()).toContain("Add marketplace");
+      expect(bodyText()).toContain("Marketplace sources");
+      expect(bodyText()).toContain("No marketplaces configured.");
+
+      const installButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Install",
+      );
+      if (!(installButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing skill install button");
+      }
+      await act(async () => {
+        installButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(installSkillsMock).toHaveBeenCalledWith(
+        "https://skills.sh/example/skills/imagegen",
+        "global",
+      );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("skills tab keeps the marketplace section with a compact empty state", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: { plugins: [], availablePlugins: [], warnings: [] },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [skillInstallation("skill-1", "skill-one")],
+            availableSkills: [],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      await selectTab(harness, "Skills");
+
+      const bodyText = harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText).toContain("Everything from your marketplaces is installed.");
+      expect(bodyText).toContain("Add marketplace");
+      expect(bodyText).toContain("Marketplace sources");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("plugins tab shows the available section only when the marketplace has plugins", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            plugins: [installedPlugin("alpha", "Alpha Plugin")],
+            availablePlugins: [],
+            warnings: [],
+          },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [],
+            availableSkills: [],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      const bodyText = () => harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText()).toContain("Alpha Plugin");
+      // No available plugins: the marketplace section stays hidden entirely.
+      expect(bodyText()).not.toContain("Available from marketplaces");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            "ws-1": {
+              ...state.workspaceRuntimeById["ws-1"],
+              pluginsCatalog: {
+                plugins: [installedPlugin("alpha", "Alpha Plugin")],
+                availablePlugins: [marketplacePlugin("cursor-team-kit", "Cursor Team Kit")],
+                warnings: [],
+              },
+            },
+          },
+        }));
+      });
+
+      expect(bodyText()).toContain("Available from marketplaces");
+      expect(bodyText()).toContain("Cursor Team Kit");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("search filters the available marketplace cards in both tabs", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      ...catalogActionMocks(previousState),
+      workspaces: [projectWorkspace("ws-1")],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            plugins: [installedPlugin("alpha", "Alpha Plugin")],
+            availablePlugins: [marketplacePlugin("cursor-team-kit", "Cursor Team Kit")],
+            warnings: [],
+          },
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [skillInstallation("skill-1", "skill-one")],
+            availableSkills: [marketplaceSkill("imagegen", "Imagegen")],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ToolAccessTabs));
+      });
+
+      const bodyText = () => harness.dom.window.document.body.textContent ?? "";
+      const searchInput = (label: string) => {
+        const input = harness.dom.window.document.querySelector(`input[aria-label="${label}"]`);
+        if (!(input instanceof harness.dom.window.HTMLInputElement)) {
+          throw new Error(`missing search input ${label}`);
+        }
+        return input;
+      };
+
+      // Plugins tab: the query narrows both installed and available cards.
+      expect(bodyText()).toContain("Alpha Plugin");
+      expect(bodyText()).toContain("Cursor Team Kit");
+
+      await act(async () => {
+        setInputValue(harness, searchInput("Search plugins…"), "cursor");
+      });
+      expect(bodyText()).toContain("Cursor Team Kit");
+      expect(bodyText()).not.toContain("Alpha Plugin");
+
+      await act(async () => {
+        setInputValue(harness, searchInput("Search plugins…"), "alpha");
+      });
+      expect(bodyText()).toContain("Alpha Plugin");
+      expect(bodyText()).not.toContain("Available from marketplaces");
+      expect(bodyText()).not.toContain("Cursor Team Kit");
+
+      // Skills tab: the query narrows both installed and available cards.
+      await selectTab(harness, "Skills");
+
+      await act(async () => {
+        setInputValue(harness, searchInput("Search skills…"), "imagegen");
+      });
+      expect(bodyText()).toContain("Imagegen");
+      expect(bodyText()).not.toContain("skill-one");
+
+      await act(async () => {
+        setInputValue(harness, searchInput("Search skills…"), "skill-one");
+      });
+      expect(bodyText()).toContain("skill-one");
+      expect(bodyText()).not.toContain("Imagegen");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("chat-only workspaces still anchor the catalog and marketplace installs", async () => {
     const previousState = useAppStore.getState();
     const installPluginsMock = mock(
@@ -630,32 +931,44 @@ describe("tool access tabs", () => {
         root.render(createElement(ToolAccessTabs));
       });
 
-      expect(harness.dom.window.document.body.textContent ?? "").not.toContain("No workspaces yet");
+      const bodyText = () => harness.dom.window.document.body.textContent ?? "";
+      expect(bodyText()).not.toContain("No workspaces yet");
 
-      await selectTab(harness, "Marketplace");
+      // The default Plugins tab surfaces the available marketplace plugin.
+      expect(bodyText()).toContain("Available from marketplaces");
+      expect(bodyText()).toContain("Cursor Team Kit");
 
-      const bodyText = harness.dom.window.document.body.textContent ?? "";
-      expect(bodyText).toContain("Cursor Team Kit");
-      expect(bodyText).toContain("Imagegen");
-
-      const installButtons = Array.from(
-        harness.dom.window.document.querySelectorAll("button"),
-      ).filter((button) => button.textContent?.trim() === "Install");
-      expect(installButtons).toHaveLength(2);
-
-      for (const button of installButtons) {
-        if (!(button instanceof harness.dom.window.HTMLButtonElement)) {
-          throw new Error("missing marketplace install button");
-        }
-        await act(async () => {
-          button.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-        });
+      const findInstallButtons = () =>
+        Array.from(harness.dom.window.document.querySelectorAll("button")).filter(
+          (button) => button.textContent?.trim() === "Install",
+        );
+      const pluginInstallButtons = findInstallButtons();
+      expect(pluginInstallButtons).toHaveLength(1);
+      const pluginInstall = pluginInstallButtons[0];
+      if (!(pluginInstall instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing plugin install button");
       }
-
+      await act(async () => {
+        pluginInstall.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
       expect(installPluginsMock).toHaveBeenCalledWith(
         "https://github.com/example/cowork-plugins/tree/main/plugins/cursor-team-kit",
         "user",
       );
+
+      // The Skills tab surfaces the available marketplace skill.
+      await selectTab(harness, "Skills");
+      expect(bodyText()).toContain("Imagegen");
+
+      const skillInstallButtons = findInstallButtons();
+      expect(skillInstallButtons).toHaveLength(1);
+      const skillInstall = skillInstallButtons[0];
+      if (!(skillInstall instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing skill install button");
+      }
+      await act(async () => {
+        skillInstall.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
       expect(installSkillsMock).toHaveBeenCalledWith(
         "https://skills.sh/example/skills/imagegen",
         "global",
@@ -723,8 +1036,7 @@ describe("tool access tabs", () => {
         root.render(createElement(ToolAccessTabs));
       });
 
-      await selectTab(harness, "Marketplace");
-
+      // The available plugin card renders on the default Plugins tab.
       const installButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (button) => button.textContent?.trim() === "Install",
       );

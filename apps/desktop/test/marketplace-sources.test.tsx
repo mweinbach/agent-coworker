@@ -16,7 +16,7 @@ mock.module("../src/lib/desktopCommands", () =>
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
-const { MarketplaceSection } = await import("../src/ui/settings/toolAccess/MarketplaceSection");
+const { MarketplaceSourcesList } = await import("../src/ui/settings/toolAccess/marketplaceCatalog");
 const { AddMarketplaceDialog } = await import("../src/ui/settings/toolAccess/AddMarketplaceDialog");
 mock.restore();
 
@@ -174,7 +174,7 @@ describe("marketplace sources section", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(MarketplaceSection, { workspaceId, filterQuery: "" }));
+        root.render(createElement(MarketplaceSourcesList, { workspaceId }));
         await flushUi();
       });
 
@@ -256,7 +256,7 @@ describe("marketplace sources section", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(MarketplaceSection, { workspaceId, filterQuery: "" }));
+        root.render(createElement(MarketplaceSourcesList, { workspaceId }));
         await flushUi();
       });
 
@@ -314,7 +314,7 @@ describe("marketplace sources section", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(MarketplaceSection, { workspaceId, filterQuery: "" }));
+        root.render(createElement(MarketplaceSourcesList, { workspaceId }));
         await flushUi();
       });
 

@@ -15,6 +15,7 @@ import {
 import { matchesQuery, NoMatchesState, pluginIcon } from "./catalogShared";
 import { ImportDialog } from "./ImportDialog";
 import { InstallPluginDialog } from "./InstallPluginDialog";
+import { AvailablePluginsSection } from "./marketplaceCatalog";
 import { PluginDetailDialog } from "./PluginDetailDialog";
 
 type InstalledPluginEntry = Extract<PluginCatalogEntry, { installed: true }>;
@@ -56,7 +57,7 @@ export function PluginsSection({
     pluginPendingKeys[`plugin:disable:${plugin.scope}:${plugin.id}`] === true;
 
   return (
-    <>
+    <div className="flex flex-col gap-5">
       <SettingsSection
         title="Plugins"
         description="Installed plugin bundles of skills, MCP servers, and apps. Click a plugin for details, updates, and removal."
@@ -157,7 +158,8 @@ export function PluginsSection({
           })
         )}
       </SettingsSection>
+      <AvailablePluginsSection workspaceId={workspaceId} filterQuery={filterQuery} />
       <PluginDetailDialog workspaceId={workspaceId} />
-    </>
+    </div>
   );
 }

@@ -44,10 +44,12 @@ describe("skill tool", () => {
     return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", body].join("\n");
   }
 
-  test("discovers and loads the bundled memories skill", async () => {
+  test("discovers and loads the bundled memories skill when advanced memory is on", async () => {
     const dir = await tmpDir();
     const config = makeConfig(dir, {
       skillsDirs: [path.join(repoRoot, "skills")],
+      builtInDir: repoRoot,
+      advancedMemory: true,
     });
 
     const discovered = await discoverSkills(config.skillsDirs);
@@ -60,6 +62,16 @@ describe("skill tool", () => {
     const loaded = await loadSkillBodyByName(config, "memories");
     expect(loaded?.body).toContain("manageMemory");
     expect(loaded?.body).toContain("Writes always go to the active memory folder");
+  });
+
+  test("hides the bundled memories skill when advanced memory is off", async () => {
+    const dir = await tmpDir();
+    const config = makeConfig(dir, {
+      skillsDirs: [path.join(repoRoot, "skills")],
+      builtInDir: repoRoot,
+    });
+
+    expect(await loadSkillBodyByName(config, "memories")).toBeNull();
   });
 
   test("loads skill from SKILL.md in directory", async () => {

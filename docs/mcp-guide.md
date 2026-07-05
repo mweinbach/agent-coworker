@@ -21,35 +21,46 @@ Because `.cowork/mcp-servers.json` is part of a repository, an untrusted (e.g. f
 - set `"trustWorkspaceMcp": true` in `~/.cowork/config/config.json` (user-level), or
 - set the `AGENT_TRUST_WORKSPACE_MCP=1` environment variable.
 
-Until then, workspace `stdio` servers are skipped (with a `[MCP] Not auto-starting …` log line) while user/built-in/plugin servers and non-`stdio` workspace transports continue to load. Explicitly validating a server (`mcp_server_validate`) is treated as per-command approval and may launch the workspace's own `stdio` server for that one test.
+Until then, workspace `stdio` servers are skipped (with a `[MCP] Not auto-starting …` log line) while user/built-in/plugin servers and non-`stdio` workspace transports continue to load. Explicitly validating a server (`cowork/mcp/server/validate`) is treated as per-command approval and may launch the workspace's own `stdio` server for that one test.
 
 ## Server Configuration Schema
-Each MCP server entry in the configuration file must specify how the agent should connect to it. The basic schema includes defining the `transport` mechanism and the command or URL required to initialize the connection.
+Workspace, user, and built-in `mcp-servers.json` files share one schema: a top-level `servers` array where each entry names the server and describes its transport and (optional) auth.
 
-### Example Schema
+### Example Schema (`mcp-servers.json`)
 ```json
 {
-  "mcpServers": {
-    "my-stdio-server": {
-      "command": "node",
-      "args": ["/path/to/server.js"],
-      "transport": "stdio",
-      "auth": "none"
+  "servers": [
+    {
+      "name": "my-stdio-server",
+      "transport": {
+        "type": "stdio",
+        "command": "node",
+        "args": ["/path/to/server.js"],
+        "env": { "DEBUG": "1" }
+      },
+      "enabled": true,
+      "auth": { "type": "none" }
     },
-    "my-http-server": {
-      "url": "https://api.example.com/mcp",
-      "transport": "http",
-      "auth": "apiKey"
+    {
+      "name": "my-http-server",
+      "transport": {
+        "type": "http",
+        "url": "https://api.example.com/mcp",
+        "headers": { "x-tenant": "team-a" }
+      },
+      "auth": { "type": "api_key", "headerName": "authorization", "prefix": "Bearer " }
     }
-  }
+  ]
 }
 ```
 
-- **`transport`**: Defines the communication channel. Typically `stdio` for local processes or `http`/`sse` for remote services.
-- **`command`** & **`args`**: Used exclusively with `stdio` transports to spawn the local server process.
-- **`url`**: Used with `http` transports to specify the endpoint.
-- **`auth`**: Indicates the required authentication mode (e.g., `none`, `apiKey`, `oauth`).
+- **`transport.type`**: `stdio` (local process; requires `command`, optional `args`/`env`/`cwd`) or `http`/`sse` (remote; requires `url`, optional `headers`).
+- **`auth.type`**: `none`, `api_key` (optional `headerName`, `prefix`, `keyId`), or `oauth` (optional `scope`, `resource`, `oauthMode: "auto" | "code"`).
 - **`enabled`**: Optional boolean. Omitted or `true` means the server is available to agent turns; `false` keeps the server configured and visible in management UIs but skips loading its tools.
+- **`required`**, **`retries`**, **`icon`**: Optional operational metadata.
+
+### Plugin-provided servers (`.mcp.json`)
+Plugins bundle MCP servers with a different, Claude-compatible shape: a top-level `mcpServers` object keyed by server name. Plugin servers merge in after the workspace/user/system layers and are skipped on name collision, so custom servers always win. Custom servers configured directly in `mcp-servers.json` do not require a plugin or skill.
 
 ## Authentication Flows
 For MCP servers that require secure access, agent-coworker supports standard authentication flows such as API Keys and OAuth.
@@ -63,13 +74,20 @@ Credentials are NEVER stored in the plain text configuration files. Once authent
 ## Desktop UI & WebSocket Integration
 All MCP management is built on top of the JSON-RPC WebSocket protocol, ensuring that the CLI, TUI, and Desktop UI remain thin clients.
 
-Clients call JSON-RPC methods to manage MCP configurations:
+Clients call JSON-RPC methods to manage MCP configurations (see `docs/websocket-protocol.md` for full request/response shapes):
 
-- **`mcp_server_upsert`**: Sent by the client to add a new MCP server or update an existing configuration. The core server handles writing this to the appropriate configuration layer (usually Workspace or User).
-- **`mcp_server_setEnabled`**: Toggles whether a configured server is loaded for future agent turns without deleting its configuration. Workspace and user servers update their owning `mcp-servers.json`; plugin servers update plugin override state; built-in system servers are read-only.
-- **`mcp_server_validate`**: Triggered to test the connection to an MCP server. The server attempts to initialize the transport and perform a handshake, returning a success or failure event to the UI.
+- **`cowork/mcp/servers/read`**: Lists the effective merged server set plus per-layer config-file diagnostics.
+- **`cowork/mcp/server/upsert`**: Adds or updates a server. Accepts `source: "workspace" | "user"` to pick the target layer, so both project-scoped and personal (all-projects) custom servers are supported.
+- **`cowork/mcp/server/delete`**: Removes a server from the given editable layer.
+- **`cowork/mcp/server/setEnabled`**: Toggles whether a configured server is loaded for future agent turns without deleting its configuration. Workspace and user servers update their owning `mcp-servers.json`; plugin servers update plugin override state; built-in system servers are read-only.
+- **`cowork/mcp/server/validate`**: Tests the connection to an MCP server. The server attempts to initialize the transport and perform a handshake, returning a success or failure event to the UI.
+- **`cowork/mcp/server/auth/authorize`**, **`cowork/mcp/server/auth/callback`**, **`cowork/mcp/server/auth/setApiKey`**: Drive the OAuth and API-key credential flows.
 
 This WebSocket-first approach ensures that any UI client can configure and validate MCP servers using the exact same underlying logic.
+
+## Tool Exposure (and future tool search)
+
+Today every tool a connected server advertises is registered eagerly into the turn's tool map as `mcp__{serverName}__{toolName}`, subject to per-server `enabled` state, subagent profile allowlists (`allowedMcpServers`), and role-based filtering. Treat the advertised tool list as informational, not as a guarantee that every tool is exposed to every turn: a future iteration will support deferred tool exposure / tool search (as offered by providers like Anthropic), where a model discovers and loads MCP tools on demand instead of receiving all of them upfront. New features should route tool registration through `loadMCPTools` (`src/mcp/index.ts`) rather than assuming the full eager set, so that seam can later switch to lazy exposure per provider capability.
 
 ## Troubleshooting
 If an MCP tool isn't showing up or is failing validation, follow these steps to diagnose the issue:

@@ -7,6 +7,7 @@ import {
   scanSkillCatalogFromSources,
   toLegacySkillEntry,
 } from "./catalog";
+import { isSkillDiscoveryAllowed } from "./featureGates";
 
 export { extractTriggers } from "./catalog";
 
@@ -93,9 +94,11 @@ export async function discoverSkillsForConfig(
       includeDisabled: opts.includeDisabled === true,
     },
   );
-  const filtered = opts.includeDisabled
-    ? catalog.installations
-    : catalog.installations.filter((installation) => installation.enabled);
+  const filtered = (
+    opts.includeDisabled
+      ? catalog.installations
+      : catalog.installations.filter((installation) => installation.enabled)
+  ).filter((installation) => isSkillDiscoveryAllowed(config, installation));
 
   const seen = new Set<string>();
   const out: SkillEntry[] = [];

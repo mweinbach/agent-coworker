@@ -56,15 +56,24 @@ describe("server command helpers", () => {
     );
   });
 
-  test("listCommands includes built-in commands and the task skill", async () => {
+  test("listCommands includes built-in commands and the task skill when tasks are enabled", async () => {
     const commands = await listCommands(
-      makeConfig({ skillsDirs: [path.join(repoRoot(), "skills")] }),
+      makeConfig({ skillsDirs: [path.join(repoRoot(), "skills")], tasksEnabled: true }),
     );
     const names = commands.map((cmd) => cmd.name);
 
     expect(names.includes("init")).toBe(true);
     expect(names.includes("review")).toBe(true);
     expect(names.includes("task")).toBe(true);
+  });
+
+  test("listCommands omits the task skill when tasks are disabled", async () => {
+    const commands = await listCommands(
+      makeConfig({ skillsDirs: [path.join(repoRoot(), "skills")] }),
+    );
+    const names = commands.map((cmd) => cmd.name);
+
+    expect(names.includes("task")).toBe(false);
   });
 
   test("resolveCommand returns config-defined command templates", async () => {

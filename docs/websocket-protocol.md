@@ -2712,6 +2712,8 @@ Full skills catalog snapshot for the desktop skills manager.
 | `clearedMutationPendingKeys` | `string[]?` | Optional pending mutation keys completed by this refresh; omit on plain catalog reads |
 | `mutationBlockedReason` | `string?` | Optional explanation when blocked |
 
+Feature-owned built-in skills (`task`, `memories`) never appear in `catalog.installations` or `catalog.effectiveSkills`: they are backend services gated by their features (the `tasks` feature flag and `advancedMemory` respectively), only discoverable to agents while the owning feature is enabled, and never user-toggleable through skill management. User- or project-installed skills that share those names are unaffected.
+
 ---
 
 ### plugins_catalog

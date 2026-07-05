@@ -28,6 +28,7 @@ import {
   getSkillScopeDescriptors,
   scanSkillCatalogFromSources,
 } from "./catalog";
+import { isSkillVisibleInCatalog } from "./featureGates";
 import {
   adoptSkillInstallManifest,
   createManagedInstallationId,
@@ -167,7 +168,7 @@ function normalizeInstallSourceInput(input: string | null | undefined): string |
 
 async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot> {
   const pluginCatalog = await buildPluginCatalogSnapshot(config);
-  return await scanSkillCatalogFromSources(
+  const catalog = await scanSkillCatalogFromSources(
     [
       ...getSkillScopeDescriptors(config.skillsDirs).map((descriptor) => ({
         kind: "standalone" as const,
@@ -184,6 +185,17 @@ async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot
     ],
     { includeDisabled: true },
   );
+  // Feature-owned built-in skills (task mode, advanced memory) are backend
+  // services; they never surface in the user-facing management catalog.
+  return {
+    ...catalog,
+    installations: catalog.installations.filter((installation) =>
+      isSkillVisibleInCatalog(config, installation),
+    ),
+    effectiveSkills: catalog.effectiveSkills.filter((installation) =>
+      isSkillVisibleInCatalog(config, installation),
+    ),
+  };
 }
 
 type NamedUpdateCandidate = {

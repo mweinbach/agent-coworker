@@ -297,7 +297,18 @@ describe("Server Startup", () => {
 
   test("shared startup keeps built-in skills as the final runtime fallback", async () => {
     const tmpDir = await makeTmpProject();
-    const started = await startAgentServer(serverOpts(tmpDir));
+    // The bundled memories skill is feature-gated; enable advanced memory so it
+    // surfaces in the prompt and proves the built-in fallback tier loads.
+    const started = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          AGENT_ADVANCED_MEMORY: "1",
+        },
+      }),
+    );
     const { server, config } = started;
     try {
       await started.ready;

@@ -79,8 +79,26 @@ describe("manage models dialog", () => {
     const harness = setupJsdom();
     const calls: Array<{ provider: string; models: unknown }> = [];
     useAppStore.setState({
-      setProviderModelsEnabled: (async (provider: string, models: unknown) => {
+      // Mirror the real action: the RPC response carries the refreshed
+      // catalog, so apply the change to providerCatalog before resolving.
+      setProviderModelsEnabled: (async (
+        provider: string,
+        models: Array<{ id: string; enabled: boolean }>,
+      ) => {
         calls.push({ provider, models });
+        const changed = new Map(models.map((model) => [model.id, model.enabled] as const));
+        useAppStore.setState((s: any) => ({
+          providerCatalog: s.providerCatalog.map((entry: any) =>
+            entry.id === provider
+              ? {
+                  ...entry,
+                  models: entry.models.map((model: any) =>
+                    changed.has(model.id) ? { ...model, enabled: changed.get(model.id) } : model,
+                  ),
+                }
+              : entry,
+          ),
+        }));
         return true;
       }) as any,
     });

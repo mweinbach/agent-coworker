@@ -47,11 +47,33 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
   );
 
   // The catalog event is the source of truth; local pending flags only bridge
-  // the round-trip so checkboxes respond instantly.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: providerCatalog changes signal a completed round-trip
+  // the round-trip so checkboxes respond instantly. Reconcile instead of
+  // clearing wholesale: one toggle's refresh must not wipe optimistic state
+  // for other toggles still in flight.
   useEffect(() => {
-    setPendingById({});
-  }, [providerCatalog]);
+    setPendingById((current) => {
+      const ids = Object.keys(current);
+      if (ids.length === 0) return current;
+      const entry = provider ? providerCatalog.find((e) => e.id === provider) : undefined;
+      const enabledInCatalog = new Map(
+        (Array.isArray(entry?.models) ? entry.models : []).map(
+          (model) => [model.id, isCatalogModelEnabled(model)] as const,
+        ),
+      );
+      const next = { ...current };
+      let changed = false;
+      for (const id of ids) {
+        const landed = enabledInCatalog.get(id);
+        // Drop entries the catalog now agrees with (round-trip landed) and
+        // entries for models that no longer exist; keep in-flight disagreements.
+        if (landed === undefined || landed === next[id]) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [providerCatalog, provider]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset transient state when the target provider changes
   useEffect(() => {
@@ -88,8 +110,10 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
 
   const toggleModel = (modelId: string, enabled: boolean) => {
     setPendingById((s) => ({ ...s, [modelId]: enabled }));
-    void setProviderModelsEnabled(provider, [{ id: modelId, enabled }]).then((ok) => {
-      if (!ok) dropPending([modelId]);
+    // The response carries the refreshed catalog, so once the call settles the
+    // optimistic entry is stale either way (applied, rejected, or overridden).
+    void setProviderModelsEnabled(provider, [{ id: modelId, enabled }]).then(() => {
+      dropPending([modelId]);
     });
   };
 
@@ -103,8 +127,8 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
     void setProviderModelsEnabled(
       provider,
       visibleModels.map((model) => ({ id: model.id, enabled })),
-    ).then((ok) => {
-      if (!ok) dropPending(modelIds);
+    ).then(() => {
+      dropPending(modelIds);
     });
   };
 

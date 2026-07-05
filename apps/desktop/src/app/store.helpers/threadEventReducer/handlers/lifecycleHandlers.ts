@@ -25,6 +25,8 @@ let sandboxApprovalSequence = 0;
 function shouldClearComposerReasoningEffort(
   current: {
     composerReasoningEffort?: ReasoningEffortValue | null;
+    draftComposerProvider?: unknown;
+    draftComposerModel?: unknown;
     config?: { provider?: unknown; model?: unknown } | null;
   },
   config: Extract<SessionEvent, { type: "session_config" }>["config"],
@@ -32,14 +34,23 @@ function shouldClearComposerReasoningEffort(
   const pendingEffort = current.composerReasoningEffort;
   if (!pendingEffort) return true;
 
-  const provider = current.config?.provider;
+  // Draft threads track the composer's selection separately from the live
+  // session config; compare against the provider the composer is showing.
+  const draftProvider = current.draftComposerProvider ?? null;
+  const provider = draftProvider ?? current.config?.provider;
+  const model = draftProvider
+    ? typeof current.draftComposerModel === "string"
+      ? current.draftComposerModel
+      : undefined
+    : typeof current.config?.model === "string"
+      ? current.config.model
+      : undefined;
   const providerOptions = config.providerOptions as WorkspaceProviderOptions | undefined;
   if (provider === "openai" || provider === "codex-cli") {
     return providerOptions?.[provider]?.reasoningEffort === pendingEffort;
   }
 
   if (provider === "google") {
-    const model = typeof current.config?.model === "string" ? current.config.model : undefined;
     return getWorkspaceGoogleReasoningEffort(providerOptions, model) === pendingEffort;
   }
 

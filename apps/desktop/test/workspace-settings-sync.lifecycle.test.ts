@@ -267,6 +267,84 @@ describe("workspace settings sync", () => {
     expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBeNull();
   });
 
+  test("session_config compares pending reasoning effort against the draft composer provider", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    // Live session config points at a provider without composer reasoning
+    // options, while the composer draft targets openai.
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          config: {
+            ...(state.threadRuntimeById[threadId] as any).config,
+            provider: "anthropic",
+            model: "claude-opus-4-8",
+          },
+          draftComposerProvider: "openai",
+          draftComposerModel: "gpt-5.2",
+          composerReasoningEffort: "xhigh",
+        } as any,
+      },
+    }));
+
+    const baseConfig = {
+      yolo: false,
+      observabilityEnabled: false,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      enableMemory: true,
+      memoryRequireApproval: false,
+      preferredChildModel: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "openai:gpt-5.2",
+      allowedChildModelRefs: [],
+      maxSteps: 100,
+      toolOutputOverflowChars: 25000,
+    };
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        ...baseConfig,
+        providerOptions: { openai: { reasoningEffort: "medium" } },
+      },
+    });
+    await flushAsyncWork();
+
+    // Unconfirmed for the draft provider: the pending effort must survive
+    // even though the live config provider has no reasoning options.
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+      "xhigh",
+    );
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        ...baseConfig,
+        providerOptions: { openai: { reasoningEffort: "xhigh" } },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBeNull();
+  });
+
   test("ensureServerRunning reactivates disposed JSON-RPC helper state for an existing workspace", async () => {
     primeWorkspaceConnection();
     const { threadId } = seedConnectedThread();

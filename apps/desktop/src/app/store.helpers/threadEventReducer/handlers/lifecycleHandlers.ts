@@ -22,22 +22,55 @@ import type { HandlerDispatch, HandlerModuleContext } from "./shared";
 
 let sandboxApprovalSequence = 0;
 
-function shouldClearComposerReasoningEffort(
+function reasoningEffortFromProviderOptions(
+  provider: unknown,
+  model: string | undefined,
+  providerOptions: WorkspaceProviderOptions | undefined,
+): ReasoningEffortValue | undefined {
+  if (provider === "openai" || provider === "codex-cli") {
+    return providerOptions?.[provider]?.reasoningEffort;
+  }
+  if (provider === "google") {
+    return getWorkspaceGoogleReasoningEffort(providerOptions, model) ?? undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Decide what to do with an optimistic composer reasoning effort when a
+ * `session_config` ack arrives.
+ *
+ * The optimistic value bridges the `set_config` round-trip. Clear it once the
+ * server settles a value — either it confirms our request (incoming matches
+ * pending) or it lands a different effort (the config's effort changed from a
+ * previously-defined value). Preserve it only while the config is still lagging
+ * (the effort is unchanged from the prior config and hasn't reached our value),
+ * so the selector never shows a stale pending value indefinitely.
+ *
+ * When clearing for an openai/codex-cli thread — where the selector prefers the
+ * runtime effort — return the authoritative incoming effort so the runtime
+ * fields are synced to it (a server-clamped value wins, not the optimistic one).
+ */
+function resolveComposerReasoningEffortUpdate(
   current: {
     composerReasoningEffort?: ReasoningEffortValue | null;
     draftComposerProvider?: unknown;
     draftComposerModel?: unknown;
     config?: { provider?: unknown; model?: unknown } | null;
+    sessionConfig?: { providerOptions?: unknown } | null;
   },
   config: Extract<SessionEvent, { type: "session_config" }>["config"],
-): boolean {
+): { clear: boolean; runtimeSyncEffort: Exclude<ReasoningEffortValue, "dynamic"> | null } {
   const pendingEffort = current.composerReasoningEffort;
-  if (!pendingEffort) return true;
+  if (!pendingEffort) return { clear: true, runtimeSyncEffort: null };
 
   // Draft threads track the composer's selection separately from the live
   // session config; compare against the provider the composer is showing.
   const draftProvider = current.draftComposerProvider ?? null;
   const provider = draftProvider ?? current.config?.provider;
+  if (provider !== "openai" && provider !== "codex-cli" && provider !== "google") {
+    return { clear: true, runtimeSyncEffort: null };
+  }
   const model = draftProvider
     ? typeof current.draftComposerModel === "string"
       ? current.draftComposerModel
@@ -45,16 +78,30 @@ function shouldClearComposerReasoningEffort(
     : typeof current.config?.model === "string"
       ? current.config.model
       : undefined;
-  const providerOptions = config.providerOptions as WorkspaceProviderOptions | undefined;
-  if (provider === "openai" || provider === "codex-cli") {
-    return providerOptions?.[provider]?.reasoningEffort === pendingEffort;
-  }
 
-  if (provider === "google") {
-    return getWorkspaceGoogleReasoningEffort(providerOptions, model) === pendingEffort;
-  }
+  const incomingEffort = reasoningEffortFromProviderOptions(
+    provider,
+    model,
+    config.providerOptions as WorkspaceProviderOptions | undefined,
+  );
+  const priorEffort = reasoningEffortFromProviderOptions(
+    provider,
+    model,
+    (current.sessionConfig as { providerOptions?: WorkspaceProviderOptions } | undefined)
+      ?.providerOptions,
+  );
 
-  return true;
+  const clear =
+    incomingEffort === pendingEffort ||
+    (priorEffort !== undefined && incomingEffort !== priorEffort);
+  const runtimeSyncEffort =
+    clear &&
+    (provider === "openai" || provider === "codex-cli") &&
+    incomingEffort &&
+    incomingEffort !== "dynamic"
+      ? incomingEffort
+      : null;
+  return { clear, runtimeSyncEffort };
 }
 
 export function handleLifecycleThreadEvent(
@@ -303,23 +350,17 @@ export function handleLifecycleThreadEvent(
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
-      const clearing = shouldClearComposerReasoningEffort(rt, evt.config);
-      const composerReasoningEffort = clearing ? null : (rt.composerReasoningEffort ?? null);
-      // When a pending composer effort is confirmed by the config ack, sync the
-      // runtime effort to it. The selector prefers the runtime value (what the
-      // session is actually using) over the config, so leaving it stale would
-      // snap the selector back to the pre-change effort after the ack lands.
-      const confirmedEffort = clearing ? (rt.composerReasoningEffort ?? null) : null;
-      // The runtime effort fields carry openai/codex-cli semantics and exclude
-      // Google's "dynamic" mode (which the selector reads from the config, not
-      // the runtime), so only sync a concrete effort value.
-      const runtimeEffortPatch =
-        confirmedEffort && confirmedEffort !== "dynamic"
-          ? {
-              requestedReasoningEffort: confirmedEffort,
-              effectiveReasoningEffort: confirmedEffort,
-            }
-          : {};
+      const { clear, runtimeSyncEffort } = resolveComposerReasoningEffortUpdate(rt, evt.config);
+      const composerReasoningEffort = clear ? null : (rt.composerReasoningEffort ?? null);
+      // The selector prefers the runtime value over the config, so when the
+      // pending effort resolves, sync the runtime fields to the authoritative
+      // config value; otherwise a stale runtime effort would keep showing.
+      const runtimeEffortPatch = runtimeSyncEffort
+        ? {
+            requestedReasoningEffort: runtimeSyncEffort,
+            effectiveReasoningEffort: runtimeSyncEffort,
+          }
+        : {};
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,

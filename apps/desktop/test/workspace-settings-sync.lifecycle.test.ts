@@ -272,6 +272,69 @@ describe("workspace settings sync", () => {
     expect(confirmedRt?.effectiveReasoningEffort).toBe("xhigh");
   });
 
+  test("session_config clears a pending effort when the server settles a different one", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: {
+        providerOptions: {
+          openai: { reasoningEffort: "medium" },
+        },
+      },
+    });
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    // The user optimistically picked xhigh, but the server settles on "low"
+    // (e.g. clamped/rejected). The pending value must not stay stuck.
+    useAppStore.setState((state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          composerReasoningEffort: "xhigh",
+        },
+      },
+    }));
+
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+        providerOptions: {
+          openai: { reasoningEffort: "low" },
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(rt?.composerReasoningEffort).toBeNull();
+    // Runtime synced to the server's authoritative value, not the optimistic one.
+    expect(rt?.requestedReasoningEffort).toBe("low");
+    expect(rt?.effectiveReasoningEffort).toBe("low");
+  });
+
   test("session_config compares pending reasoning effort against the draft composer provider", async () => {
     primeWorkspaceConnection();
     const { threadId, sessionId } = seedConnectedThread();

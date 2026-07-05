@@ -1366,6 +1366,20 @@ export function createThreadActions(
           sessionId: rt.sessionId,
           config,
         });
+      } else {
+        // The change never left the client, so no session_config ack will
+        // arrive to clear the optimistic value — revert it now so the selector
+        // does not stay stuck on an effort the session never received.
+        set((state) => {
+          const current = state.threadRuntimeById[threadId];
+          if (!current || current.composerReasoningEffort !== effort) return {};
+          return {
+            threadRuntimeById: {
+              ...state.threadRuntimeById,
+              [threadId]: { ...current, composerReasoningEffort: null },
+            },
+          };
+        });
       }
     },
 

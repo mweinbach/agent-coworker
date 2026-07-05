@@ -3,6 +3,7 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   ChevronRightIcon,
+  MoreHorizontalIcon,
   PlusIcon,
   ServerIcon,
   SettingsIcon,
@@ -25,6 +26,12 @@ import {
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu";
 import { Field, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
 import { RadioGroup, RadioGroupItem } from "../../../components/ui/radio-group";
@@ -108,6 +115,18 @@ function authModeLabel(mode: string): string {
   return AUTH_MODE_LABELS[mode] ?? mode;
 }
 
+/**
+ * An OAuth connector the user simply hasn't signed in to yet (or whose sign-in
+ * is still in flight). This is a to-do, not an error: the UI prompts for
+ * authentication instead of showing a failed validation.
+ */
+function serverNeedsOAuthSignIn(server: Pick<RuntimeMcpServer, "auth" | "authMode">): boolean {
+  return (
+    server.auth?.type === "oauth" &&
+    (server.authMode === "missing" || server.authMode === "oauth_pending")
+  );
+}
+
 type ConnectionKind = "remote" | "local";
 
 const CONNECTION_KIND_OPTIONS: Array<{
@@ -176,6 +195,10 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
   const [draft, setDraft] = useState<DraftState>(defaultDraftState);
   const [createLocation, setCreateLocation] = useState<EditableMcpSource>("user");
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
+  const [oauthCodeEntryOpenByName, setOauthCodeEntryOpenByName] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [oauthMenuOpenKey, setOauthMenuOpenKey] = useState<string | null>(null);
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
   const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
   const [validationServerKeyByName, setValidationServerKeyByName] = useState<
@@ -739,6 +762,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
           const availableToolCount = validation?.ok
             ? (validation.toolCount ?? validationTools.length)
             : 0;
+          const needsOAuthSignIn = serverNeedsOAuthSignIn(server);
 
           return (
             <div
@@ -749,34 +773,56 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
               )}
             >
               <div className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-card/60">
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  onClick={() => toggleExpand(serverKey)}
-                >
-                  {isExpanded ? (
-                    <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
-                  )}
-                  <EntityIcon src={server.icon} name={server.name} size="sm" />
-                  <span className="truncate text-sm font-medium text-foreground">
-                    {server.name}
-                  </span>
-                  <Badge variant="secondary" className="h-5 text-[10px]">
-                    {sourceLabel(server.source)}
-                  </Badge>
-                  {!serverEnabled ? (
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    onClick={() => toggleExpand(serverKey)}
+                  >
+                    {isExpanded ? (
+                      <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <EntityIcon src={server.icon} name={server.name} size="sm" />
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {server.name}
+                    </span>
                     <Badge variant="secondary" className="h-5 text-[10px]">
-                      Disabled
+                      {sourceLabel(server.source)}
                     </Badge>
+                    {!serverEnabled ? (
+                      <Badge variant="secondary" className="h-5 text-[10px]">
+                        Disabled
+                      </Badge>
+                    ) : null}
+                    {validation?.ok ? (
+                      <CheckCircle2Icon className="size-4 shrink-0 text-success" />
+                    ) : validation && !validation.ok && !needsOAuthSignIn ? (
+                      <XCircleIcon className="size-4 shrink-0 text-destructive" />
+                    ) : null}
+                  </button>
+                  {needsOAuthSignIn ? (
+                    // Matches the SettingsStatusPill warning tone, as a real
+                    // button so sign-in is one click from the collapsed row.
+                    <button
+                      type="button"
+                      aria-label={`Authenticate ${server.name}`}
+                      className="inline-flex h-6 shrink-0 items-center rounded-md border border-warning/35 bg-warning/12 px-2 text-[11px] font-medium text-warning-foreground shadow-none outline-none transition-colors hover:bg-warning/20 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (!workspace) return;
+                        void authorizeWorkspaceMcpServerAuth(
+                          workspace.id,
+                          server.name,
+                          server.source,
+                        );
+                      }}
+                    >
+                      Authenticate
+                    </button>
                   ) : null}
-                  {validation?.ok ? (
-                    <CheckCircle2Icon className="size-4 shrink-0 text-success" />
-                  ) : validation && !validation.ok ? (
-                    <XCircleIcon className="size-4 shrink-0 text-destructive" />
-                  ) : null}
-                </button>
+                </div>
 
                 <div className="flex shrink-0 items-center gap-3">
                   <div className="flex items-center gap-2">
@@ -854,12 +900,18 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                         Last check
                       </span>
-                      <span className="text-[13px] text-foreground">
-                        {validation.ok ? "Passed" : "Failed"}
-                        {typeof validation.latencyMs === "number"
-                          ? ` • ${validation.latencyMs}ms`
-                          : ""}
-                      </span>
+                      {!validation.ok && needsOAuthSignIn ? (
+                        <span className="text-[13px] text-muted-foreground">
+                          Waiting for sign-in
+                        </span>
+                      ) : (
+                        <span className="text-[13px] text-foreground">
+                          {validation.ok ? "Passed" : "Failed"}
+                          {typeof validation.latencyMs === "number"
+                            ? ` • ${validation.latencyMs}ms`
+                            : ""}
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -929,51 +981,87 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   </div>
 
                   {server.auth?.type === "oauth" ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/50 pt-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() =>
-                          workspace &&
-                          void authorizeWorkspaceMcpServerAuth(
-                            workspace.id,
-                            server.name,
-                            server.source,
-                          )
-                        }
-                      >
-                        Sign in
-                      </Button>
-                      <Input
-                        className="h-7 max-w-64 text-xs"
-                        placeholder="Paste sign-in code (optional)"
-                        value={oauthCode}
-                        onChange={(event) =>
-                          setOauthCodeByName((prev) => ({
-                            ...prev,
-                            [draftKey]: event.target.value,
-                          }))
-                        }
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() =>
-                          workspace &&
-                          void callbackWorkspaceMcpServerAuth(
-                            workspace.id,
-                            server.name,
-                            oauthCode.trim() ? oauthCode : undefined,
-                            server.source,
-                          )
-                        }
-                      >
-                        Continue
-                      </Button>
+                    <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-3">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() =>
+                            workspace &&
+                            void authorizeWorkspaceMcpServerAuth(
+                              workspace.id,
+                              server.name,
+                              server.source,
+                            )
+                          }
+                        >
+                          Sign in
+                        </Button>
+                        <DropdownMenu
+                          open={oauthMenuOpenKey === draftKey}
+                          onOpenChange={(open) => setOauthMenuOpenKey(open ? draftKey : null)}
+                        >
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`More sign-in options for ${server.name}`}
+                              className="text-muted-foreground hover:text-foreground"
+                            >
+                              <MoreHorizontalIcon className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          {/* Conditional render + forceMount matches the editor
+                              Dialog pattern so the menu mounts reliably. */}
+                          {oauthMenuOpenKey === draftKey ? (
+                            <DropdownMenuContent forceMount align="start">
+                              <DropdownMenuItem
+                                onSelect={() =>
+                                  setOauthCodeEntryOpenByName((prev) => ({
+                                    ...prev,
+                                    [draftKey]: true,
+                                  }))
+                                }
+                              >
+                                Paste sign-in code…
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          ) : null}
+                        </DropdownMenu>
+                      </div>
+                      {oauthCodeEntryOpenByName[draftKey] ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Input
+                            className="h-7 max-w-64 text-xs"
+                            placeholder="Paste sign-in code (optional)"
+                            value={oauthCode}
+                            onChange={(event) =>
+                              setOauthCodeByName((prev) => ({
+                                ...prev,
+                                [draftKey]: event.target.value,
+                              }))
+                            }
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() =>
+                              workspace &&
+                              void callbackWorkspaceMcpServerAuth(
+                                workspace.id,
+                                server.name,
+                                oauthCode.trim() ? oauthCode : undefined,
+                                server.source,
+                              )
+                            }
+                          >
+                            Continue
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
 

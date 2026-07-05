@@ -15,13 +15,20 @@ function DropdownMenuTrigger({
   return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />;
 }
 
+// Radix's Portal resolves `document.body` behind a layout-effect shim that is
+// frozen to a no-op when the module loads before a DOM exists (Bun test
+// preload), so pass the container explicitly — same pattern as dialog.tsx.
+function getPortalContainer() {
+  return typeof globalThis.document === "undefined" ? undefined : globalThis.document.body;
+}
+
 function DropdownMenuContent({
   className,
   sideOffset = 4,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   return (
-    <DropdownMenuPrimitive.Portal>
+    <DropdownMenuPrimitive.Portal container={getPortalContainer()}>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}

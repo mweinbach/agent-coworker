@@ -1055,4 +1055,279 @@ describe("MCP servers settings page", () => {
       harness.restore();
     }
   });
+
+  function oauthWorkspaceState(
+    server: Record<string, unknown>,
+    validation?: Record<string, unknown>,
+  ) {
+    return {
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-04-28T00:00:00.000Z",
+          lastOpenedAt: "2026-04-28T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.5",
+          defaultPreferredChildModel: "gpt-5.5",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...useAppStore.getState().workspaceRuntimeById["ws-1"],
+          serverUrl: "ws://mock",
+          starting: false,
+          error: null,
+          controlSessionId: "control",
+          mcpServers: [server],
+          mcpFiles: [],
+          mcpWarnings: [],
+          mcpValidationByName: validation ? { [server.name as string]: validation } : {},
+        },
+      },
+      requestWorkspaceMcpServers: mock(async () => {}),
+    };
+  }
+
+  test("shows an Authenticate pill instead of a failure for OAuth servers awaiting sign-in", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const authorize = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...oauthWorkspaceState(
+            {
+              name: "linear",
+              transport: { type: "http", url: "https://mcp.linear.app/mcp" },
+              enabled: true,
+              source: "user",
+              inherited: true,
+              authMode: "missing",
+              authScope: "user",
+              authMessage: "OAuth authorization required.",
+              auth: { type: "oauth" },
+            },
+            {
+              type: "mcp_server_validation",
+              sessionId: "control",
+              name: "linear",
+              ok: false,
+              mode: "missing",
+              message: "OAuth authorization required.",
+            },
+          ),
+          authorizeWorkspaceMcpServerAuth: authorize,
+        } as never);
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      // The collapsed row shows the Authenticate pill instead of the red X.
+      const pill = container.querySelector('[aria-label="Authenticate linear"]');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent).toBe("Authenticate");
+      expect(container.querySelector("svg.text-destructive")).toBeNull();
+
+      // Clicking the pill starts the OAuth flow without expanding the row.
+      await act(async () => {
+        pill?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(authorize).toHaveBeenCalledWith("ws-1", "linear", "user");
+      expect(container.textContent).not.toContain("Connection");
+
+      // Expanded panel reports the pending sign-in, not a failure.
+      const rowButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("linear"),
+      );
+      expect(rowButton).toBeDefined();
+      await act(async () => {
+        rowButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("Waiting for sign-in");
+      expect(container.textContent).not.toContain("Failed");
+      expect(container.textContent).toContain("OAuth authorization required.");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("reveals the paste-code fallback behind the more menu and submits the code", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const callback = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...oauthWorkspaceState({
+            name: "linear",
+            transport: { type: "http", url: "https://mcp.linear.app/mcp" },
+            enabled: true,
+            source: "user",
+            inherited: true,
+            authMode: "missing",
+            authScope: "user",
+            authMessage: "OAuth authorization required.",
+            auth: { type: "oauth" },
+          }),
+          callbackWorkspaceMcpServerAuth: callback,
+        } as never);
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      const rowButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("linear"),
+      );
+      expect(rowButton).toBeDefined();
+      await act(async () => {
+        rowButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      // The primary Sign in button is present; paste-code stays hidden.
+      const signIn = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Sign in",
+      );
+      expect(signIn).toBeDefined();
+      expect(
+        container.querySelector('input[placeholder="Paste sign-in code (optional)"]'),
+      ).toBeNull();
+      expect(
+        Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent === "Continue",
+        ),
+      ).toBeUndefined();
+
+      // Open the more menu (Radix opens on pointerdown) and pick the fallback.
+      const menuTrigger = container.querySelector('[aria-label="More sign-in options for linear"]');
+      expect(menuTrigger).not.toBeNull();
+      await act(async () => {
+        menuTrigger?.dispatchEvent(
+          new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+        );
+      });
+
+      // Radix DropdownMenu portals its content into document.body.
+      const body = harness.dom.window.document.body;
+      const pasteItem = Array.from(body.querySelectorAll('[role="menuitem"]')).find((node) =>
+        node.textContent?.includes("Paste sign-in code"),
+      );
+      expect(pasteItem).toBeDefined();
+      await act(async () => {
+        pasteItem?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const codeInput = container.querySelector(
+        'input[placeholder="Paste sign-in code (optional)"]',
+      );
+      expect(codeInput).not.toBeNull();
+      await act(async () => {
+        setInputValue(harness, codeInput as HTMLInputElement, "code-123");
+      });
+
+      const continueButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Continue",
+      );
+      expect(continueButton).toBeDefined();
+      await act(async () => {
+        continueButton?.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+
+      expect(callback).toHaveBeenCalledWith("ws-1", "linear", "code-123", "user");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("keeps the failed state for an authenticated OAuth server", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...oauthWorkspaceState(
+            {
+              name: "linear",
+              transport: { type: "http", url: "https://mcp.linear.app/mcp" },
+              enabled: true,
+              source: "user",
+              inherited: true,
+              authMode: "oauth",
+              authScope: "user",
+              authMessage: "",
+              auth: { type: "oauth" },
+            },
+            {
+              type: "mcp_server_validation",
+              sessionId: "control",
+              name: "linear",
+              ok: false,
+              mode: "oauth",
+              message: "MCP server validation failed.",
+              latencyMs: 12,
+            },
+          ),
+        } as never);
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      // Signed-in servers with genuine failures keep the red X, no pill.
+      expect(container.querySelector("svg.text-destructive")).not.toBeNull();
+      expect(container.querySelector('[aria-label="Authenticate linear"]')).toBeNull();
+
+      const rowButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("linear"),
+      );
+      expect(rowButton).toBeDefined();
+      await act(async () => {
+        rowButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("Failed");
+      expect(container.textContent).not.toContain("Waiting for sign-in");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
 });

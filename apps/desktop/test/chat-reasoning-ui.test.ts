@@ -39,41 +39,41 @@ describe("desktop reasoning UI helpers", () => {
     expect(shouldToggleReasoningExpanded("Escape")).toBe(false);
   });
 
-  test("reasoning effort prefers confirmed config over a stale runtime value", () => {
-    // After a confirmed config change, composerReasoningEffort is cleared and
-    // the runtime effort is stale; the selector must follow the config.
-    expect(
-      resolveCurrentReasoningEffort({
-        composerEffort: null,
-        configuredEffort: "high",
-        runtimeEffort: "low",
-        defaultEffort: "medium",
-      }),
-    ).toBe("high");
-    // A pending composer selection still wins over everything.
+  test("reasoning effort precedence is composer then runtime then config then default", () => {
+    // A pending composer selection wins over everything.
     expect(
       resolveCurrentReasoningEffort({
         composerEffort: "xhigh",
-        configuredEffort: "high",
         runtimeEffort: "low",
+        configuredEffort: "high",
         defaultEffort: "medium",
       }),
     ).toBe("xhigh");
-    // Runtime only fills in when the config has no configured effort.
+    // Runtime (what the session is actually using) beats the config value; the
+    // config-ack handler keeps runtime in sync so this never shows a stale one.
     expect(
       resolveCurrentReasoningEffort({
         composerEffort: null,
-        configuredEffort: undefined,
         runtimeEffort: "low",
+        configuredEffort: "high",
         defaultEffort: "medium",
       }),
     ).toBe("low");
+    // Config fills in when there is no runtime effort (e.g. a draft thread).
+    expect(
+      resolveCurrentReasoningEffort({
+        composerEffort: null,
+        runtimeEffort: undefined,
+        configuredEffort: "high",
+        defaultEffort: "medium",
+      }),
+    ).toBe("high");
     // Falls back to the model default when nothing else is set.
     expect(
       resolveCurrentReasoningEffort({
         composerEffort: null,
-        configuredEffort: undefined,
         runtimeEffort: undefined,
+        configuredEffort: undefined,
         defaultEffort: "medium",
       }),
     ).toBe("medium");

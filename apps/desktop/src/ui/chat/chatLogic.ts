@@ -194,19 +194,19 @@ export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
 
 /**
  * Precedence for the reasoning-effort selector value:
- *   pending composer selection → confirmed session config → runtime effort
- *   (captured at creation/resume) → model default.
+ *   pending composer selection → runtime effort (what the session is actually
+ *   using) → configured session/workspace effort → model default.
  *
- * Config beats runtime because the runtime effort is NOT refreshed on a config
- * ack: after a reasoning change is confirmed, `composerReasoningEffort` clears
- * and a stale runtime value would otherwise snap the selector back to the old
- * effort. Runtime only fills in when the config has no configured effort.
+ * Runtime is authoritative over the config because the session may be running
+ * an effort that differs from a stale config value. The config-ack handler
+ * keeps the runtime effort in sync when a change is confirmed, so this order
+ * does not snap the selector back to a pre-change value.
  */
 export function resolveCurrentReasoningEffort<T>(opts: {
   composerEffort: T | null | undefined;
-  configuredEffort: T | null | undefined;
   runtimeEffort: T | null | undefined;
+  configuredEffort: T | null | undefined;
   defaultEffort: T;
 }): T {
-  return opts.composerEffort ?? opts.configuredEffort ?? opts.runtimeEffort ?? opts.defaultEffort;
+  return opts.composerEffort ?? opts.runtimeEffort ?? opts.configuredEffort ?? opts.defaultEffort;
 }

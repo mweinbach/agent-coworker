@@ -303,13 +303,32 @@ export function handleLifecycleThreadEvent(
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
-      const composerReasoningEffort = shouldClearComposerReasoningEffort(rt, evt.config)
-        ? null
-        : (rt.composerReasoningEffort ?? null);
+      const clearing = shouldClearComposerReasoningEffort(rt, evt.config);
+      const composerReasoningEffort = clearing ? null : (rt.composerReasoningEffort ?? null);
+      // When a pending composer effort is confirmed by the config ack, sync the
+      // runtime effort to it. The selector prefers the runtime value (what the
+      // session is actually using) over the config, so leaving it stale would
+      // snap the selector back to the pre-change effort after the ack lands.
+      const confirmedEffort = clearing ? (rt.composerReasoningEffort ?? null) : null;
+      // The runtime effort fields carry openai/codex-cli semantics and exclude
+      // Google's "dynamic" mode (which the selector reads from the config, not
+      // the runtime), so only sync a concrete effort value.
+      const runtimeEffortPatch =
+        confirmedEffort && confirmedEffort !== "dynamic"
+          ? {
+              requestedReasoningEffort: confirmedEffort,
+              effectiveReasoningEffort: confirmedEffort,
+            }
+          : {};
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...rt, sessionConfig: evt.config, composerReasoningEffort },
+          [threadId]: {
+            ...rt,
+            sessionConfig: evt.config,
+            composerReasoningEffort,
+            ...runtimeEffortPatch,
+          },
         },
       };
     });

@@ -264,7 +264,12 @@ describe("workspace settings sync", () => {
     });
     await flushAsyncWork();
 
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBeNull();
+    const confirmedRt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(confirmedRt?.composerReasoningEffort).toBeNull();
+    // The runtime effort is synced to the confirmed value so the selector
+    // (which prefers runtime over config) does not snap back to the old effort.
+    expect(confirmedRt?.requestedReasoningEffort).toBe("xhigh");
+    expect(confirmedRt?.effectiveReasoningEffort).toBe("xhigh");
   });
 
   test("session_config compares pending reasoning effort against the draft composer provider", async () => {

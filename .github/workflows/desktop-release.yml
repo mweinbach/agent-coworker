@@ -64,6 +64,11 @@ jobs:
             artifact_name: desktop-release-windows-x64
             build_arch: x64
             updater_metadata_name: latest.yml
+          - os: windows-latest
+            label: Windows ARM64
+            artifact_name: desktop-release-windows-arm64
+            build_arch: arm64
+            updater_metadata_name: latest-arm64.yml
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -76,7 +81,7 @@ jobs:
         uses: ./.github/actions/setup-rust-cache
         with:
           cache-scope: desktop-${{ matrix.build_arch }}
-          save-cache: true
+          save-cache: ${{ matrix.build_arch != 'arm64' }}
 
       - name: Validate public telemetry build variables
         shell: bash
@@ -268,7 +273,8 @@ jobs:
             throw "No packaged .exe installer found for arch ${{ matrix.build_arch }} under apps/desktop/release"
           }
 
-          $binariesRoot = Join-Path "apps/desktop/release" "win-unpacked/resources/binaries"
+          $unpackedName = if ("${{ matrix.build_arch }}" -eq "arm64") { "win-arm64-unpacked" } else { "win-unpacked" }
+          $binariesRoot = Join-Path "apps/desktop/release" "$unpackedName/resources/binaries"
           $trustedHelpers = @(
             "cowork-win-sandbox.exe",
             "codex-windows-sandbox-setup.exe",

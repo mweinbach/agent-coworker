@@ -268,7 +268,7 @@ export function buildRemoteMarketplaceSkillCatalogEntry(opts: {
 export async function fetchRemotePluginMarketplace(
   opts: RemotePluginMarketplaceOptions = {},
 ): Promise<ParsedMarketplaceDocument> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const repo = opts.repo ?? BUILT_IN_MARKETPLACE_REPO;
   const ref = opts.ref ?? BUILT_IN_MARKETPLACE_REF;
   const marketplacePath = opts.marketplacePath ?? BUILT_IN_MARKETPLACE_PATH;

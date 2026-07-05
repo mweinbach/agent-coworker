@@ -72,16 +72,17 @@ describe("desktop release workflow", () => {
     expect(workflow).not.toMatch(/vars\.COWORK_CLOUD_SYNC_ENDPOINT/);
   });
 
-  test("builds only the supported Windows x64 release entry", () => {
+  test("builds separate Windows x64 and ARM64 release entries", () => {
     expect(workflow).toContain("label: Windows x64");
     expect(workflow).toContain("artifact_name: desktop-release-windows-x64");
     expect(workflow).toContain("build_arch: x64");
-    expect(workflow).not.toContain("label: Windows ARM64");
-    expect(workflow).not.toContain("artifact_name: desktop-release-windows-arm64");
-    expect(workflow).not.toContain("updater_metadata_name: latest-arm64.yml");
+    expect(workflow).toContain("label: Windows ARM64");
+    expect(workflow).toContain("artifact_name: desktop-release-windows-arm64");
+    expect(workflow).toContain("build_arch: arm64");
+    expect(workflow).toContain("updater_metadata_name: latest-arm64.yml");
   });
 
-  test("uses target-aware Windows build inputs and stages updater metadata", () => {
+  test("uses target-aware Windows build inputs and stages ARM64 updater metadata separately", () => {
     expect(workflow).toMatch(
       /- name: Build Windows desktop artifacts[\s\S]*?COWORK_BUILD_PLATFORM: win32[\s\S]*?COWORK_BUILD_ARCH: \$\{\{ matrix\.build_arch \}\}[\s\S]*?bun run desktop:build -- --publish never --\$\{\{ matrix\.build_arch \}\}/,
     );
@@ -110,12 +111,13 @@ describe("desktop release workflow", () => {
     expect(builderConfig).toContain("verifyUpdateCodeSignature: true");
   });
 
-  test("does not build or gate releases on the retired Windows ARM64 desktop artifact", () => {
+  test("builds ARM64 release artifacts without native ARM smoke gating", () => {
     expect(workflow).toContain("pattern: desktop-release-*");
+    expect(workflow).toContain("artifact_name: desktop-release-windows-arm64");
+    expect(workflow).toContain("updater_metadata_name: latest-arm64.yml");
     expect(workflow).not.toContain("desktop-smoke-windows-arm64-unpacked");
     expect(workflow).not.toContain("Smoke Windows ARM64 Desktop");
     expect(workflow).not.toContain("runs-on: windows-11-arm");
-    expect(workflow).not.toContain("win-arm64-unpacked");
   });
 
   test("publishes release assets after package success without an ARM64 smoke gate", () => {

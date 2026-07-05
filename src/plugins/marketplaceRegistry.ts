@@ -3,10 +3,8 @@ import path from "node:path";
 
 import { parseGitHubShorthand, parseGitHubUrl } from "../extensions/github";
 import type { FetchLike } from "../extensions/source";
-import { getAiCoworkerPaths } from "../store/connections";
 import type { AgentConfig } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
-import { resolveCoworkHomedir } from "../utils/coworkHome";
 import type { ParsedMarketplaceDocument } from "./marketplace";
 import { BUILT_IN_MARKETPLACE_REPO, fetchRemotePluginMarketplace } from "./remoteMarketplace";
 
@@ -57,8 +55,10 @@ function marketplaceUrl(repo: string, ref: string): string {
 }
 
 export function marketplacesFileForConfig(config: MarketplaceRegistryConfig): string {
-  const homedir = resolveCoworkHomedir(config.userCoworkDir);
-  return path.join(getAiCoworkerPaths({ homedir }).configDir, MARKETPLACES_FILE);
+  // Derive strictly from the session's cowork home. Never fall back to the
+  // real OS home: configs pointing elsewhere (tests, isolated sessions) must
+  // stay hermetic instead of silently reading the developer's registry.
+  return path.join(config.userCoworkDir, "config", MARKETPLACES_FILE);
 }
 
 function builtInMarketplace(): ConfiguredMarketplace {

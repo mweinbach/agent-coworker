@@ -36,6 +36,10 @@ const DISCOVERED_VISION_ID = "acme/discovered-vision-1";
 // A discovered reasoning model that advertises reasoning info in the cache;
 // its resolved metadata must keep the provider default's reasoning options.
 const DISCOVERED_REASONING_ID = "acme/discovered-reasoning-1";
+// A discovered reasoning model whose cached default effort ("medium") differs
+// from the OpenAI provider fallback ("high"); the resolved defaults must honor
+// the cached effort so config loading / child routing send the right payload.
+const DISCOVERED_REASONING_MEDIUM_ID = "acme/discovered-reasoning-medium";
 // An id present in BOTH the custom store and the discovery cache (as a vision
 // model). Selection/resume must prefer the richer discovered metadata over the
 // generic custom placeholder so it is not downgraded to text-only.
@@ -107,6 +111,11 @@ beforeAll(async () => {
         id: DISCOVERED_REASONING_ID,
         displayName: "Discovered Reasoning",
         reasoning: { defaultEffort: "high", availableEfforts: ["low", "medium", "high"] },
+      },
+      {
+        id: DISCOVERED_REASONING_MEDIUM_ID,
+        displayName: "Discovered Reasoning Medium",
+        reasoning: { defaultEffort: "medium", availableEfforts: ["low", "medium", "high"] },
       },
       {
         id: DISCOVERED_AND_CUSTOM_VISION_ID,
@@ -197,6 +206,17 @@ describe("getDiscoveredModelMetadataSync", () => {
     expect(resolved?.providerOptionsDefaults.reasoningSummary).toBe("detailed");
   });
 
+  test("honors the cached default effort when it differs from the provider fallback", () => {
+    // The cache advertises "medium" while the OpenAI fallback default is "high";
+    // the resolved defaults must reflect the cached effort so config loading and
+    // child routing do not send the fallback-high payload.
+    const resolved = getDiscoveredModelMetadataSync("openai", DISCOVERED_REASONING_MEDIUM_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.providerOptionsDefaults.reasoningEffort).toBe("medium");
+  });
+
   test("drops reasoning defaults when the cached entry has no reasoning info", () => {
     const resolved = getDiscoveredModelMetadataSync("openai", DISCOVERED_ID, {
       home: homeWithStore,
@@ -277,6 +297,19 @@ describe("getKnownResolvedModelMetadata with custom model ids", () => {
     expect(resolved?.id).toBe(CUSTOM_ONLY_ID);
     expect(resolved?.provider).toBe("anthropic");
     expect(resolved?.source).toBe("dynamic");
+  });
+
+  test("strips reasoning defaults for an unproven custom non-OpenAI id", () => {
+    // A custom Anthropic id carries no capability proof, so the placeholder must
+    // not inherit the provider default's thinking/effort keys — buildPiStreamOptions
+    // would otherwise forward a thinking payload a non-reasoning custom id (e.g. a
+    // legacy claude-3-5 deployment) rejects on the first turn.
+    const resolved = getKnownResolvedModelMetadata("anthropic", CUSTOM_ONLY_ID, {
+      home: homeWithStore,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.providerOptionsDefaults.thinking).toBeUndefined();
+    expect(resolved?.providerOptionsDefaults.effort).toBeUndefined();
   });
 
   test("resolves custom ids that are foreign to the provider's registry", () => {

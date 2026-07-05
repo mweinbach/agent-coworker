@@ -30,6 +30,7 @@ async function staticCatalogTestOptions(prefix: string) {
   const paths = getAiCoworkerPaths({ homedir: home });
   const store = emptyConnectionStore();
   return {
+    home,
     paths,
     store,
     env: {} as NodeJS.ProcessEnv,
@@ -767,6 +768,31 @@ describe("providers/connectionCatalog", () => {
       supportsImageInput: false,
       runtimeOptions: { source: "custom" },
     });
+  });
+
+  test("exposes a reasoning block for a custom OpenAI reasoning id but not a non-reasoning one", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-custom-reasoning-");
+    await upsertCustomModel(staticOpts.paths, "openai", "o3-preview-custom");
+    await upsertCustomModel(staticOpts.paths, "openai", "gpt-4o");
+
+    const payload = await getProviderCatalog({
+      homedir: staticOpts.home,
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
+      readStore: staticOpts.readStore,
+    });
+
+    const openai = payload.all.find((entry) => entry.id === "openai");
+    const reasoningModel = openai?.models.find((model) => model.id === "o3-preview-custom");
+    const nonReasoningModel = openai?.models.find((model) => model.id === "gpt-4o");
+    // A custom reasoning id (o-family) advertises a selector-ready reasoning block
+    // so the desktop reasoning selector renders even though it is not in the
+    // static registry; a non-reasoning custom id (gpt-4o) advertises none.
+    expect(reasoningModel?.runtimeOptions?.source).toBe("custom");
+    expect(reasoningModel?.reasoning?.defaultEffort).toBeDefined();
+    expect((reasoningModel?.reasoning?.availableEfforts ?? []).length).toBeGreaterThan(0);
+    expect(nonReasoningModel?.reasoning).toBeUndefined();
   });
 
   test("marks catalog models that duplicate a custom ID as custom-managed", async () => {

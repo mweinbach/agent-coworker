@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { type AiCoworkerPaths, getAiCoworkerPaths, readConnectionStore } from "../connect";
+import { getResolvedModelMetadataSync } from "../models/metadata";
 import {
   defaultSupportedModel,
   getSupportedModel,
@@ -392,13 +393,44 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
   };
 }
 
-function customModelToCatalogEntry(model: CustomModelEntry): ProviderCatalogModelEntry {
+function customModelToCatalogEntry(
+  model: CustomModelEntry,
+  provider: ProviderName,
+  home?: string,
+): ProviderCatalogModelEntry {
+  // Resolve the custom id through the same placeholder resolution model selection
+  // uses, so a custom reasoning id (e.g. `o3-preview-custom` or a `gpt-5...`
+  // deployment) advertises a reasoning block. Without it the catalog entry has no
+  // reasoning metadata and desktop `reasoningConfigFromCatalog()` — which only
+  // falls back to static-registry models — cannot offer an effort selector even
+  // though the runtime treats the model as reasoning-capable.
+  const resolved = getResolvedModelMetadataSync(
+    provider,
+    model.id,
+    "custom catalog model",
+    home ? { home } : {},
+  );
+  // Derive strictly from the resolved reasoning defaults (keyed by
+  // `reasoningEffort` for OpenAI-compatible providers), so a custom id whose
+  // reasoning defaults were stripped as unproven does not advertise a selector
+  // the runtime would not honor.
+  const openAiReasoning = openAiReasoningConfigForSupportedModel({
+    providerOptionsDefaults: resolved.providerOptionsDefaults,
+    supportedReasoningEfforts: undefined,
+  });
+  const reasoning = openAiReasoning
+    ? {
+        defaultEffort: openAiReasoning.defaultEffort,
+        availableEfforts: uniqueCatalogEfforts(openAiReasoning.availableEfforts),
+      }
+    : undefined;
   return {
     id: model.id,
     displayName: model.displayName ?? model.id,
     description: "Custom model ID",
     knowledgeCutoff: "Unknown",
     supportsImageInput: false,
+    ...(reasoning ? { reasoning } : {}),
     runtimeOptions: { source: "custom" },
   };
 }
@@ -406,6 +438,7 @@ function customModelToCatalogEntry(model: CustomModelEntry): ProviderCatalogMode
 function mergeCustomModelsIntoCatalogEntry(
   entry: ProviderCatalogEntry,
   customModelsByProvider: Awaited<ReturnType<typeof readCustomModelStore>>["providers"],
+  home?: string,
 ): ProviderCatalogEntry {
   if (!supportsCustomModelIds(entry.id)) return entry;
   const customModels = customModelsByProvider[entry.id] ?? [];
@@ -423,7 +456,7 @@ function mergeCustomModelsIntoCatalogEntry(
   const annotated = entry.models.some((model) => customIds.has(model.id));
   const additions = customModels
     .filter((model) => !existingIds.has(model.id))
-    .map(customModelToCatalogEntry);
+    .map((model) => customModelToCatalogEntry(model, entry.id, home));
   if (!annotated && additions.length === 0) return entry;
   return {
     ...entry,
@@ -871,7 +904,8 @@ export async function listProviderCatalogEntries(
     refresh?: boolean;
   } = {},
 ): Promise<ProviderCatalogEntry[]> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
+  const home = opts.homedir ?? resolveAuthHomeDir();
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: home });
   const customModelStore = await readCustomModelStore(paths);
   const modelPreferencesStore = await readModelPreferencesStore(paths);
   const bedrock = await bedrockCatalogEntry({
@@ -925,7 +959,7 @@ export async function listProviderCatalogEntries(
       if (apiEntry) return apiEntry;
       return staticCatalogEntry(provider);
     })
-    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers))
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers, home))
     .map((entry) =>
       applyModelPreferencesToCatalogEntry(
         entry,
@@ -950,7 +984,8 @@ export async function getProviderCatalog(
     refresh?: boolean;
   } = {},
 ): Promise<ProviderCatalogPayload> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
+  const home = opts.homedir ?? resolveAuthHomeDir();
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: home });
   const readStore = opts.readStore ?? readConnectionStore;
   const readCodexAppServerAccountImpl =
     opts.readCodexAppServerAccountImpl ?? readCodexAppServerAccount;
@@ -1013,7 +1048,7 @@ export async function getProviderCatalog(
       if (apiEntry) return apiEntry;
       return staticCatalogEntry(provider);
     })
-    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers))
+    .map((entry) => mergeCustomModelsIntoCatalogEntry(entry, customModelStore.providers, home))
     .map((entry) =>
       applyModelPreferencesToCatalogEntry(
         entry,

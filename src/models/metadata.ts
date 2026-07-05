@@ -19,6 +19,7 @@ import {
   readModelDiscoveryCacheSync,
 } from "../providers/modelDiscoveryCache";
 import { supportsCustomModelIds } from "../shared/customModels";
+import { isOpenAiReasoningEffort } from "../shared/openaiCompatibleOptions";
 import { getAiCoworkerPaths } from "../store/connections";
 import type { AgentConfig, ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
@@ -108,9 +109,16 @@ function customModelIdLikelySupportsReasoning(
     const id = modelId.trim().toLowerCase();
     return id.startsWith("o") || id.startsWith("gpt-5");
   }
-  // Other providers have no cheap id-only heuristic; keep their reasoning
-  // defaults rather than risk stripping a payload the model needs.
-  return true;
+  // Other providers have no cheap id-only heuristic, and a custom id carries no
+  // capability proof. Default to NOT reasoning: keeping the provider default's
+  // thinking keys (e.g. Anthropic `thinking`/`effort`) would make
+  // buildPiStreamOptions forward a thinking payload that a non-reasoning custom
+  // id (e.g. a legacy `claude-3-5-...` deployment) rejects on the very first
+  // turn — a hard failure. A reasoning custom model instead loses only its
+  // DEFAULT effort, which the user can re-enable — a soft, recoverable
+  // degradation. Static/discovered models that actually advertise reasoning pass
+  // `supportsReasoning: true` explicitly and are unaffected by this heuristic.
+  return false;
 }
 
 // Verbosity is GPT-5-family only, so an o-series id (which supports reasoning)
@@ -231,8 +239,23 @@ function buildDiscoveredModelMetadata(
   const base = buildProviderPlaceholderMetadata(provider, cached.id, {
     supportsReasoning: cacheHasReasoning,
   });
+  // When the cache advertises a specific default effort, honor it in the resolved
+  // defaults instead of the provider fallback (e.g. OpenAI `reasoningEffort:
+  // "high"`). Config loading and child routing consume `providerOptionsDefaults`,
+  // so without this a reopened/routed discovered model would send the fallback
+  // effort even though the catalog advertised another — potentially an
+  // unsupported/too-high reasoning payload. Only OpenAI-compatible providers key
+  // reasoning by `reasoningEffort`; anthropic/google use their own keys and are
+  // not populated with a generic effort from the discovery cache.
+  const cachedDefaultEffort = cached.reasoning?.defaultEffort;
+  const providerOptionsDefaults =
+    isOpenAiReasoningEffort(cachedDefaultEffort) &&
+    "reasoningEffort" in base.providerOptionsDefaults
+      ? { ...base.providerOptionsDefaults, reasoningEffort: cachedDefaultEffort }
+      : base.providerOptionsDefaults;
   return {
     ...base,
+    providerOptionsDefaults,
     displayName: cached.displayName || cached.id,
     ...(cached.knowledgeCutoff ? { knowledgeCutoff: cached.knowledgeCutoff } : {}),
     ...(typeof cached.supportsImageInput === "boolean"

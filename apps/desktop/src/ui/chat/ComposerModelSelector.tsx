@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, PlusIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
@@ -10,18 +10,15 @@ import {
   CommandItem,
   CommandList,
 } from "../../components/ui/command";
-import { Input } from "../../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import {
   availableProvidersFromCatalog,
   type CatalogVisibilityOptions,
-  customModelPlaceholderForProvider,
   encodeProviderModelSelection,
   isCustomCatalogModelEntry,
   modelChoicesFromCatalog,
   modelDescriptionsFromCatalog,
   resolveModelDisplayLabel,
-  supportsCustomModelIds,
 } from "../../lib/modelChoices";
 import { displayProviderName } from "../../lib/providerDisplayNames";
 import { cn } from "../../lib/utils";
@@ -81,7 +78,6 @@ export function ComposerModelSelector({
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerUiState = useAppStore((s) => s.providerUiState);
-  const addCustomProviderModel = useAppStore((s) => s.addCustomProviderModel);
   const chatCatalogVisibility = useMemo<CatalogVisibilityOptions>(
     () => ({
       hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
@@ -122,33 +118,11 @@ export function ComposerModelSelector({
   }, [providerCatalog, provider, model]);
 
   const [open, setOpen] = useState(defaultOpen);
-  const [customDialogOpen, setCustomDialogOpen] = useState(false);
-  const [customProvider, setCustomProvider] = useState<ProviderName | null>(null);
-  const [customModelVal, setCustomModelVal] = useState("");
 
   const selectModel = (nextProvider: ProviderName, nextModel: string) => {
     setOpen(false);
     if (nextProvider === provider && nextModel === model) return;
     onChange({ provider: nextProvider, model: nextModel });
-  };
-
-  const openCustomModelEditor = (nextProvider: ProviderName, initialModel: string) => {
-    setCustomProvider(nextProvider);
-    setCustomModelVal(initialModel);
-    setCustomDialogOpen(true);
-  };
-
-  const saveCustomModel = async () => {
-    if (!customProvider) return;
-    const customModel = customModelVal.trim();
-    if (!customModel) return;
-    // Wait for the add to persist before selecting: the model/set path only
-    // accepts unknown dynamic IDs once they exist in the custom-model store.
-    const added = await addCustomProviderModel(customProvider, customModel);
-    if (!added) return;
-    onChange({ provider: customProvider, model: customModel });
-    setCustomDialogOpen(false);
-    setOpen(false);
   };
 
   return (
@@ -179,8 +153,7 @@ export function ComposerModelSelector({
             {providers.map((p) => {
               const models = choices[p] ?? [];
               const showCurrentCustom = p === provider && !!model && !models.includes(model);
-              const showCustomEntry = supportsCustomModelIds(p);
-              if (models.length === 0 && !showCurrentCustom && !showCustomEntry) return null;
+              if (models.length === 0 && !showCurrentCustom) return null;
               return (
                 <CommandGroup key={p} heading={displayProviderName(p)}>
                   {models.map((m) => {
@@ -213,50 +186,6 @@ export function ComposerModelSelector({
                         selected
                       />
                     </CommandItem>
-                  ) : null}
-                  {showCustomEntry ? (
-                    <button
-                      type="button"
-                      data-slot="command-item"
-                      key={`${p}-custom-entry`}
-                      className={cn(
-                        "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground",
-                        "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-                      )}
-                      onClick={() =>
-                        openCustomModelEditor(
-                          p,
-                          p === provider && showCurrentCustom && currentModelIsCustom ? model : "",
-                        )
-                      }
-                    >
-                      <PlusIcon className="mr-2 size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="text-xs text-muted-foreground">Custom model ID…</span>
-                    </button>
-                  ) : null}
-                  {customDialogOpen && customProvider === p ? (
-                    <div className="mt-1 flex items-center gap-2 rounded-sm border border-border/50 bg-background/70 p-2">
-                      <Input
-                        autoFocus
-                        placeholder={customModelPlaceholderForProvider(p)}
-                        value={customModelVal}
-                        onInput={(e) => setCustomModelVal(e.currentTarget.value)}
-                        onChange={(e) => setCustomModelVal(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && customModelVal.trim()) {
-                            void saveCustomModel();
-                          }
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={!customModelVal.trim()}
-                        onClick={() => void saveCustomModel()}
-                      >
-                        Save
-                      </Button>
-                    </div>
                   ) : null}
                 </CommandGroup>
               );

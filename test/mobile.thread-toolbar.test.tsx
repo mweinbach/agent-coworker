@@ -173,11 +173,6 @@ mockLocalModule("@/components/ui/status-pill", "apps/mobile/src/components/ui/st
   StatusPill: () => null,
 }));
 mockLocalModule(
-  "@/features/cowork/activityGroups",
-  "apps/mobile/src/features/cowork/activityGroups",
-  () => ({ buildChatRenderItems: () => [] }),
-);
-mockLocalModule(
   "@/features/cowork/feedDisplay",
   "apps/mobile/src/features/cowork/feedDisplay",
   () => ({ filterFeedForDisplay: () => [] }),

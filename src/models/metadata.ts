@@ -8,12 +8,12 @@ import {
   resolveDefaultBedrockModelMetadata,
 } from "../providers/bedrockShared";
 import { readCustomModelStore } from "../providers/customModels";
-import { isLmStudioError } from "../providers/lmstudio/client";
 import {
   buildLmStudioPlaceholderMetadata,
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
+import { isLmStudioError } from "../providers/lmstudio/client";
 import type { CachedModelDiscoveryModel } from "../providers/modelDiscoveryCache";
 import {
   readModelDiscoveryCache,

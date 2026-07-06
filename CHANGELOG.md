@@ -4,6 +4,82 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.17 - 2026-07-06
+
+### Fixed
+
+- **Desktop release packaging** — Scopes package-matrix dependency caches by
+  desktop build architecture so Windows x64 and ARM64 release jobs do not race
+  the same post-job cache save before publishing.
+
+## 1.2.16 - 2026-07-06
+
+### Fixed
+
+- **GitHub release validation** — Narrows the desktop settings shell
+  regression to the full-window replacement contract so Linux CI does not
+  require optional chat top-bar chrome in an empty synthetic state.
+
+## 1.2.15 - 2026-07-06
+
+### Fixed
+
+- **GitHub release validation** — Makes the desktop settings shell regression
+  test deterministic after closing settings so CI does not depend on runner
+  timer throughput.
+
+## 1.2.14 - 2026-07-06
+
+### Fixed
+
+- **GitHub CI validation hardening** — Removes the mobile toolbar test's
+  cross-file activity grouping mock, injects resumed `runTurn` mocks into the
+  exact persisted provider-options fixture, and drives desktop settings
+  restoration through the real navigation action.
+
+## 1.2.13 - 2026-07-06
+
+### Fixed
+
+- **GitHub CI full-suite isolation** — Restores partial mobile module mocks,
+  injects persisted AgentSession `runTurn` mocks directly, and waits for the
+  desktop chat shell to settle before asserting window-mode restoration.
+- **Windows release smoke** — Gives the presentation preview renderer subprocess
+  tests enough time to start on slower Windows x64 CI runners.
+
+## 1.2.12 - 2026-07-06
+
+### Fixed
+
+- **GitHub CI AgentSession validation** — Injects the AgentSession harness
+  `runTurn` mock directly so full-suite Linux CI no longer depends on test file
+  order or a previously cached lazy provider module.
+
+## 1.2.11 - 2026-07-06
+
+### Added
+
+- **Skill Improvement (Beta)** — Adds live skill-improvement controls across
+  the harness and desktop settings, with persisted workspace defaults, backup
+  handling, JSON-RPC routes, and tests for job storage, improver behavior,
+  service orchestration, and session default round-trips.
+- **LM Studio local start-and-retry flow** — When LM Studio is selected but the
+  local server is not running, chat turns now surface an explicit start dialog,
+  wire the local service through JSON-RPC, and retry the original turn after
+  startup succeeds.
+- **Provider model management polish** — Refreshes provider model catalogs on
+  startup, improves the model management dialog, and removes the stale custom
+  model composer entry from the default selector path.
+
+### Fixed
+
+- **Release CI check recovery** — Restores the standard Bun test runner in CI
+  and release workflows, then fixes the LM Studio import ordering that caused
+  the v1.2.10 desktop release validation to fail during `bun run check`.
+- **Runtime/provider status clarity** — Clarifies Codex runtime status output,
+  preserves delegated MCP inheritance, and normalizes MCP tool names for
+  Codex app-server/runtime paths.
+
 ## 1.2.9 - 2026-07-05
 
 ### Added

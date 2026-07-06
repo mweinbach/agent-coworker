@@ -5,12 +5,12 @@ import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
 import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
-import { createLmStudioLocalService } from "../../providers/lmstudio/local";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
+import { createLmStudioLocalService } from "../../providers/lmstudio/local";
 import { SkillImprovementService } from "../../skillImprovement";
 import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";

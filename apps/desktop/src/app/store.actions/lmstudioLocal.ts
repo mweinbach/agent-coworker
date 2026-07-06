@@ -3,9 +3,9 @@ import {
   makeId,
   nowIso,
   requestJsonRpcControl,
-  sendUserMessageToThread,
   type StoreGet,
   type StoreSet,
+  sendUserMessageToThread,
 } from "../store.helpers";
 import { MAX_FEED_ITEMS } from "../store.helpers/threadEventReducerContext";
 

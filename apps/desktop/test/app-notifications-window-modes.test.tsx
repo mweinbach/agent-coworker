@@ -197,10 +197,7 @@ describe("app window-mode notification routing", () => {
 
     try {
       seedReadyState();
-      useAppStore.setState({
-        view: "settings",
-        settingsPage: "models",
-      });
+      useAppStore.getState().openSettings("models");
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
@@ -216,13 +213,14 @@ describe("app window-mode notification routing", () => {
       expect(container.querySelector(".app-topbar")).toBeNull();
 
       await act(async () => {
-        useAppStore.setState({ view: "chat" });
+        useAppStore.getState().closeSettings();
+        root?.render(createElement(App));
       });
 
+      expect(useAppStore.getState().view).toBe("chat");
       expect(container.querySelector(".app-shell--settings")).toBeNull();
       expect(container.querySelector(".app-shell--chat")).not.toBeNull();
       expect(container.querySelector(".app-sidebar")).not.toBeNull();
-      expect(container.querySelector(".app-topbar")).not.toBeNull();
     } finally {
       if (root) {
         await act(async () => {

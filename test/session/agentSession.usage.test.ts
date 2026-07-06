@@ -515,6 +515,7 @@ describe("AgentSession", () => {
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
+        runTurnImpl: mockRunTurn,
       });
 
       session.getSessionUsage();
@@ -578,6 +579,7 @@ describe("AgentSession", () => {
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
+        runTurnImpl: mockRunTurn,
       });
 
       expect(session.currentTurnOutcome).toBe("error");
@@ -754,6 +756,7 @@ describe("AgentSession", () => {
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
+        runTurnImpl: mockRunTurn,
       });
 
       await session.sendUserMessage("question");

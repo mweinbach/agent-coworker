@@ -1,11 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ExecFileCompatResult } from "../../src/utils/execFileCompat";
 import {
   createLmStudioLocalService,
   isLoopbackBaseUrl,
   type LmStudioLocalDeps,
   resolveLmsCliPath,
 } from "../../src/providers/lmstudio/local";
+import type { ExecFileCompatResult } from "../../src/utils/execFileCompat";
 
 const MODELS_OK = new Response(JSON.stringify({ models: [] }), {
   status: 200,

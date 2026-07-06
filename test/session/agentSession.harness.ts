@@ -284,6 +284,7 @@ export function makeSession(
     }>;
     sessionDb: ConstructorParameters<typeof AgentSession>[0]["sessionDb"];
     writePersistedSessionSnapshotImpl: (opts: any) => Promise<string>;
+    runTurnImpl: typeof REAL_AGENT.runTurn;
     createAgentSessionImpl: (opts: any) => Promise<any>;
     listAgentSessionsImpl: (parentSessionId: string) => Promise<any[]>;
     sendAgentInputImpl: (opts: any) => Promise<void>;
@@ -331,6 +332,7 @@ export function makeSession(
     sessionDb: overrides?.sessionDb,
     writePersistedSessionSnapshotImpl:
       overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
+    runTurnImpl: overrides?.runTurnImpl ?? mockRunTurn,
     createAgentSessionImpl: overrides?.createAgentSessionImpl,
     listAgentSessionsImpl: overrides?.listAgentSessionsImpl,
     sendAgentInputImpl: overrides?.sendAgentInputImpl,

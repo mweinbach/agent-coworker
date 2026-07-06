@@ -62,7 +62,9 @@ describe("presentation preview renderer", () => {
     });
   });
 
-  test("runs mock rendering script successfully for a single slide", async () => {
+  test("runs mock rendering script successfully for a single slide", {
+    timeout: 20_000,
+  }, async () => {
     await withTempDir(async (dir) => {
       // 1. Create a dummy slide module
       const filePath = path.join(dir, "slide-1.mjs");
@@ -103,7 +105,9 @@ describe("presentation preview renderer", () => {
     });
   });
 
-  test("runs the marketplace presentation skill with the separate runtime environment", async () => {
+  test("runs the marketplace presentation skill with the separate runtime environment", {
+    timeout: 20_000,
+  }, async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "slide-1.mjs");
       await fs.writeFile(filePath, "export default {}", "utf8");
@@ -193,7 +197,9 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
     });
   });
 
-  test("dynamic deck compilation renders all slide modules in order", async () => {
+  test("dynamic deck compilation renders all slide modules in order", {
+    timeout: 20_000,
+  }, async () => {
     await withTempDir(async (dir) => {
       // 1. Set up slide modules and dummy pptx file
       const slidesDir = path.join(dir, "slides");

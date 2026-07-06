@@ -619,6 +619,51 @@ describe("bash tool", () => {
     expect(observed.requireBackend).toBe(false);
   });
 
+  test("YOLO with an explicit network ban requires an enforcing backend", async () => {
+    // YOLO auto-approves every prompt, so the unsandboxed no-backend fallback
+    // would silently grant network access despite an explicit `network: false`.
+    // The ban must instead be enforced by the backend (fail closed without one).
+    const dir = await tmpDir();
+    let observed: { requireBackend?: boolean; requireEnforcingBackend?: boolean } = {};
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = {
+        requireBackend: opts.requireBackend,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: false, requireBackend: false },
+      }),
+      yolo: true,
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    expect(observed.requireEnforcingBackend).toBe(true);
+  });
+
+  test("YOLO without a network ban does not require an enforcing backend", async () => {
+    const dir = await tmpDir();
+    let observed: { requireBackend?: boolean; requireEnforcingBackend?: boolean } = {};
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      observed = {
+        requireBackend: opts.requireBackend,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        sandbox: { mode: "workspace-write", network: true, requireBackend: false },
+      }),
+      yolo: true,
+    });
+    const t: any = createBashTool(ctx);
+    await t.execute({ command: "echo hi" });
+    expect(observed.requireEnforcingBackend).toBe(false);
+  });
+
   test("hard-floor scoped child fails closed under a non-enforcing (Windows-like) backend", async () => {
     // A backend that runs the command but does not report every required
     // capability must not satisfy a hard floor — the run is refused, not executed.

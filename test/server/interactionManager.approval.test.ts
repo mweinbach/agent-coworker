@@ -28,15 +28,14 @@ describe("InteractionManager.approveCommand", () => {
     expect(events).toEqual([]);
   });
 
-  test("YOLO still prompts for sandbox-denied escalations", async () => {
+  test("YOLO auto-approves sandbox-denied escalations without prompting", async () => {
+    // YOLO means zero approval prompts. Hard floors are safe regardless: the
+    // bash tool never offers an escalation for read-only roles or scoped
+    // children, so auto-approving here cannot widen them.
     const { manager, events } = makeManager({ yolo: true, promptResult: false });
     const approved = await manager.approveCommand("cat /etc/shadow", { reason: "sandbox_denied" });
-    expect(approved).toBe(false);
-    expect(events.find((e) => e.type === "approval")).toMatchObject({
-      type: "approval",
-      reasonCode: "sandbox_denied_escalation",
-      dangerous: true,
-    });
+    expect(approved).toBe(true);
+    expect(events).toEqual([]);
   });
 
   test("non-YOLO escalation honors the prompt response", async () => {

@@ -9,7 +9,6 @@ import { getSupportedModel } from "../../models/registry";
 import {
   type SandboxPolicy as CoworkSandboxPolicy,
   resolveSandboxPolicy,
-  type SandboxConfig,
 } from "../../platform/sandbox";
 import { tmpScratchRoots } from "../../platform/sandbox/policy";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
@@ -310,8 +309,13 @@ function codexScratchRoots(): string[] {
 }
 
 function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSandboxPolicy {
+  // YOLO lifts an unscoped, non-read-only session to full access; the shared
+  // resolver holds the hard floors (explicit read-only mode, read-only roles,
+  // scoped children) regardless of YOLO. YOLO usually maps to approvalPolicy
+  // "never", except turns with Cowork dynamic tools keep approval requests so
+  // native app-server effects still cross the mutation gate.
   return resolveSandboxPolicy({
-    config: codexSandboxConfig(params),
+    config: params.config.sandbox,
     readOnlyRole: params.shellPolicy === "no_project_write",
     workingDirectory: params.config.workingDirectory,
     projectRoot: path.dirname(params.config.projectCoworkDir),
@@ -319,26 +323,8 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     uploadsDirectory: params.config.uploadsDirectory,
     toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(params.config)],
     targetPaths: params.agentTargetPaths,
+    yolo: params.yolo,
   });
-}
-
-function codexSandboxConfig(params: RuntimeRunTurnParams): SandboxConfig | undefined {
-  // A scoped child (agentTargetPaths) must stay within its assigned paths even
-  // under YOLO. An explicitly restrictive `read-only` sandbox is a hard floor and
-  // must not be widened either — YOLO only relaxes the APPROVAL policy, not the
-  // sandbox mode the user explicitly selected. Only an unscoped, non-read-only
-  // session is lifted to full access. YOLO usually maps to approvalPolicy
-  // "never", except turns with Cowork dynamic tools keep approval requests so
-  // native app-server effects still cross the mutation gate.
-  const scoped = (params.agentTargetPaths?.length ?? 0) > 0;
-  const explicitlyReadOnly = params.config.sandbox?.mode === "read-only";
-  if (params.yolo !== true || scoped || explicitlyReadOnly) {
-    return params.config.sandbox;
-  }
-  return {
-    ...(params.config.sandbox ?? {}),
-    mode: "danger-full-access",
-  };
 }
 
 export function parseUsage(value: unknown): RuntimeUsage | undefined {

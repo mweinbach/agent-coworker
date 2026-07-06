@@ -1222,27 +1222,26 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                       htmlFor="yolo-toggle"
                       className="text-sm font-medium leading-none cursor-pointer"
                     >
-                      Run shell commands without asking
+                      YOLO mode
                     </Label>
                     <div className="text-xs text-muted-foreground">
-                      Skip confirmation prompts and run shell commands immediately without review.
+                      Never ask for approval and run shell commands outside the OS sandbox with full
+                      file and network access.
                     </div>
                   </div>
                   <ToggleChip
                     id="yolo-toggle"
                     pressed={yolo}
-                    aria-label="Run shell commands without asking"
+                    aria-label="YOLO mode"
                     onPressedChange={async (next) => {
                       if (!ws) return;
                       const confirmed = await confirmAction({
-                        title: next
-                          ? "Enable auto-approve commands"
-                          : "Disable auto-approve commands",
+                        title: next ? "Enable YOLO mode" : "Disable YOLO mode",
                         message: next
-                          ? "Enable auto-approve? The agent will run shell commands on your machine without asking for review first."
-                          : "Disable auto-approve?",
+                          ? "Enable YOLO mode? The agent will run shell commands on your machine without asking for approval and without the OS sandbox."
+                          : "Disable YOLO mode?",
                         detail: next
-                          ? "This is a high-risk setting. The server will restart to apply this change."
+                          ? "This is a high-risk setting. Commands get full file and network access. The server will restart to apply this change."
                           : undefined,
                         confirmLabel: next ? "Enable" : "Disable",
                         cancelLabel: "Cancel",

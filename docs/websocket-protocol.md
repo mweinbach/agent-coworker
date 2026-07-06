@@ -2615,7 +2615,7 @@ Internal session event recorded when an action needs user approval. There are tw
 1. **Sandbox-denial escalation** (`dangerous: true`, `reasonCode: "sandbox_denied_escalation"`): the OS sandbox (see [Sandbox](./sandbox.md)) is the enforcement boundary, so this is emitted when a sandboxed command failed like a sandbox denial and the agent wants to retry it unsandboxed (escalate-on-failure), or when a restrictive command would fall back to unsandboxed execution because no backend is available. Approving runs the command with full access; rejecting returns the sandbox failure/refusal to the model.
 2. **Ordinary approval** (`dangerous: false`, `reasonCode: "requires_manual_review"`): a provider/tool approval that is NOT a sandbox escape — e.g. the Codex app-server `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` prompts, routed through `approveCommand` without a sandbox reason. Clients should render these as normal approval prompts, not as "escape the sandbox".
 
-YOLO mode auto-approves ordinary approvals; the sandbox-denial escalation always prompts (it is not auto-approved under YOLO). On the JSON-RPC wire, the prompt is always sent as the server request `item/commandExecution/requestApproval` — upstream Codex app-server `item/fileChange/requestApproval` requests are handled internally and surface through the same `approveCommand` prompt.
+YOLO mode never prompts: it auto-approves ordinary approvals AND sandbox-denial escalations, and the session's own commands already run outside the OS sandbox (`danger-full-access`), so escalations rarely arise in the first place. Hard floors are unaffected — an explicit `read-only` sandbox mode, read-only roles, and scoped children (targetPaths) keep their sandbox and are never offered an escalation, so YOLO cannot widen them. On the JSON-RPC wire, the prompt is always sent as the server request `item/commandExecution/requestApproval` — upstream Codex app-server `item/fileChange/requestApproval` requests are handled internally and surface through the same `approveCommand` prompt.
 
 For a sandbox-denial escalation the event also carries `detail` (a short, safe-to-display reason the command was blocked) and `category` (`"filesystem"` or `"network"`) so clients can render a clear, inline, sandbox-aware approval ("re-run with full disk + network access?") instead of a generic command-approval prompt. These fields are omitted for ordinary approvals. They are mirrored on the JSON-RPC server request `item/commandExecution/requestApproval` params (`detail`, `category`).
 
@@ -3839,7 +3839,7 @@ Current runtime config. Sent on connection and after `set_config`.
 |-------|------|-------------|
 | `type` | `"session_config"` | — |
 | `sessionId` | `string` | Session identifier |
-| `config.yolo` | `boolean` | Whether all commands are auto-approved |
+| `config.yolo` | `boolean` | YOLO mode: all approvals are auto-approved (no prompts) and unscoped, non-read-only sessions run shell commands outside the OS sandbox with full access |
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.backupsEnabled` | `boolean` | Whether advanced backups are enabled for the live session after applying any session-scoped override. Defaults to `false`. |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied. Defaults to `false`. |

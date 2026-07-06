@@ -74,6 +74,13 @@ export interface ResolveSandboxPolicyInput {
   toolRuntimeWritableRoots?: readonly string[];
   /** Child-agent enforced scope; when present these become the only writable roots. */
   targetPaths?: readonly string[] | null;
+  /**
+   * YOLO mode: the session runs with zero approval prompts and outside the OS
+   * sandbox. Lifts an unscoped, non-read-only session to `danger-full-access`.
+   * Hard floors still hold: an explicit `read-only` mode, a read-only role, and
+   * a scoped child (targetPaths) are never widened by YOLO.
+   */
+  yolo?: boolean;
 }
 
 /**
@@ -103,7 +110,10 @@ export function resolveSandboxPolicy(input: ResolveSandboxPolicyInput): SandboxP
   // floor, so it must not be lifted to unsandboxed full access (which would also
   // hand Codex-native shell/write tools the whole filesystem).
   const scoped = (input.targetPaths?.length ?? 0) > 0;
-  if (config.mode === "danger-full-access" && !scoped) {
+  // YOLO lifts an unscoped session to full access. The explicit read-only mode
+  // and read-only roles returned above are hard floors YOLO must not widen; a
+  // scoped child likewise stays held to its targetPaths below.
+  if ((config.mode === "danger-full-access" || input.yolo === true) && !scoped) {
     return network === false
       ? { kind: "danger-full-access", network: false }
       : { kind: "danger-full-access" };

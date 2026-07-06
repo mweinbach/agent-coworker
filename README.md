@@ -13,7 +13,7 @@ It is built for everyday computer work, not just chat. Open a workspace, pick yo
 - **Use the model you already prefer.** Cowork supports Google, OpenAI, Anthropic, Bedrock, Together, Fireworks, Fire Pass, NVIDIA, LM Studio, Baseten, OpenCode, and Codex CLI.
 - **Bring in tools and apps.** Skills, plugins, MCP servers, web search, file tools, shell tools, and subagents are part of the product surface.
 - **Delegate bigger jobs.** Ask Cowork to spawn focused helper agents for independent research, review, or implementation tasks.
-- **Stay in control.** Risky tool actions go through approval flows unless you explicitly launch with `--yolo`.
+- **Stay in control.** Risky tool actions go through approval flows and shell commands run in an OS sandbox — unless you explicitly opt into YOLO mode (`--yolo` or the workspace toggle), which skips every prompt and runs commands unsandboxed.
 - **Use it from your desk or phone.** The desktop app is the main client, and the optional mobile app can pair directly to your desktop for remote access while the desktop app is running.
 - **Build on the same core.** The desktop app, CLI, mobile app, and custom clients all talk to the same WebSocket-first runtime.
 

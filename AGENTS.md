@@ -105,7 +105,7 @@ When adding a new WebSocket message or event:
 
 - Don’t commit secrets or local state. `.env`, `.agent/`, `.cowork/`, `output/`, and `uploads/` are gitignored.
 - Prefer environment variables (e.g. `OPENAI_API_KEY`) and local `.cowork/config.json` / `.cowork/mcp-servers.json` for developer setup. MCP server configs, auth, and session backups also live in `.cowork/` (project-level or `~/.cowork/`).
-- `--yolo` bypasses command approvals; use only for local experiments.
+- `--yolo` enables YOLO mode: no approval prompts and shell commands run outside the OS sandbox; use only for local experiments.
 - Make commits liberally as you go with meaningful detailed messages.
 
 ## Model Metadata Rules

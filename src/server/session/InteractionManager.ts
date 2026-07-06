@@ -189,12 +189,15 @@ export class InteractionManager {
    * own command/file approvals here without a reason — those are ordinary
    * approvals, not sandbox escapes.
    *
-   * YOLO auto-approves ordinary command execution. Sandbox-denial retries still
-   * require an explicit response because they lift the OS sandbox entirely.
+   * YOLO auto-approves everything, sandbox-denial retries included: the mode
+   * means zero approval prompts, and the session's own commands already run
+   * unsandboxed (danger-full-access). Hard floors are unaffected — the bash
+   * tool never offers an escalation for read-only roles or scoped children, so
+   * this auto-approval cannot widen them.
    */
   async approveCommand(command: string, opts?: ApproveCommandOptions) {
     const isSandboxEscalation = opts?.reason === "sandbox_denied";
-    if (this.opts.isYolo() && !isSandboxEscalation) return true;
+    if (this.opts.isYolo()) return true;
 
     const classification = isSandboxEscalation ? null : classifyCommandDetailed(command);
     if (classification?.autoApprove) return true;

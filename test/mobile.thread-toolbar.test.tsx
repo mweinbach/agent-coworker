@@ -18,6 +18,7 @@ const actualRuntimeClient = require("../apps/mobile/src/features/cowork/runtimeC
 const actualPairingStore = require("../apps/mobile/src/features/pairing/pairingStore");
 const actualFeedDisplay = require("../apps/mobile/src/features/cowork/feedDisplay");
 const actualDisplayPreferencesStore = require("../apps/mobile/src/features/preferences/displayPreferencesStore");
+const actualActivityGroups = require("../apps/mobile/src/features/cowork/activityGroups");
 
 const realUseWorkspaceStore = actualWorkspaceStore.useWorkspaceStore;
 const realUseThreadStore = actualThreadStore.useThreadStore;
@@ -175,7 +176,7 @@ mockLocalModule("@/components/ui/status-pill", "apps/mobile/src/components/ui/st
 mockLocalModule(
   "@/features/cowork/activityGroups",
   "apps/mobile/src/features/cowork/activityGroups",
-  () => ({ buildChatRenderItems: () => [] }),
+  () => ({ ...actualActivityGroups, buildChatRenderItems: () => [] }),
 );
 mockLocalModule(
   "@/features/cowork/feedDisplay",
@@ -265,6 +266,11 @@ describe("mobile thread toolbar affordances", () => {
       "@/features/cowork/feedDisplay",
       "apps/mobile/src/features/cowork/feedDisplay",
       () => ({ filterFeedForDisplay: realFilterFeedForDisplay }),
+    );
+    mockLocalModule(
+      "@/features/cowork/activityGroups",
+      "apps/mobile/src/features/cowork/activityGroups",
+      () => actualActivityGroups,
     );
     mockLocalModule(
       "@/features/preferences/displayPreferencesStore",

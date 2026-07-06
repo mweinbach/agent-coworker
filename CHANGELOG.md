@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.13 - 2026-07-06
+
+### Fixed
+
+- **GitHub CI full-suite isolation** — Restores partial mobile module mocks,
+  injects persisted AgentSession `runTurn` mocks directly, and waits for the
+  desktop chat shell to settle before asserting window-mode restoration.
+- **Windows release smoke** — Gives the presentation preview renderer subprocess
+  tests enough time to start on slower Windows x64 CI runners.
+
 ## 1.2.12 - 2026-07-06
 
 ### Fixed

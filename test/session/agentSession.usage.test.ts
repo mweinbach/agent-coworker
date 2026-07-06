@@ -515,6 +515,7 @@ describe("AgentSession", () => {
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
+        runTurnImpl: mockRunTurn,
       });
 
       session.getSessionUsage();

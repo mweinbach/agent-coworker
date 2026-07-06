@@ -42,11 +42,13 @@ import type {
   SkillInstallationEntry,
   SkillInstallPreview,
   SkillUpdateCheckResult,
+  TurnReference,
 } from "../lib/wsProtocol";
 import type {
   ReasoningEffortValue,
   WorkspaceProviderOptions,
 } from "./openaiCompatibleProviderOptions";
+import type { FileAttachmentInput } from "./store.helpers/jsonRpcSocket";
 
 export type WorkspaceUserProfile = {
   instructions: string;
@@ -638,6 +640,28 @@ export type PromptModalState =
   | { kind: "ask"; threadId: string; prompt: AskPrompt }
   | { kind: "approval"; threadId: string; prompt: ApprovalPrompt }
   | null;
+
+/**
+ * Modal offering to start a local LM Studio server after `turn/start` was
+ * rejected with `reason: "lmstudio_unreachable"`. `retry` holds the rejected
+ * message so it can be re-sent with the SAME clientMessageId once the server
+ * is running (the optimistic bubble stays in the feed and dedups the echo).
+ */
+export type LmStudioStartModalState = {
+  threadId: string;
+  workspaceId: string;
+  baseUrl: string;
+  installed: boolean;
+  canAutoStart: boolean;
+  phase: "prompt" | "starting" | "failed";
+  errorDetail?: string | null;
+  retry: {
+    text: string;
+    clientMessageId: string;
+    attachments?: FileAttachmentInput[];
+    references?: TurnReference[];
+  } | null;
+};
 
 export type Notification = {
   id: string;

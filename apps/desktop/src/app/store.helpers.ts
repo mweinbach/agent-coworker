@@ -88,6 +88,7 @@ import type {
   OnboardingStep,
   PersistedOnboardingState,
   PersistedPrivacyTelemetrySettings,
+  LmStudioStartModalState,
   PersistedProviderUiState,
   PrivacyTelemetrySettings,
   PromptModalState,
@@ -224,6 +225,7 @@ export type AppStoreState = {
   workspaceExplorerRefreshById: Record<string, number>;
 
   promptModal: PromptModalState;
+  lmStudioStartModal: LmStudioStartModalState | null;
   /**
    * Pending sandbox-denial escalations rendered inline in the chat feed, keyed by
    * threadId. Sandbox escapes use this inline path; ordinary approvals
@@ -705,6 +707,8 @@ export type AppStoreState = {
   }) => Promise<import("../lib/wsProtocol").LibreOfficeRuntimeDiagnostic | null>;
   setLmStudioEnabled: (enabled: boolean) => Promise<void>;
   setLmStudioModelVisible: (modelId: string, visible: boolean) => Promise<void>;
+  startLmStudioServerAndRetry: () => Promise<void>;
+  dismissLmStudioStartModal: () => void;
 
   loadAllThreadUsage: () => Promise<void>;
 

@@ -12,6 +12,10 @@ export const jsonRpcProviderRequestSchemas = {
     jsonRpcControlRequestSchemas["cowork/provider/codexAppServer/status"],
   "cowork/provider/codexAppServer/update":
     jsonRpcControlRequestSchemas["cowork/provider/codexAppServer/update"],
+  "cowork/provider/lmstudio/local/status":
+    jsonRpcControlRequestSchemas["cowork/provider/lmstudio/local/status"],
+  "cowork/provider/lmstudio/local/start":
+    jsonRpcControlRequestSchemas["cowork/provider/lmstudio/local/start"],
   "cowork/provider/auth/authorize": jsonRpcControlRequestSchemas["cowork/provider/auth/authorize"],
   "cowork/provider/auth/logout": jsonRpcControlRequestSchemas["cowork/provider/auth/logout"],
   "cowork/provider/auth/callback": jsonRpcControlRequestSchemas["cowork/provider/auth/callback"],
@@ -38,6 +42,10 @@ export const jsonRpcProviderResultSchemas = {
     jsonRpcControlResultSchemas["cowork/provider/codexAppServer/status"],
   "cowork/provider/codexAppServer/update":
     jsonRpcControlResultSchemas["cowork/provider/codexAppServer/update"],
+  "cowork/provider/lmstudio/local/status":
+    jsonRpcControlResultSchemas["cowork/provider/lmstudio/local/status"],
+  "cowork/provider/lmstudio/local/start":
+    jsonRpcControlResultSchemas["cowork/provider/lmstudio/local/start"],
   "cowork/provider/auth/authorize": jsonRpcControlResultSchemas["cowork/provider/auth/authorize"],
   "cowork/provider/auth/logout": jsonRpcControlResultSchemas["cowork/provider/auth/logout"],
   "cowork/provider/auth/callback": jsonRpcControlResultSchemas["cowork/provider/auth/callback"],

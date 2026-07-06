@@ -274,6 +274,50 @@ describe("JsonRpcSocket runtime", () => {
     });
   });
 
+  test("preserves structured JSON-RPC error data on request failures", async () => {
+    FakeWebSocket.instances = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws = FakeWebSocket.instances[0]!;
+    await ws.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    const requestPromise = socket.request("turn/start", { threadId: "chat-1" });
+    await ws.emitMessage(
+      JSON.stringify({
+        id: 2,
+        error: {
+          code: -32600,
+          message: "LM Studio isn't running at http://localhost:1234.",
+          data: {
+            reason: "lmstudio_unreachable",
+            provider: "lmstudio",
+            baseUrl: "http://localhost:1234",
+            installed: true,
+            canAutoStart: true,
+          },
+        },
+      }),
+    );
+
+    await expect(requestPromise).rejects.toMatchObject({
+      jsonRpcCode: -32600,
+      jsonRpcData: {
+        reason: "lmstudio_unreachable",
+        baseUrl: "http://localhost:1234",
+        installed: true,
+        canAutoStart: true,
+      },
+    });
+  });
+
   test("queues only retryable operations and enforces queue bounds across reconnect", async () => {
     FakeWebSocket.instances = [];
     const timers = createManualTimers();

@@ -404,6 +404,8 @@ async function flushAsyncWork() {
   }
 }
 
+const defaultRefreshProviderStatus = useAppStore.getState().refreshProviderStatus;
+
 function seedActiveThreadState() {
   useAppStore.setState({
     selectedWorkspaceId: "ws-jsonrpc",
@@ -510,6 +512,8 @@ describe("desktop JSON-RPC single connection path", () => {
       latestTodosByThreadId: {},
       workspaceExplorerById: {},
       promptModal: null,
+      lmStudioStartModal: null,
+      refreshProviderStatus: defaultRefreshProviderStatus,
       notifications: [],
       providerStatusByName: {},
       providerStatusLastUpdatedAt: null,
@@ -864,6 +868,189 @@ describe("desktop JSON-RPC single connection path", () => {
     });
     expect(useAppStore.getState().composerText).toBe("");
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/start");
+  });
+
+  test("opens the LM Studio start modal and keeps the optimistic bubble on lmstudio_unreachable", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestHandlers.set("turn/start", () => {
+      const error = new Error("LM Studio isn't running at http://localhost:1234.") as Error & {
+        jsonRpcCode?: number;
+        jsonRpcData?: unknown;
+      };
+      error.jsonRpcCode = -32600;
+      error.jsonRpcData = {
+        reason: "lmstudio_unreachable",
+        provider: "lmstudio",
+        baseUrl: "http://localhost:1234",
+        installed: true,
+        canAutoStart: true,
+      };
+      throw error;
+    });
+
+    await useAppStore.getState().sendMessage("hello local model");
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    // Composer unblocked, optimistic bubble retained, and NO error row: the
+    // modal owns the failure UX for this rejection.
+    expect(runtime?.pendingTurnStart).toBeNull();
+    expect(runtime?.feed.map((item) => item.kind)).toEqual(["message"]);
+    const bubble = runtime?.feed[0];
+    expect(bubble).toMatchObject({ kind: "message", role: "user", text: "hello local model" });
+
+    const modal = useAppStore.getState().lmStudioStartModal;
+    expect(modal).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      workspaceId: "ws-jsonrpc",
+      baseUrl: "http://localhost:1234",
+      installed: true,
+      canAutoStart: true,
+      phase: "prompt",
+    });
+    expect(modal?.retry?.clientMessageId).toBe(bubble?.id ?? "");
+    expect(modal?.retry?.text).toBe("hello local model");
+  });
+
+  test("start-and-retry re-sends the held message with the same clientMessageId", async () => {
+    seedActiveThreadState();
+    let lmStudioDown = true;
+    jsonRpcRequestHandlers.set("turn/start", () => {
+      if (lmStudioDown) {
+        const error = new Error("LM Studio isn't running at http://localhost:1234.") as Error & {
+          jsonRpcData?: unknown;
+        };
+        error.jsonRpcData = {
+          reason: "lmstudio_unreachable",
+          provider: "lmstudio",
+          baseUrl: "http://localhost:1234",
+          installed: true,
+          canAutoStart: true,
+        };
+        throw error;
+      }
+      return {
+        turn: { id: "turn-1", threadId: "jsonrpc-thread-1", status: "inProgress", items: [] },
+      };
+    });
+    jsonRpcRequestHandlers.set("cowork/provider/lmstudio/local/start", () => {
+      lmStudioDown = false;
+      return {
+        status: { ok: true, installed: true, running: true, baseUrl: "http://localhost:1234" },
+      };
+    });
+    useAppStore.setState({ refreshProviderStatus: async () => {} });
+
+    await useAppStore.getState().sendMessage("hello local model");
+    await flushAsyncWork();
+    const heldClientMessageId =
+      useAppStore.getState().lmStudioStartModal?.retry?.clientMessageId ?? "";
+    expect(heldClientMessageId).not.toBe("");
+
+    // Async state refreshes leaked from earlier tests in this file can clear
+    // the seeded `threads` array while flushing. Restore only the thread list
+    // (never threadRuntimeById) so the retained optimistic feed still proves
+    // the retry does not duplicate the bubble.
+    if (useAppStore.getState().threads.length === 0) {
+      useAppStore.setState({
+        threads: [
+          {
+            id: "jsonrpc-thread-1",
+            workspaceId: "ws-jsonrpc",
+            title: "New session",
+            createdAt: "2026-03-21T00:00:00.000Z",
+            lastMessageAt: "2026-03-21T00:00:00.000Z",
+            status: "active",
+            sessionId: "jsonrpc-thread-1",
+            messageCount: 0,
+            lastEventSeq: 0,
+          },
+        ],
+      } as any);
+    }
+
+    await useAppStore.getState().startLmStudioServerAndRetry();
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().lmStudioStartModal).toBeNull();
+    const startParams = jsonRpcRequests.find(
+      (entry) => entry.method === "cowork/provider/lmstudio/local/start",
+    )?.params;
+    expect(startParams).toMatchObject({ baseUrl: "http://localhost:1234" });
+    const turnStarts = jsonRpcRequests.filter((entry) => entry.method === "turn/start");
+    expect(turnStarts).toHaveLength(2);
+    expect((turnStarts[1]?.params as { clientMessageId?: string }).clientMessageId).toBe(
+      heldClientMessageId,
+    );
+
+    // Exactly one user bubble: the retry reuses the optimistic message.
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    const bubbles = runtime?.feed.filter((item) => item.kind === "message" && item.role === "user");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles?.[0]?.id).toBe(heldClientMessageId);
+    expect(runtime?.feed.some((item) => item.kind === "error")).toBe(false);
+  });
+
+  test("failed start keeps the modal with the failure detail", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestHandlers.set("turn/start", () => {
+      const error = new Error("LM Studio isn't running.") as Error & { jsonRpcData?: unknown };
+      error.jsonRpcData = {
+        reason: "lmstudio_unreachable",
+        provider: "lmstudio",
+        baseUrl: "http://localhost:1234",
+        installed: true,
+        canAutoStart: true,
+      };
+      throw error;
+    });
+    jsonRpcRequestHandlers.set("cowork/provider/lmstudio/local/start", () => ({
+      status: {
+        ok: false,
+        installed: true,
+        running: false,
+        baseUrl: "http://localhost:1234",
+        message: "LM Studio did not become reachable at http://localhost:1234: daemon crashed",
+      },
+    }));
+
+    await useAppStore.getState().sendMessage("hello local model");
+    await flushAsyncWork();
+    await useAppStore.getState().startLmStudioServerAndRetry();
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().lmStudioStartModal).toMatchObject({
+      phase: "failed",
+      errorDetail: expect.stringContaining("daemon crashed"),
+    });
+    expect(jsonRpcRequests.filter((entry) => entry.method === "turn/start")).toHaveLength(1);
+  });
+
+  test("dismissing the LM Studio modal leaves a visible not-sent marker", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestHandlers.set("turn/start", () => {
+      const error = new Error("LM Studio isn't running.") as Error & { jsonRpcData?: unknown };
+      error.jsonRpcData = {
+        reason: "lmstudio_unreachable",
+        provider: "lmstudio",
+        baseUrl: "http://localhost:1234",
+        installed: true,
+        canAutoStart: true,
+      };
+      throw error;
+    });
+
+    await useAppStore.getState().sendMessage("hello local model");
+    await flushAsyncWork();
+    useAppStore.getState().dismissLmStudioStartModal();
+
+    expect(useAppStore.getState().lmStudioStartModal).toBeNull();
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.feed.map((item) => item.kind)).toEqual(["message", "error"]);
+    expect(runtime?.feed.at(-1)).toMatchObject({
+      kind: "error",
+      message: expect.stringContaining("Message not sent"),
+    });
   });
 
   test("tracks a pending turn start locally after an optimistic send", async () => {

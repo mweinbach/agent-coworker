@@ -17,6 +17,39 @@ type JsonRpcTurnSteerOutcome =
   | Extract<SessionEvent, { type: "steer_accepted" }>
   | JsonRpcSessionError;
 
+/**
+ * Reject a turn before it reaches the session when the thread is pointed at a
+ * local LM Studio server that is not running. The typed `data` payload lets
+ * clients offer to start LM Studio and retry with the same clientMessageId;
+ * because the rejection happens before `sendUserMessage`, the send is
+ * retry-safe.
+ */
+async function rejectIfLmStudioUnreachable(
+  context: JsonRpcRouteContext,
+  ws: Parameters<JsonRpcRouteContext["jsonrpc"]["sendError"]>[0],
+  id: Parameters<JsonRpcRouteContext["jsonrpc"]["sendError"]>[1],
+  runtime: { read?: { publicConfig?: { provider?: string }; configEvent?: { config?: unknown } } },
+): Promise<boolean> {
+  const service = context.lmstudioLocal;
+  if (!service) return false;
+  if (runtime.read?.publicConfig?.provider !== "lmstudio") return false;
+  const config = runtime.read?.configEvent?.config as { providerOptions?: unknown } | undefined;
+  const status = await service.getStatus({ providerOptions: config?.providerOptions });
+  if (status.running) return false;
+  context.jsonrpc.sendError(ws, id, {
+    code: JSONRPC_ERROR_CODES.invalidRequest,
+    message: `LM Studio isn't running at ${status.baseUrl}. Start LM Studio's local server and try again.`,
+    data: {
+      reason: "lmstudio_unreachable",
+      provider: "lmstudio",
+      baseUrl: status.baseUrl,
+      installed: status.installed,
+      canAutoStart: status.canAutoStart,
+    },
+  });
+  return true;
+}
+
 export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "turn/start": async (ws, message) => {
@@ -47,6 +80,9 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
         });
+        return;
+      }
+      if (await rejectIfLmStudioUnreachable(context, ws, message.id, binding.runtime)) {
         return;
       }
       const outcome = await captureBindingOutcome(

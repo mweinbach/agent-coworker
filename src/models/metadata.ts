@@ -8,6 +8,7 @@ import {
   resolveDefaultBedrockModelMetadata,
 } from "../providers/bedrockShared";
 import { readCustomModelStore } from "../providers/customModels";
+import { isLmStudioError } from "../providers/lmstudio/client";
 import {
   buildLmStudioPlaceholderMetadata,
   resolveDefaultLmStudioModelMetadata,
@@ -575,21 +576,44 @@ export async function resolveModelMetadata(
     });
   }
   try {
-    return await resolveLmStudioDiscoveredModelMetadata({
+    const resolved = await resolveLmStudioDiscoveredModelMetadata({
       modelId: normalizedModelId,
       providerOptions: opts.providerOptions,
       env: opts.env,
       fetchImpl: opts.fetchImpl,
     });
+    clearLmStudioPlaceholderWarnings(normalizedModelId);
+    return resolved;
   } catch (error) {
     if (opts.allowPlaceholder) {
-      opts.log?.(
-        `[lmstudio] using conservative placeholder metadata for ${normalizedModelId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      // Prompt loading resolves metadata on every turn, so an offline LM Studio
+      // would repeat this warning endlessly; log once per server+model until
+      // the model resolves successfully again.
+      const warningKey = `${isLmStudioError(error) ? error.baseUrl : "unknown"}::${normalizedModelId}`;
+      if (!lmStudioPlaceholderWarningKeys.has(warningKey)) {
+        lmStudioPlaceholderWarningKeys.add(warningKey);
+        opts.log?.(
+          `[lmstudio] using conservative placeholder metadata for ${normalizedModelId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       return buildLmStudioPlaceholderMetadata(normalizedModelId);
     }
     throw error;
   }
+}
+
+const lmStudioPlaceholderWarningKeys = new Set<string>();
+
+function clearLmStudioPlaceholderWarnings(normalizedModelId: string): void {
+  for (const key of lmStudioPlaceholderWarningKeys) {
+    if (key.endsWith(`::${normalizedModelId}`)) {
+      lmStudioPlaceholderWarningKeys.delete(key);
+    }
+  }
+}
+
+export function resetLmStudioPlaceholderWarningCacheForTests(): void {
+  lmStudioPlaceholderWarningKeys.clear();
 }
 
 export async function resolveDefaultModelMetadata(

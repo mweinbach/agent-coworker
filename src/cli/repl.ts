@@ -877,6 +877,10 @@ export async function runCliRepl(
         });
       } catch (err) {
         console.error(`Error: ${String(err)}`);
+        const errorData = (err as { jsonRpcData?: { reason?: string } } | null)?.jsonRpcData;
+        if (errorData?.reason === "lmstudio_unreachable") {
+          console.log("hint: start it with `lms server start` (or open LM Studio), then resend.");
+        }
         if (!socket) {
           handleDisconnect(rl, NOT_CONNECTED_MSG);
           return;

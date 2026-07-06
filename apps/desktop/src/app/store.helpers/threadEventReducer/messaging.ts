@@ -1,3 +1,4 @@
+import { parseLmStudioUnreachableError } from "../../../lib/lmStudioLocalError";
 import type { TurnReference } from "../../../lib/wsProtocol";
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
 import type { StoreGet, StoreSet } from "../../store.helpers";
@@ -260,7 +261,39 @@ export function createMessagingModule(
       clientMessageId,
       attachments,
       references,
-    ).catch(() => {
+    ).catch((error) => {
+      const lmStudio = parseLmStudioUnreachableError(error);
+      if (lmStudio) {
+        // The server rejected the turn before it reached the session, so the
+        // send is retry-safe: keep the optimistic bubble, unblock the
+        // composer, and open the start-LM-Studio modal holding the retry
+        // payload (same clientMessageId dedups the re-send).
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          const pendingCleared =
+            rt && rt.pendingTurnStart?.clientMessageId === clientMessageId
+              ? {
+                  threadRuntimeById: {
+                    ...s.threadRuntimeById,
+                    [threadId]: { ...rt, pendingTurnStart: null },
+                  },
+                }
+              : {};
+          return {
+            ...pendingCleared,
+            lmStudioStartModal: {
+              threadId,
+              workspaceId,
+              baseUrl: lmStudio.baseUrl,
+              installed: lmStudio.installed,
+              canAutoStart: lmStudio.canAutoStart,
+              phase: "prompt",
+              retry: { text, clientMessageId, attachments, references },
+            },
+          };
+        });
+        return;
+      }
       surfaceJsonRpcTurnSendFailure(set, threadId, {
         pendingTurnStartClientMessageId: clientMessageId,
       });

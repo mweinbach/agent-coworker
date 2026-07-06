@@ -3,6 +3,7 @@ import {
   getCodexAppServerInstallStatus,
   updateManagedCodexAppServer,
 } from "../../../providers/codexAppServerResolver";
+import { isLoopbackBaseUrl } from "../../../providers/lmstudio/local";
 import type { AgentConfig } from "../../../types";
 import { isProviderName } from "../../../types";
 import { FILE_LOCK_ACQUIRE_TIMEOUT_MS } from "../../../utils/fileLock";
@@ -139,6 +140,54 @@ export function createProviderRouteHandlers(
       await closePooledCodexAppServerClients();
       const status = await updateManagedCodexAppServer({
         force: params.force === true,
+      });
+      context.jsonrpc.sendResult(ws, message.id, { status });
+    },
+
+    "cowork/provider/lmstudio/local/status": async (ws, message) => {
+      const service = context.lmstudioLocal;
+      if (!service) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.internalError,
+          message: "LM Studio local service is unavailable on this server",
+        });
+        return;
+      }
+      const params = toJsonRpcParams(message.params);
+      const baseUrl = typeof params.baseUrl === "string" ? params.baseUrl : undefined;
+      const status = await service.getStatus({
+        ...(baseUrl ? { baseUrl } : {}),
+        providerOptions: context.getConfig().providerOptions,
+      });
+      context.jsonrpc.sendResult(ws, message.id, { status });
+    },
+
+    "cowork/provider/lmstudio/local/start": async (ws, message) => {
+      const service = context.lmstudioLocal;
+      if (!service) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.internalError,
+          message: "LM Studio local service is unavailable on this server",
+        });
+        return;
+      }
+      const params = toJsonRpcParams(message.params);
+      const baseUrl = typeof params.baseUrl === "string" ? params.baseUrl : undefined;
+      const timeoutMs =
+        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+          ? params.timeoutMs
+          : undefined;
+      if (baseUrl && !isLoopbackBaseUrl(baseUrl)) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} can only start a local LM Studio server (got ${baseUrl})`,
+        });
+        return;
+      }
+      const status = await service.start({
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        providerOptions: context.getConfig().providerOptions,
       });
       context.jsonrpc.sendResult(ws, message.id, { status });
     },

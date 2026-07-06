@@ -360,6 +360,40 @@ const codexAppServerInstallStatusEnvelopeSchema = z
   })
   .strict();
 
+const lmStudioLocalStatusSchema = z
+  .object({
+    installed: z.boolean(),
+    running: z.boolean(),
+    baseUrl: nonEmptyTrimmedStringSchema,
+    canAutoStart: z.boolean(),
+    cliPath: z.string().optional(),
+    message: z.string().optional(),
+    checkedAt: z.string(),
+  })
+  .passthrough();
+
+const lmStudioLocalStatusEnvelopeSchema = z
+  .object({
+    status: lmStudioLocalStatusSchema,
+  })
+  .strict();
+
+const lmStudioLocalStartResultSchema = z
+  .object({
+    ok: z.boolean(),
+    installed: z.boolean(),
+    running: z.boolean(),
+    baseUrl: nonEmptyTrimmedStringSchema,
+    message: z.string().optional(),
+  })
+  .passthrough();
+
+const lmStudioLocalStartEnvelopeSchema = z
+  .object({
+    status: lmStudioLocalStartResultSchema,
+  })
+  .strict();
+
 const libreOfficeRuntimeCheckRequestSchema = cwdRequestSchema
   .extend({
     smoke: z.boolean().optional(),
@@ -1423,6 +1457,21 @@ const providerCodexAppServerUpdateRequestSchema = z
   })
   .strict();
 
+const providerLmStudioLocalStatusRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    baseUrl: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const providerLmStudioLocalStartRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    baseUrl: optionalNonEmptyTrimmedStringSchema,
+    timeoutMs: z.number().int().positive().max(60_000).optional(),
+  })
+  .strict();
+
 const providerAuthAuthorizeRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1930,6 +1979,8 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/status/refresh": providerStatusRefreshRequestSchema,
   "cowork/provider/codexAppServer/status": providerCodexAppServerStatusRequestSchema,
   "cowork/provider/codexAppServer/update": providerCodexAppServerUpdateRequestSchema,
+  "cowork/provider/lmstudio/local/status": providerLmStudioLocalStatusRequestSchema,
+  "cowork/provider/lmstudio/local/start": providerLmStudioLocalStartRequestSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeCheckRequestSchema,
   "cowork/provider/auth/authorize": providerAuthAuthorizeRequestSchema,
   "cowork/provider/auth/logout": providerAuthLogoutRequestSchema,
@@ -2024,6 +2075,8 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/status/refresh": sessionEventEnvelope(providerStatusEventSchema),
   "cowork/provider/codexAppServer/status": codexAppServerInstallStatusEnvelopeSchema,
   "cowork/provider/codexAppServer/update": codexAppServerInstallStatusEnvelopeSchema,
+  "cowork/provider/lmstudio/local/status": lmStudioLocalStatusEnvelopeSchema,
+  "cowork/provider/lmstudio/local/start": lmStudioLocalStartEnvelopeSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeDiagnosticEnvelopeSchema,
   "cowork/provider/auth/authorize": sessionEventEnvelope(
     z.union([providerAuthChallengeEventSchema, providerAuthResultEventSchema]),

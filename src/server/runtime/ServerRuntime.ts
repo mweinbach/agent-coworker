@@ -5,6 +5,7 @@ import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
 import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
+import { createLmStudioLocalService } from "../../providers/lmstudio/local";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
@@ -718,6 +719,7 @@ export async function createAgentServerRuntime(
         await startupReadyPromise;
       },
     },
+    lmstudioLocal: createLmStudioLocalService({ env }),
     jsonrpc: {
       send: (ws, payload) => sendQueue.send(ws, payload),
       sendResult: (ws, id, result) => sendQueue.send(ws, buildJsonRpcResultResponse(id, result)),

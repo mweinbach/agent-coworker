@@ -109,6 +109,7 @@ export type JsonRpcSocketInvalidMessage = {
 
 type JsonRpcRequestError = Error & {
   jsonRpcCode?: number;
+  jsonRpcData?: unknown;
 };
 
 export type JsonRpcSocketReconnectEvent = {
@@ -581,6 +582,9 @@ export class JsonRpcSocket {
     if (message.error) {
       const error = new Error(message.error.message) as JsonRpcRequestError;
       error.jsonRpcCode = message.error.code;
+      if (message.error.data !== undefined) {
+        error.jsonRpcData = message.error.data;
+      }
       pending.reject(error);
       return;
     }

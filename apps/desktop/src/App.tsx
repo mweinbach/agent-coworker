@@ -40,6 +40,7 @@ import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
+import { LmStudioStartDialog } from "./ui/chat/LmStudioStartDialog";
 import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
@@ -636,6 +637,7 @@ export default function App() {
         <ChatShell init={init} ready={ready} startupError={startupError} />
       )}
       <PromptModal />
+      <LmStudioStartDialog />
       {windowMode === "main" ? <FilePreviewModal /> : null}
       {windowMode === "main" ? (
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />

@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.42`
+- Current protocol version: `7.43`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -277,6 +277,8 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/status/refresh`
   - `cowork/provider/codexAppServer/status`
   - `cowork/provider/codexAppServer/update`
+  - `cowork/provider/lmstudio/local/status`
+  - `cowork/provider/lmstudio/local/start`
   - `cowork/provider/auth/authorize`
   - `cowork/provider/auth/logout`
   - `cowork/provider/auth/callback`
@@ -812,6 +814,14 @@ active promoted task use `lockKind: "active_source_chat"` plus the active `taskI
 `taskTitle`; clients should route users to the active task rather than rendering terminal lifecycle
 actions.
 
+`turn/start` on a thread whose provider is `lmstudio` is rejected with `-32600` before the message
+reaches the session when the configured LM Studio server is not reachable. The rejection carries
+structured `error.data` `{ "reason": "lmstudio_unreachable", "provider": "lmstudio", "baseUrl":
+string, "installed": boolean, "canAutoStart": boolean }`. Because the message never entered the
+session, the send is retry-safe: clients should keep the optimistic user message, offer to start LM
+Studio via `cowork/provider/lmstudio/local/start`, and re-issue `turn/start` with the **same**
+`clientMessageId` once the server is running.
+
 ### JSON-RPC overload behavior
 
 Cowork reserves JSON-RPC error code `-32001` for bounded-queue overload handling:
@@ -838,6 +848,22 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.43`:
+
+- Added `cowork/provider/lmstudio/local/status` returning `{ status }` with `installed` (LM Studio's
+  bundled `lms` CLI is present), `running` (the configured base URL answered an HTTP probe),
+  `baseUrl`, `canAutoStart` (installed and the base URL is loopback), optional `cliPath`/`message`,
+  and `checkedAt`.
+- Added `cowork/provider/lmstudio/local/start` which runs `lms server start` headlessly against the
+  loopback base URL and polls until the server is reachable (default 20s, `timeoutMs` up to 60s).
+  Returns `{ status }` with `ok`, `installed`, `running`, `baseUrl`, and optional `message`;
+  failures are reported as `ok: false` rather than JSON-RPC errors. Non-loopback base URLs are
+  rejected with `invalidParams`.
+- `turn/start` rejects with structured `error.data` (`reason: "lmstudio_unreachable"`) before the
+  message reaches the session when the thread's provider is `lmstudio` and the local server is
+  unreachable, so clients can offer to start LM Studio and retry with the same `clientMessageId`.
+  See [JSON-RPC error codes](#json-rpc-error-codes).
 
 Changes in `7.41`:
 

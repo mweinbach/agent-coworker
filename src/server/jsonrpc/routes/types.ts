@@ -1,4 +1,5 @@
 import type { LibreOfficeCapabilityDiagnostic } from "../../../coworkRuntime";
+import type { LmStudioLocalService } from "../../../providers/lmstudio/local";
 import type { SkillImprovementService } from "../../../skillImprovement";
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
@@ -175,6 +176,7 @@ export interface JsonRpcRouteContext {
       };
     };
   };
+  lmstudioLocal?: LmStudioLocalService;
   jsonrpc: {
     send(ws: StartServerSocket, payload: unknown): void;
     sendResult(ws: StartServerSocket, id: JsonRpcLiteId, result: unknown): void;

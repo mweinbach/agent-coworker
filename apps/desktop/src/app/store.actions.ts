@@ -4,6 +4,7 @@ import { createBootstrapActions } from "./store.actions/bootstrap";
 import { createOpenAiNativeConnectorActions } from "./store.actions/connectors";
 import { createExplorerActions } from "./store.actions/explorer";
 import { createImportActions } from "./store.actions/import";
+import { createLmStudioLocalActions } from "./store.actions/lmstudioLocal";
 import { createMarketplaceActions } from "./store.actions/marketplaces";
 import { createWorkspaceMcpActions } from "./store.actions/mcp";
 import { createWorkspaceMemoryActions } from "./store.actions/memory";
@@ -39,6 +40,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createOpenAiNativeConnectorActions(set, get),
     ...createWorkspaceMemoryActions(set, get),
     ...createProviderActions(set, get),
+    ...createLmStudioLocalActions(set, get),
     ...createRuntimeDiagnosticsActions(set, get),
     ...createExplorerActions(set, get),
     ...createPreviewActions(set, get),

@@ -46,6 +46,7 @@ const initialState: AppStoreDataState = {
   workspaceExplorerRefreshById: {},
 
   promptModal: null,
+  lmStudioStartModal: null,
   sandboxApprovalsByThread: {},
   filePreview: null,
   canvasActiveTab: "preview",

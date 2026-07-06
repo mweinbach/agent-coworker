@@ -21,6 +21,7 @@ import { openAiNativeConnectorsEventSchema } from "./openaiNativeConnectors";
 
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
+const skillImprovementScopeSchema = z.enum(["user", "all"]);
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const optionalNonEmptyTrimmedStringSchema = nonEmptyTrimmedStringSchema.optional();
 const sourceHashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -169,6 +170,10 @@ const sessionConfigEventSchema = z
         memoryRequireApproval: z.boolean().optional(),
         advancedMemory: z.boolean().optional(),
         memoryGenerationModel: z.string().optional(),
+        skillImprovementEnabled: z.boolean().optional(),
+        skillImprovementModel: z.string().optional(),
+        skillImprovementScope: skillImprovementScopeSchema.optional(),
+        skillImprovementExcludedSkills: z.array(z.string()).optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
@@ -610,6 +615,81 @@ const advancedMemoryListEventSchema = z
     folder: z.string(),
     folders: z.array(z.string()),
     memories: z.array(advancedMemoryEntrySchema),
+  })
+  .passthrough();
+
+const skillImprovementRunHistoryEntrySchema = z
+  .object({
+    id: z.string(),
+    skillName: z.string(),
+    status: z.enum(["completed", "failed", "skipped"]),
+    startedAt: z.string(),
+    finishedAt: z.string(),
+    message: z.string(),
+    usageCount: z.number().int().nonnegative(),
+    error: z.string().optional(),
+  })
+  .passthrough();
+
+const skillImprovementBackupRecordSchema = z
+  .object({
+    key: z.string(),
+    skillName: z.string(),
+    sourceRootDir: z.string(),
+    backupRootDir: z.string(),
+    createdAt: z.string(),
+    restoreMode: z.enum(["copy-back", "delete-shadow"]),
+    shadowRootDir: z.string().optional(),
+  })
+  .passthrough();
+
+const skillImprovementEligibilitySchema = z
+  .object({
+    skillName: z.string(),
+    installationId: z.string(),
+    scope: z.enum(["project", "user", "global", "built-in"]),
+    enabled: z.boolean(),
+    effective: z.boolean(),
+    eligible: z.boolean(),
+    included: z.boolean(),
+    excluded: z.boolean(),
+    writable: z.boolean(),
+    sourceKind: z.enum(["user", "marketplace", "plugin", "built-in", "invalid"]),
+    reason: z.string().optional(),
+    rootDir: z.string(),
+    skillPath: z.string(),
+    hasBackup: z.boolean(),
+    pluginName: z.string().optional(),
+  })
+  .passthrough();
+
+const skillImprovementPendingJobSchema = z
+  .object({
+    key: z.string(),
+    skillName: z.string(),
+    runAt: z.string(),
+    lastUsageAt: z.string(),
+    usageCount: z.number().int().nonnegative(),
+    status: z.enum(["pending", "running"]).optional(),
+    sources: z.array(z.enum(["skill-tool", "at-mention"])),
+    kinds: z.array(z.enum(["tool", "reference"])),
+  })
+  .passthrough();
+
+export const skillImprovementStatusEventSchema = z
+  .object({
+    type: z.literal("skill_improvement_status"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    enabled: z.boolean(),
+    model: z.string().optional(),
+    scope: skillImprovementScopeSchema,
+    excludedSkills: z.array(z.string()),
+    busy: z.boolean(),
+    blockReason: z.string().nullable(),
+    pendingJobs: z.array(skillImprovementPendingJobSchema),
+    runHistory: z.array(skillImprovementRunHistoryEntrySchema),
+    backups: z.array(skillImprovementBackupRecordSchema),
+    skills: z.array(skillImprovementEligibilitySchema),
   })
   .passthrough();
 
@@ -1779,6 +1859,26 @@ const workspaceBackupsDeleteEntryRequestSchema = z
   })
   .strict();
 
+const skillImprovementStatusRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const skillImprovementRunRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    skillName: optionalNonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const skillImprovementRestoreRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    skillName: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const sessionStateReadRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1798,6 +1898,11 @@ const sessionDefaultsApplyRequestSchema = z
         advancedMemory: z.boolean().optional(),
         memoryGenerationModel: z.string().optional(),
         clearMemoryGenerationModel: z.boolean().optional(),
+        skillImprovementEnabled: z.boolean().optional(),
+        skillImprovementModel: z.string().optional(),
+        clearSkillImprovementModel: z.boolean().optional(),
+        skillImprovementScope: skillImprovementScopeSchema.optional(),
+        skillImprovementExcludedSkills: z.array(z.string()).optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         clearToolOutputOverflowChars: z.boolean().optional(),
         preferredChildModel: z.string().optional(),
@@ -1906,6 +2011,9 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/backups/workspace/restore": workspaceBackupsRestoreRequestSchema,
   "cowork/backups/workspace/deleteCheckpoint": workspaceBackupsDeleteCheckpointRequestSchema,
   "cowork/backups/workspace/deleteEntry": workspaceBackupsDeleteEntryRequestSchema,
+  "cowork/skills/improvement/status": skillImprovementStatusRequestSchema,
+  "cowork/skills/improvement/run": skillImprovementRunRequestSchema,
+  "cowork/skills/improvement/restore": skillImprovementRestoreRequestSchema,
   "cowork/session/state/read": sessionStateReadRequestSchema,
   "cowork/session/defaults/apply": sessionDefaultsApplyRequestSchema,
 } as const;
@@ -2003,6 +2111,9 @@ export const jsonRpcControlResultSchemas = {
   "cowork/backups/workspace/restore": sessionEventEnvelope(workspaceBackupsEventSchema),
   "cowork/backups/workspace/deleteCheckpoint": sessionEventEnvelope(workspaceBackupsEventSchema),
   "cowork/backups/workspace/deleteEntry": sessionEventEnvelope(workspaceBackupsEventSchema),
+  "cowork/skills/improvement/status": sessionEventEnvelope(skillImprovementStatusEventSchema),
+  "cowork/skills/improvement/run": sessionEventEnvelope(skillImprovementStatusEventSchema),
+  "cowork/skills/improvement/restore": sessionEventEnvelope(skillImprovementStatusEventSchema),
   "cowork/session/state/read": sessionEventsEnvelope(
     z.union([configUpdatedEventSchema, sessionSettingsEventSchema, sessionConfigEventSchema]),
   ),

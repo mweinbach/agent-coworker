@@ -250,6 +250,10 @@ const persistedWorkspaceSchema = z
     ),
     defaultAdvancedMemory: z.boolean().optional(),
     defaultMemoryGenerationModel: z.string().optional(),
+    defaultSkillImprovementEnabled: z.boolean().optional(),
+    defaultSkillImprovementModel: z.string().optional(),
+    defaultSkillImprovementScope: z.enum(["user", "all"]).optional(),
+    defaultSkillImprovementExcludedSkills: z.array(z.string()).optional(),
     yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   })
   .passthrough()
@@ -299,6 +303,10 @@ const persistedWorkspaceSchema = z
       defaultBackupsEnabled: workspace.defaultBackupsEnabled,
       defaultAdvancedMemory: workspace.defaultAdvancedMemory,
       defaultMemoryGenerationModel: workspace.defaultMemoryGenerationModel,
+      defaultSkillImprovementEnabled: workspace.defaultSkillImprovementEnabled,
+      defaultSkillImprovementModel: workspace.defaultSkillImprovementModel,
+      defaultSkillImprovementScope: workspace.defaultSkillImprovementScope,
+      defaultSkillImprovementExcludedSkills: workspace.defaultSkillImprovementExcludedSkills,
       yolo: workspace.yolo,
     };
   });
@@ -1089,6 +1097,10 @@ export function createBootstrapActions(
             "defaultBackupsEnabled",
             "defaultAdvancedMemory",
             "defaultMemoryGenerationModel",
+            "defaultSkillImprovementEnabled",
+            "defaultSkillImprovementModel",
+            "defaultSkillImprovementScope",
+            "defaultSkillImprovementExcludedSkills",
             "yolo",
           ];
           const patch: Record<string, unknown> = {};

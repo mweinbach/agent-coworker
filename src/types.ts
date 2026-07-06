@@ -272,6 +272,31 @@ export interface AgentConfig {
   memoryGenerationModel?: string;
 
   /**
+   * Whether the beta background skill improvement system is enabled. When true,
+   * completed turns that used skills are debounced into headless improvement
+   * jobs. Defaults to false.
+   */
+  skillImprovementEnabled?: boolean;
+
+  /**
+   * Optional model override for the headless skill-improvement agent. Falls
+   * back to the preferred child model and then the active session model.
+   */
+  skillImprovementModel?: string;
+
+  /**
+   * Which skill sources the beta improver may target. `user` limits changes to
+   * user-installed writable skills; `all` adds marketplace/plugin skills
+   * (improved in place after the original is backed up — plugin updates
+   * overwrite in-place improvements) and bundled built-in skills (improved via
+   * a backed-up shadow copy under the global skills directory).
+   */
+  skillImprovementScope?: "user" | "all";
+
+  /** Skill names excluded from automatic skill improvement. */
+  skillImprovementExcludedSkills?: string[];
+
+  /**
    * Whether to include raw model stream chunks in emitted stream events.
    * Defaults to true when not specified.
    */

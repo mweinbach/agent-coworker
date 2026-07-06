@@ -539,6 +539,10 @@ const persistedWorkspaceSchema = z
     defaultAllowedChildModelRefs: z.array(nonEmptyStringSchema).optional(),
     defaultAdvancedMemory: z.boolean().optional(),
     defaultMemoryGenerationModel: optionalNonEmptyStringSchema,
+    defaultSkillImprovementEnabled: z.boolean().optional(),
+    defaultSkillImprovementModel: optionalNonEmptyStringSchema,
+    defaultSkillImprovementScope: z.enum(["user", "all"]).optional(),
+    defaultSkillImprovementExcludedSkills: z.array(nonEmptyStringSchema).optional(),
     defaultToolOutputOverflowChars: z.preprocess((value) => {
       if (value === undefined) return undefined;
       if (value === null) return null;

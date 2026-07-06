@@ -31,6 +31,7 @@ import type {
   TaskDirectiveResult,
   TaskReviewMaterialReference,
 } from "../../shared/tasks";
+import type { SkillUsageRecord } from "../../skillImprovement/types";
 import type {
   AgentConfig,
   ChildModelRoutingMode,
@@ -81,6 +82,10 @@ export type PersistedProjectConfigPatch = Partial<
     | "memoryRequireApproval"
     | "advancedMemory"
     | "memoryGenerationModel"
+    | "skillImprovementEnabled"
+    | "skillImprovementModel"
+    | "skillImprovementScope"
+    | "skillImprovementExcludedSkills"
     | "observabilityEnabled"
     | "backupsEnabled"
     | "toolOutputOverflowChars"
@@ -90,6 +95,7 @@ export type PersistedProjectConfigPatch = Partial<
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
   clearMemoryGenerationModel?: boolean;
+  clearSkillImprovementModel?: boolean;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
@@ -148,6 +154,8 @@ export type SessionRuntimeState = {
   pendingSteers: PendingSteer[];
   pendingExternalSkillRefreshReason: string | null;
   currentTurnOutcome: "completed" | "cancelled" | "error";
+  currentTurnMessageStartIndex: number;
+  currentTurnSkillUsages: SkillUsageRecord[];
   maxSteps: number;
   todos: TodoItem[];
   sessionInfo: SessionInfoState;
@@ -303,6 +311,15 @@ export type SessionDependencies = {
     sourceSessionId: string;
     allWorkspaces?: boolean;
   }) => Promise<void>;
+  recordSkillImprovementUsageImpl?: (usage: {
+    sessionId: string;
+    turnId: string;
+    workingDirectory: string;
+    messageStartIndex: number;
+    messageEndIndex: number;
+    transcript: string;
+    usages: SkillUsageRecord[];
+  }) => void | Promise<void>;
 };
 
 export type SessionContext = {

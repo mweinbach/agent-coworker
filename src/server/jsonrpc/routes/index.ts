@@ -14,6 +14,7 @@ import { createProviderRouteHandlers } from "./provider";
 import { createResearchRouteHandlers } from "./research";
 import { createRuntimeRouteHandlers } from "./runtime";
 import { createSessionRouteHandlers } from "./session";
+import { createSkillImprovementRouteHandlers } from "./skillImprovement";
 import { createSkillsRouteHandlers } from "./skills";
 import { createTaskRouteHandlers } from "./tasks";
 import { createThreadRouteHandlers } from "./thread";
@@ -46,6 +47,7 @@ export function createJsonRpcRequestRouter(
     ...createImportRouteHandlers(context),
     ...createMemoryRouteHandlers(context),
     ...createWorkspaceBackupRouteHandlers(context),
+    ...createSkillImprovementRouteHandlers(context),
     ...createWorkspaceRouteHandlers(context),
     // Gate the durable Tasks routes behind the `tasks` feature flag. When off,
     // task/* methods are unregistered and resolve to methodNotFound below.

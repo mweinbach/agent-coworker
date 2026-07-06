@@ -384,6 +384,27 @@ function asNonEmptyString(v: unknown): string | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+function asStringArray(v: unknown): string[] | undefined {
+  if (Array.isArray(v)) {
+    return v
+      .map((item) => asNonEmptyString(item))
+      .filter((item): item is string => typeof item === "string");
+  }
+  const parsed = stringSchema.safeParse(v);
+  if (!parsed.success) return undefined;
+  return parsed.data
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function asSkillImprovementScope(v: unknown): AgentConfig["skillImprovementScope"] | undefined {
+  const parsed = stringSchema.safeParse(v);
+  if (!parsed.success) return undefined;
+  const normalized = parsed.data.trim().toLowerCase();
+  return normalized === "user" || normalized === "all" ? normalized : undefined;
+}
+
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
   const parsed = stringSchema.safeParse(maybeRelative);
   if (!parsed.success || !parsed.data) return baseDir;
@@ -695,6 +716,30 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(builtInDefaults.memoryGenerationModel) ||
     undefined;
 
+  const skillImprovementEnabled =
+    asBoolean(env.AGENT_SKILL_IMPROVEMENT) ??
+    asBoolean(userConfig.skillImprovementEnabled) ??
+    asBoolean(builtInDefaults.skillImprovementEnabled) ??
+    false;
+
+  const skillImprovementModel =
+    asNonEmptyString(env.AGENT_SKILL_IMPROVEMENT_MODEL) ||
+    asNonEmptyString(userConfig.skillImprovementModel) ||
+    asNonEmptyString(builtInDefaults.skillImprovementModel) ||
+    undefined;
+
+  const skillImprovementScope =
+    asSkillImprovementScope(env.AGENT_SKILL_IMPROVEMENT_SCOPE) ??
+    asSkillImprovementScope(userConfig.skillImprovementScope) ??
+    asSkillImprovementScope(builtInDefaults.skillImprovementScope) ??
+    "user";
+
+  const skillImprovementExcludedSkills =
+    asStringArray(env.AGENT_SKILL_IMPROVEMENT_EXCLUDED_SKILLS) ??
+    asStringArray(userConfig.skillImprovementExcludedSkills) ??
+    asStringArray(builtInDefaults.skillImprovementExcludedSkills) ??
+    [];
+
   const includeRawChunks =
     asBoolean(env.AGENT_INCLUDE_RAW_CHUNKS) ??
     asBoolean(projectConfig.includeRawChunks) ??
@@ -850,6 +895,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     memoryRequireApproval,
     advancedMemory,
     ...(memoryGenerationModel ? { memoryGenerationModel } : {}),
+    skillImprovementEnabled,
+    ...(skillImprovementModel ? { skillImprovementModel } : {}),
+    skillImprovementScope,
+    skillImprovementExcludedSkills,
     includeRawChunks,
     tasksEnabled,
     experimentalFeatures: {

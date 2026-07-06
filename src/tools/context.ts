@@ -18,6 +18,7 @@ import type {
   TaskDirectiveResult,
   TaskReviewMaterialReference,
 } from "../shared/tasks";
+import type { SkillUsageRecord } from "../skillImprovement/types";
 import type { AgentConfig, ApproveCommandOptions, HarnessContextState, TodoItem } from "../types";
 
 export interface AgentControl {
@@ -117,6 +118,9 @@ export interface ToolContext {
 
   /** Notify the session when an advanced-memory tool mutates a memory folder. */
   onAdvancedMemoryChanged?: (folder: string) => void | Promise<void>;
+
+  /** Notify the session when a skill is loaded during the active turn. */
+  onSkillUsed?: (usage: Omit<SkillUsageRecord, "turnId" | "usedAt">) => void | Promise<void>;
 
   /**
    * Server-authoritative write gate for tools with side effects. Mutating tools

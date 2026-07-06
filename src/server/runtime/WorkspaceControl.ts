@@ -21,6 +21,11 @@ type WorkspaceControlRefreshEvent = Extract<
   }
 >;
 
+/** Events pushed over `cowork/control/event` beyond the refresh snapshot set. */
+type WorkspaceControlPushEvent =
+  | WorkspaceControlRefreshEvent
+  | Extract<SessionEvent, { type: "skill_improvement_status" }>;
+
 export class WorkspaceControl {
   private readonly stateIds = new Map<string, string>();
   private readonly subscribers = new Map<string, Map<string, StartServerSocket>>();
@@ -122,6 +127,19 @@ export class WorkspaceControl {
     }
   }
 
+  /**
+   * Push a server-global skill-improvement status to every subscribed
+   * workspace. Skill improvement state lives under the user home, so all
+   * connected clients should see queue/history changes as they happen.
+   */
+  broadcastSkillImprovementStatus(
+    event: Extract<SessionEvent, { type: "skill_improvement_status" }>,
+  ): void {
+    for (const cwd of this.subscribers.keys()) {
+      this.notifySubscribers(cwd, event);
+    }
+  }
+
   private getOrCreateStateId(cwd: string): string {
     const existing = this.stateIds.get(cwd);
     if (existing) {
@@ -204,6 +222,12 @@ export class WorkspaceControl {
           ...(controlConfig.memoryGenerationModel
             ? { memoryGenerationModel: controlConfig.memoryGenerationModel }
             : {}),
+          skillImprovementEnabled: controlConfig.skillImprovementEnabled ?? false,
+          ...(controlConfig.skillImprovementModel
+            ? { skillImprovementModel: controlConfig.skillImprovementModel }
+            : {}),
+          skillImprovementScope: controlConfig.skillImprovementScope ?? "user",
+          skillImprovementExcludedSkills: controlConfig.skillImprovementExcludedSkills ?? [],
           preferredChildModel: controlConfig.preferredChildModel,
           childModelRoutingMode: controlConfig.childModelRoutingMode ?? "same-provider",
           preferredChildModelRef,
@@ -225,7 +249,7 @@ export class WorkspaceControl {
     ];
   }
 
-  private notifySubscribers(cwd: string, event: WorkspaceControlRefreshEvent): void {
+  private notifySubscribers(cwd: string, event: WorkspaceControlPushEvent): void {
     const subscribers = this.subscribers.get(cwd);
     if (!subscribers || subscribers.size === 0) {
       return;

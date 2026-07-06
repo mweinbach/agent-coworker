@@ -185,6 +185,10 @@ export function createWorkspaceDefaultsActions(
       backupsEnabled?: boolean;
       advancedMemory?: boolean;
       memoryGenerationModel?: string | null;
+      skillImprovementEnabled?: boolean;
+      skillImprovementModel?: string | null;
+      skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
+      skillImprovementExcludedSkills?: string[];
       toolOutputOverflowChars?: number | null;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -201,6 +205,10 @@ export function createWorkspaceDefaultsActions(
       defaultBackupsEnabled?: boolean;
       advancedMemory?: boolean;
       memoryGenerationModel?: string;
+      skillImprovementEnabled?: boolean;
+      skillImprovementModel?: string;
+      skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
+      skillImprovementExcludedSkills?: string[];
       defaultToolOutputOverflowChars?: number | null;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
@@ -254,6 +262,44 @@ export function createWorkspaceDefaultsActions(
         } else if (currentMemoryGenerationModel !== undefined) {
           configPatch.clearMemoryGenerationModel = true;
         }
+      }
+    }
+
+    if (
+      typeof opts.desired.skillImprovementEnabled === "boolean" &&
+      opts.desired.skillImprovementEnabled !== currentSessionConfig.skillImprovementEnabled
+    ) {
+      configPatch.skillImprovementEnabled = opts.desired.skillImprovementEnabled;
+    }
+
+    if (Object.hasOwn(opts.desired, "skillImprovementModel")) {
+      const currentSkillImprovementModel =
+        currentSessionConfig.skillImprovementModel?.trim() || undefined;
+      const desiredSkillImprovementModel = opts.desired.skillImprovementModel?.trim() || undefined;
+      if (desiredSkillImprovementModel !== currentSkillImprovementModel) {
+        if (desiredSkillImprovementModel) {
+          configPatch.skillImprovementModel = desiredSkillImprovementModel;
+        } else if (currentSkillImprovementModel !== undefined) {
+          configPatch.clearSkillImprovementModel = true;
+        }
+      }
+    }
+
+    if (
+      opts.desired.skillImprovementScope &&
+      opts.desired.skillImprovementScope !== currentSessionConfig.skillImprovementScope
+    ) {
+      configPatch.skillImprovementScope = opts.desired.skillImprovementScope;
+    }
+
+    if (Object.hasOwn(opts.desired, "skillImprovementExcludedSkills")) {
+      const currentExcludedSkills = currentSessionConfig.skillImprovementExcludedSkills ?? [];
+      const desiredExcludedSkills = opts.desired.skillImprovementExcludedSkills ?? [];
+      if (
+        currentExcludedSkills.length !== desiredExcludedSkills.length ||
+        currentExcludedSkills.some((skill, index) => skill !== desiredExcludedSkills[index])
+      ) {
+        configPatch.skillImprovementExcludedSkills = desiredExcludedSkills;
       }
     }
 
@@ -390,6 +436,10 @@ export function createWorkspaceDefaultsActions(
         workspace.defaultToolOutputOverflowChars,
       defaultAdvancedMemory: memoryDefaults.defaultAdvancedMemory,
       defaultMemoryGenerationModel: memoryDefaults.defaultMemoryGenerationModel,
+      defaultSkillImprovementEnabled: memoryDefaults.defaultSkillImprovementEnabled,
+      defaultSkillImprovementModel: memoryDefaults.defaultSkillImprovementModel,
+      defaultSkillImprovementScope: memoryDefaults.defaultSkillImprovementScope,
+      defaultSkillImprovementExcludedSkills: memoryDefaults.defaultSkillImprovementExcludedSkills,
       providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
         workspace.providerOptions,
         normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions),
@@ -501,6 +551,10 @@ export function createWorkspaceDefaultsActions(
               backupsEnabled: nextWorkspace.defaultBackupsEnabled,
               advancedMemory: memoryDefaults.advancedMemory,
               memoryGenerationModel: memoryDefaults.memoryGenerationModel,
+              skillImprovementEnabled: memoryDefaults.skillImprovementEnabled,
+              skillImprovementModel: memoryDefaults.skillImprovementModel,
+              skillImprovementScope: memoryDefaults.skillImprovementScope,
+              skillImprovementExcludedSkills: memoryDefaults.skillImprovementExcludedSkills,
               toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
               yolo: nextWorkspace.yolo,
               ...(preferredChildModel ? { preferredChildModel } : {}),
@@ -771,6 +825,10 @@ export function createWorkspaceDefaultsActions(
           yolo: ws.yolo,
           advancedMemory: memoryDefaults.advancedMemory,
           memoryGenerationModel: memoryDefaults.memoryGenerationModel,
+          skillImprovementEnabled: memoryDefaults.skillImprovementEnabled,
+          skillImprovementModel: memoryDefaults.skillImprovementModel,
+          skillImprovementScope: memoryDefaults.skillImprovementScope,
+          skillImprovementExcludedSkills: memoryDefaults.skillImprovementExcludedSkills,
           ...(mode === "explicit"
             ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }
             : harnessToolOutputOverflowChars !== undefined
@@ -898,6 +956,10 @@ export function createWorkspaceDefaultsActions(
         clearDefaultToolOutputOverflowChars === true ||
         workspacePatch.defaultAdvancedMemory !== undefined ||
         workspacePatch.defaultMemoryGenerationModel !== undefined ||
+        workspacePatch.defaultSkillImprovementEnabled !== undefined ||
+        workspacePatch.defaultSkillImprovementModel !== undefined ||
+        workspacePatch.defaultSkillImprovementScope !== undefined ||
+        workspacePatch.defaultSkillImprovementExcludedSkills !== undefined ||
         workspacePatch.defaultEnableMcp !== undefined ||
         workspacePatch.defaultBackupsEnabled !== undefined ||
         workspacePatch.providerOptions !== undefined ||

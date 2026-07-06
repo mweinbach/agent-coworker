@@ -88,11 +88,21 @@ describe("skill tool", () => {
     config.skillsDirs = [path.join(dir, "skills")];
     const ctx = makeCtx(dir);
     ctx.config = config;
+    const onSkillUsed = mock(async () => {});
+    ctx.onSkillUsed = onSkillUsed;
 
     const t: any = createSkillTool(ctx);
     const res: string = await t.execute({ skillName: "xlsx" });
     expect(res).toContain("XLSX Skill");
     expect(res).toContain("Instructions here.");
+    expect(onSkillUsed).toHaveBeenCalledTimes(1);
+    expect(onSkillUsed).toHaveBeenCalledWith({
+      skillName: "xlsx",
+      kind: "tool",
+      source: "skill-tool",
+      skillPath: path.join(skillDir, "SKILL.md"),
+      skillSource: "project",
+    });
   });
 
   test("does not load non-spec flat file layout", async () => {

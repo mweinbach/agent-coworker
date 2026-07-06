@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.41`
+- Current protocol version: `7.42`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -48,6 +48,8 @@ env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP co
 local subprocess) while connecting. The `cowork/memory/*` surface (including the
 `cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the
 workspace-settings permission, because memory holds long-lived private user/project content.
+`cowork/skills/improvement/*` likewise requires workspace-settings access because it reads skill
+usage state, runs local skill-file edits, and can restore skill backups.
 `cowork/plugins/install/preview` and `cowork/skills/install/preview` also require the
 workspace-settings permission, because they materialize an attacker-selectable local or GitHub
 source (only the passive plugin/skill catalog/list/detail reads stay always-allowed). The workspace
@@ -317,6 +319,9 @@ Currently implemented `cowork/*` methods include:
   - `cowork/skills/installation/update`
   - `cowork/skills/installation/copy`
   - `cowork/skills/installation/checkUpdate`
+  - `cowork/skills/improvement/status`
+  - `cowork/skills/improvement/run`
+  - `cowork/skills/improvement/restore`
 - plugin controls
   - `cowork/plugins/catalog/read`
   - `cowork/plugins/read`
@@ -360,6 +365,32 @@ Currently implemented `cowork/*` methods include:
     explicit-folder delete route.
   - `cowork/memory/advanced/folder/generate` — params `{ cwd?, folder, threadId }`; administrative
     explicit-folder history-generation route.
+- skill improvement controls (beta; uses recent skill usage to update eligible local skills and
+  keeps restore backups before edits). Each result returns a `skill_improvement_status` event with
+  `{ enabled, model?, scope, excludedSkills, busy, blockReason, pendingJobs, runHistory, backups, skills }`.
+  `skills[]` reports eligibility/inclusion per installed skill; `pendingJobs[]` reports debounced
+  usage-driven jobs; `backups[]` are restorable pre-change copies. The `user` scope covers writable
+  user-installed skills; the `all` scope adds marketplace/plugin skills (improved in place after the
+  original is backed up) and bundled built-in skills (improved via a backed-up shadow copy under the
+  global skills directory). After background scheduler runs finish, the server also pushes a fresh
+  `skill_improvement_status` event to subscribed clients as a `cowork/control/event` notification.
+  - `cowork/skills/improvement/status` — params `{ cwd? }`; reads queue, history, backup, and
+    eligibility state.
+  - `cowork/skills/improvement/run` — params `{ cwd?, skillName? }`; with `skillName`, runs that
+    skill's queued job now (a skill with no recorded usage evidence records a `skipped` history
+    entry instead of running without evidence); without `skillName`, drains every queued job in
+    order. Busy-session and cross-process gates still apply; gated manual runs record a `skipped`
+    history entry and stay queued. Project-scope skills queue per workspace (the request `cwd`
+    selects among same-named jobs), and usage recorded while a run is in flight stays queued for
+    the next debounce window.
+  - `cowork/skills/improvement/restore` — params `{ cwd?, skillName }`; restores the pre-improvement
+    original for that skill (or deletes the shadow copy for built-ins) and removes the backup
+    record. Fails with a JSON-RPC error while a session is running or when no backup exists.
+  - Failed improvement runs roll back that run's changes from a pre-run snapshot, so earlier
+    improvements and manual edits survive; the `Restore` action always returns to the state before
+    the first improvement. Serialized turn transcripts for queued jobs are stored under
+    `~/.cowork/skill-improvement/` until the job runs; plugin updates overwrite in-place
+    improvements (the backup still restores the pre-improvement original).
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`
@@ -434,7 +465,7 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/runtime/diagnostics/read` returns `{ diagnostics }` with `startup.ready`, `sendQueue` counters (`queuedSends`, `droppedDeltas`, `droppedImportant`, serialization/send failures, max/current queue depth), `journal` counters (untrusted thread count, failed writes, dropped journal events, pending threads), and `dbLocks` counters (write-lock waits, timeouts, SQLite lock errors, stale lock recoveries). Clients should use these counters for support diagnostics and to decide whether a reconnect gap needs a full thread snapshot refresh. While `startup.ready` is false, thread list/read/hydrate traffic may continue, but new turn mutations are held until background startup finishes.
 
-`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive.
+`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive. Skill improvement defaults use `skillImprovementEnabled`, `skillImprovementModel`, `clearSkillImprovementModel`, `skillImprovementScope: "user" | "all"`, and `skillImprovementExcludedSkills: string[]`; `skillImprovementModel` and `clearSkillImprovementModel` are mutually exclusive.
 
 `cowork/session/delete` is workspace-scoped. The control session may delete sessions in the active workspace, but attempts to delete a live or persisted session from another workspace fail with a JSON-RPC error.
 

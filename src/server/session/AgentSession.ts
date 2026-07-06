@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   MemoryGenerator,
+  serializeTurnDelta,
   splitMessagesForMemoryBackfill,
 } from "../../advancedMemory/MemoryGenerator";
 import {
@@ -214,6 +215,7 @@ export class AgentSession {
     getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
     readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
     refreshSkillsAcrossWorkspaceSessionsImpl?: SessionDependencies["refreshSkillsAcrossWorkspaceSessionsImpl"];
+    recordSkillImprovementUsageImpl?: SessionDependencies["recordSkillImprovementUsageImpl"];
     initialSkillCatalogMtimeSnapshot?: string | null;
     hydratedState?: HydratedSessionState;
     initialSessionSnapshot?: SessionSnapshot;
@@ -269,6 +271,8 @@ export class AgentSession {
       pendingSteers: [],
       pendingExternalSkillRefreshReason: null,
       currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
+      currentTurnMessageStartIndex: seededMessages.length,
+      currentTurnSkillUsages: [],
       maxSteps: 100,
       todos: seededTodos,
       sessionInfo: hydratedSessionInfo ?? {
@@ -392,6 +396,7 @@ export class AgentSession {
       getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,
       readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,
       refreshSkillsAcrossWorkspaceSessionsImpl: opts.refreshSkillsAcrossWorkspaceSessionsImpl,
+      recordSkillImprovementUsageImpl: opts.recordSkillImprovementUsageImpl,
     };
 
     if (seededHarnessContext) {
@@ -544,6 +549,7 @@ export class AgentSession {
         this.sendUserMessage(text, clientMessageId, displayText),
       flushPendingExternalSkillRefresh: async () => await this.flushPendingExternalSkillRefresh(),
       triggerMemoryGeneration: () => this.triggerMemoryGeneration(),
+      triggerSkillImprovementUsage: () => this.triggerSkillImprovementUsage(),
       getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
       onAdvancedMemoryChanged: async (folder) => await this.onAdvancedMemoryChanged(folder),
@@ -1192,6 +1198,37 @@ export class AgentSession {
       .catch(() => {
         // Generation failures must never affect the user-facing turn or the queue.
       });
+  }
+
+  triggerSkillImprovementUsage(): void {
+    if (!this.state.config.skillImprovementEnabled) return;
+    const usages = this.state.currentTurnSkillUsages;
+    if (usages.length === 0) return;
+    const turnId = usages[0]?.turnId ?? this.state.currentTurnId;
+    if (!turnId) return;
+
+    const messageStartIndex = Math.max(0, this.state.currentTurnMessageStartIndex);
+    const messageEndIndex = this.state.allMessages.length;
+    const deltaMessages = this.state.allMessages.slice(messageStartIndex, messageEndIndex);
+    const transcript = serializeTurnDelta(deltaMessages);
+    const payload = {
+      sessionId: this.id,
+      turnId,
+      workingDirectory: this.state.config.workingDirectory,
+      messageStartIndex,
+      messageEndIndex,
+      transcript,
+      usages: usages.map((usage) => ({ ...usage })),
+    };
+    this.state.currentTurnSkillUsages = [];
+
+    Promise.resolve(this.deps.recordSkillImprovementUsageImpl?.(payload)).catch((error) => {
+      this.context.emit({
+        type: "log",
+        sessionId: this.id,
+        line: `[skill-improvement] failed to record usage: ${String(error)}`,
+      });
+    });
   }
 
   private async runMemoryGenerationOnce(targetMessageIndex: number): Promise<void> {

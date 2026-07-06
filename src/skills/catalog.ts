@@ -110,7 +110,10 @@ function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> |
   }
 }
 
-function parseSkillFrontMatter(raw: string, skillDirName: string): ParsedSkillDocument | null {
+export function parseSkillFrontMatter(
+  raw: string,
+  skillDirName: string,
+): ParsedSkillDocument | null {
   const { frontMatterRaw, body } = splitFrontMatter(raw);
   if (!frontMatterRaw) {
     return null;

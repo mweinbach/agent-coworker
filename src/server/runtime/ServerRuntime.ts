@@ -10,6 +10,7 @@ import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
+import { SkillImprovementService } from "../../skillImprovement";
 import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
 import { resolveVersion } from "../../version";
@@ -360,6 +361,7 @@ export async function createAgentServerRuntime(
   const threadJournal = new ThreadJournal(sessionDb);
   let workspaceControl: WorkspaceControl;
   let skillMutationBus: SkillMutationBus;
+  let skillImprovement: SkillImprovementService;
   registry = new SessionRegistry({
     config,
     env,
@@ -395,6 +397,8 @@ export async function createAgentServerRuntime(
         await skillMutationBus.publish();
       }
     },
+    recordSkillImprovementUsage: async (usage) =>
+      await skillImprovement.recordCompletedTurnUsage(usage),
     onTaskCreatedFromChat: subscribeSourceChatToTaskWorkspace,
   });
   tasks.setThreadFactory(async ({ task, provider, model }) => {
@@ -453,6 +457,40 @@ export async function createAgentServerRuntime(
     refreshLocalSkillState,
   });
   await skillMutationBus.start();
+
+  skillImprovement = new SkillImprovementService({
+    config,
+    // Settings applied through workspace control sessions persist to disk but
+    // never update this module's `config` binding, so always reload the
+    // effective config (optionally for a specific workspace) from disk.
+    getConfig: async (cwd?: string) => {
+      const targetCwd = cwd?.trim() || config.workingDirectory;
+      const fresh = await loadConfig({
+        cwd: targetCwd,
+        env: { ...env, AGENT_WORKING_DIR: targetCwd },
+        homedir: opts.homedir,
+        builtInDir,
+      });
+      const providerOptions = mergeRuntimeProviderOptions(
+        opts.providerOptions,
+        fresh.providerOptions,
+      );
+      if (providerOptions) fresh.providerOptions = providerOptions;
+      return fresh;
+    },
+    hasBusySessions: () =>
+      [...registry.sessionBindings.values()].some((binding) => binding.runtime?.read.isBusy),
+    signalSkillMutation: async () => {
+      await refreshLocalSkillState({
+        workingDirectory: config.workingDirectory,
+        allWorkspaces: true,
+      });
+      await skillMutationBus.publish();
+    },
+    broadcastStatus: (event) => workspaceControl.broadcastSkillImprovementStatus(event),
+    log: (line) => console.warn(line),
+  });
+  skillImprovement.start();
 
   const runStartupReadinessWork = async (): Promise<void> => {
     const failures: string[] = [];
@@ -557,6 +595,7 @@ export async function createAgentServerRuntime(
     getConfig: () => config,
     homedir: opts.homedir,
     research,
+    skillImprovement,
     tasks,
     taskRequests: {
       onStarted: ({ ws, method, workspacePath }) => {
@@ -807,6 +846,7 @@ export async function createAgentServerRuntime(
         markStartupReady(new Error("Server stopped before startup completed"));
       }
       disposeDesktopStateWatcher?.();
+      skillImprovement.stop();
       skillMutationBus.stop();
       workspaceControl.clearSubscribers();
       taskSubscribers.clear();

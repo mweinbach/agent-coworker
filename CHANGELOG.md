@@ -4,6 +4,71 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.9 - 2026-07-05
+
+### Added
+
+- **User-configured marketplaces in the harness** — Adds a persisted
+  user-level marketplace registry (`~/.cowork/config/marketplaces.json`)
+  with the built-in marketplace as an implicit, non-removable first entry.
+  Plugin and skill catalogs, available-item offers, plugin detail
+  lookups, and sourceHash-based update annotation now aggregate across
+  every configured marketplace, with per-marketplace failure isolation. New
+  JSON-RPC methods `cowork/marketplaces/read`, `add`, and `remove` return a
+  `marketplaces_list` event; `add` validates the manifest before persisting
+  and both mutations refresh the remote-inclusive skill and plugin catalogs.
+  Documented in `docs/websocket-protocol.md`.
+- **Marketplace management in the Tool Access Marketplace tab** — The
+  Marketplace tab gains an Add marketplace dialog (GitHub repo or URL,
+  validated server-side before saving) and a Marketplace sources list
+  showing each configured catalog with display name, repo, plugin and
+  skill counts, a Built-in badge, an unreachable state, and confirmed
+  removal for user-added sources. Store plumbing mirrors the plugin and
+  skill patterns with a marketplace mutation domain whose pending keys
+  clear via the server's catalog refresh events. Skill install and
+  preview failures now surface the server's actual error message instead
+  of a generic fallback.
+- **Marketplace detail dialog and MCP OAuth UI refresh** — Exposes
+  marketplace contents via `cowork/marketplaces/detail` and refreshes MCP
+  connector auth state automatically after browser OAuth completes.
+- **Unauthenticated OAuth connectors treated as awaiting sign-in** — An
+  OAuth connector that has not been signed in yet is a to-do, not a
+  failure. The collapsed row shows a clickable amber "Authenticate" pill
+  that starts the OAuth flow instead of a red failed-validation icon; the
+  expanded panel promotes "Sign in" to the primary action with the
+  paste-a-code fallback tucked behind a more menu, and a failed
+  connection check reads "Waiting for sign-in" until authentication
+  completes. Genuine failures on authenticated servers still show as
+  failures. Dropdown menus portal to an explicit `document.body` container
+  so they mount under the Bun test harness, matching the dialog pattern.
+- **Marketplace folded into Skills and Plugins tabs** — The standalone
+  Marketplace tab is gone: the Skills tab now hosts a Marketplace section
+  with available skills, the Add marketplace dialog, and the marketplace
+  sources list, while the Plugins tab shows an "Available from
+  marketplaces" section only when a marketplace offers an uninstalled
+  plugin. Tab search filters the available cards too.
+
+### Fixed
+
+- **Marketplace registry path derived from session cowork home** — The
+  registry file resolved through `resolveCoworkHomedir`, which falls
+  back to the real OS home whenever `userCoworkDir` is not literally
+  named `.cowork`, so isolated sessions and tests silently read and wrote
+  the developer's registry and session-level plugin catalog tests hung
+  on hydration. The path now derives strictly from
+  `config.userCoworkDir` (identical location in production:
+  `~/.cowork/config/marketplaces.json`). Also switches the default remote
+  marketplace transport to `globalThis.fetch` so Bun tests that mock the
+  global fetch do not escape to network during catalog refresh
+  verification.
+- **Windows ARM64 release artifacts kept** — Restores the Windows ARM64
+  desktop release matrix entry, `latest-arm64.yml` publication path, and
+  arch-specific unpacked binary validation while keeping the native
+  Windows ARM64 smoke job out of the release gate, so release
+  publication depends only on supported macOS and Windows x64 package
+  artifacts and workflow/docs match that contract. (Supersedes the
+  earlier `fix: drop Windows ARM64 desktop release gate`.)
+
 ## 1.2.8 - 2026-07-05
 
 ### Added

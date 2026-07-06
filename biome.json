@@ -22,7 +22,8 @@
       "!!config/models",
       "!!.agents",
       "!!.claude",
-      "!!skills"
+      "!!skills",
+      "!!docs/generated"
     ]
   },
   "formatter": {

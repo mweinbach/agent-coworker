@@ -2560,7 +2560,7 @@ describe("commit-pinned plugin updates", () => {
     });
     const catalog = await buildPluginCatalogSnapshot(config);
     const plugin = catalog.plugins.find((entry) => entry.id === "figma-toolkit");
-    if (!plugin || !plugin.installed) throw new Error("Expected installed figma-toolkit entry");
+    if (!plugin?.installed) throw new Error("Expected installed figma-toolkit entry");
     return plugin;
   }
 

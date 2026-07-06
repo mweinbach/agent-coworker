@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import JSZip from "jszip";
+
 import { FOUNDATION_MODELS_KOFFI_TRIPLET } from "../apps/desktop/electron/services/sidecar";
 import { __internal } from "../scripts/build_desktop_resources";
 import {
@@ -222,9 +224,8 @@ describe("desktop resource build helpers", () => {
     [WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]: "prebuilt-command-runner",
   } as const;
 
-  // The zip fixture spawns PowerShell on Windows, whose cold start can be slow on
-  // CI runners (windows-11-arm exceeds bun's 5s default test timeout). Build the
-  // fixture once and give the prebuilt tests explicit generous timeouts.
+  // Keep one reusable in-process zip fixture so the prebuilt tests exercise real
+  // archive extraction without depending on slow platform zip CLIs.
   const PREBUILT_TEST_TIMEOUT_MS = 60_000;
   let prebuiltZipBytesPromise: Promise<Buffer> | null = null;
 
@@ -234,39 +235,11 @@ describe("desktop resource build helpers", () => {
 
   function getPrebuiltZipBytes(): Promise<Buffer> {
     prebuiltZipBytesPromise ??= (async () => {
-      const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-prebuilt-zip-"));
-      try {
-        const zipInputDir = path.join(fixtureDir, "input");
-        await fs.mkdir(zipInputDir, { recursive: true });
-        for (const [name, contents] of Object.entries(PREBUILT_BINARIES)) {
-          await fs.writeFile(path.join(zipInputDir, name), contents);
-        }
-        const zipPath = path.join(fixtureDir, PREBUILT_ZIP_NAME);
-        // Windows CI runners have no `zip` CLI; mirror the platform split in extractZipArchive.
-        const zipCommand =
-          process.platform === "win32"
-            ? [
-                "powershell.exe",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                `Compress-Archive -Path '${zipInputDir.replace(/'/g, "''")}\\*' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force`,
-              ]
-            : ["zip", "-j", "-q", zipPath, ...Object.keys(PREBUILT_BINARIES)];
-        const zipProc = Bun.spawn(zipCommand, {
-          cwd: zipInputDir,
-          stdout: "ignore",
-          stderr: "inherit",
-        });
-        if ((await zipProc.exited) !== 0) {
-          throw new Error("Failed to create test zip fixture");
-        }
-        return Buffer.from(await fs.readFile(zipPath));
-      } finally {
-        await fs.rm(fixtureDir, { recursive: true, force: true });
+      const zip = new JSZip();
+      for (const [name, contents] of Object.entries(PREBUILT_BINARIES)) {
+        zip.file(name, contents);
       }
+      return Buffer.from(await zip.generateAsync({ compression: "STORE", type: "uint8array" }));
     })();
     return prebuiltZipBytesPromise;
   }

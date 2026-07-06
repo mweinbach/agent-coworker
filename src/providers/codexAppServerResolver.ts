@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { fetchWithGitHubAuth } from "../extensions/github";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { execFileCompat } from "../utils/execFileCompat";
 import { sha256FileHex } from "../utils/hash";
@@ -466,12 +467,7 @@ async function fetchCodexRelease(
   const url = opts.version
     ? `${CODEX_RELEASE_TAG_URL}/${codexReleaseTag(opts.version)}`
     : CODEX_RELEASES_LATEST_URL;
-  const response = await fetchImpl(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": CODEX_USER_AGENT,
-    },
-  });
+  const response = await fetchWithGitHubAuth(fetchImpl, url, { "User-Agent": CODEX_USER_AGENT });
   if (!response.ok) {
     throw new Error(
       `Failed to read Codex app-server release metadata: ${response.status} ${response.statusText}`,

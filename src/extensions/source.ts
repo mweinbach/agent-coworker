@@ -9,7 +9,7 @@ import {
   type FetchLike,
   fetchGitHubContent,
   fetchGitHubFile,
-  githubHeaders,
+  fetchWithGitHubAuth,
   type ParsedGitHubSource,
   parseGitHubShorthand,
   parseGitHubUrl,
@@ -230,9 +230,7 @@ async function doesGitHubRefExist(
   repo: string,
   ref: string,
 ): Promise<boolean> {
-  const response = await fetchImpl(buildGitHubApiUrl(repo, ref, ""), {
-    headers: githubHeaders(),
-  });
+  const response = await fetchWithGitHubAuth(fetchImpl, buildGitHubApiUrl(repo, ref, ""));
   if (response.ok) {
     return true;
   }
@@ -273,9 +271,7 @@ async function fetchGitHubDefaultBranch(
   fetchImpl: FetchLike,
   repo: string,
 ): Promise<string | null> {
-  const response = await fetchImpl(`https://api.github.com/repos/${repo}`, {
-    headers: githubHeaders(),
-  });
+  const response = await fetchWithGitHubAuth(fetchImpl, `https://api.github.com/repos/${repo}`);
   if (!response.ok) {
     throw new Error(
       `Failed to fetch GitHub repo metadata for ${repo}: ${await readResponseError(response)}`,

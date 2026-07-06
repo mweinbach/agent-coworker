@@ -1,3 +1,4 @@
+import { fetchWithGitHubAuth } from "../extensions/github";
 import { type FetchLike, fetchGitHubTextFile } from "../extensions/source";
 import type {
   MarketplacePluginCatalogEntry,
@@ -74,7 +75,7 @@ async function fetchRawGitHubTextFile(opts: {
     .filter(Boolean)
     .map((segment) => encodeURIComponent(segment))
     .join("/")}`;
-  const response = await opts.fetchImpl(rawUrl);
+  const response = await fetchWithGitHubAuth(opts.fetchImpl, rawUrl);
   if (!response.ok) {
     const body = (await readResponseText(response)).trim();
     throw new Error(

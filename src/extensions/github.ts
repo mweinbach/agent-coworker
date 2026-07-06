@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { isGitHubTokenHost, resolveGitHubToken } from "./githubToken";
+
 export type FetchLike = typeof fetch;
 
 export type GitHubContentEntry = {
@@ -45,18 +47,39 @@ export function buildGitHubApiUrl(repo: string, ref: string, githubPath: string)
   return `https://api.github.com/repos/${repo}/contents/${encodeGitHubPath(githubPath)}?ref=${encodeURIComponent(ref)}`;
 }
 
-export function githubHeaders(): HeadersInit {
+async function githubHeaders(url: string): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "User-Agent": "agent-coworker-extensions",
   };
 
-  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  if (isGitHubTokenHost(url)) {
+    const token = await resolveGitHubToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
   }
 
   return headers;
+}
+
+/**
+ * Authenticated GitHub GET with an anonymous retry: a stale or under-scoped
+ * locally resolved token (gh keyring, git credential helper) must not break
+ * access to public repos that anonymous requests could still read.
+ */
+export async function fetchWithGitHubAuth(
+  fetchImpl: FetchLike,
+  url: string,
+  extraHeaders?: Record<string, string>,
+): Promise<Response> {
+  const headers = { ...(await githubHeaders(url)), ...extraHeaders };
+  const response = await fetchImpl(url, { headers });
+  if ((response.status === 401 || response.status === 403) && headers.Authorization) {
+    const { Authorization: _authorization, ...anonymousHeaders } = headers;
+    return await fetchImpl(url, { headers: anonymousHeaders });
+  }
+  return response;
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -74,9 +97,7 @@ export async function fetchGitHubContent(
   ref: string,
   githubPath: string,
 ): Promise<GitHubContentEntry | GitHubContentEntry[]> {
-  const response = await fetchImpl(buildGitHubApiUrl(repo, ref, githubPath), {
-    headers: githubHeaders(),
-  });
+  const response = await fetchWithGitHubAuth(fetchImpl, buildGitHubApiUrl(repo, ref, githubPath));
   if (!response.ok) {
     throw new Error(
       `Failed to fetch ${repo}/${githubPath}@${ref}: ${await responseError(response)}`,
@@ -100,9 +121,7 @@ async function fetchGitHubDirectoryEntries(
 }
 
 export async function fetchGitHubFile(fetchImpl: FetchLike, downloadUrl: string): Promise<Buffer> {
-  const response = await fetchImpl(downloadUrl, {
-    headers: githubHeaders(),
-  });
+  const response = await fetchWithGitHubAuth(fetchImpl, downloadUrl);
   if (!response.ok) {
     throw new Error(`Failed to download ${downloadUrl}: ${await responseError(response)}`);
   }

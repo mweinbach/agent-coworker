@@ -2,6 +2,22 @@
 
 Harness observability uses Langfuse's OpenTelemetry processor/runtime and exports traces to Langfuse.
 
+## Local Server File Logs
+
+Independent of Langfuse telemetry, the server writes session `log` and `error` events to
+`~/.cowork/logs/server-YYYY-MM-DD.log` (JSONL, one file per UTC day). This is on by default in every
+build — packaged desktop builds have no terminal, so this file is the durable record of harness tool
+traces and turn failures. Entries pass through the shared diagnostics redaction
+(`src/diagnostics/redaction.ts`) before hitting disk, files are `0600`, and files older than 14 days
+are swept automatically. Set `COWORK_SERVER_FILE_LOGS=0` to disable. Terminal mirroring via
+`COWORK_HARNESS_TERMINAL_LOGS=1` is unchanged and independent.
+
+The server also runs best-effort startup maintenance (`src/server/runtime/startupMaintenance.ts`):
+stale `running`/`pending_init` execution states are reconciled to `errored` before any turn can
+start, model stream chunks for sessions untouched for 30 days are pruned, leaked session snapshot
+temp files are swept, and session-backup roots are pruned (closed-session retention plus aging out
+orphaned, corrupt, abandoned-active, and leaked staging directories).
+
 ## Config Resolution
 
 The harness resolves observability from the same layered config path as the rest of `AgentConfig`:

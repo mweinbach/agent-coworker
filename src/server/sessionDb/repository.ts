@@ -588,6 +588,38 @@ export class SessionDbRepository {
       );
   }
 
+  reconcileStaleExecutionStates(): number {
+    // Sessions killed mid-turn (crash, force-quit) persist execution_state
+    // 'running'/'pending_init' forever; nothing is live at boot, so any such
+    // state is stale. Terminal 'errored' keeps them out of busy checks and
+    // stops thread-list force-inclusion.
+    const result = this.db
+      .query(
+        sql([
+          "UPDATE sessions",
+          "       SET execution_state = 'errored'",
+          "       WHERE execution_state IN ('running', 'pending_init')",
+        ]),
+      )
+      .run();
+    return Number(result.changes ?? 0);
+  }
+
+  pruneModelStreamChunksForStaleSessions(cutoffIso: string): number {
+    const cutoff = parseRequiredIsoTimestamp(cutoffIso, "model_stream_chunk_prune.cutoff");
+    const result = this.db
+      .query(
+        sql([
+          "DELETE FROM session_model_stream_chunks",
+          "       WHERE session_id IN (",
+          "         SELECT session_id FROM sessions WHERE updated_at < ?",
+          "       )",
+        ]),
+      )
+      .run(cutoff);
+    return Number(result.changes ?? 0);
+  }
+
   persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): void {
     this.db
       .query(

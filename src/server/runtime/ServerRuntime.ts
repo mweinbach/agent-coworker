@@ -37,6 +37,7 @@ import { jsonRpcTaskRequestSchemas } from "../jsonrpc/schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../jsonrpc/taskPermissions";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
 import { ResearchService } from "../research/ResearchService";
+import { ServerFileLog, shouldEnableServerFileLog } from "../serverFileLog";
 import { getSessionTaskLock } from "../session/taskLocks";
 import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
 import { readSkillCatalogMtimeSnapshot } from "../skillCatalogMtime";
@@ -46,6 +47,7 @@ import { TaskCoordinator } from "../tasks/TaskCoordinator";
 import type { WebDesktopServiceLike } from "../webDesktopService";
 import { isErrorWithCode, isPlainObject, mergeRuntimeProviderOptions } from "./ConfigPatchStore";
 import { SessionRegistry } from "./SessionRegistry";
+import { runStartupMaintenance } from "./startupMaintenance";
 import { SkillMutationBus } from "./SkillMutationBus";
 import { SocketSendQueue } from "./SocketSendQueue";
 import { ThreadJournal } from "./ThreadJournal";
@@ -230,6 +232,21 @@ export async function createAgentServerRuntime(
     },
   });
   const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir: opts.homedir });
+  // Must complete before any session can start a turn: flips execution states
+  // left as running/pending_init by a previous process that died mid-turn.
+  try {
+    const reconciled = await sessionDb.reconcileStaleExecutionStates();
+    if (reconciled > 0) {
+      console.warn(`[maintenance] reconciled ${reconciled} stale session execution state(s)`);
+    }
+  } catch (error) {
+    console.warn(
+      `[maintenance] execution state reconciliation failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const fileLog = shouldEnableServerFileLog(env)
+    ? new ServerFileLog({ logsDir: aiCoworkerPaths.logsDir })
+    : null;
   const sendQueue = new SocketSendQueue();
   const taskSubscribers = new WorkspaceJsonRpcSubscribers(sendQueue);
   const jsonRpcConnections = new Set<StartServerSocket>();
@@ -368,6 +385,7 @@ export async function createAgentServerRuntime(
     env,
     system,
     discoveredSkills,
+    fileLog,
     yolo: opts.yolo,
     homedir: opts.homedir,
     connectProviderImpl: opts.connectProviderImpl,
@@ -494,6 +512,17 @@ export async function createAgentServerRuntime(
   skillImprovement.start();
 
   const runStartupReadinessWork = async (): Promise<void> => {
+    // Deferred housekeeping (stream-chunk retention, leaked temp files, backup
+    // pruning) must never delay or fail startup readiness.
+    void runStartupMaintenance({
+      sessionDb,
+      sessionsDir: aiCoworkerPaths.sessionsDir,
+      homedir: opts.homedir,
+      log: (line) => console.warn(line),
+    }).catch(() => {
+      // best-effort housekeeping only
+    });
+
     const failures: string[] = [];
     const ensureRuntimeReady = opts.ensureCoworkRuntimeReadyImpl ?? ensureCoworkRuntimeReady;
     const ensureDefaultSkillsReady =
@@ -856,6 +885,7 @@ export async function createAgentServerRuntime(
       threadSubscriptionsByConnectionId.clear();
       await threadJournal.close();
       await registry.disposeAll("server stopping");
+      await fileLog?.flush();
       try {
         sessionDb.close();
       } catch {

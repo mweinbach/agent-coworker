@@ -417,6 +417,18 @@ export class SessionDb {
     return this.readRepository.listModelStreamChunks(sessionId, turnId);
   }
 
+  async reconcileStaleExecutionStates(): Promise<number> {
+    return await this.writeCoordinator.runExclusive("reconcile_stale_execution_states", async () =>
+      this.repository.reconcileStaleExecutionStates(),
+    );
+  }
+
+  async pruneModelStreamChunksForStaleSessions(cutoffIso: string): Promise<number> {
+    return await this.writeCoordinator.runExclusive("prune_model_stream_chunks", async () =>
+      this.repository.pruneModelStreamChunksForStaleSessions(cutoffIso),
+    );
+  }
+
   async appendThreadJournalEvent(opts: Omit<PersistedThreadJournalEvent, "seq">): Promise<number> {
     return await this.writeCoordinator.runExclusive(
       "append_thread_journal_event",

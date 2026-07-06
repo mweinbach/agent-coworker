@@ -43,6 +43,40 @@ async function ensureSecureSessionsDir(sessionsDir: string): Promise<void> {
   }
 }
 
+const STALE_TMP_FILE_AGE_MS = 24 * 60 * 60 * 1000;
+const TMP_FILE_PATTERN = /\.json\.[0-9a-f-]{36}\.tmp$/;
+
+/**
+ * Atomic snapshot writes stage through `<file>.json.<uuid>.tmp`; a crash
+ * between write and rename leaks the temp file forever. Sweeps stragglers
+ * older than a day — anything younger may belong to a write in flight.
+ */
+export async function sweepStaleSessionTmpFiles(
+  paths: Pick<AiCoworkerPaths, "sessionsDir">,
+): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(paths.sessionsDir);
+  } catch {
+    return 0;
+  }
+  const now = Date.now();
+  let removed = 0;
+  for (const entry of entries) {
+    if (!TMP_FILE_PATTERN.test(entry)) continue;
+    const tmpPath = path.join(paths.sessionsDir, entry);
+    try {
+      const stat = await fs.stat(tmpPath);
+      if (now - stat.mtimeMs <= STALE_TMP_FILE_AGE_MS) continue;
+      await fs.rm(tmpPath, { force: true });
+      removed += 1;
+    } catch {
+      // best effort only
+    }
+  }
+  return removed;
+}
+
 export async function readPersistedSessionSnapshot(opts: {
   paths: Pick<AiCoworkerPaths, "sessionsDir">;
   sessionId: string;

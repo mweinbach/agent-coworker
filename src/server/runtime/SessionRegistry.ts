@@ -82,6 +82,7 @@ export type SessionRegistryOptions = {
   recordSkillImprovementUsage?: (usage: CompletedTurnSkillUsage) => void | Promise<void>;
   onThreadListChanged?: () => void;
   onTaskCreatedFromChat?: (input: { sourceSessionId: string; workspacePath: string }) => void;
+  fileLog?: { appendSessionEvent: (event: SessionEvent) => void } | null;
 };
 
 function shouldInvalidateThreadList(evt: SessionEvent): boolean {
@@ -474,6 +475,13 @@ export class SessionRegistry {
           process.stderr.write(`${formatHarnessTerminalLogLine(evt)}\n`);
         } catch {
           // Terminal debug logging must never affect session delivery.
+        }
+      }
+      if (evt.type === "log" || evt.type === "error") {
+        try {
+          this.options.fileLog?.appendSessionEvent(evt);
+        } catch {
+          // File logging must never affect session delivery.
         }
       }
       for (const sink of binding.sinks.values()) {

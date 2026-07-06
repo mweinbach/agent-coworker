@@ -1418,7 +1418,10 @@ export class AgentSession {
   }
 
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
-    await this.getProviderAuthManager().setModel(modelIdRaw, providerRaw);
+    await this.enqueueConfigMutation(async () => {
+      await this.getProviderAuthManager().setModel(modelIdRaw, providerRaw);
+      await this.persistenceManager.waitForIdle();
+    });
   }
 
   async applySessionDefaults(opts: {

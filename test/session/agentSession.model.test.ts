@@ -1,6 +1,9 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { RunTurnParams } from "../../src/agent";
 import { getAiCoworkerPaths } from "../../src/connect";
 import { upsertCustomModel } from "../../src/providers/customModels";
+import type { SessionEvent } from "../../src/server/protocol";
+import type { PersistedSessionMutation } from "../../src/server/sessionDb";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -33,6 +36,20 @@ import {
   waitForCondition,
   withEnv,
 } from "./agentSession.harness";
+
+function createDeferred<T>() {
+  let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value: T | PromiseLike<T>) => {
+      if (!resolvePromise) throw new Error("Deferred promise was not initialized");
+      resolvePromise(value);
+    },
+  };
+}
 
 describe("AgentSession", () => {
   beforeEach(async () => {
@@ -109,6 +126,135 @@ describe("AgentSession", () => {
       await session.setModel("gpt-5.2", "openai");
 
       expect((session as any).state.providerState).toBeNull();
+    });
+
+    test("persists same-provider model switches with cleared continuation state before resolving", async () => {
+      const mutationGate = createDeferred<number>();
+      const persistedMutations: PersistedSessionMutation[] = [];
+      let modelMutationStarted = false;
+      const sessionDb = {
+        persistSessionMutation: mock(async (input: PersistedSessionMutation) => {
+          persistedMutations.push(input);
+          if (input.eventType !== "session.model_updated") {
+            return persistedMutations.length;
+          }
+          modelMutationStarted = true;
+          return await mutationGate.promise;
+        }),
+        persistSessionSnapshot: mock(async () => {}),
+      };
+      const { session } = makeSession({ sessionDb: sessionDb as never });
+      (session as any).state.providerState = {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_flash",
+        updatedAt: "2026-02-16T00:00:00.000Z",
+      };
+
+      const setModelPromise = session.setModel("gemini-3.1-pro-preview", "google");
+      let resolved = false;
+      void setModelPromise.then(() => {
+        resolved = true;
+      });
+
+      await waitForCondition(() => modelMutationStarted);
+      await flushAsyncWork();
+
+      const modelMutation = persistedMutations.find(
+        (mutation) => mutation.eventType === "session.model_updated",
+      );
+      expect(resolved).toBe(false);
+      expect(modelMutation?.snapshot.provider).toBe("google");
+      expect(modelMutation?.snapshot.model).toBe("gemini-3.1-pro-preview");
+      expect(modelMutation?.snapshot.providerState).toBeNull();
+
+      mutationGate.resolve(2);
+      await setModelPromise;
+
+      expect(resolved).toBe(true);
+      expect(sessionDb.persistSessionSnapshot).toHaveBeenCalledTimes(persistedMutations.length);
+    });
+
+    test("follow-up turns use the selected model without stale continuation state", async () => {
+      let runTurnParams: RunTurnParams | null = null;
+      const runTurnImpl = mock(async (params: RunTurnParams) => {
+        runTurnParams = params;
+        return {
+          text: "response",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "response" }],
+        };
+      });
+      const { session } = makeSession({ runTurnImpl });
+      (session as any).state.providerState = {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_flash",
+        updatedAt: "2026-02-16T00:00:00.000Z",
+      };
+
+      await session.setModel("gemini-3.1-pro-preview", "google");
+      await session.sendUserMessage("Use the selected model");
+
+      expect(runTurnParams?.config.provider).toBe("google");
+      expect(runTurnParams?.config.model).toBe("gemini-3.1-pro-preview");
+      expect(runTurnParams?.providerState).toBeNull();
+    });
+
+    test("turns started while a model switch is pending wait for the selected model", async () => {
+      let runTurnParams: RunTurnParams | null = null;
+      const runTurnImpl = mock(async (params: RunTurnParams) => {
+        runTurnParams = params;
+        return {
+          text: "response",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "response" }],
+        };
+      });
+      const { session } = makeSession({ runTurnImpl });
+
+      const setModelPromise = session.setModel("gemini-3.1-pro-preview", "google");
+      const sendPromise = session.sendUserMessage("Send immediately after switching models");
+
+      await Promise.all([setModelPromise, sendPromise]);
+
+      expect(runTurnParams?.config.provider).toBe("google");
+      expect(runTurnParams?.config.model).toBe("gemini-3.1-pro-preview");
+    });
+
+    test("cached-token usage is attributed to the selected model after switching", async () => {
+      const runTurnImpl = mock(async (_params: RunTurnParams) => ({
+        text: "response",
+        reasoningText: undefined,
+        responseMessages: [{ role: "assistant", content: "response" }],
+        usage: {
+          promptTokens: 12,
+          completionTokens: 4,
+          totalTokens: 16,
+          cachedPromptTokens: 5,
+          cacheWritePromptTokens: 2,
+        },
+      }));
+      const { session } = makeSession({ runTurnImpl });
+
+      await session.setModel("gemini-3.1-pro-preview", "google");
+      await session.sendUserMessage("Track cached tokens on the new model");
+
+      const usage = (session as any).state.costTracker.getSnapshot();
+      expect(usage.turns[0]?.provider).toBe("google");
+      expect(usage.turns[0]?.model).toBe("gemini-3.1-pro-preview");
+      expect(usage.turns[0]?.usage.cachedPromptTokens).toBe(5);
+      expect(usage.turns[0]?.usage.cacheWritePromptTokens).toBe(2);
+      expect(usage.byModel).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            totalCachedPromptTokens: 5,
+            totalCacheWritePromptTokens: 2,
+          }),
+        ]),
+      );
     });
 
     test("emits session_info when provider/model changes", async () => {

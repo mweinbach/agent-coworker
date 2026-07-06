@@ -1284,6 +1284,71 @@ describe("MCP servers settings page", () => {
     }
   });
 
+  test("shows the Authenticate pill for OAuth servers whose authorization expired", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const authorize = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...oauthWorkspaceState(
+            {
+              name: "diligence-stack",
+              transport: { type: "http", url: "https://portal.example.test/mcp" },
+              enabled: true,
+              source: "plugin",
+              inherited: true,
+              authMode: "error",
+              authScope: "user",
+              authMessage: "OAuth authorization expired. Re-authorize this server.",
+              auth: { type: "oauth" },
+              pluginId: "diligence-stack",
+              pluginScope: "user",
+            },
+            {
+              type: "mcp_server_validation",
+              sessionId: "control",
+              name: "diligence-stack",
+              ok: false,
+              mode: "error",
+              message: "OAuth authorization expired. Re-authorize this server.",
+            },
+          ),
+          authorizeWorkspaceMcpServerAuth: authorize,
+        } as never);
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      // The expired state is a re-auth to-do: pill instead of the red X.
+      const pill = container.querySelector('[aria-label="Authenticate diligence-stack"]');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent).toBe("Authenticate");
+      expect(container.querySelector("svg.text-destructive")).toBeNull();
+
+      await act(async () => {
+        pill?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(authorize).toHaveBeenCalledWith("ws-1", "diligence-stack", "plugin", {
+        pluginId: "diligence-stack",
+        pluginScope: "user",
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("reveals the paste-code fallback behind the more menu and submits the code", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const callback = mock(async () => {});

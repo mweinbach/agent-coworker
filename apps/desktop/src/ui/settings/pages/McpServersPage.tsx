@@ -141,14 +141,18 @@ function authModeLabel(mode: string): string {
 }
 
 /**
- * An OAuth connector the user simply hasn't signed in to yet (or whose sign-in
- * is still in flight). This is a to-do, not an error: the UI prompts for
- * authentication instead of showing a failed validation.
+ * An OAuth connector the user simply hasn't signed in to yet, whose sign-in
+ * is still in flight, or whose authorization has expired ("error" is only
+ * emitted for OAuth servers when re-authorization is required). This is a
+ * to-do, not a failure: the UI prompts for authentication instead of showing
+ * a failed validation.
  */
 function serverNeedsOAuthSignIn(server: Pick<RuntimeMcpServer, "auth" | "authMode">): boolean {
   return (
     server.auth?.type === "oauth" &&
-    (server.authMode === "missing" || server.authMode === "oauth_pending")
+    (server.authMode === "missing" ||
+      server.authMode === "oauth_pending" ||
+      server.authMode === "error")
   );
 }
 

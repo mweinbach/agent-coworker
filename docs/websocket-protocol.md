@@ -369,13 +369,28 @@ Currently implemented `cowork/*` methods include:
   keeps restore backups before edits). Each result returns a `skill_improvement_status` event with
   `{ enabled, model?, scope, excludedSkills, busy, blockReason, pendingJobs, runHistory, backups, skills }`.
   `skills[]` reports eligibility/inclusion per installed skill; `pendingJobs[]` reports debounced
-  usage-driven jobs; `backups[]` are restorable pre-change copies.
+  usage-driven jobs; `backups[]` are restorable pre-change copies. The `user` scope covers writable
+  user-installed skills; the `all` scope adds marketplace/plugin skills (improved in place after the
+  original is backed up) and bundled built-in skills (improved via a backed-up shadow copy under the
+  global skills directory). After background scheduler runs finish, the server also pushes a fresh
+  `skill_improvement_status` event to subscribed clients as a `cowork/control/event` notification.
   - `cowork/skills/improvement/status` — params `{ cwd? }`; reads queue, history, backup, and
     eligibility state.
-  - `cowork/skills/improvement/run` — params `{ cwd?, skillName? }`; runs the named skill now or
-    processes currently due queued jobs.
-  - `cowork/skills/improvement/restore` — params `{ cwd?, skillName }`; restores the most recent
-    backup for that skill and removes the backup record.
+  - `cowork/skills/improvement/run` — params `{ cwd?, skillName? }`; with `skillName`, runs that
+    skill's queued job now (a skill with no recorded usage evidence records a `skipped` history
+    entry instead of running without evidence); without `skillName`, drains every queued job in
+    order. Busy-session and cross-process gates still apply; gated manual runs record a `skipped`
+    history entry and stay queued. Project-scope skills queue per workspace (the request `cwd`
+    selects among same-named jobs), and usage recorded while a run is in flight stays queued for
+    the next debounce window.
+  - `cowork/skills/improvement/restore` — params `{ cwd?, skillName }`; restores the pre-improvement
+    original for that skill (or deletes the shadow copy for built-ins) and removes the backup
+    record. Fails with a JSON-RPC error while a session is running or when no backup exists.
+  - Failed improvement runs roll back that run's changes from a pre-run snapshot, so earlier
+    improvements and manual edits survive; the `Restore` action always returns to the state before
+    the first improvement. Serialized turn transcripts for queued jobs are stored under
+    `~/.cowork/skill-improvement/` until the job runs; plugin updates overwrite in-place
+    improvements (the backup still restores the pre-improvement original).
 - advanced workspace backup controls (registered by default, active only when `backupsEnabled` is true)
   - `cowork/backups/workspace/read`
   - `cowork/backups/workspace/delta/read`

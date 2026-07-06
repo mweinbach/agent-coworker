@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.12 - 2026-07-06
+
+### Fixed
+
+- **GitHub CI AgentSession validation** — Injects the AgentSession harness
+  `runTurn` mock directly so full-suite Linux CI no longer depends on test file
+  order or a previously cached lazy provider module.
+
 ## 1.2.11 - 2026-07-06
 
 ### Added

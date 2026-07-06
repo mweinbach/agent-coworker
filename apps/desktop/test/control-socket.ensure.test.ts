@@ -174,6 +174,7 @@ describe("control socket helpers over JSON-RPC", () => {
       jsonRpcRequests.find((entry) => entry.method === "cowork/provider/catalog/read")?.params,
     ).toEqual({
       cwd: "/tmp/workspace-second",
+      refresh: true,
     });
   });
 

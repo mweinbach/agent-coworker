@@ -25,9 +25,9 @@ describe("control socket helpers over JSON-RPC", () => {
   test("provider auth refresh clears loading when the follow-up refresh only partially succeeds", async () => {
     const workspaceId = "ws-provider-auth";
     const { state, get, set } = createState(workspaceId);
-    const calls: string[] = [];
-    installFakeSocket(workspaceId, async (method) => {
-      calls.push(method);
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    installFakeSocket(workspaceId, async (method, params) => {
+      calls.push({ method, params });
       if (method === "cowork/provider/auth/setApiKey") {
         return {
           event: {
@@ -68,9 +68,23 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(ok).toBe(true);
     expect(state.providerStatusRefreshing).toBe(false);
     expect(calls).toEqual([
-      "cowork/provider/auth/setApiKey",
-      "cowork/provider/status/refresh",
-      "cowork/provider/catalog/read",
+      {
+        method: "cowork/provider/auth/setApiKey",
+        params: {
+          cwd: "/tmp/workspace",
+          provider: "openai",
+          methodId: "api_key",
+          apiKey: "sk-test",
+        },
+      },
+      {
+        method: "cowork/provider/status/refresh",
+        params: { cwd: "/tmp/workspace" },
+      },
+      {
+        method: "cowork/provider/catalog/read",
+        params: { cwd: "/tmp/workspace", refresh: true },
+      },
     ]);
   });
 

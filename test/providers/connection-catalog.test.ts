@@ -1408,6 +1408,45 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).toContain("codex-cli");
   });
 
+  test("refreshed codex-cli catalog refreshes the account before listing app-server models", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-refresh-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const readCodexAppServerAccountImpl = mock(async () => ({
+      account: { type: "chatgpt", email: "tester@example.com" },
+      requiresOpenaiAuth: false,
+    }));
+    const listCodexAppServerModelsImpl = mock(async () => [
+      {
+        id: "gpt-5.5",
+        model: "gpt-5.5",
+        displayName: "GPT-5.5 from app-server",
+        isDefault: true,
+      },
+    ]);
+
+    const payload = await getProviderCatalog({
+      paths,
+      refresh: true,
+      env: {},
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+      readCodexAppServerAccountImpl,
+      listCodexAppServerModelsImpl,
+    });
+
+    expect(readCodexAppServerAccountImpl).toHaveBeenCalledWith({
+      refreshToken: true,
+      codexHome: path.join(paths.authDir, "codex-cli"),
+    });
+    expect(listCodexAppServerModelsImpl).toHaveBeenCalledTimes(1);
+    expect(payload.all.find((entry) => entry.id === "codex-cli")?.models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.5" }),
+    );
+  });
+
   test("codex-cli catalog serves stale cached models when app-server discovery fails", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-stale-"));
     const paths = getAiCoworkerPaths({ homedir: home });

@@ -743,7 +743,10 @@ export function createControlSocketHelpers(
     await Promise.allSettled([
       requestWorkspaceSessions(get, set, workspaceId),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/state/read", { cwd }),
-      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd }),
+      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
+        cwd,
+        refresh: true,
+      }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", {
         cwd,
       }),
@@ -1736,7 +1739,10 @@ export function createControlSocketHelpers(
         requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", {
           cwd,
         }),
-        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd }),
+        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
+          cwd,
+          refresh: true,
+        }),
       ]).then(() => {
         if (refreshGeneration === RUNTIME.providerStatusRefreshGeneration) {
           set(() => ({ providerStatusRefreshing: false }));

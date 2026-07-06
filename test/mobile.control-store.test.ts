@@ -296,6 +296,10 @@ describe("mobile control stores", () => {
       "cowork/provider/catalog/read",
       "cowork/provider/status/refresh",
     ]);
+    expect(calls.find((entry) => entry.method === "cowork/provider/catalog/read")?.params).toEqual({
+      cwd: workspaceCwd,
+      refresh: true,
+    });
   });
 
   test("provider store applies provider and model defaults through the workspace control session", async () => {

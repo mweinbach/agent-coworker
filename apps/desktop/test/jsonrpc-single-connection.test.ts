@@ -1158,6 +1158,14 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/memory/list",
       "cowork/backups/workspace/read",
     ]);
+    expect(
+      jsonRpcRequests
+        .filter((entry) => entry.method === "cowork/provider/catalog/read")
+        .map((entry) => entry.params),
+    ).toEqual([
+      { cwd: "/tmp/jsonrpc-workspace", refresh: true },
+      { cwd: "/tmp/jsonrpc-workspace", refresh: true },
+    ]);
 
     const state = useAppStore.getState();
     expect(state.providerCatalog).toHaveLength(1);

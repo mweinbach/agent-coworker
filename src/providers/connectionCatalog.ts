@@ -1000,7 +1000,10 @@ export async function getProviderCatalog(
     forceRefresh: opts.refresh,
   });
   const hasCodexAccount = Boolean(
-    await readCodexAppServerAccountImpl({ refreshToken: false, codexHome }).then(
+    await readCodexAppServerAccountImpl({
+      refreshToken: opts.refresh === true,
+      codexHome,
+    }).then(
       (result) => result.account,
       () => null,
     ),

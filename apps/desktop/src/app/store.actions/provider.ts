@@ -525,6 +525,7 @@ export function createProviderActions(
         "cowork/provider/catalog/read",
         {
           cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          refresh: true,
         },
       );
       if (!ok) {

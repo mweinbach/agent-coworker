@@ -77,7 +77,7 @@ export function useProviderCatalogQuery(cwd: string | null) {
       if (!client) throw new Error("No active JSON-RPC client.");
 
       const [catalogResult, authResult, statusResult] = await Promise.all([
-        callParsedControlMethod(client, "cowork/provider/catalog/read", { cwd }),
+        callParsedControlMethod(client, "cowork/provider/catalog/read", { cwd, refresh: true }),
         callParsedControlMethod(client, "cowork/provider/authMethods/read", { cwd }),
         callParsedControlMethod(client, "cowork/provider/status/refresh", { cwd }),
       ]);

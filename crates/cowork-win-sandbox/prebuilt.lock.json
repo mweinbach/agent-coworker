@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "tag": "win-sandbox-v0.2.0",
+  "sourceFingerprint": "6f517bb3a59437a78e63e9284ef069e7617423e2f6faf93bf380ab07f8c132d4",
+  "targets": {
+    "x86_64-pc-windows-msvc": {
+      "zipName": "win-sandbox-x86_64-pc-windows-msvc.zip",
+      "zipSha256": "aaedc77353afe3330de34b57d3b46ba68f2c95eeead099b4b9e91fed598c26bc",
+      "files": {
+        "cowork-win-sandbox.exe": "91ca329c552cbf75c4967c5a52eb8965e6fd0072d50743570194049d6d084295",
+        "codex-windows-sandbox-setup.exe": "f81ef191957506539ee0f9018c8c0c873cf8458859f1687ad8013d7ead3de8b5",
+        "codex-command-runner.exe": "9ca7f3fc2faf2521d4ebbbf779969146b4cc63b26942bc385e80e28c2b5ec6d2"
+      }
+    },
+    "aarch64-pc-windows-msvc": {
+      "zipName": "win-sandbox-aarch64-pc-windows-msvc.zip",
+      "zipSha256": "32e2ed75bae08ca480f32a70a459aba39cbb2a61c21d633cfaeda7323963bfa8",
+      "files": {
+        "cowork-win-sandbox.exe": "65051e07fb9b4b3ac4ac52282e30f6d3a0bc26728304bf3e30db67b0ef4a55ff",
+        "codex-windows-sandbox-setup.exe": "14e7f2b95294208810a4d4b1dfefecd13a5f03d86baf924c2e05c3e264d69f68",
+        "codex-command-runner.exe": "da98b41bac537ba3684741461ebcc0f2e0b43fd0fbb850792d1556035402a0ac"
+      }
+    }
+  }
+}

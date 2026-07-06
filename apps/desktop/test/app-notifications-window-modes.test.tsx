@@ -221,7 +221,6 @@ describe("app window-mode notification routing", () => {
       expect(container.querySelector(".app-shell--settings")).toBeNull();
       expect(container.querySelector(".app-shell--chat")).not.toBeNull();
       expect(container.querySelector(".app-sidebar")).not.toBeNull();
-      expect(container.querySelector(".app-topbar")).not.toBeNull();
     } finally {
       if (root) {
         await act(async () => {

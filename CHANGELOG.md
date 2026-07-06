@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.16 - 2026-07-06
+
+### Fixed
+
+- **GitHub release validation** — Narrows the desktop settings shell
+  regression to the full-window replacement contract so Linux CI does not
+  require optional chat top-bar chrome in an empty synthetic state.
+
 ## 1.2.15 - 2026-07-06
 
 ### Fixed

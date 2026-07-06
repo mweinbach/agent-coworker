@@ -2969,6 +2969,17 @@ describe("server JSON-RPC task terminal turn locks", () => {
     const handlerAEntered = Promise.withResolvers<void>();
     const releaseHandlerA = Promise.withResolvers<void>();
     const releaseProvider = Promise.withResolvers<void>();
+    const finalizerClosed = Promise.withResolvers<void>();
+    const releaseFinalizer = Promise.withResolvers<void>();
+    const restoreFinalizerHook =
+      runUserMessageTurnInternal.setUserMessageTurnFinalizerCheckpointHookForTests(
+        async (checkpoint) => {
+          if (checkpoint.phase === "steer_admission_closed") {
+            finalizerClosed.resolve();
+            await releaseFinalizer.promise;
+          }
+        },
+      );
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {
         runTurnImpl: (async (params: RunTurnParams) => {
@@ -3018,6 +3029,16 @@ describe("server JSON-RPC task terminal turn locks", () => {
       });
       await handlerAEntered.promise;
       releaseProvider.resolve();
+      await finalizerClosed.promise;
+      const pendingSteerRejection = rpc.waitFor(
+        (message) =>
+          message.method === "item/started" &&
+          message.params.threadId === threadId &&
+          message.params.item?.type === "error" &&
+          message.params.item?.message ===
+            "Active turn ended before pending steers could be accepted.",
+        15_000,
+      );
       releaseHandlerA.resolve();
 
       const steerAResult = await steerA;
@@ -3029,14 +3050,8 @@ describe("server JSON-RPC task terminal turn locks", () => {
       } else {
         expect(steerAResult.result.turnId).toBe(turnId);
       }
-      await rpc.waitFor(
-        (message) =>
-          message.method === "item/started" &&
-          message.params.threadId === threadId &&
-          message.params.item?.type === "error" &&
-          message.params.item?.message ===
-            "Active turn ended before pending steers could be accepted.",
-      );
+      releaseFinalizer.resolve();
+      await pendingSteerRejection;
       await waitForTurnCompleted(rpc, threadId, turnId);
       const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
       expect(read.error).toBeUndefined();
@@ -3045,9 +3060,11 @@ describe("server JSON-RPC task terminal turn locks", () => {
       expect(serialized).not.toContain("queued steer B before handler");
       rpc.close();
     } finally {
+      restoreFinalizerHook();
       releaseHandlerRegistration.resolve();
       releaseProvider.resolve();
       releaseHandlerA.resolve();
+      releaseFinalizer.resolve();
       await stopTestServer(server);
     }
   }, 20_000);

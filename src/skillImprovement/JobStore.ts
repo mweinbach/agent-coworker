@@ -368,7 +368,7 @@ export class SkillImprovementJobStore {
         } else {
           const lastUsageAt = remainingUsages.reduce(
             (latest, usage) => maxIso(latest, usage.usedAt),
-            remainingUsages[0]!.usedAt,
+            remainingUsages[0]?.usedAt ?? job.lastUsageAt,
           );
           const lastUsedMs = new Date(lastUsageAt).getTime();
           job.usageEvents = remainingUsages.slice(-SKILL_IMPROVEMENT_MAX_USAGES_PER_JOB);

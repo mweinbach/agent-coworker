@@ -193,6 +193,58 @@ describe("DelegateRunner", () => {
     );
   });
 
+  test("delegates inherit MCP tools when MCP is enabled", async () => {
+    const runTurn = mock(async () => ({
+      text: "ok",
+      reasoningText: undefined as string | undefined,
+      responseMessages: [],
+    }));
+    const closeMcp = mock(async () => {});
+    const createRuntime = mock(() => ({ runTurn }));
+    const createTools = mock(() => ({
+      read: { type: "builtin" },
+      write: { type: "builtin" },
+    }));
+    const loadMCPServers = mock(async () => [
+      { name: "Diligence Stack", transport: { type: "stdio" as const, command: "mcp" } },
+    ]);
+    const loadMCPTools = mock(async () => ({
+      tools: { mcp__Diligence_Stack__search: { type: "mcp" } },
+      errors: [],
+      close: closeMcp,
+    }));
+    const runner = new DelegateRunner({
+      loadAgentPrompt: async () => "delegate system prompt",
+      buildRuntimeTelemetrySettings: async () => null,
+      buildGooglePrepareStep: () => undefined,
+      createRuntime,
+      createTools,
+      loadMCPServers,
+      loadMCPTools,
+    });
+
+    await runner.run({
+      config: makeConfig({ enableMcp: true }),
+      role: "research",
+      message: "Use parent MCP",
+      askUser: async () => "",
+      approveCommand: async () => true,
+      log: () => {},
+      connectedProviders: ["codex-cli"] as readonly ProviderName[],
+    });
+
+    expect(loadMCPServers).toHaveBeenCalledTimes(1);
+    expect(loadMCPTools).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          mcp__Diligence_Stack__search: { type: "mcp" },
+        }),
+      }),
+    );
+    expect(closeMcp).toHaveBeenCalledTimes(1);
+  });
+
   test("injects harness context into delegated child system prompts", async () => {
     const config = makeConfig();
     const runTurn = mock(async () => ({

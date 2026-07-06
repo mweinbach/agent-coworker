@@ -582,6 +582,23 @@ describe("loadMCPTools", () => {
     expect(result.tools).toHaveProperty("mcp__local__ping");
   });
 
+  test("normalizes spaces in server and tool names for provider-safe ids", async () => {
+    mockCreateMCPClient.mockImplementation(async (_opts: any) => ({
+      tools: mock(async () => ({
+        "search__reports": { description: "search" },
+      })),
+      close: mock(async () => {}),
+    }));
+    const servers: MCPServerConfig[] = [
+      { name: "Diligence  Stack", transport: { type: "stdio", command: "echo" } },
+    ];
+
+    const result = await loadMCPTools(servers, { createClient: mockCreateMCPClient as any });
+
+    expect(result.tools).toHaveProperty("mcp__Diligence_Stack__search_reports");
+    expect(result.tools).not.toHaveProperty("mcp__Diligence__Stack__search__reports");
+  });
+
   test("collects errors for optional server failures", async () => {
     mockCreateMCPClient.mockRejectedValue(new Error("refused"));
     const servers: MCPServerConfig[] = [

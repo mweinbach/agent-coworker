@@ -1,3 +1,4 @@
+import { normalizeMcpNamePart } from "../../mcp/names";
 import type { AgentProfileSnapshot } from "../../shared/agentProfiles";
 import type { AgentRoleDefinition } from "./roles";
 
@@ -21,12 +22,12 @@ export function filterToolsForProfile(
   profile: AgentProfileSnapshot,
 ): Record<string, any> {
   const allowedBuiltIns = new Set(profile.allowedBuiltInTools);
-  const allowedMcpServers = new Set(profile.allowedMcpServers.map(normalizeMcpServerName));
+  const allowedMcpServers = new Set(profile.allowedMcpServers.map(normalizeMcpNamePart));
   return Object.fromEntries(
     Object.entries(tools).filter(([name, _tool]) => {
       const mcpServerName = extractMcpServerName(name);
       if (mcpServerName) {
-        return allowedMcpServers.has(normalizeMcpServerName(mcpServerName));
+        return allowedMcpServers.has(normalizeMcpNamePart(mcpServerName));
       }
       return allowedBuiltIns.has(name);
     }),
@@ -39,8 +40,4 @@ function extractMcpServerName(toolName: string): string | null {
   const separatorIndex = rest.indexOf("__");
   if (separatorIndex <= 0) return null;
   return rest.slice(0, separatorIndex);
-}
-
-function normalizeMcpServerName(name: string): string {
-  return name.trim().replace(/[^A-Za-z0-9_-]/g, "_");
 }

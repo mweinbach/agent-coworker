@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import {
@@ -288,7 +289,7 @@ export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPo
   const writableRoots =
     sandbox.kind === "workspace-write"
       ? sandbox.writableRoots
-      : tmpScratchRoots(sandbox.projectRoots ?? [], ["/tmp", "/private/tmp"]);
+      : tmpScratchRoots(sandbox.projectRoots ?? [], codexScratchRoots());
   return {
     type: "workspaceWrite",
     writableRoots,
@@ -302,6 +303,10 @@ export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPo
       (root) => root.startsWith("/tmp/") || root.startsWith("/private/tmp/"),
     ),
   };
+}
+
+function codexScratchRoots(): string[] {
+  return process.platform === "win32" ? [os.tmpdir()] : ["/tmp", "/private/tmp"];
 }
 
 function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSandboxPolicy {

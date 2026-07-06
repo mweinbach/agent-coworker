@@ -514,7 +514,9 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
     const roleFilteredTools = params.agentRole
       ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole), {
-          allowProfileMcp: !!params.agentProfile,
+          // Child agents inherit the parent session's MCP tools; agent profiles
+          // can still narrow that set via filterToolsForProfile below.
+          allowProfileMcp: true,
         })
       : mergedTools;
     const filteredTools = params.agentProfile

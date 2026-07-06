@@ -1065,8 +1065,15 @@ rl.on("line", (line) => {
         });
         const sandboxPolicy = requests.find((entry) => entry.method === "turn/start")?.params
           ?.sandboxPolicy;
-        expect(sandboxPolicy?.writableRoots).toContain("/tmp");
-        expect(sandboxPolicy?.writableRoots).toContain("/private/tmp");
+        const expectedScratchRoots =
+          process.platform === "win32" ? [canonicalizeRoot(os.tmpdir())] : ["/tmp", "/private/tmp"];
+        for (const root of expectedScratchRoots) {
+          expect(sandboxPolicy?.writableRoots).toContain(root);
+        }
+        if (process.platform === "win32") {
+          expect(sandboxPolicy?.writableRoots).not.toContain("/tmp");
+          expect(sandboxPolicy?.writableRoots).not.toContain("/private/tmp");
+        }
         expect(sandboxPolicy?.writableRoots).not.toContain(dir);
       } finally {
         await fs.rm(dir, { recursive: true, force: true });

@@ -32,6 +32,7 @@ import {
   readWorkspaceMCPServersDocument,
   writeWorkspaceMCPServersDocument,
 } from "./configRegistry";
+import { buildMcpToolName } from "./names";
 
 export {
   DEFAULT_MCP_SERVERS_DOCUMENT,
@@ -738,7 +739,8 @@ export async function loadMCPTools(
               continue;
             }
           }
-          tools[`mcp__${server.name}__${name}`] = toolDef;
+          const toolKey = reserveMcpToolName(tools, server.name, name, opts.log);
+          tools[toolKey] = toolDef;
         }
 
         clients.push({ name: server.name, close: client.close.bind(client) });
@@ -770,6 +772,27 @@ export async function loadMCPTools(
   }
 
   return { tools, errors, close };
+}
+
+function reserveMcpToolName(
+  tools: Record<string, unknown>,
+  serverName: string,
+  toolName: string,
+  log?: (line: string) => void,
+): string {
+  const baseName = buildMcpToolName(serverName, toolName);
+  if (!(baseName in tools)) return baseName;
+
+  let i = 2;
+  let candidate = `${baseName}_${i}`;
+  while (candidate in tools) {
+    i += 1;
+    candidate = `${baseName}_${i}`;
+  }
+  log?.(
+    `[MCP warn] Tool name collision: "${serverName}/${toolName}" remapped to "${candidate}" — reference it by the remapped name`,
+  );
+  return candidate;
 }
 
 interface CachedWorkspaceMcp {

@@ -47,6 +47,7 @@ describe("agent profile tool policy", () => {
   test("normalizes MCP server names before prefix matching", () => {
     const tools = {
       mcp__linear_server__issue: { type: "mcp" },
+      mcp__linear__server__issue: { type: "mcp" },
       mcp__linear__issue: { type: "mcp" },
     };
 
@@ -56,7 +57,7 @@ describe("agent profile tool policy", () => {
           tools,
           snapshot({
             allowedBuiltInTools: [],
-            allowedMcpServers: ["linear server"],
+            allowedMcpServers: ["linear  server"],
           }),
         ),
       ),

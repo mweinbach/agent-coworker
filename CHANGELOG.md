@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.20 - 2026-07-06
+
+### Added
+
+- **YOLO mode usability** — Makes YOLO mode zero-prompt and unsandboxed by default while keeping
+  the existing security prompts/controls for optional network enforcement.
+
+### Fixed
+
+- **Projection stability** — Attaches mid-turn error items to the correct turn payload, preventing
+  stale or misplaced errors in streaming conversations.
+- **Session backup cleanup** — Adds startup cleanup for orphaned, stale-active, and leaked backup staging
+  directories to reduce accumulation and avoid stale session state across runs.
+- **Plugin MCP auth targeting** — Restricts plugin MCP auth lookups and flows to the correct target scope
+  and resolves session/runtime edge cases from mis-scoped target state.
+- **YOLO policy enforcement** — Fails closed when YOLO mode cannot enforce an explicit network ban, and
+  updates sandbox policy and test coverage to keep behavior deterministic.
+- **Google citation test reliability** — Makes citation fetch mocks hermetic so test suites are insulated
+  from background test-prime side effects.
+- **Startup maintenance** — Enables default-on file logging and performs startup maintenance for
+  `~/.cowork` to improve startup diagnostics.
+
 ## 1.2.19 - 2026-07-06
 
 ### Added

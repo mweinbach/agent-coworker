@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.19 - 2026-07-06
+
+### Added
+
+- **Prebuilt Windows sandbox helpers** — Downloads and verifies pinned Windows
+  sandbox helper release assets for desktop builds, with a committed lock file
+  for the v0.2.0 helper release.
+
+### Fixed
+
+- **GitHub authenticated fetches** — Resolves GitHub tokens from environment,
+  `gh`, or stored git credentials so marketplace, plugin, and runtime release
+  reads avoid anonymous API rate limits while retrying anonymously on rejected
+  credentials.
+- **Windows CI release validation** — Stabilizes task-terminal steer finalizer
+  ordering and uses an in-process ZIP fixture for prebuilt sandbox helper tests
+  so Windows x64 and ARM64 smoke lanes pass reliably.
+
 ## 1.2.18 - 2026-07-06
 
 ### Fixed

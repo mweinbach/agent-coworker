@@ -424,6 +424,13 @@ export function createWorkspaceMemoryActions(
       ensureControlSocket(get, set, workspaceId);
       const key = skillName ? `run:${skillName}` : "run:queued";
       setSkillImprovementPending(workspaceId, key, true);
+      // Snapshot the known history so the toast only reflects entries this
+      // request produced — never a background run that happened to finish
+      // around the same time.
+      const priorStatus = get().workspaceRuntimeById[workspaceId]?.skillImprovementStatus;
+      const historyIdsBefore = priorStatus
+        ? new Set(priorStatus.runHistory.map((entry) => entry.id))
+        : null;
       const requestedAt = Date.now();
 
       const ok = await requestJsonRpcControlEvent(
@@ -453,7 +460,7 @@ export function createWorkspaceMemoryActions(
       }
       // The run result already refreshed skillImprovementStatus in the store,
       // so report what actually happened instead of assuming success.
-      const outcome = latestRunOutcome(get, workspaceId, requestedAt, skillName);
+      const outcome = latestRunOutcome(get, workspaceId, historyIdsBefore, requestedAt, skillName);
       set((s) => ({
         notifications: pushNotification(s.notifications, {
           id: makeId(),
@@ -750,17 +757,21 @@ function applyOptimisticMemoryConfig(
 function latestRunOutcome(
   get: StoreGet,
   workspaceId: string,
+  historyIdsBefore: Set<string> | null,
   requestedAtMs: number,
   skillName?: string,
 ): { skillName: string; status: "completed" | "failed" | "skipped"; message: string } | null {
   const history = get().workspaceRuntimeById[workspaceId]?.skillImprovementStatus?.runHistory ?? [];
-  // Allow a little clock skew between client and server timestamps.
-  const cutoffMs = requestedAtMs - 5_000;
-  const entry = history.find(
-    (candidate) =>
-      (!skillName || candidate.skillName === skillName) &&
-      new Date(candidate.finishedAt).getTime() >= cutoffMs,
-  );
+  const entry = history.find((candidate) => {
+    if (skillName && candidate.skillName !== skillName) return false;
+    // With a pre-request snapshot, only entries this request added count — a
+    // background run finishing just before the click must not be mislabeled
+    // as the manual action. Without a snapshot, require the entry to have
+    // finished after the request started (no backwards skew allowance).
+    return historyIdsBefore
+      ? !historyIdsBefore.has(candidate.id)
+      : new Date(candidate.finishedAt).getTime() >= requestedAtMs;
+  });
   return entry
     ? { skillName: entry.skillName, status: entry.status, message: entry.message }
     : null;

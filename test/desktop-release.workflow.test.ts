@@ -27,6 +27,17 @@ describe("desktop release workflow", () => {
     expect(validateJob).not.toContain("run: bun run test:stable");
   });
 
+  test("restores package dependencies without saving post-job caches", () => {
+    const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
+    const packageJob = workflow.match(/package:[\s\S]*?\n {2}publish:/)?.[0] ?? "";
+
+    expect(validateJob).toContain("- name: Setup dependencies");
+    expect(validateJob).not.toContain('save-cache: "false"');
+    expect(packageJob).toMatch(
+      /- name: Setup dependencies[\s\S]*?uses: \.\/\.github\/actions\/setup-bun[\s\S]*?with:[\s\S]*?save-cache: "false"/,
+    );
+  });
+
   test("separates macOS and Windows signing credentials", () => {
     expect(workflow).toMatch(
       /- name: Build macOS desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}[\s\S]*?CSC_KEY_PASSWORD: \$\{\{ secrets\.CSC_KEY_PASSWORD \}\}/,

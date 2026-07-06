@@ -23,7 +23,11 @@ describe("main CI workflow", () => {
 
   test("caches dependencies", () => {
     expect(workflow).toContain("cache-scope: mobile");
+    expect(setupBunAction).toContain("save-cache:");
     expect(setupBunAction).toContain("uses: actions/cache@v4");
+    expect(setupBunAction).toContain("uses: actions/cache/restore@v4");
+    expect(setupBunAction).toContain("if: ${{ inputs.save-cache == 'true' }}");
+    expect(setupBunAction).toContain("if: ${{ inputs.save-cache != 'true' }}");
     expect(setupBunAction).toContain("~/.bun/install/cache");
     expect(setupBunAction).toContain("~/.cache/electron");
     expect(setupBunAction).toContain("~/.cache/electron-builder");

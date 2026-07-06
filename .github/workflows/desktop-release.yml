@@ -73,6 +73,8 @@ jobs:
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+        with:
+          save-cache: "false"
 
       - name: Setup Rust cache
         if: ${{ runner.os == 'Windows' }}

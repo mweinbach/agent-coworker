@@ -71,7 +71,6 @@ No `exec`/`execSync`/`fork` anywhere; usage is `execFile` (buffered), `spawn` (s
 | File | API | Difficulty | Notes |
 | --- | --- | --- | --- |
 | `scripts/postinstall.ts`, `scripts/open_xcode_workspace.ts` | `spawn` inherit | easy | direct swap |
-| `packages/harness/src/run_tests_stable.ts` | `spawn` inherit | easy | direct swap |
 | `src/utils/ripgrep.ts` | `execFile` | easy | tar/PowerShell extraction, bounded |
 | `src/tools/bash.ts` | `execFile` | **hard, highest value** | agent shell tool: 10 MB `maxBuffer`, timeout→SIGTERM→exit 124, AbortSignal→exit 130, `windowsHide`, env replacement, shell-candidate ENOENT fallback, sandbox transform |
 | `src/tools/grep.ts` | `execFile` | medium | same contract as bash (timeout/abort/maxBuffer), injectable `execFileImpl` |
@@ -134,7 +133,7 @@ Optional follow-ups: async-ify `src/workspace/map.ts` (sync readdir/stat on ever
 
 | Dep | Verdict |
 | --- | --- |
-| `fast-glob` | **Replace in `packages/harness/run_tests_stable.ts` + `test/package-manifest.test.ts`** with `Bun.Glob`. **Keep in `src/tools/glob.ts` for now**: the tool needs streaming with abort, `stats: true` (mtime ordering), `objectMode`, `braceExpansion: false` — `Bun.Glob` has no stat-stream; revisit as a scoped follow-up with behavior tests. |
+| `fast-glob` | **Replace in `test/package-manifest.test.ts`** with `Bun.Glob`. **Keep in `src/tools/glob.ts` for now**: the tool needs streaming with abort, `stats: true` (mtime ordering), `objectMode`, `braceExpansion: false` — `Bun.Glob` has no stat-stream; revisit as a scoped follow-up with behavior tests. |
 | `ws` (desktop) | Replace the one test usage with Bun's client `WebSocket` if it supports multi-protocol offers; `desktopSmoke.ts` runs in Electron main (Node) and may keep `ws`, or move smoke into a Bun subprocess to drop the dep. |
 | `proxy-agent` | **Keep** — feeds Node `http.Agent` into the AWS SDK's `NodeHttpHandler` for Bedrock; Bun's fetch env-proxy doesn't apply. |
 | `yauzl`, `jszip`, `fast-xml-parser` | **Keep** — ZIP extraction with zip-slip/symlink/entry-limit hardening (yauzl) and OOXML read/modify/write (jszip + fxp). Bun has gzip/zstd, not ZIP or XML. |
@@ -143,7 +142,7 @@ Optional follow-ups: async-ify `src/workspace/map.ts` (sync readdir/stat on ever
 
 ## Phased plan
 
-Each phase is one or more PR-sized slices. Every slice: full `bun test` (`test:stable --max-concurrency 1` lane), `bun run typecheck`, `bun run check`, `bun run docs:check`; behavior-parity tests land **with** the migration, not after.
+Each phase is one or more PR-sized slices. Every slice: full `bun test --max-concurrency 1`, `bun run typecheck`, `bun run check`, `bun run docs:check`; behavior-parity tests land **with** the migration, not after.
 
 ### Phase 0 — Guardrail (small, do first)
 
@@ -152,8 +151,8 @@ Add a boundary check (test or lint script) that fails if any file in the Electro
 ### Phase 1 — Mechanical, zero-risk slices
 
 1. `randomUUID`/`randomBytes` → global Web Crypto (all 7 files, incl. Electron-shared ones — globals are runtime-portable).
-2. `Bun.spawn` in Bun-only scripts: `scripts/postinstall.ts`, `scripts/open_xcode_workspace.ts`, `packages/harness/run_tests_stable.ts`.
-3. `Bun.Glob` in `run_tests_stable.ts` + `test/package-manifest.test.ts`.
+2. `Bun.spawn` in Bun-only scripts: `scripts/postinstall.ts`, `scripts/open_xcode_workspace.ts`.
+3. `Bun.Glob` in `test/package-manifest.test.ts`.
 4. `Bun.file`/`Bun.write` in `scripts/` and `packages/harness/` file I/O.
 
 ### Phase 2 — OAuth callback listener → `Bun.serve`
@@ -186,7 +185,7 @@ Define a `HarnessSubprocess` interface (spawn, write stdin, async line iteration
 ## Implementation status
 
 - **Phase 0** ✅ `test/desktopSharedBunBoundary.test.ts` computes the Electron-main and renderer value-import closures and fails on any `bun:`/`Bun.*` usage inside them.
-- **Phase 1** ✅ global `crypto.randomUUID()`/`getRandomValues` replace `node:crypto` imports in 7 files; `Bun.spawn` in `scripts/postinstall.ts`, `scripts/open_xcode_workspace.ts`, and the stable test runner; `Bun.Glob` replaces `fast-glob` in the harness runner and `test/package-manifest.test.ts` (verified identical file sets).
+- **Phase 1** ✅ global `crypto.randomUUID()`/`getRandomValues` replace `node:crypto` imports in 7 files; `Bun.spawn` in `scripts/postinstall.ts` and `scripts/open_xcode_workspace.ts`; `Bun.Glob` replaces `fast-glob` in `test/package-manifest.test.ts` (verified identical file sets).
 - **Phase 2** ✅ MCP OAuth callback on `Bun.serve`, bound to `127.0.0.1` + best-effort `::1` on one port, redirect URI pinned to `127.0.0.1`, with an IPv6 coverage test.
 - **Phase 3** ✅ `src/utils/execFileCompat.ts` (Bun.spawn, Node execFile contract: maxBuffer, timeout→SIGTERM/exit 124, abort/exit 130, ENOENT codes, pipe teardown on kill) + parity tests; consumers migrated: `tools/bash.ts`, `tools/grep.ts`, `utils/ripgrep.ts`, `coworkRuntime/runtime.ts`. Streaming consumers on `src/utils/subprocess.ts` (`spawnStreamingSubprocess` + `subscribeLines`): `sessionBackup/command.ts`, `coworkRuntime/libreOffice.ts` (now with a 4 MiB output cap), `webDesktopService.ts`.
 - **Phase 4** ✅ `Bun.file` reads on hot paths: edit/read tools, prompt templates, skill catalog/bodies, config layers, session snapshots, memory/MCP-auth/CLI-state stores; `Bun.write` in the edit tool.

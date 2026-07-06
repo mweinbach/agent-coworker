@@ -18,8 +18,8 @@ describe("cowork-server release workflow", () => {
 
   test("keeps repo validation gates in front of release builds", () => {
     expect(workflow).toContain("- name: Unit tests");
-    expect(workflow).toContain("run: bun run test:stable -- --max-concurrency 1");
-    expect(workflow).not.toContain("run: bun test --max-concurrency 1");
+    expect(workflow).toContain("run: bun test --max-concurrency 1");
+    expect(workflow).not.toContain("run: bun run test:stable");
     expect(workflow).toContain("- name: Typecheck");
     expect(workflow).toContain("- name: Docs consistency check");
   });

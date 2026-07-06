@@ -83,7 +83,7 @@ apps/
   desktop/              # Electron desktop app
   mobile/               # Optional Expo mobile app (React Native)
 packages/
-  harness/              # Developer harness, docs generation, stable test runner
+  harness/              # Developer harness and docs generation
 config/
   defaults.json         # Built-in default configuration
   mcp-servers.json      # System-level MCP server definitions

@@ -20,11 +20,11 @@ describe("desktop release workflow", () => {
     expect(packageJob).not.toContain("needs.validate.result == 'skipped'");
   });
 
-  test("uses isolated stable tests for release validation", () => {
+  test("uses standard Bun tests for release validation", () => {
     const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
 
-    expect(validateJob).toContain("run: bun run test:stable -- --max-concurrency 1");
-    expect(validateJob).not.toContain("run: bun test --max-concurrency 1");
+    expect(validateJob).toContain("run: bun test --max-concurrency 1");
+    expect(validateJob).not.toContain("run: bun run test:stable");
   });
 
   test("separates macOS and Windows signing credentials", () => {

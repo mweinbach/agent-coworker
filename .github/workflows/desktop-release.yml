@@ -29,10 +29,8 @@ jobs:
       - name: Docs consistency check
         run: bun run docs:check
 
-      # Run each test file in a fresh Bun process: desktop tests swap global JSDOM
-      # document/window and can leak async React cleanup into later files.
       - name: Unit tests
-        run: bun run test:stable -- --max-concurrency 1
+        run: bun test --max-concurrency 1
 
       - name: Typecheck
         run: bun run typecheck

@@ -56,10 +56,8 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
-      # Run files in isolated Bun processes: the aggregate runner can retain JSDOM/global
-      # state until shutdown and hang after the final desktop test on CI.
       - name: Unit tests
-        run: bun run test:stable -- --max-concurrency 1
+        run: bun test --max-concurrency 1
 
   windows-smoke:
     name: Windows smoke (${{ matrix.arch }})

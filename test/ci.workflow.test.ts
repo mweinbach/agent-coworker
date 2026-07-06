@@ -4,16 +4,11 @@ import { readFileSync } from "node:fs";
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
 const rootPackagePath = new URL("../package.json", import.meta.url);
 const setupBunActionPath = new URL("../.github/actions/setup-bun/action.yml", import.meta.url);
-const stableTestRunnerPath = new URL(
-  "../packages/harness/src/run_tests_stable.ts",
-  import.meta.url,
-);
 const workflow = readFileSync(workflowPath, "utf8");
 const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as {
   scripts?: Record<string, string>;
 };
 const setupBunAction = readFileSync(setupBunActionPath, "utf8");
-const stableTestRunner = readFileSync(stableTestRunnerPath, "utf8");
 
 describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
@@ -38,17 +33,15 @@ describe("main CI workflow", () => {
   });
 
   test("keeps the core reliability guardrails", () => {
-    expect(rootPackage.scripts?.test).toBe("bun packages/harness/src/run_tests_stable.ts");
-    expect(rootPackage.scripts?.["test:stable"]).toBe(
-      "bun packages/harness/src/run_tests_stable.ts",
-    );
+    expect(rootPackage.scripts?.test).toBe("bun test");
+    expect(rootPackage.scripts?.["test:stable"]).toBeUndefined();
     expect(workflow).toContain("- name: Docs consistency check");
     expect(workflow).toContain("run: bun run docs:check");
     expect(workflow).toContain("- name: Typecheck");
     expect(workflow).toContain("run: bun run typecheck");
     expect(workflow).toContain("- name: Unit tests");
-    expect(workflow).toContain("run: bun run test:stable -- --max-concurrency 1");
-    expect(workflow).not.toContain("- name: Stable per-file unit tests");
+    expect(workflow).toContain("run: bun test --max-concurrency 1");
+    expect(workflow).not.toContain("run: bun run test:stable");
   });
 
   test("runs Windows path and desktop smoke coverage", () => {
@@ -110,13 +103,6 @@ describe("main CI workflow", () => {
     expect(workflow).not.toContain("- name: Android native build smoke");
     expect(workflow).not.toContain("./gradlew :app:assembleDebug");
     expect(workflow).not.toContain("actions/setup-java@v4");
-  });
-
-  test("stable test runner discovers TypeScript and TSX test files", () => {
-    expect(stableTestRunner).toContain('"test/**/*.test.ts"');
-    expect(stableTestRunner).toContain('"test/**/*.test.tsx"');
-    expect(stableTestRunner).toContain('"apps/**/test/**/*.test.ts"');
-    expect(stableTestRunner).toContain('"apps/**/test/**/*.test.tsx"');
   });
 
   test("keeps remote MCP smoke opt-in via secrets-backed environment", () => {

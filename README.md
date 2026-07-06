@@ -246,7 +246,6 @@ bun run desktop:dev         # run Electron desktop app in dev mode
 bun run desktop:demo        # run desktop app with onboarding demo mode
 bun run dev                 # watch the CLI entry point
 bun run harness:run         # run harness scenarios in report-only mode
-bun run test:stable         # sequential per-file test runner
 ```
 
 Mobile commands:

@@ -59,10 +59,9 @@ bun run format           # Biome formatter check (format:write to apply)
 bun run check            # Biome lint + format combined
 bun run docs:check       # Protocol/docs consistency check (runs in CI)
 bun run knip             # Dead export checker
-bun run test:stable      # Stable per-file test lane (same as CI)
 ```
 
-The CI verification lane is: `bun test:stable --max-concurrency 1`, then `bun run typecheck`, `bun run lint`, and `bun run docs:check`.
+The CI verification lane is: `bun test --max-concurrency 1`, then `bun run typecheck`, `bun run lint`, and `bun run docs:check`.
 
 ## Architecture
 

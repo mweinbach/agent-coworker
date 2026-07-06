@@ -518,6 +518,12 @@ export function createBashTool(ctx: ToolContext) {
         policy.kind === "read-only" ||
         policy.kind === "no-project-write" ||
         (ctx.agentTargetPaths?.length ?? 0) > 0;
+      // An explicitly configured network ban is a floor YOLO must not silently
+      // widen: approvals auto-return true under YOLO, so the unsandboxed
+      // fallback below would otherwise run a no-network command WITH network
+      // access on a host without an enforcing backend. Require the backend to
+      // enforce the ban and fail closed when it cannot (YOLO never prompts).
+      const yoloEnforcedNetworkBan = ctx.yolo === true && !policyAllowsNetwork(policy);
       const baseArgs = {
         command,
         cwd: ctx.config.workingDirectory,
@@ -525,7 +531,7 @@ export function createBashTool(ctx: ToolContext) {
         timeoutMs,
         env: ctx.toolEnv,
         requireBackend: sandboxConfig.requireBackend,
-        requireEnforcingBackend: isHardFloor,
+        requireEnforcingBackend: isHardFloor || yoloEnforcedNetworkBan,
         // Prompt before running unsandboxed when no backend is available. This
         // is still a sandbox escape, so label it with the sandbox-denied reason
         // used by the approval layer's protected escalation path.

@@ -54,7 +54,11 @@ non-read-only session to `danger-full-access` — commands run outside the OS
 sandbox with full file and network access, and every approval (ordinary and
 sandbox-escalation alike) auto-approves, so nothing prompts. The hard floors
 above are unaffected: an explicit `read-only` mode, read-only roles, and scoped
-children (`targetPaths`) keep their sandbox even under YOLO.
+children (`targetPaths`) keep their sandbox even under YOLO. An explicit
+`sandbox.network: false` is also a floor: YOLO keeps the ban
+(`danger-full-access` + `network: false`), and because YOLO never prompts, a
+host without a network-enforcing backend fails closed instead of falling back
+to an unsandboxed (network-capable) run.
 
 Reads are full-disk in every sandboxed mode, so global skills/plugins/config
 under `~/.cowork` (e.g. `~/.cowork/skills`, `~/.cowork/plugins`), built-in/bundled

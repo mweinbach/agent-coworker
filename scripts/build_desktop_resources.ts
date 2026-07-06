@@ -31,6 +31,7 @@ import {
   rmrf,
   runCommand,
 } from "./releaseBuildUtils";
+import { tryDownloadPrebuiltHelpers } from "./winSandboxPrebuilt";
 
 const CACHE_VERSION = 11;
 
@@ -184,6 +185,8 @@ async function syncWindowsSandboxHelper(opts: {
   arch: string;
   commandRunner?: typeof runCommand;
   forceBuild?: boolean;
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const destinationDir = path.dirname(opts.dest);
   const binaryNames = [
@@ -237,9 +240,40 @@ async function syncWindowsSandboxHelper(opts: {
   }
 
   const crateDir = path.join(opts.root, "crates", "cowork-win-sandbox");
+  const rustTarget = resolveWindowsRustTarget(opts.arch);
+
+  // Fast path: download prebuilt helpers published by win-sandbox-release.yml when
+  // the checked-in lock matches the local crate source. Any soft miss (no lock,
+  // fingerprint drift, unavailable asset) falls back to the cargo source build;
+  // hash mismatches inside tryDownloadPrebuiltHelpers throw instead of falling back.
+  if (opts.forceBuild !== true) {
+    const prebuilt = await tryDownloadPrebuiltHelpers({
+      crateDir,
+      destinationDir,
+      rustTarget,
+      binaryNames,
+      fetchImpl: opts.fetchImpl,
+      env: opts.env,
+      logger: (message) => console.log(`[resources] Windows sandbox helpers: ${message}`),
+    });
+    if (prebuilt.ok) {
+      await fs.writeFile(
+        manifestDest,
+        `${JSON.stringify({ schemaVersion: 1, rustTarget, files: prebuilt.files }, null, 2)}\n`,
+        "utf8",
+      );
+      console.log(
+        `[resources] Windows sandbox helpers: prebuilt ${path.relative(opts.root, destinationDir)}`,
+      );
+      return;
+    }
+    console.log(
+      `[resources] Windows sandbox helpers: prebuilt unavailable (${prebuilt.reason}); building from source`,
+    );
+  }
+
   const manifestPath = path.join(crateDir, "Cargo.toml");
   const runner = opts.commandRunner ?? runCommand;
-  const rustTarget = resolveWindowsRustTarget(opts.arch);
   await runner(["rustup", "target", "add", rustTarget], {
     cwd: opts.root,
   });

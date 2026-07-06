@@ -207,7 +207,7 @@ function psQuoteSingle(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-async function extractZipArchive(archivePath: string, destDir: string): Promise<void> {
+export async function extractZipArchive(archivePath: string, destDir: string): Promise<void> {
   if (process.platform === "win32") {
     const command = `Expand-Archive -Path ${psQuoteSingle(archivePath)} -DestinationPath ${psQuoteSingle(destDir)} -Force`;
     await runCommand(
@@ -228,7 +228,10 @@ async function extractZipArchive(archivePath: string, destDir: string): Promise<
   await runCommand(["unzip", "-oq", archivePath, "-d", destDir], { cwd: path.dirname(destDir) });
 }
 
-async function findFileRecursive(dir: string, wantedBasename: string): Promise<string | null> {
+export async function findFileRecursive(
+  dir: string,
+  wantedBasename: string,
+): Promise<string | null> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isFile() && entry.name === wantedBasename) {

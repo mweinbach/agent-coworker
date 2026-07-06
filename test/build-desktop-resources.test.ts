@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { FOUNDATION_MODELS_KOFFI_TRIPLET } from "../apps/desktop/electron/services/sidecar";
 import { __internal } from "../scripts/build_desktop_resources";
+import {
+  computeSourceFingerprint,
+  WIN_SANDBOX_PREBUILT_LOCK_NAME,
+  type WinSandboxPrebuiltLock,
+} from "../scripts/winSandboxPrebuilt";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
@@ -203,6 +209,397 @@ describe("desktop resource build helpers", () => {
       });
       expect(commands).toHaveLength(2);
       await expect(fs.readFile(dest, "utf8")).resolves.toBe("helper-binary");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  const PREBUILT_TAG = "win-sandbox-v0.0.0-test";
+  const PREBUILT_ZIP_NAME = "win-sandbox-aarch64-pc-windows-msvc.zip";
+  const PREBUILT_BINARIES = {
+    [WINDOWS_SANDBOX_HELPER_NAME]: "prebuilt-helper",
+    [WINDOWS_SANDBOX_SETUP_NAME]: "prebuilt-setup",
+    [WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]: "prebuilt-command-runner",
+  } as const;
+
+  function sha256(data: string | Buffer): string {
+    return createHash("sha256").update(data).digest("hex");
+  }
+
+  async function setUpPrebuiltCrate(root: string): Promise<{
+    crateDir: string;
+    zipBytes: Buffer;
+    lock: WinSandboxPrebuiltLock;
+    writeLock: (lock: WinSandboxPrebuiltLock) => Promise<void>;
+  }> {
+    const crateDir = path.join(root, "crates", "cowork-win-sandbox");
+    await fs.mkdir(path.join(crateDir, "src"), { recursive: true });
+    await fs.writeFile(path.join(crateDir, "Cargo.toml"), '[package]\nname = "test"\n');
+    await fs.writeFile(path.join(crateDir, "Cargo.lock"), "");
+    await fs.writeFile(path.join(crateDir, "src", "main.rs"), "fn main() {}\n");
+
+    const zipInputDir = path.join(root, "prebuilt-zip-input");
+    await fs.mkdir(zipInputDir, { recursive: true });
+    for (const [name, contents] of Object.entries(PREBUILT_BINARIES)) {
+      await fs.writeFile(path.join(zipInputDir, name), contents);
+    }
+    const zipPath = path.join(root, PREBUILT_ZIP_NAME);
+    // Windows CI runners have no `zip` CLI; mirror the platform split in extractZipArchive.
+    const zipCommand =
+      process.platform === "win32"
+        ? [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            `Compress-Archive -Path '${zipInputDir.replace(/'/g, "''")}\\*' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force`,
+          ]
+        : ["zip", "-j", "-q", zipPath, ...Object.keys(PREBUILT_BINARIES)];
+    const zipProc = Bun.spawn(zipCommand, {
+      cwd: zipInputDir,
+      stdout: "ignore",
+      stderr: "inherit",
+    });
+    if ((await zipProc.exited) !== 0) {
+      throw new Error("Failed to create test zip fixture");
+    }
+    const zipBytes = Buffer.from(await fs.readFile(zipPath));
+
+    const lock: WinSandboxPrebuiltLock = {
+      schemaVersion: 1,
+      tag: PREBUILT_TAG,
+      sourceFingerprint: await computeSourceFingerprint(crateDir),
+      targets: {
+        "aarch64-pc-windows-msvc": {
+          zipName: PREBUILT_ZIP_NAME,
+          zipSha256: sha256(zipBytes),
+          files: Object.fromEntries(
+            Object.entries(PREBUILT_BINARIES).map(([name, contents]) => [name, sha256(contents)]),
+          ),
+        },
+      },
+    };
+    const writeLock = async (nextLock: WinSandboxPrebuiltLock) => {
+      await fs.writeFile(
+        path.join(crateDir, WIN_SANDBOX_PREBUILT_LOCK_NAME),
+        JSON.stringify(nextLock, null, 2),
+      );
+    };
+    await writeLock(lock);
+    return { crateDir, zipBytes, lock, writeLock };
+  }
+
+  function recordingFetch(responder: (url: string) => Response): {
+    fetchImpl: typeof fetch;
+    urls: string[];
+  } {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      urls.push(url);
+      return responder(url);
+    }) as typeof fetch;
+    return { fetchImpl, urls };
+  }
+
+  test("downloads verified prebuilt Windows sandbox helpers instead of running cargo", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const dest = path.join(
+      root,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const commands: string[][] = [];
+
+    try {
+      const { zipBytes } = await setUpPrebuiltCrate(root);
+      const { fetchImpl, urls } = recordingFetch(() => new Response(zipBytes));
+
+      await __internal.syncWindowsSandboxHelper({
+        root,
+        dest,
+        previousFingerprint: "old",
+        nextFingerprint: "new",
+        platform: "win32",
+        arch: "arm64",
+        commandRunner: async (command) => {
+          commands.push(command);
+        },
+        fetchImpl,
+        env: {},
+      });
+
+      expect(commands).toEqual([]);
+      expect(urls).toEqual([
+        `https://github.com/mweinbach/agent-coworker/releases/download/${PREBUILT_TAG}/${PREBUILT_ZIP_NAME}`,
+      ]);
+      for (const [name, contents] of Object.entries(PREBUILT_BINARIES)) {
+        await expect(fs.readFile(path.join(path.dirname(dest), name), "utf8")).resolves.toBe(
+          contents,
+        );
+      }
+      const manifest = JSON.parse(
+        await fs.readFile(
+          path.join(path.dirname(dest), WINDOWS_SANDBOX_HASH_MANIFEST_NAME),
+          "utf8",
+        ),
+      );
+      expect(manifest.schemaVersion).toBe(1);
+      expect(manifest.rustTarget).toBe("aarch64-pc-windows-msvc");
+      expect(manifest.files).toEqual(
+        Object.fromEntries(
+          Object.entries(PREBUILT_BINARIES).map(([name, contents]) => [name, sha256(contents)]),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("throws on a prebuilt helper hash mismatch instead of silently rebuilding", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const dest = path.join(
+      root,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const commands: string[][] = [];
+
+    try {
+      const { zipBytes, lock, writeLock } = await setUpPrebuiltCrate(root);
+      const tamperedLock: WinSandboxPrebuiltLock = {
+        ...lock,
+        targets: {
+          "aarch64-pc-windows-msvc": {
+            ...lock.targets["aarch64-pc-windows-msvc"]!,
+            files: {
+              ...lock.targets["aarch64-pc-windows-msvc"]!.files,
+              [WINDOWS_SANDBOX_HELPER_NAME]: sha256("some-other-binary"),
+            },
+          },
+        },
+      };
+      await writeLock(tamperedLock);
+      const { fetchImpl } = recordingFetch(() => new Response(zipBytes));
+
+      await expect(
+        __internal.syncWindowsSandboxHelper({
+          root,
+          dest,
+          previousFingerprint: "old",
+          nextFingerprint: "new",
+          platform: "win32",
+          arch: "arm64",
+          commandRunner: async (command) => {
+            commands.push(command);
+          },
+          fetchImpl,
+          env: {},
+        }),
+      ).rejects.toThrow(/hash mismatch/);
+      expect(commands).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("throws on a prebuilt zip hash mismatch instead of silently rebuilding", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const dest = path.join(
+      root,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const commands: string[][] = [];
+
+    try {
+      const { zipBytes } = await setUpPrebuiltCrate(root);
+      const tampered = Buffer.concat([zipBytes, Buffer.from("tamper")]);
+      const { fetchImpl } = recordingFetch(() => new Response(tampered));
+
+      await expect(
+        __internal.syncWindowsSandboxHelper({
+          root,
+          dest,
+          previousFingerprint: "old",
+          nextFingerprint: "new",
+          platform: "win32",
+          arch: "arm64",
+          commandRunner: async (command) => {
+            commands.push(command);
+          },
+          fetchImpl,
+          env: {},
+        }),
+      ).rejects.toThrow(/zip hash mismatch/);
+      expect(commands).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to cargo when the prebuilt lock fingerprint drifts from the crate source", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const dest = path.join(
+      root,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const crateDir = path.join(root, "crates", "cowork-win-sandbox");
+    const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
+    const commands: string[][] = [];
+
+    try {
+      await setUpPrebuiltCrate(root);
+      await fs.writeFile(path.join(crateDir, "src", "main.rs"), "fn main() { /* edited */ }\n");
+      const { fetchImpl, urls } = recordingFetch(() => new Response("unused"));
+
+      await __internal.syncWindowsSandboxHelper({
+        root,
+        dest,
+        previousFingerprint: "old",
+        nextFingerprint: "new",
+        platform: "win32",
+        arch: "arm64",
+        commandRunner: async (command) => {
+          commands.push(command);
+          await fs.mkdir(builtDir, { recursive: true });
+          await Promise.all(
+            Object.keys(PREBUILT_BINARIES).map((name) =>
+              fs.writeFile(path.join(builtDir, name), `built-${name}`),
+            ),
+          );
+        },
+        fetchImpl,
+        env: {},
+      });
+
+      expect(urls).toEqual([]);
+      expect(commands).toHaveLength(2);
+      await expect(fs.readFile(dest, "utf8")).resolves.toBe(`built-${WINDOWS_SANDBOX_HELPER_NAME}`);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("skips prebuilt downloads when COWORK_WIN_SANDBOX_PREBUILT=0 or forceBuild is set", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const dest = path.join(
+      root,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const crateDir = path.join(root, "crates", "cowork-win-sandbox");
+    const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
+    const commands: string[][] = [];
+    const buildRunner = async (command: string[]) => {
+      commands.push(command);
+      await fs.mkdir(builtDir, { recursive: true });
+      await Promise.all(
+        Object.keys(PREBUILT_BINARIES).map((name) =>
+          fs.writeFile(path.join(builtDir, name), `built-${name}`),
+        ),
+      );
+    };
+
+    try {
+      await setUpPrebuiltCrate(root);
+      const { fetchImpl, urls } = recordingFetch(() => new Response("unused"));
+
+      await __internal.syncWindowsSandboxHelper({
+        root,
+        dest,
+        previousFingerprint: "old",
+        nextFingerprint: "new",
+        platform: "win32",
+        arch: "arm64",
+        commandRunner: buildRunner,
+        fetchImpl,
+        env: { COWORK_WIN_SANDBOX_PREBUILT: "0" },
+      });
+      expect(urls).toEqual([]);
+      expect(commands).toHaveLength(2);
+
+      commands.splice(0);
+      await __internal.syncWindowsSandboxHelper({
+        root,
+        dest,
+        previousFingerprint: "old",
+        nextFingerprint: "new",
+        platform: "win32",
+        arch: "arm64",
+        commandRunner: buildRunner,
+        forceBuild: true,
+        fetchImpl,
+        env: {},
+      });
+      expect(urls).toEqual([]);
+      expect(commands).toHaveLength(2);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to cargo when the prebuilt release asset is unavailable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const dest = path.join(
+      root,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      WINDOWS_SANDBOX_HELPER_NAME,
+    );
+    const crateDir = path.join(root, "crates", "cowork-win-sandbox");
+    const builtDir = path.join(crateDir, "target", "aarch64-pc-windows-msvc", "release");
+    const commands: string[][] = [];
+
+    try {
+      await setUpPrebuiltCrate(root);
+      const { fetchImpl, urls } = recordingFetch(
+        () => new Response("not found", { status: 404, statusText: "Not Found" }),
+      );
+
+      await __internal.syncWindowsSandboxHelper({
+        root,
+        dest,
+        previousFingerprint: "old",
+        nextFingerprint: "new",
+        platform: "win32",
+        arch: "arm64",
+        commandRunner: async (command) => {
+          commands.push(command);
+          await fs.mkdir(builtDir, { recursive: true });
+          await Promise.all(
+            Object.keys(PREBUILT_BINARIES).map((name) =>
+              fs.writeFile(path.join(builtDir, name), `built-${name}`),
+            ),
+          );
+        },
+        fetchImpl,
+        env: {},
+      });
+
+      expect(urls).toHaveLength(1);
+      expect(commands).toHaveLength(2);
+      await expect(fs.readFile(dest, "utf8")).resolves.toBe(`built-${WINDOWS_SANDBOX_HELPER_NAME}`);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

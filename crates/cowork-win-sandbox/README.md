@@ -55,6 +55,37 @@ The resulting `cowork-win-sandbox.exe` should be bundled next to the app binary
 1. the `COWORK_WIN_SANDBOX_HELPER` environment variable (absolute path), or
 2. the directory of the running binary / the app `resources` directory.
 
+## Prebuilt release helpers
+
+Desktop packaging (`scripts/build_desktop_resources.ts`) prefers downloading
+prebuilt helpers over compiling this crate, because the cargo build (git deps
+from `openai/codex`, `opt-level = "z"` + LTO) dominates release wall-clock time.
+
+- `prebuilt.lock.json` (checked in next to this README) pins a `win-sandbox-v*`
+  GitHub release tag, a content-based fingerprint of this crate's build inputs
+  (`Cargo.toml`, `Cargo.lock`, `build.rs`, `codex-windows-sandbox-setup.manifest`,
+  `src/`, `vendor/`; CRLF-normalized so checkouts hash identically), and sha256
+  hashes for each per-target zip and helper exe.
+- When the local fingerprint matches the lock, the build downloads the zip for
+  the requested MSVC target, verifies the zip and every exe against the lock,
+  and writes the same `cowork-win-sandbox.sha256.json` manifest a source build
+  would produce. Signing and post-signing re-hashing are unchanged.
+- Any soft miss — no lock, fingerprint drift after a crate edit, missing target,
+  unavailable release asset — falls back to the cargo source build. A hash
+  mismatch with a *matching* fingerprint is a hard failure by design: it means
+  the release asset no longer contains the bytes the lock promised, so the build
+  stops instead of masking a possible supply-chain problem.
+- Escape hatches: `COWORK_WIN_SANDBOX_PREBUILT=0` disables prebuilt downloads;
+  `--force-windows-sandbox-build` (the desktop `dev` script) always compiles.
+
+Publishing flow (`.github/workflows/win-sandbox-release.yml`): push a
+`win-sandbox-v*` tag (keep it in sync with the crate version) → the workflow
+builds both MSVC targets, publishes the zips as release assets, and prints the
+refreshed `prebuilt.lock.json` in the job summary → commit that file here.
+Until the new lock is committed, desktop releases transparently compile from
+source. `bun scripts/winSandboxPrebuilt.ts fingerprint|check|lock` exposes the
+same logic on the command line.
+
 ## Verification checklist (Windows runner)
 
 1. `cargo build --release` succeeds.

@@ -537,7 +537,7 @@ describe("SessionBackupManager", () => {
     expect("closedAt" in reopenedMetadata).toBe(false);
   });
 
-  test("pruneClosedSessions removes old closed sessions beyond retention", async () => {
+  test("pruneBackupsRoot removes old closed sessions beyond retention", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     const ids: string[] = [];
     for (let i = 0; i < 3; i++) {
@@ -552,7 +552,7 @@ describe("SessionBackupManager", () => {
     }
 
     const backupsRoot = path.join(home, ".cowork", "session-backups");
-    await SessionBackupManager.pruneClosedSessions(backupsRoot, {
+    await SessionBackupManager.pruneBackupsRoot(backupsRoot, {
       maxClosedSessions: 1,
       maxClosedAgeDays: 365,
     });
@@ -561,5 +561,101 @@ describe("SessionBackupManager", () => {
       ids.map(async (id) => ({ id, exists: await fileExists(path.join(backupsRoot, id)) })),
     );
     expect(existing.filter((x) => x.exists).length).toBe(1);
+  });
+
+  test("pruneBackupsRoot ages out orphan dirs without metadata", async () => {
+    const { home } = await makeTmpWorkspace();
+    const backupsRoot = path.join(home, ".cowork", "session-backups");
+
+    const oldOrphan = path.join(backupsRoot, crypto.randomUUID());
+    await fs.mkdir(path.join(oldOrphan, "checkpoints"), { recursive: true });
+    await fs.writeFile(path.join(oldOrphan, "original.tar.gz"), "stub", "utf-8");
+    const oldTime = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    await fs.utimes(oldOrphan, oldTime, oldTime);
+
+    const freshOrphan = path.join(backupsRoot, crypto.randomUUID());
+    await fs.mkdir(freshOrphan, { recursive: true });
+
+    await SessionBackupManager.pruneBackupsRoot(backupsRoot);
+
+    expect(await fileExists(oldOrphan)).toBe(false);
+    expect(await fileExists(freshOrphan)).toBe(true);
+  });
+
+  test("pruneBackupsRoot ages out stale active sessions and corrupt metadata", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    const backupsRoot = path.join(home, ".cowork", "session-backups");
+    const oldTime = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+
+    const staleActiveId = crypto.randomUUID();
+    const staleActive = await SessionBackupManager.create({
+      sessionId: staleActiveId,
+      workingDirectory: workspace,
+      homedir: home,
+    });
+    const staleActiveDir = staleActive.getPublicState().backupDirectory;
+    if (!staleActiveDir) throw new Error("Expected backup directory");
+    // Rewrite the timestamps so the never-closed session looks abandoned.
+    const staleMetadataPath = path.join(staleActiveDir, "metadata.json");
+    const staleMetadata = JSON.parse(await fs.readFile(staleMetadataPath, "utf-8")) as {
+      createdAt: string;
+      checkpoints: Array<{ createdAt: string }>;
+    };
+    staleMetadata.createdAt = oldTime.toISOString();
+    for (const checkpoint of staleMetadata.checkpoints) {
+      checkpoint.createdAt = oldTime.toISOString();
+    }
+    await fs.writeFile(staleMetadataPath, JSON.stringify(staleMetadata, null, 2), "utf-8");
+    await fs.utimes(staleMetadataPath, oldTime, oldTime);
+
+    const corruptId = crypto.randomUUID();
+    const corruptDir = path.join(backupsRoot, corruptId);
+    await fs.mkdir(corruptDir, { recursive: true });
+    await fs.writeFile(path.join(corruptDir, "metadata.json"), "{not json", "utf-8");
+    await fs.utimes(corruptDir, oldTime, oldTime);
+
+    const liveActiveId = crypto.randomUUID();
+    const liveActive = await SessionBackupManager.create({
+      sessionId: liveActiveId,
+      workingDirectory: workspace,
+      homedir: home,
+    });
+    const liveActiveDir = liveActive.getPublicState().backupDirectory;
+    if (!liveActiveDir) throw new Error("Expected backup directory");
+
+    await SessionBackupManager.pruneBackupsRoot(backupsRoot);
+
+    expect(await fileExists(staleActiveDir)).toBe(false);
+    expect(await fileExists(corruptDir)).toBe(false);
+    expect(await fileExists(liveActiveDir)).toBe(true);
+  });
+
+  test("pruneBackupsRoot sweeps leaked stage dirs but keeps fresh ones", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    const backupsRoot = path.join(home, ".cowork", "session-backups");
+
+    const sessionId = crypto.randomUUID();
+    const manager = await SessionBackupManager.create({
+      sessionId,
+      workingDirectory: workspace,
+      homedir: home,
+    });
+    const sessionDir = manager.getPublicState().backupDirectory;
+    if (!sessionDir) throw new Error("Expected backup directory");
+
+    const leakedStage = path.join(sessionDir, ".snapshot-stage-abc123");
+    await fs.mkdir(leakedStage, { recursive: true });
+    await fs.writeFile(path.join(leakedStage, "workspace-copy.txt"), "leak", "utf-8");
+    const oldTime = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    await fs.utimes(leakedStage, oldTime, oldTime);
+
+    const freshStage = path.join(sessionDir, ".fingerprint-stage-def456");
+    await fs.mkdir(freshStage, { recursive: true });
+
+    await SessionBackupManager.pruneBackupsRoot(backupsRoot);
+
+    expect(await fileExists(leakedStage)).toBe(false);
+    expect(await fileExists(freshStage)).toBe(true);
+    expect(await fileExists(sessionDir)).toBe(true);
   });
 });

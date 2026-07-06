@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,6 +115,13 @@ const ORIGINAL_ARCHIVE = "original.tar.gz";
 const CHECKPOINTS_DIR = "checkpoints";
 const DEFAULT_MAX_CLOSED_SESSIONS = 20;
 const DEFAULT_MAX_CLOSED_AGE_DAYS = 7;
+const DEFAULT_MAX_ORPHAN_AGE_DAYS = 7;
+const DEFAULT_MAX_INACTIVE_AGE_DAYS = 30;
+const DEFAULT_MAX_STAGE_AGE_HOURS = 24;
+
+// Matches mkdtemp staging dirs from current and past releases
+// (.fingerprint-stage-*, .restore-stage-*, legacy .snapshot-stage-*).
+const STAGE_DIR_PATTERN = /^\.[\w-]*-stage-/;
 
 export function getSessionBackupsRootDirs(opts: { homedir?: string } = {}): string[] {
   const paths = getAiCoworkerPaths({ homedir: opts.homedir });
@@ -227,37 +235,101 @@ async function normalizeMetadataOnLoad(
 // ---------------------------------------------------------------------------
 
 export class SessionBackupManager implements SessionBackupHandle {
-  static async pruneClosedSessions(
+  static async pruneBackupsRoot(
     backupsRootDir: string,
-    opts?: { maxClosedSessions?: number; maxClosedAgeDays?: number; skipSessionId?: string },
+    opts?: {
+      maxClosedSessions?: number;
+      maxClosedAgeDays?: number;
+      maxOrphanAgeDays?: number;
+      maxInactiveAgeDays?: number;
+      maxStageAgeHours?: number;
+      skipSessionId?: string;
+    },
   ): Promise<void> {
     await ensureSecureDirectory(backupsRootDir);
     const maxClosedSessions = Math.max(
       1,
       Math.floor(opts?.maxClosedSessions ?? DEFAULT_MAX_CLOSED_SESSIONS),
     );
-    const maxClosedAgeDays = Math.max(
-      1,
-      Math.floor(opts?.maxClosedAgeDays ?? DEFAULT_MAX_CLOSED_AGE_DAYS),
-    );
-    const maxClosedAgeMs = maxClosedAgeDays * 24 * 60 * 60 * 1000;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const maxClosedAgeMs =
+      Math.max(1, Math.floor(opts?.maxClosedAgeDays ?? DEFAULT_MAX_CLOSED_AGE_DAYS)) * dayMs;
+    const maxOrphanAgeMs =
+      Math.max(1, Math.floor(opts?.maxOrphanAgeDays ?? DEFAULT_MAX_ORPHAN_AGE_DAYS)) * dayMs;
+    const maxInactiveAgeMs =
+      Math.max(1, Math.floor(opts?.maxInactiveAgeDays ?? DEFAULT_MAX_INACTIVE_AGE_DAYS)) * dayMs;
+    const maxStageAgeMs =
+      Math.max(1, Math.floor(opts?.maxStageAgeHours ?? DEFAULT_MAX_STAGE_AGE_HOURS)) *
+      60 *
+      60 *
+      1000;
     const now = Date.now();
+
+    const mtimeMs = async (target: string): Promise<number | null> => {
+      try {
+        return (await fs.stat(target)).mtimeMs;
+      } catch {
+        return null;
+      }
+    };
 
     const entries = await fs.readdir(backupsRootDir, { withFileTypes: true });
     const closedSessions: Array<{ sessionId: string; sessionDir: string; closedAtMs: number }> = [];
+    const survivingSessionDirs: string[] = [];
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       if (opts?.skipSessionId && entry.name === opts.skipSessionId) continue;
       const sessionDir = path.join(backupsRootDir, entry.name);
-      const metadata = await readMetadata(path.join(sessionDir, METADATA_FILE));
-      if (metadata?.state !== "closed") continue;
-      const closedAtMs = Date.parse(metadata.closedAt ?? metadata.createdAt);
-      closedSessions.push({
-        sessionId: metadata.sessionId,
-        sessionDir,
-        closedAtMs: Number.isFinite(closedAtMs) ? closedAtMs : 0,
-      });
+
+      let metadata: SessionBackupMetadata | null = null;
+      try {
+        metadata = await readMetadata(path.join(sessionDir, METADATA_FILE));
+      } catch {
+        // Corrupt metadata: treat like a missing file and age the dir out below.
+      }
+
+      if (!metadata) {
+        // Orphan: missing (crashed mid-create, or pre-metadata legacy layout) or
+        // corrupt metadata. Never prunable via the closed-session path, so age
+        // it out by directory mtime. Fresh dirs are protected: a create() in
+        // flight keeps updating the dir while it writes snapshots.
+        const dirMtimeMs = await mtimeMs(sessionDir);
+        if (dirMtimeMs !== null && now - dirMtimeMs > maxOrphanAgeMs) {
+          await fs.rm(sessionDir, { recursive: true, force: true });
+          continue;
+        }
+        survivingSessionDirs.push(sessionDir);
+        continue;
+      }
+
+      if (metadata.state === "closed") {
+        const closedAtMs = Date.parse(metadata.closedAt ?? metadata.createdAt);
+        closedSessions.push({
+          sessionId: metadata.sessionId,
+          sessionDir,
+          closedAtMs: Number.isFinite(closedAtMs) ? closedAtMs : 0,
+        });
+        continue;
+      }
+
+      // "active" metadata from a session that never closed cleanly (crash or
+      // force-quit) stays active forever. Every checkpoint rewrites
+      // metadata.json, so its mtime is a reliable freshness signal; age out
+      // dirs with no writes for a generous window.
+      const metadataMtimeMs = await mtimeMs(path.join(sessionDir, METADATA_FILE));
+      const lastCheckpointAtMs = Date.parse(
+        metadata.checkpoints[metadata.checkpoints.length - 1]?.createdAt ?? metadata.createdAt,
+      );
+      const freshestMs = Math.max(
+        metadataMtimeMs ?? 0,
+        Number.isFinite(lastCheckpointAtMs) ? lastCheckpointAtMs : 0,
+      );
+      if (freshestMs > 0 && now - freshestMs > maxInactiveAgeMs) {
+        await fs.rm(sessionDir, { recursive: true, force: true });
+        continue;
+      }
+      survivingSessionDirs.push(sessionDir);
     }
 
     closedSessions.sort((a, b) => b.closedAtMs - a.closedAtMs);
@@ -266,8 +338,31 @@ export class SessionBackupManager implements SessionBackupHandle {
     for (const session of closedSessions) {
       const tooOld = session.closedAtMs > 0 && now - session.closedAtMs > maxClosedAgeMs;
       const overLimit = !keep.has(session.sessionId);
-      if (!tooOld && !overLimit) continue;
+      if (!tooOld && !overLimit) {
+        survivingSessionDirs.push(session.sessionDir);
+        continue;
+      }
       await fs.rm(session.sessionDir, { recursive: true, force: true });
+    }
+
+    // Sweep leaked mkdtemp staging dirs (fingerprint/restore stages, legacy
+    // snapshot stages) inside surviving session dirs. Each holds a full
+    // unpacked workspace copy. The age guard protects stages belonging to an
+    // operation that is running right now.
+    for (const sessionDir of survivingSessionDirs) {
+      let children: Dirent[];
+      try {
+        children = await fs.readdir(sessionDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const child of children) {
+        if (!child.isDirectory() || !STAGE_DIR_PATTERN.test(child.name)) continue;
+        const stageDir = path.join(sessionDir, child.name);
+        const stageMtimeMs = await mtimeMs(stageDir);
+        if (stageMtimeMs === null || now - stageMtimeMs <= maxStageAgeMs) continue;
+        await fs.rm(stageDir, { recursive: true, force: true });
+      }
     }
   }
 
@@ -292,6 +387,13 @@ export class SessionBackupManager implements SessionBackupHandle {
     await ensureSecureDirectory(backupsRootDir);
     await ensureSecureDirectory(sessionDir);
     await ensureSecureDirectory(path.join(sessionDir, CHECKPOINTS_DIR));
+    // Backups accumulate whenever sessions end without a clean close(); sweep
+    // on create so long-lived installs reclaim space even if close never runs.
+    void SessionBackupManager.pruneBackupsRoot(backupsRootDir, {
+      skipSessionId: opts.sessionId,
+    }).catch(() => {
+      // best-effort cleanup
+    });
     const existing = await readMetadata(metadataPath);
     if (existing) {
       if (existing.sessionId !== opts.sessionId) {
@@ -511,7 +613,7 @@ export class SessionBackupManager implements SessionBackupHandle {
     this.metadata.closedAt = new Date().toISOString();
     await this.persistMetadata();
     try {
-      await SessionBackupManager.pruneClosedSessions(path.dirname(this.sessionDir), {
+      await SessionBackupManager.pruneBackupsRoot(path.dirname(this.sessionDir), {
         skipSessionId: this.metadata.sessionId,
       });
     } catch {

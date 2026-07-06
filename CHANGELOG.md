@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.18 - 2026-07-06
+
+### Fixed
+
+- **Windows CI smoke cleanup** — Restores Windows smoke dependency caches
+  without saving new Bun/Electron archives so successful Windows jobs do not
+  stall in post-job cache uploads before the release tag is cut.
+
 ## 1.2.17 - 2026-07-06
 
 ### Fixed

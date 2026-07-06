@@ -77,6 +77,9 @@ jobs:
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+        with:
+          cache-scope: windows-smoke-${{ matrix.arch }}
+          save-cache: "false"
 
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache

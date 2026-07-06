@@ -49,10 +49,15 @@ describe("main CI workflow", () => {
   });
 
   test("runs Windows path and desktop smoke coverage", () => {
+    const windowsSmokeJob = workflow.match(/windows-smoke:[\s\S]*?\n {2}macos-smoke:/)?.[0] ?? "";
+
     expect(workflow).toContain("windows-smoke:");
     expect(workflow).toContain("runner: windows-latest");
     expect(workflow).toContain("runner: windows-11-arm");
     expect(workflow).toContain("runs-on: ${{ matrix.runner }}");
+    expect(windowsSmokeJob).toMatch(
+      /- name: Setup dependencies[\s\S]*?uses: \.\/\.github\/actions\/setup-bun[\s\S]*?with:[\s\S]*?cache-scope: windows-smoke-\$\{\{ matrix\.arch \}\}[\s\S]*?save-cache: "false"/,
+    );
     expect(workflow).toContain("- name: Windows sandbox helper enforcement");
     expect(workflow).toContain(
       "cargo build --release --bins --manifest-path crates\\cowork-win-sandbox\\Cargo.toml",

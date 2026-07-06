@@ -424,6 +424,7 @@ export function createWorkspaceMemoryActions(
       ensureControlSocket(get, set, workspaceId);
       const key = skillName ? `run:${skillName}` : "run:queued";
       setSkillImprovementPending(workspaceId, key, true);
+      const requestedAt = Date.now();
 
       const ok = await requestJsonRpcControlEvent(
         get,
@@ -448,15 +449,23 @@ export function createWorkspaceMemoryActions(
         }));
         return false;
       }
+      // The run result already refreshed skillImprovementStatus in the store,
+      // so report what actually happened instead of assuming success.
+      const outcome = latestRunOutcome(get, workspaceId, requestedAt, skillName);
       set((s) => ({
         notifications: pushNotification(s.notifications, {
           id: makeId(),
           ts: nowIso(),
-          kind: "info",
-          title: "Skill improvement complete",
-          detail: skillName
-            ? `${skillName} was processed.`
-            : "Queued skill improvement jobs were processed.",
+          kind: outcome?.status === "failed" ? "error" : "info",
+          title:
+            outcome?.status === "failed"
+              ? "Skill improvement failed"
+              : outcome?.status === "skipped"
+                ? "Skill improvement finished without changes"
+                : "Skill improvement complete",
+          detail: outcome
+            ? `${outcome.skillName}: ${outcome.message}`
+            : "No queued skill improvement jobs were due.",
         }),
       }));
       return true;
@@ -467,6 +476,7 @@ export function createWorkspaceMemoryActions(
       ensureControlSocket(get, set, workspaceId);
       const key = `restore:${skillName}`;
       setSkillImprovementPending(workspaceId, key, true);
+      const errorDetail: { message?: string } = {};
 
       const ok = await requestJsonRpcControlEvent(
         get,
@@ -477,6 +487,7 @@ export function createWorkspaceMemoryActions(
           cwd: resolveMemoryCwd(workspaceId, opts),
           skillName,
         },
+        errorDetail,
       );
       if (!ok) {
         setSkillImprovementPending(workspaceId, key, false);
@@ -486,7 +497,7 @@ export function createWorkspaceMemoryActions(
             ts: nowIso(),
             kind: "error",
             title: "Unable to restore skill",
-            detail: `${skillName} could not be restored from backup.`,
+            detail: errorDetail.message ?? `${skillName} could not be restored from backup.`,
           }),
         }));
         return false;
@@ -731,6 +742,25 @@ function applyOptimisticMemoryConfig(
       ) as typeof s.workspaceRuntimeById,
     }));
   };
+}
+
+function latestRunOutcome(
+  get: StoreGet,
+  workspaceId: string,
+  requestedAtMs: number,
+  skillName?: string,
+): { skillName: string; status: "completed" | "failed" | "skipped"; message: string } | null {
+  const history = get().workspaceRuntimeById[workspaceId]?.skillImprovementStatus?.runHistory ?? [];
+  // Allow a little clock skew between client and server timestamps.
+  const cutoffMs = requestedAtMs - 5_000;
+  const entry = history.find(
+    (candidate) =>
+      (!skillName || candidate.skillName === skillName) &&
+      new Date(candidate.finishedAt).getTime() >= cutoffMs,
+  );
+  return entry
+    ? { skillName: entry.skillName, status: entry.status, message: entry.message }
+    : null;
 }
 
 async function syncAdvancedMemoryDefaultsAcrossThreads(get: StoreGet): Promise<void> {

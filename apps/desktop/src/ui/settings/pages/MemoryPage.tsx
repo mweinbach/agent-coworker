@@ -357,13 +357,10 @@ export function MemoryPage() {
   const skillImprovementSkills = useMemo(
     () =>
       (skillImprovementStatus?.skills ?? [])
-        .filter(
-          (skill) =>
-            skill.eligible &&
-            (skillImprovementScope === "all" || skill.sourceKind === "user" || skill.excluded),
-        )
+        // Excluded skills stay listed (unchecked) so exclusion is reversible.
+        .filter((skill) => skill.included && (skill.eligible || skill.excluded))
         .sort((left, right) => left.skillName.localeCompare(right.skillName)),
-    [skillImprovementScope, skillImprovementStatus?.skills],
+    [skillImprovementStatus?.skills],
   );
   const skillImprovementPendingJobs = skillImprovementStatus?.pendingJobs ?? [];
   const skillImprovementHistory = skillImprovementStatus?.runHistory.slice(0, 5) ?? [];
@@ -805,7 +802,13 @@ export function MemoryPage() {
                         <span className="ml-2 text-muted-foreground">{entry.message}</span>
                       </div>
                       <Badge
-                        variant={entry.status === "completed" ? "default" : "secondary"}
+                        variant={
+                          entry.status === "completed"
+                            ? "default"
+                            : entry.status === "failed"
+                              ? "destructive"
+                              : "secondary"
+                        }
                         className="h-5 text-[10px] uppercase"
                       >
                         {entry.status}
@@ -815,44 +818,46 @@ export function MemoryPage() {
                 </div>
               )}
             </SettingsRow>
-            <SettingsRow
-              title="Restore backups"
-              description="Backups are created before a skill is changed."
-            >
-              {skillImprovementBackups.length === 0 ? (
-                <div className="text-xs text-muted-foreground">No restore backups available.</div>
-              ) : (
-                <div className="space-y-2">
-                  {skillImprovementBackups.map((backup) => {
-                    const restoreKey = `restore:${backup.skillName}`;
-                    return (
-                      <div
-                        key={backup.key}
-                        className="flex flex-wrap items-center justify-between gap-2 text-xs"
-                      >
-                        <div className="min-w-0">
-                          <div className="font-medium text-foreground">{backup.skillName}</div>
-                          <div className="truncate text-muted-foreground">
-                            Saved {relativeTime(backup.createdAt)}
-                          </div>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          type="button"
-                          disabled={!!skillImprovementPendingActionKeys[restoreKey]}
-                          onClick={() => handleRestoreSkill(backup.skillName)}
-                        >
-                          <RotateCcwIcon data-icon="inline-start" />
-                          {skillImprovementPendingActionKeys[restoreKey] ? "Restoring" : "Restore"}
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </SettingsRow>
           </>
+        ) : null}
+        {skillImprovementEnabled || skillImprovementBackups.length > 0 ? (
+          <SettingsRow
+            title="Restore backups"
+            description="Backups are created before a skill is changed."
+          >
+            {skillImprovementBackups.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No restore backups available.</div>
+            ) : (
+              <div className="space-y-2">
+                {skillImprovementBackups.map((backup) => {
+                  const restoreKey = `restore:${backup.skillName}`;
+                  return (
+                    <div
+                      key={backup.key}
+                      className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium text-foreground">{backup.skillName}</div>
+                        <div className="truncate text-muted-foreground">
+                          Saved {relativeTime(backup.createdAt)}
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        disabled={!!skillImprovementPendingActionKeys[restoreKey]}
+                        onClick={() => handleRestoreSkill(backup.skillName)}
+                      >
+                        <RotateCcwIcon data-icon="inline-start" />
+                        {skillImprovementPendingActionKeys[restoreKey] ? "Restoring" : "Restore"}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </SettingsRow>
         ) : null}
       </SettingsSection>
 

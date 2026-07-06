@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveGitHubCommitSha } from "../extensions/github";
 import {
   expandHomeDir,
   type FetchLike,
@@ -304,6 +305,54 @@ export async function materializePluginSource(opts: {
     return await materializeLocalPath(descriptor.localPath ?? descriptor.displaySource);
   }
   return await materializeGitHubSource(descriptor, opts.fetchImpl ?? fetch);
+}
+
+export type PinnedPluginSourceInput = {
+  /** The source input rewritten to address the pinned commit. */
+  input: string;
+  repo: string;
+  commitSha: string;
+};
+
+const COMMIT_SHA_RE = /^[0-9a-f]{40}$/i;
+
+/**
+ * Pin a GitHub tree source to the commit its ref points at right now, so the
+ * plugin files and any marketplace manifest verification read one immutable
+ * snapshot. GitHub's content endpoints cache branch-ref paths independently,
+ * so two fetches against a just-pushed branch can observe different commits;
+ * SHA-addressed fetches cannot. Returns null — caller keeps branch-ref
+ * behavior — for non-tree sources and on any resolution failure.
+ */
+export async function resolvePinnedPluginSourceInput(opts: {
+  input: string;
+  cwd?: string;
+  fetchImpl?: FetchLike;
+}): Promise<PinnedPluginSourceInput | null> {
+  let descriptor: PluginSourceDescriptor;
+  try {
+    descriptor = resolvePluginSource(opts.input, opts.cwd);
+  } catch {
+    return null;
+  }
+  if (descriptor.kind !== "github_tree" || !descriptor.repo || !descriptor.ref) {
+    return null;
+  }
+  if (COMMIT_SHA_RE.test(descriptor.ref)) {
+    return { input: opts.input, repo: descriptor.repo, commitSha: descriptor.ref.toLowerCase() };
+  }
+  const commitSha = await resolveGitHubCommitSha(
+    opts.fetchImpl ?? fetch,
+    descriptor.repo,
+    descriptor.ref,
+  );
+  if (!commitSha) return null;
+  const subdir = descriptor.subdir ? `/${trimSlashes(descriptor.subdir)}` : "";
+  return {
+    input: `https://github.com/${descriptor.repo}/tree/${commitSha}${subdir}`,
+    repo: descriptor.repo,
+    commitSha,
+  };
 }
 
 function wouldCandidateBePrimary(

@@ -50,6 +50,13 @@ export type RemotePluginMarketplaceOptions = {
   repo?: string;
   ref?: string;
   marketplacePath?: string;
+  /**
+   * Commit to download the manifest bytes from when it should differ from
+   * `ref` (e.g. an install pinned to one commit). Plugin sourceInputs are
+   * still built against `ref` so they keep matching install metadata and
+   * inputs recorded from branch URLs.
+   */
+  contentRef?: string;
 };
 
 function normalizeInstallSourceInput(input: string): string {
@@ -272,15 +279,16 @@ export async function fetchRemotePluginMarketplace(
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const repo = opts.repo ?? BUILT_IN_MARKETPLACE_REPO;
   const ref = opts.ref ?? BUILT_IN_MARKETPLACE_REF;
+  const contentRef = opts.contentRef ?? ref;
   const marketplacePath = opts.marketplacePath ?? BUILT_IN_MARKETPLACE_PATH;
   const raw = await fetchMarketplaceJsonText({
     fetchImpl,
     repo,
-    ref,
+    ref: contentRef,
     marketplacePath,
   });
   const marketplace = parseRemotePluginMarketplace(raw, {
-    marketplacePath: `https://github.com/${repo}/blob/${ref}/${marketplacePath}`,
+    marketplacePath: `https://github.com/${repo}/blob/${contentRef}/${marketplacePath}`,
     repo,
     ref,
   });
@@ -291,10 +299,13 @@ export async function fetchMarketplaceInstallMetadataBySourceInput(opts: {
   config: MarketplaceRegistryConfig;
   input: string;
   fetchImpl?: FetchLike;
+  /** Per-marketplace-id commit override for the manifest download. */
+  contentRefOverridesById?: ReadonlyMap<string, string>;
 }): Promise<Map<string, PluginMarketplaceInstallMetadata>> {
   const { marketplaces } = await fetchConfiguredMarketplaces({
     config: opts.config,
     fetchImpl: opts.fetchImpl,
+    contentRefOverridesById: opts.contentRefOverridesById,
   });
   const metadataByPluginId = new Map<string, PluginMarketplaceInstallMetadata>();
   for (const { document } of marketplaces) {

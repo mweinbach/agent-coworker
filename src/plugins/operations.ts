@@ -34,6 +34,8 @@ import {
   buildPluginInstallPreview,
   type MaterializedPluginSource,
   materializePluginSource,
+  type PinnedPluginSourceInput,
+  resolvePinnedPluginSourceInput,
   selectSingleValidPluginCandidate,
 } from "./sourceResolver";
 
@@ -296,6 +298,7 @@ async function resolveRemoteMarketplaceMetadataByPluginId(opts: {
   input: string;
   materialized: MaterializedPluginSource;
   fetchImpl?: FetchLike;
+  pinnedCommitSha?: string;
 }): Promise<Map<string, PluginMarketplaceInstallMetadata>> {
   const sourceRepo = opts.materialized.descriptor.repo;
   if (!sourceRepo) {
@@ -312,10 +315,59 @@ async function resolveRemoteMarketplaceMetadataByPluginId(opts: {
       config: opts.config,
       input: opts.input,
       fetchImpl: opts.fetchImpl,
+      // Read the same-repo manifest from the exact commit the plugin files
+      // were downloaded at, so the hash gate compares one snapshot instead of
+      // racing per-path GitHub caches while the branch advances.
+      ...(opts.pinnedCommitSha
+        ? { contentRefOverridesById: new Map([[sourceRepoId, opts.pinnedCommitSha]]) }
+        : {}),
     });
   } catch {
     return new Map();
   }
+}
+
+/**
+ * Materialize a plugin source pinned to the commit its ref points at right
+ * now, falling back to the plain branch-ref download when pinning fails
+ * (non-GitHub sources, ambiguous refs, API errors). The pin is what makes
+ * install/update deterministic right after a push.
+ */
+async function materializePinnedPluginSource(opts: {
+  config: AgentConfig;
+  input: string;
+  fetchImpl?: FetchLike;
+}): Promise<{ materialized: MaterializedPluginSource; pin: PinnedPluginSourceInput | null }> {
+  const pin = await resolvePinnedPluginSourceInput({
+    input: opts.input,
+    cwd: opts.config.workingDirectory,
+    fetchImpl: opts.fetchImpl,
+  });
+  if (pin) {
+    try {
+      return {
+        materialized: await materializePluginSource({
+          input: pin.input,
+          cwd: opts.config.workingDirectory,
+          fetchImpl: opts.fetchImpl,
+        }),
+        pin,
+      };
+    } catch {
+      // A tree URL whose branch name contains "/" can parse to the wrong
+      // ref/subdir split; the pinned download then 404s even though the
+      // branch-ref attempt machinery would succeed. Fall back rather than
+      // failing the whole operation.
+    }
+  }
+  return {
+    materialized: await materializePluginSource({
+      input: opts.input,
+      cwd: opts.config.workingDirectory,
+      fetchImpl: opts.fetchImpl,
+    }),
+    pin: null,
+  };
 }
 
 export async function previewPluginInstall(opts: {
@@ -348,9 +400,9 @@ export async function installPluginsFromSource(opts: {
   const currentCatalog = await buildPluginCatalogSnapshot(opts.config, {
     fetchImpl: opts.fetchImpl,
   });
-  const materialized = await materializePluginSource({
+  const { materialized, pin } = await materializePinnedPluginSource({
+    config: opts.config,
     input: opts.input,
-    cwd: opts.config.workingDirectory,
     fetchImpl: opts.fetchImpl,
   });
 
@@ -371,6 +423,7 @@ export async function installPluginsFromSource(opts: {
         input: opts.input,
         materialized,
         fetchImpl: opts.fetchImpl,
+        ...(pin ? { pinnedCommitSha: pin.commitSha } : {}),
       }));
     const candidate = selectSingleValidPluginCandidate(materialized.candidates);
     if (opts.expectedPluginId && candidate.pluginId !== opts.expectedPluginId) {
@@ -382,7 +435,11 @@ export async function installPluginsFromSource(opts: {
     const marketplaceMetadata = marketplaceMetadataByPluginId.get(candidate.pluginId);
     if (marketplaceMetadata?.sourceHash && marketplaceMetadata.sourceHash !== sourceHash) {
       throw new Error(
-        `Marketplace source hash mismatch for "${candidate.pluginId}": expected ${marketplaceMetadata.sourceHash}, got ${sourceHash}.`,
+        `Marketplace source hash mismatch for "${candidate.pluginId}": expected ${marketplaceMetadata.sourceHash}, got ${sourceHash}.${
+          pin
+            ? ` Both were read at commit ${pin.commitSha}; the marketplace manifest in that commit does not match its plugin files — recompute the manifest sourceHash and push.`
+            : ""
+        }`,
       );
     }
     const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
@@ -455,9 +512,9 @@ export async function checkPluginInstallationUpdate(opts: {
     };
   }
 
-  const materialized = await materializePluginSource({
+  const { materialized } = await materializePinnedPluginSource({
+    config: opts.config,
     input: opts.plugin.installSource,
-    cwd: opts.config.workingDirectory,
     fetchImpl: opts.fetchImpl,
   });
   try {

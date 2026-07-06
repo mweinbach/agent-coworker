@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { computeSourceRootHash } from "../src/extensions/sourceFingerprint";
 import { readMCPAuthFiles, setMCPServerApiKeyCredential } from "../src/mcp/authStore";
 import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
 import {
@@ -18,10 +19,16 @@ import {
   installPluginsFromSource,
   __internal as pluginOperationsInternal,
   previewPluginInstall,
+  updatePluginInstallation,
 } from "../src/plugins/operations";
 import { setPluginMcpServerEnabled } from "../src/plugins/overrides";
 import { discoverSkillsForConfig } from "../src/skills";
-import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot } from "../src/types";
+import type {
+  AgentConfig,
+  InstalledPluginCatalogEntry,
+  PluginCatalogEntry,
+  PluginCatalogSnapshot,
+} from "../src/types";
 
 const OLD_SOURCE_HASH = `sha256:${"1".repeat(64)}`;
 const NEW_SOURCE_HASH = `sha256:${"2".repeat(64)}`;
@@ -2386,6 +2393,268 @@ describe("plugin catalog and install operations", () => {
       expect(plugin?.warnings).toHaveLength(1);
       expect(plugin?.warnings[0]).toContain("broken-skill");
       expect(plugin?.warnings[0]).toContain("SKILL.md");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("commit-pinned plugin updates", () => {
+  const PINNED_COMMIT_SHA = "aa".repeat(20);
+  const BRANCH_SOURCE_INPUT = `https://github.com/${BUILT_IN_REPO}/tree/main/plugins/figma-toolkit`;
+
+  type RemotePluginFiles = { pluginJson: string; skillMd: string };
+
+  function remotePluginFiles(description: string): RemotePluginFiles {
+    return {
+      pluginJson: JSON.stringify({
+        name: "figma-toolkit",
+        version: "1.0.1",
+        description,
+        interface: { displayName: "Remote Figma Toolkit" },
+      }),
+      skillMd: "---\nname: import-frame\ndescription: Import a frame\n---\n# Import frame\n",
+    };
+  }
+
+  /** Replicates the tree downloadGitHubDirectory materializes, for hashing. */
+  async function computeRemotePluginTreeHash(files: RemotePluginFiles): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-pin-hash-"));
+    try {
+      await fs.mkdir(path.join(dir, ".cowork-plugin"), { recursive: true });
+      await fs.mkdir(path.join(dir, "skills", "import-frame"), { recursive: true });
+      await fs.writeFile(path.join(dir, ".cowork-plugin", "plugin.json"), files.pluginJson);
+      await fs.writeFile(path.join(dir, "skills", "import-frame", "SKILL.md"), files.skillMd);
+      return await computeSourceRootHash(dir);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  function marketplaceJsonWithHash(sourceHash: string): string {
+    return JSON.stringify({
+      name: "cowork-test",
+      interface: { displayName: "Cowork Test" },
+      plugins: [
+        {
+          name: "figma-toolkit",
+          source: { source: "local", path: "./plugins/figma-toolkit" },
+          sourceHash,
+          policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+          category: "Design",
+        },
+      ],
+    });
+  }
+
+  /**
+   * Serves the built-in marketplace repo with per-ref content, mimicking how
+   * GitHub's per-path caches can expose different commits for a moving branch
+   * while SHA-addressed reads stay immutable. `commitShaByRef[ref] = null`
+   * simulates a failing commits endpoint.
+   */
+  function refAwareGitHubFetch(opts: {
+    commitShaByRef: Record<string, string | null>;
+    pluginFilesByRef: Record<string, RemotePluginFiles>;
+    marketplaceJsonByRef: Record<string, string>;
+  }): typeof fetch {
+    const knownRefs = new Set([
+      ...Object.keys(opts.pluginFilesByRef),
+      ...Object.keys(opts.marketplaceJsonByRef),
+    ]);
+    const fileEntry = (name: string, contentPath: string, ref: string, downloadName: string) => ({
+      type: "file",
+      name,
+      path: contentPath,
+      url: `https://api.github.com/repos/${BUILT_IN_REPO}/contents/${contentPath}?ref=${ref}`,
+      download_url: `https://download.test/${ref}/${downloadName}`,
+    });
+    const dirEntry = (name: string, contentPath: string, ref: string) => ({
+      type: "dir",
+      name,
+      path: contentPath,
+      url: `https://api.github.com/repos/${BUILT_IN_REPO}/contents/${contentPath}?ref=${ref}`,
+      download_url: null,
+    });
+
+    return (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+
+      if (url.hostname === "api.github.com") {
+        const commitsMatch = url.pathname.match(
+          new RegExp(`^/repos/${BUILT_IN_REPO}/commits/(.+)$`),
+        );
+        if (commitsMatch) {
+          const sha = opts.commitShaByRef[decodeURIComponent(commitsMatch[1] ?? "")];
+          if (sha === undefined) return textResponse("not found", 404);
+          if (sha === null) return textResponse("commit resolution unavailable", 500);
+          return jsonResponse({ sha });
+        }
+
+        const contentsMatch = url.pathname.match(
+          new RegExp(`^/repos/${BUILT_IN_REPO}/contents/(.*)$`),
+        );
+        if (!contentsMatch) return textResponse("not found", 404);
+        const ref = url.searchParams.get("ref") ?? "";
+        if (!knownRefs.has(ref)) return textResponse("not found", 404);
+        const contentPath = decodeURIComponent(contentsMatch[1] ?? "").replace(/\/+$/, "");
+        switch (contentPath) {
+          case "":
+            return jsonResponse([]);
+          case ".agents/plugins/marketplace.json":
+            return jsonResponse(
+              fileEntry("marketplace.json", contentPath, ref, "marketplace.json"),
+            );
+          case "plugins/figma-toolkit":
+            return jsonResponse([
+              dirEntry(".cowork-plugin", "plugins/figma-toolkit/.cowork-plugin", ref),
+              dirEntry("skills", "plugins/figma-toolkit/skills", ref),
+            ]);
+          case "plugins/figma-toolkit/.cowork-plugin":
+            return jsonResponse([
+              fileEntry("plugin.json", `${contentPath}/plugin.json`, ref, "plugin.json"),
+            ]);
+          case "plugins/figma-toolkit/skills":
+            return jsonResponse([
+              dirEntry("import-frame", "plugins/figma-toolkit/skills/import-frame", ref),
+            ]);
+          case "plugins/figma-toolkit/skills/import-frame":
+            return jsonResponse([
+              fileEntry("SKILL.md", `${contentPath}/SKILL.md`, ref, "SKILL.md"),
+            ]);
+          default:
+            return textResponse("not found", 404);
+        }
+      }
+
+      if (url.hostname === "download.test") {
+        const [, ref, downloadName] = url.pathname.split("/");
+        if (!ref || !downloadName) return textResponse("not found", 404);
+        if (downloadName === "marketplace.json") {
+          const manifest = opts.marketplaceJsonByRef[ref];
+          return manifest !== undefined ? textResponse(manifest) : textResponse("not found", 404);
+        }
+        const files = opts.pluginFilesByRef[ref];
+        if (!files) return textResponse("not found", 404);
+        if (downloadName === "plugin.json") return textResponse(files.pluginJson);
+        if (downloadName === "SKILL.md") return textResponse(files.skillMd);
+        return textResponse("not found", 404);
+      }
+
+      return textResponse("not found", 404);
+    }) as typeof fetch;
+  }
+
+  async function seedInstalledPlugin(config: AgentConfig): Promise<InstalledPluginCatalogEntry> {
+    if (!config.userPluginsDir) throw new Error("Expected user plugin directory");
+    const pluginRoot = path.join(config.userPluginsDir, "figma-toolkit");
+    await writePlugin(pluginRoot, "Installed Figma Toolkit");
+    await writePluginInstallMetadata(pluginRoot, {
+      marketplace: {
+        name: "cowork-test",
+        sourceInput: BRANCH_SOURCE_INPUT,
+        sourceHash: OLD_SOURCE_HASH,
+      },
+    });
+    const catalog = await buildPluginCatalogSnapshot(config);
+    const plugin = catalog.plugins.find((entry) => entry.id === "figma-toolkit");
+    if (!plugin || !plugin.installed) throw new Error("Expected installed figma-toolkit entry");
+    return plugin;
+  }
+
+  test("update reads plugin files and marketplace manifest from the same pinned commit", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-pin-update-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-pin-update-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-pin-update-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const newFiles = remotePluginFiles("New Figma helpers");
+      const newFilesHash = await computeRemotePluginTreeHash(newFiles);
+      // The branch still serves the previous commit's view — a stale manifest
+      // hash AND stale files — while the commits API already points at the new
+      // commit. Only a pinned update can succeed here; unpinned reads would
+      // compare the stale manifest hash against whichever files they raced to.
+      const fetchImpl = refAwareGitHubFetch({
+        commitShaByRef: { main: PINNED_COMMIT_SHA },
+        pluginFilesByRef: {
+          main: remotePluginFiles("Old Figma helpers"),
+          [PINNED_COMMIT_SHA]: newFiles,
+        },
+        marketplaceJsonByRef: {
+          main: marketplaceJsonWithHash(OLD_SOURCE_HASH),
+          [PINNED_COMMIT_SHA]: marketplaceJsonWithHash(newFilesHash),
+        },
+      });
+
+      const installedPlugin = await seedInstalledPlugin(config);
+
+      const updateCheck = await checkPluginInstallationUpdate({
+        config,
+        plugin: installedPlugin,
+        fetchImpl,
+      });
+      expect(updateCheck).toMatchObject({
+        pluginId: "figma-toolkit",
+        canUpdate: true,
+        latestSourceHash: newFilesHash,
+      });
+
+      const result = await updatePluginInstallation({
+        config,
+        plugin: installedPlugin,
+        fetchImpl,
+      });
+      expect(result.pluginId).toBe("figma-toolkit");
+
+      const pluginRoot = path.join(home, ".agents", "plugins", "figma-toolkit");
+      const manifest = await readPluginManifest(pluginRoot);
+      expect(manifest.description).toBe("New Figma helpers");
+      expect(await computeSourceRootHash(pluginRoot)).toBe(newFilesHash);
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      expect(catalog.plugins.find((entry) => entry.id === "figma-toolkit")).toMatchObject({
+        installed: true,
+        installSource: BRANCH_SOURCE_INPUT,
+        installedSourceHash: newFilesHash,
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("update falls back to branch refs when commit resolution fails", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-pin-fallback-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-pin-fallback-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-pin-fallback-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const newFiles = remotePluginFiles("New Figma helpers");
+      const newFilesHash = await computeRemotePluginTreeHash(newFiles);
+      const fetchImpl = refAwareGitHubFetch({
+        commitShaByRef: { main: null },
+        pluginFilesByRef: { main: newFiles },
+        marketplaceJsonByRef: { main: marketplaceJsonWithHash(newFilesHash) },
+      });
+
+      const installedPlugin = await seedInstalledPlugin(config);
+
+      const result = await updatePluginInstallation({
+        config,
+        plugin: installedPlugin,
+        fetchImpl,
+      });
+      expect(result.pluginId).toBe("figma-toolkit");
+
+      const manifest = await readPluginManifest(
+        path.join(home, ".agents", "plugins", "figma-toolkit"),
+      );
+      expect(manifest.description).toBe("New Figma helpers");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

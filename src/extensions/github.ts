@@ -107,6 +107,31 @@ export async function fetchGitHubContent(
   return (await response.json()) as GitHubContentEntry | GitHubContentEntry[];
 }
 
+/**
+ * Resolve a branch or tag to the commit SHA it points at right now. Returns
+ * null on any failure (missing ref, rate limit, network) so callers can fall
+ * back to branch-ref fetches instead of failing the whole operation.
+ */
+export async function resolveGitHubCommitSha(
+  fetchImpl: FetchLike,
+  repo: string,
+  ref: string,
+): Promise<string | null> {
+  try {
+    const response = await fetchWithGitHubAuth(
+      fetchImpl,
+      `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(ref)}`,
+    );
+    if (!response.ok) return null;
+    const parsed = (await response.json()) as { sha?: unknown };
+    return typeof parsed.sha === "string" && /^[0-9a-f]{40}$/i.test(parsed.sha)
+      ? parsed.sha.toLowerCase()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchGitHubDirectoryEntries(
   fetchImpl: FetchLike,
   repo: string,

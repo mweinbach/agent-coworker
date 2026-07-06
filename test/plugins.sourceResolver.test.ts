@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   buildPluginInstallPreview,
   MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE,
+  resolvePinnedPluginSourceInput,
 } from "../src/plugins/sourceResolver";
 import type { PluginCatalogSnapshot } from "../src/types";
 
@@ -467,5 +468,73 @@ describe("plugin local source materialization", () => {
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolvePinnedPluginSourceInput", () => {
+  const COMMIT_SHA = "0f1e2d3c4b5a69788766554433221100ffeeddcc";
+
+  function commitsFetch(shaByRef: Record<string, string>): typeof fetch {
+    return (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const match = url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/commits\/(.+)$/);
+      if (!match) return new Response("not found", { status: 404 });
+      const sha = shaByRef[decodeURIComponent(match[1] ?? "")];
+      if (!sha) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify({ sha }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+  }
+
+  test("pins a branch tree URL to the commit the branch points at", async () => {
+    const pinned = await resolvePinnedPluginSourceInput({
+      input: "https://github.com/acme/market/tree/main/plugins/demo",
+      fetchImpl: commitsFetch({ main: COMMIT_SHA }),
+    });
+
+    expect(pinned).toEqual({
+      input: `https://github.com/acme/market/tree/${COMMIT_SHA}/plugins/demo`,
+      repo: "acme/market",
+      commitSha: COMMIT_SHA,
+    });
+  });
+
+  test("passes through tree URLs that already address a commit without fetching", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("network must not be hit for SHA-addressed inputs");
+    }) as unknown as typeof fetch;
+
+    const input = `https://github.com/acme/market/tree/${COMMIT_SHA.toUpperCase()}/plugins/demo`;
+    const pinned = await resolvePinnedPluginSourceInput({ input, fetchImpl });
+
+    expect(pinned).toEqual({
+      input,
+      repo: "acme/market",
+      commitSha: COMMIT_SHA,
+    });
+  });
+
+  test("returns null for non-tree sources and unresolvable refs", async () => {
+    const noHit = (async () => {
+      throw new Error("unreachable");
+    }) as unknown as typeof fetch;
+
+    expect(
+      await resolvePinnedPluginSourceInput({ input: "./plugins/demo", fetchImpl: noHit }),
+    ).toBeNull();
+    expect(
+      await resolvePinnedPluginSourceInput({
+        input: "https://github.com/acme/market/blob/main/plugins/demo/.cowork-plugin/plugin.json",
+        fetchImpl: noHit,
+      }),
+    ).toBeNull();
+    expect(
+      await resolvePinnedPluginSourceInput({
+        input: "https://github.com/acme/market/tree/gone/plugins/demo",
+        fetchImpl: commitsFetch({}),
+      }),
+    ).toBeNull();
   });
 });

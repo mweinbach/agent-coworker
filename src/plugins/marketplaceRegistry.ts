@@ -247,18 +247,20 @@ export async function removeMarketplace(opts: {
 async function fetchMarketplaceSources(
   sources: ConfiguredMarketplace[],
   fetchImpl?: FetchLike,
+  contentRefOverridesById?: ReadonlyMap<string, string>,
 ): Promise<ConfiguredMarketplaceFetchResult> {
   const effectiveFetchImpl = resolveMarketplaceFetchImpl(fetchImpl);
   const settled = await Promise.allSettled(
-    sources.map(
-      async (source) =>
-        await fetchRemotePluginMarketplace({
-          repo: source.repo,
-          ref: source.ref,
-          marketplacePath: source.marketplacePath,
-          ...(effectiveFetchImpl ? { fetchImpl: effectiveFetchImpl } : {}),
-        }),
-    ),
+    sources.map(async (source) => {
+      const contentRef = contentRefOverridesById?.get(source.id);
+      return await fetchRemotePluginMarketplace({
+        repo: source.repo,
+        ref: source.ref,
+        marketplacePath: source.marketplacePath,
+        ...(contentRef ? { contentRef } : {}),
+        ...(effectiveFetchImpl ? { fetchImpl: effectiveFetchImpl } : {}),
+      });
+    }),
   );
 
   const marketplaces: ConfiguredMarketplaceFetchResult["marketplaces"] = [];
@@ -282,9 +284,11 @@ async function fetchMarketplaceSources(
 export async function fetchConfiguredMarketplaces(opts: {
   config: MarketplaceRegistryConfig;
   fetchImpl?: FetchLike;
+  /** Per-marketplace-id commit override for the manifest download. */
+  contentRefOverridesById?: ReadonlyMap<string, string>;
 }): Promise<ConfiguredMarketplaceFetchResult> {
   const sources = await listConfiguredMarketplaces(opts.config);
-  return await fetchMarketplaceSources(sources, opts.fetchImpl);
+  return await fetchMarketplaceSources(sources, opts.fetchImpl, opts.contentRefOverridesById);
 }
 
 /**

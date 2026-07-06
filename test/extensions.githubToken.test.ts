@@ -64,7 +64,10 @@ describe("resolveGitHubToken", () => {
 
     expect(await resolveGitHubToken()).toBe("gho_cli");
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ file: "gh", args: ["auth", "token", "--hostname", "github.com"] });
+    expect(calls[0]).toMatchObject({
+      file: "gh",
+      args: ["auth", "token", "--hostname", "github.com"],
+    });
   });
 
   test("falls back to non-interactive git credential fill when gh fails", async () => {

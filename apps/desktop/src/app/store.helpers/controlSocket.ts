@@ -72,16 +72,21 @@ function applyMemorySessionConfigPatch(
   patch: Partial<
     Pick<
       Extract<SessionEvent, { type: "session_config" }>["config"],
-      "advancedMemory" | "memoryGenerationModel"
+      | "advancedMemory"
+      | "memoryGenerationModel"
+      | "skillImprovementEnabled"
+      | "skillImprovementModel"
+      | "skillImprovementScope"
+      | "skillImprovementExcludedSkills"
     >
   >,
 ): Extract<SessionEvent, { type: "session_config" }>["config"] {
   const next = { ...current, ...patch };
-  if (!Object.hasOwn(patch, "memoryGenerationModel")) {
-    return next;
-  }
-  if (patch.memoryGenerationModel === undefined) {
+  if (Object.hasOwn(patch, "memoryGenerationModel") && patch.memoryGenerationModel === undefined) {
     delete next.memoryGenerationModel;
+  }
+  if (Object.hasOwn(patch, "skillImprovementModel") && patch.skillImprovementModel === undefined) {
+    delete next.skillImprovementModel;
   }
   return next;
 }
@@ -402,6 +407,9 @@ export function createControlSocketHelpers(
                 pluginsLoading: false,
                 pluginsError: null,
                 memoriesLoading: false,
+                skillImprovementStatus: null,
+                skillImprovementLoading: false,
+                skillImprovementPendingActionKeys: {},
                 skillCatalogLoading: false,
                 skillCatalogError: workspaceRuntime.skillCatalogError,
                 skillsMutationBlocked: false,
@@ -760,6 +768,9 @@ export function createControlSocketHelpers(
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/list", { cwd }),
+      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/improvement/status", {
+        cwd,
+      }),
     ]);
     if (isWorkspaceDisposed(workspaceId)) {
       return;
@@ -1002,10 +1013,26 @@ export function createControlSocketHelpers(
         ...(sessionConfigHas("memoryGenerationModel")
           ? { memoryGenerationModel: evt.config.memoryGenerationModel }
           : { memoryGenerationModel: undefined }),
+        ...(sessionConfigHas("skillImprovementEnabled")
+          ? { skillImprovementEnabled: evt.config.skillImprovementEnabled }
+          : {}),
+        ...(sessionConfigHas("skillImprovementModel")
+          ? { skillImprovementModel: evt.config.skillImprovementModel }
+          : { skillImprovementModel: undefined }),
+        ...(sessionConfigHas("skillImprovementScope")
+          ? { skillImprovementScope: evt.config.skillImprovementScope }
+          : {}),
+        ...(sessionConfigHas("skillImprovementExcludedSkills")
+          ? { skillImprovementExcludedSkills: evt.config.skillImprovementExcludedSkills }
+          : {}),
       };
       const hasMemorySessionConfigPatch =
         Object.hasOwn(memorySessionConfigPatch, "advancedMemory") ||
-        Object.hasOwn(memorySessionConfigPatch, "memoryGenerationModel");
+        Object.hasOwn(memorySessionConfigPatch, "memoryGenerationModel") ||
+        Object.hasOwn(memorySessionConfigPatch, "skillImprovementEnabled") ||
+        Object.hasOwn(memorySessionConfigPatch, "skillImprovementModel") ||
+        Object.hasOwn(memorySessionConfigPatch, "skillImprovementScope") ||
+        Object.hasOwn(memorySessionConfigPatch, "skillImprovementExcludedSkills");
 
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
@@ -1033,6 +1060,21 @@ export function createControlSocketHelpers(
                 defaultMemoryGenerationModel: sessionConfigHas("memoryGenerationModel")
                   ? evt.config.memoryGenerationModel
                   : undefined,
+                ...(sessionConfigHas("skillImprovementEnabled")
+                  ? { defaultSkillImprovementEnabled: evt.config.skillImprovementEnabled }
+                  : {}),
+                defaultSkillImprovementModel: sessionConfigHas("skillImprovementModel")
+                  ? evt.config.skillImprovementModel
+                  : undefined,
+                ...(sessionConfigHas("skillImprovementScope")
+                  ? { defaultSkillImprovementScope: evt.config.skillImprovementScope }
+                  : {}),
+                ...(sessionConfigHas("skillImprovementExcludedSkills")
+                  ? {
+                      defaultSkillImprovementExcludedSkills:
+                        evt.config.skillImprovementExcludedSkills,
+                    }
+                  : {}),
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 ...(sessionConfigHasProviderOptions
                   ? {
@@ -1056,6 +1098,21 @@ export function createControlSocketHelpers(
                 ...(sessionConfigHas("memoryGenerationModel")
                   ? { defaultMemoryGenerationModel: evt.config.memoryGenerationModel }
                   : { defaultMemoryGenerationModel: undefined }),
+                ...(sessionConfigHas("skillImprovementEnabled")
+                  ? { defaultSkillImprovementEnabled: evt.config.skillImprovementEnabled }
+                  : {}),
+                ...(sessionConfigHas("skillImprovementModel")
+                  ? { defaultSkillImprovementModel: evt.config.skillImprovementModel }
+                  : { defaultSkillImprovementModel: undefined }),
+                ...(sessionConfigHas("skillImprovementScope")
+                  ? { defaultSkillImprovementScope: evt.config.skillImprovementScope }
+                  : {}),
+                ...(sessionConfigHas("skillImprovementExcludedSkills")
+                  ? {
+                      defaultSkillImprovementExcludedSkills:
+                        evt.config.skillImprovementExcludedSkills,
+                    }
+                  : {}),
               },
         ),
         workspaceRuntimeById: {
@@ -1568,6 +1625,21 @@ export function createControlSocketHelpers(
             advancedMemoryFolders: evt.folders,
             advancedMemoryActiveFolder: evt.folder,
             advancedMemoriesLoading: false,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "skill_improvement_status") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            skillImprovementStatus: evt,
+            skillImprovementLoading: false,
+            skillImprovementPendingActionKeys: {},
           },
         },
       }));

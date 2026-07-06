@@ -218,6 +218,13 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       enableMcp: context.state.config.enableMcp,
       sessionId: context.id,
       onAdvancedMemoryChanged,
+      onSkillUsed: (usage) => {
+        context.state.currentTurnSkillUsages.push({
+          ...usage,
+          turnId,
+          usedAt: new Date().toISOString(),
+        });
+      },
       assertCanMutate,
       spawnDepth:
         typeof context.state.sessionInfo.depth === "number" ? context.state.sessionInfo.depth : 0,

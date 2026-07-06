@@ -18,6 +18,7 @@ import type {
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { OpenAiNativeConnectorsEvent } from "../shared/openaiNativeConnectors";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
+import type { SkillImprovementStatusEvent } from "../skillImprovement";
 import type {
   AgentConfig,
   ApprovalRiskCode,
@@ -59,7 +60,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.41";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.42";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -70,6 +71,11 @@ export type SessionConfigPatch = {
   advancedMemory?: boolean;
   memoryGenerationModel?: string;
   clearMemoryGenerationModel?: boolean;
+  skillImprovementEnabled?: boolean;
+  skillImprovementModel?: string;
+  clearSkillImprovementModel?: boolean;
+  skillImprovementScope?: AgentConfig["skillImprovementScope"];
+  skillImprovementExcludedSkills?: string[];
   preferredChildModel?: string;
   childModelRoutingMode?: ChildModelRoutingMode;
   preferredChildModelRef?: string;
@@ -98,6 +104,10 @@ type SessionConfigState = {
   memoryRequireApproval: boolean;
   advancedMemory: boolean;
   memoryGenerationModel?: string;
+  skillImprovementEnabled: boolean;
+  skillImprovementModel?: string;
+  skillImprovementScope: NonNullable<AgentConfig["skillImprovementScope"]>;
+  skillImprovementExcludedSkills: string[];
   preferredChildModel: string;
   childModelRoutingMode: ChildModelRoutingMode;
   preferredChildModelRef: string;
@@ -376,6 +386,7 @@ export type SessionEvent =
         updatedAt: string;
       }>;
     }
+  | SkillImprovementStatusEvent
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }

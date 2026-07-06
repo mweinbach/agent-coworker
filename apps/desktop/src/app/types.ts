@@ -113,6 +113,10 @@ export type WorkspaceRecord = {
   defaultBackupsEnabled: boolean;
   defaultAdvancedMemory?: boolean;
   defaultMemoryGenerationModel?: string;
+  defaultSkillImprovementEnabled?: boolean;
+  defaultSkillImprovementModel?: string;
+  defaultSkillImprovementScope?: "user" | "all";
+  defaultSkillImprovementExcludedSkills?: string[];
   yolo: boolean;
 };
 
@@ -464,6 +468,9 @@ export type AdvancedMemoryEntry = {
   updatedAt: string;
 };
 
+export type SkillImprovementStatus = Extract<SessionEvent, { type: "skill_improvement_status" }>;
+export type SkillImprovementScope = SkillImprovementStatus["scope"];
+
 export type ImportRuntimeState = {
   items: ImportableItem[];
   homeExists: boolean;
@@ -543,6 +550,9 @@ export type WorkspaceRuntime = {
   advancedMemoryFolders: string[];
   advancedMemoryActiveFolder: string | null;
   advancedMemoriesLoading: boolean;
+  skillImprovementStatus: SkillImprovementStatus | null;
+  skillImprovementLoading: boolean;
+  skillImprovementPendingActionKeys: Record<string, true>;
   workspaceBackupsPath: string | null;
   workspaceBackups: WorkspaceBackupsEvent["backups"];
   workspaceBackupsLoading: boolean;

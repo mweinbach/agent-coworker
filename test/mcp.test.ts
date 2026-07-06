@@ -585,7 +585,7 @@ describe("loadMCPTools", () => {
   test("normalizes spaces in server and tool names for provider-safe ids", async () => {
     mockCreateMCPClient.mockImplementation(async (_opts: any) => ({
       tools: mock(async () => ({
-        "search__reports": { description: "search" },
+        search__reports: { description: "search" },
       })),
       close: mock(async () => {}),
     }));

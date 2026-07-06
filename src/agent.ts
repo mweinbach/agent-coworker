@@ -35,6 +35,7 @@ import type {
   TaskDirectiveResult,
   TaskReviewMaterialReference,
 } from "./shared/tasks";
+import type { SkillUsageRecord } from "./skillImprovement/types";
 import type { AgentControl } from "./tools";
 import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
 import { buildTurnSystemPrompt } from "./turnSystemPrompt";
@@ -128,6 +129,7 @@ export interface RunTurnParams {
   abortSignal?: AbortSignal;
   sessionId?: string;
   onAdvancedMemoryChanged?: (folder: string) => void | Promise<void>;
+  onSkillUsed?: (usage: Omit<SkillUsageRecord, "turnId" | "usedAt">) => void | Promise<void>;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
   onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
@@ -478,6 +480,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
       onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
+      onSkillUsed: params.onSkillUsed,
       assertCanMutate: params.assertCanMutate,
     };
     const useProviderNativeTools = providerOwnsExecutableTools(config);

@@ -36,6 +36,7 @@ export class TurnExecutionManager {
       backupController: SessionBackupController;
       flushPendingExternalSkillRefresh: () => Promise<void>;
       triggerMemoryGeneration?: () => void;
+      triggerSkillImprovementUsage?: () => void;
       onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
     },
   ) {
@@ -65,6 +66,7 @@ export class TurnExecutionManager {
       buildUserMessageContent: attachmentHelpers.buildUserMessageContent,
       validateUploadedFileAttachments: attachmentHelpers.validateUploadedFileAttachments,
       triggerMemoryGeneration: this.deps.triggerMemoryGeneration,
+      triggerSkillImprovementUsage: this.deps.triggerSkillImprovementUsage,
       onAdvancedMemoryChanged: this.deps.onAdvancedMemoryChanged,
       waitForLiveSteerSettlement: async () => await this.waitForLiveSteerSettlement(),
     });

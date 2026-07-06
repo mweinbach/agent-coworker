@@ -204,6 +204,12 @@ export class WorkspaceControl {
           ...(controlConfig.memoryGenerationModel
             ? { memoryGenerationModel: controlConfig.memoryGenerationModel }
             : {}),
+          skillImprovementEnabled: controlConfig.skillImprovementEnabled ?? false,
+          ...(controlConfig.skillImprovementModel
+            ? { skillImprovementModel: controlConfig.skillImprovementModel }
+            : {}),
+          skillImprovementScope: controlConfig.skillImprovementScope ?? "user",
+          skillImprovementExcludedSkills: controlConfig.skillImprovementExcludedSkills ?? [],
           preferredChildModel: controlConfig.preferredChildModel,
           childModelRoutingMode: controlConfig.childModelRoutingMode ?? "same-provider",
           preferredChildModelRef,

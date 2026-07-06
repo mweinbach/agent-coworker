@@ -26,6 +26,7 @@ export type AgentSessionManagerHost = {
   sendUserMessage(text: string, clientMessageId?: string, displayText?: string): Promise<void>;
   flushPendingExternalSkillRefresh(): Promise<void>;
   triggerMemoryGeneration(): void;
+  triggerSkillImprovementUsage(): void;
   onAdvancedMemoryChanged(folder: string): Promise<void>;
   getGlobalAuthPaths(): ReturnType<SessionContext["getCoworkPaths"]>;
   runProviderConnect(
@@ -96,6 +97,7 @@ export class AgentSessionManagerRegistry {
         flushPendingExternalSkillRefresh: async () =>
           await this.host.flushPendingExternalSkillRefresh(),
         triggerMemoryGeneration: () => this.host.triggerMemoryGeneration(),
+        triggerSkillImprovementUsage: () => this.host.triggerSkillImprovementUsage(),
         onAdvancedMemoryChanged: async (folder) => await this.host.onAdvancedMemoryChanged(folder),
       });
     }

@@ -19,6 +19,10 @@ describe("ConfigPatchStore", () => {
       {
         advancedMemory: true,
         memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+        skillImprovementEnabled: true,
+        skillImprovementModel: "openai:gpt-5.5",
+        skillImprovementScope: "all",
+        skillImprovementExcludedSkills: ["legacy-skill"],
         enableMemory: true,
       },
       undefined,
@@ -36,6 +40,10 @@ describe("ConfigPatchStore", () => {
     expect(globalConfig).toEqual({
       advancedMemory: true,
       memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+      skillImprovementEnabled: true,
+      skillImprovementModel: "openai:gpt-5.5",
+      skillImprovementScope: "all",
+      skillImprovementExcludedSkills: ["legacy-skill"],
     });
   });
 
@@ -68,5 +76,33 @@ describe("ConfigPatchStore", () => {
     );
 
     expect(merged.memoryGenerationModel).toBeUndefined();
+  });
+
+  test("clears persisted and runtime skill improvement model overrides", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
+    const projectCoworkDir = path.join(dir, ".cowork");
+    const configPath = path.join(projectCoworkDir, "config.json");
+    await fs.mkdir(projectCoworkDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ skillImprovementModel: "openai:gpt-5.5", enableMemory: true })}\n`,
+    );
+
+    await persistProjectConfigPatch(projectCoworkDir, {
+      clearSkillImprovementModel: true,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+    expect(persisted.enableMemory).toBe(true);
+    expect("skillImprovementModel" in persisted).toBe(false);
+
+    const merged = mergeConfigPatch(
+      {
+        ...makeConfig("/tmp/test-session"),
+        skillImprovementModel: "openai:gpt-5.5",
+      },
+      { clearSkillImprovementModel: true },
+    );
+    expect(merged.skillImprovementModel).toBeUndefined();
   });
 });

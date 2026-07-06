@@ -15,12 +15,20 @@ function createState() {
         path: "/tmp/workspace",
         defaultAdvancedMemory: undefined as boolean | undefined,
         defaultMemoryGenerationModel: undefined as string | undefined,
+        defaultSkillImprovementEnabled: undefined as boolean | undefined,
+        defaultSkillImprovementModel: undefined as string | undefined,
+        defaultSkillImprovementScope: undefined as "user" | "all" | undefined,
+        defaultSkillImprovementExcludedSkills: undefined as string[] | undefined,
       },
       {
         id: "ws-other",
         path: "/tmp/other",
         defaultAdvancedMemory: false as boolean | undefined,
         defaultMemoryGenerationModel: "together:moonshotai/Kimi-K2.5" as string | undefined,
+        defaultSkillImprovementEnabled: false as boolean | undefined,
+        defaultSkillImprovementModel: "openai:gpt-5-mini" as string | undefined,
+        defaultSkillImprovementScope: "user" as "user" | "all" | undefined,
+        defaultSkillImprovementExcludedSkills: ["legacy"] as string[] | undefined,
       },
     ],
     workspaceRuntimeById: {
@@ -38,6 +46,10 @@ function createState() {
         controlSessionConfig: {
           advancedMemory: false,
           memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+          skillImprovementEnabled: false,
+          skillImprovementModel: "openai:gpt-5-mini",
+          skillImprovementScope: "user",
+          skillImprovementExcludedSkills: ["legacy"],
         },
       },
     },
@@ -276,6 +288,128 @@ describe("memory store actions", () => {
     });
     expect(state.workspaceRuntimeById["ws-other"].controlSessionConfig).toEqual({
       advancedMemory: true,
+      skillImprovementEnabled: false,
+      skillImprovementScope: "user",
+      skillImprovementExcludedSkills: ["legacy"],
+    });
+  });
+
+  test("skill improvement actions hit the improvement JSON-RPC methods", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const requests: Array<{ method: string; params: any }> = [];
+    const statusEvent = {
+      type: "skill_improvement_status",
+      sessionId: "control-session",
+      enabled: true,
+      scope: "user",
+      excludedSkills: [],
+      busy: false,
+      blockReason: null,
+      pendingJobs: [],
+      runHistory: [],
+      backups: [],
+      skills: [],
+    };
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        return { event: statusEvent };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const actions = createWorkspaceMemoryActions(set as any, get as any);
+    await actions.requestSkillImprovementStatus(workspaceId, { cwd: "/tmp/proj" });
+    const runOk = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
+    const restoreOk = await actions.restoreSkillImprovement(workspaceId, "alpha", {
+      cwd: "/tmp/proj",
+    });
+
+    expect(runOk).toBe(true);
+    expect(restoreOk).toBe(true);
+    expect(requests).toEqual([
+      {
+        method: "cowork/skills/improvement/status",
+        params: { cwd: "/tmp/proj" },
+      },
+      {
+        method: "cowork/skills/improvement/run",
+        params: { cwd: "/tmp/proj", skillName: "alpha" },
+      },
+      {
+        method: "cowork/skills/improvement/restore",
+        params: { cwd: "/tmp/proj", skillName: "alpha" },
+      },
+    ]);
+    expect(state.workspaceRuntimeById[workspaceId].skillImprovementStatus).toEqual(statusEvent);
+    expect(state.workspaceRuntimeById[workspaceId].skillImprovementLoading).toBe(false);
+  });
+
+  test("setWorkspaceSkillImprovementExcludedSkills applies the config patch globally", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const requests: Array<{ method: string; params: any }> = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        if (method === "cowork/session/defaults/apply") {
+          return {
+            event: {
+              type: "session_config",
+              sessionId: "control-session",
+              config: {
+                skillImprovementEnabled: true,
+                skillImprovementScope: "all",
+                skillImprovementExcludedSkills: ["alpha", "beta"],
+              },
+            },
+          };
+        }
+        return {
+          event: {
+            type: "skill_improvement_status",
+            sessionId: "control-session",
+            enabled: true,
+            scope: "all",
+            excludedSkills: ["alpha", "beta"],
+            busy: false,
+            blockReason: null,
+            pendingJobs: [],
+            runHistory: [],
+            backups: [],
+            skills: [],
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createWorkspaceMemoryActions(
+      set as any,
+      get as any,
+    ).setWorkspaceSkillImprovementExcludedSkills(workspaceId, ["beta", "alpha", "beta"], {
+      cwd: "/tmp/proj",
+    });
+
+    expect(requests[0]).toEqual({
+      method: "cowork/session/defaults/apply",
+      params: {
+        cwd: "/tmp/proj",
+        config: { skillImprovementExcludedSkills: ["alpha", "beta"] },
+      },
+    });
+    expect(requests[1]?.method).toBe("cowork/skills/improvement/status");
+    expect(state.workspaces[0].defaultSkillImprovementExcludedSkills).toEqual(["alpha", "beta"]);
+    expect(state.workspaces[1].defaultSkillImprovementExcludedSkills).toEqual(["alpha", "beta"]);
+    expect(state.workspaceRuntimeById["ws-other"].controlSessionConfig).toMatchObject({
+      skillImprovementExcludedSkills: ["alpha", "beta"],
     });
   });
 });

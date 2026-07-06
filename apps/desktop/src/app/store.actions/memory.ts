@@ -24,11 +24,89 @@ export function createWorkspaceMemoryActions(
   | "generateAdvancedMemoryForThread"
   | "setWorkspaceAdvancedMemory"
   | "setWorkspaceMemoryGenerationModel"
+  | "requestSkillImprovementStatus"
+  | "runSkillImprovement"
+  | "restoreSkillImprovement"
+  | "setWorkspaceSkillImprovementEnabled"
+  | "setWorkspaceSkillImprovementModel"
+  | "setWorkspaceSkillImprovementScope"
+  | "setWorkspaceSkillImprovementExcludedSkills"
 > {
   const resolveMemoryCwd = (workspaceId: string, opts?: { cwd?: string }) => {
     const explicit = opts?.cwd?.trim();
     if (explicit) return explicit;
     return get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+  };
+
+  const normalizeExcludedSkills = (skills: string[]) =>
+    [...new Set(skills.map((skill) => skill.trim()).filter(Boolean))].sort((left, right) =>
+      left.localeCompare(right),
+    );
+
+  const requestSkillImprovementStatusImpl = async (
+    workspaceId: string,
+    opts?: { cwd?: string },
+  ): Promise<void> => {
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+
+    set((s) => ({
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...s.workspaceRuntimeById[workspaceId],
+          skillImprovementLoading: true,
+        },
+      },
+    }));
+
+    const ok = await requestJsonRpcControlEvent(
+      get,
+      set,
+      workspaceId,
+      "cowork/skills/improvement/status",
+      { cwd: resolveMemoryCwd(workspaceId, opts) },
+    );
+    if (!ok) {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            skillImprovementLoading: false,
+          },
+        },
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to request skill improvement status.",
+        }),
+      }));
+    }
+  };
+
+  const setSkillImprovementPending = (workspaceId: string, key: string, pending: boolean) => {
+    set((s) => {
+      const runtime = s.workspaceRuntimeById[workspaceId];
+      const current = runtime?.skillImprovementPendingActionKeys ?? {};
+      const next = { ...current };
+      if (pending) {
+        next[key] = true;
+      } else {
+        delete next[key];
+      }
+      return {
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...runtime,
+            skillImprovementPendingActionKeys: next,
+          },
+        },
+      };
+    });
   };
 
   return {
@@ -338,6 +416,240 @@ export function createWorkspaceMemoryActions(
       }
       await syncAdvancedMemoryDefaultsAcrossThreads(get);
     },
+
+    requestSkillImprovementStatus: requestSkillImprovementStatusImpl,
+
+    runSkillImprovement: async (workspaceId, skillName, opts) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const key = skillName ? `run:${skillName}` : "run:queued";
+      setSkillImprovementPending(workspaceId, key, true);
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/skills/improvement/run",
+        {
+          cwd: resolveMemoryCwd(workspaceId, opts),
+          ...(skillName ? { skillName } : {}),
+        },
+      );
+      if (!ok) {
+        setSkillImprovementPending(workspaceId, key, false);
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Unable to improve skill",
+            detail: "The skill improvement run could not be started.",
+          }),
+        }));
+        return false;
+      }
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Skill improvement complete",
+          detail: skillName
+            ? `${skillName} was processed.`
+            : "Queued skill improvement jobs were processed.",
+        }),
+      }));
+      return true;
+    },
+
+    restoreSkillImprovement: async (workspaceId, skillName, opts) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const key = `restore:${skillName}`;
+      setSkillImprovementPending(workspaceId, key, true);
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/skills/improvement/restore",
+        {
+          cwd: resolveMemoryCwd(workspaceId, opts),
+          skillName,
+        },
+      );
+      if (!ok) {
+        setSkillImprovementPending(workspaceId, key, false);
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Unable to restore skill",
+            detail: `${skillName} could not be restored from backup.`,
+          }),
+        }));
+        return false;
+      }
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Skill restored",
+          detail: `${skillName} was restored from backup.`,
+        }),
+      }));
+      return true;
+    },
+
+    setWorkspaceSkillImprovementEnabled: async (workspaceId, enabled, opts) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
+        record: { defaultSkillImprovementEnabled: enabled },
+        sessionConfig: { skillImprovementEnabled: enabled },
+      });
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/session/defaults/apply",
+        {
+          cwd: resolveMemoryCwd(workspaceId, opts),
+          config: { skillImprovementEnabled: enabled },
+        },
+      );
+      if (!ok) {
+        restore();
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to update skill improvement setting.",
+          }),
+        }));
+        return;
+      }
+      await syncAdvancedMemoryDefaultsAcrossThreads(get);
+      await requestSkillImprovementStatusImpl(workspaceId, opts);
+    },
+
+    setWorkspaceSkillImprovementModel: async (workspaceId, model, opts) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const modelOverride = model.trim() || undefined;
+
+      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
+        record: { defaultSkillImprovementModel: modelOverride },
+        sessionConfig: { skillImprovementModel: modelOverride },
+      });
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/session/defaults/apply",
+        {
+          cwd: resolveMemoryCwd(workspaceId, opts),
+          config: modelOverride
+            ? { skillImprovementModel: modelOverride }
+            : { clearSkillImprovementModel: true },
+        },
+      );
+      if (!ok) {
+        restore();
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to update skill improvement model.",
+          }),
+        }));
+        return;
+      }
+      await syncAdvancedMemoryDefaultsAcrossThreads(get);
+      await requestSkillImprovementStatusImpl(workspaceId, opts);
+    },
+
+    setWorkspaceSkillImprovementScope: async (workspaceId, scope, opts) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
+        record: { defaultSkillImprovementScope: scope },
+        sessionConfig: { skillImprovementScope: scope },
+      });
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/session/defaults/apply",
+        {
+          cwd: resolveMemoryCwd(workspaceId, opts),
+          config: { skillImprovementScope: scope },
+        },
+      );
+      if (!ok) {
+        restore();
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to update skill improvement scope.",
+          }),
+        }));
+        return;
+      }
+      await syncAdvancedMemoryDefaultsAcrossThreads(get);
+      await requestSkillImprovementStatusImpl(workspaceId, opts);
+    },
+
+    setWorkspaceSkillImprovementExcludedSkills: async (workspaceId, excludedSkills, opts) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const normalized = normalizeExcludedSkills(excludedSkills);
+
+      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
+        record: { defaultSkillImprovementExcludedSkills: normalized },
+        sessionConfig: { skillImprovementExcludedSkills: normalized },
+      });
+
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/session/defaults/apply",
+        {
+          cwd: resolveMemoryCwd(workspaceId, opts),
+          config: { skillImprovementExcludedSkills: normalized },
+        },
+      );
+      if (!ok) {
+        restore();
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to update excluded skills.",
+          }),
+        }));
+        return;
+      }
+      await syncAdvancedMemoryDefaultsAcrossThreads(get);
+      await requestSkillImprovementStatusImpl(workspaceId, opts);
+    },
   };
 }
 
@@ -354,8 +666,19 @@ function applyOptimisticMemoryConfig(
     record: Partial<{
       defaultAdvancedMemory: boolean;
       defaultMemoryGenerationModel: string | undefined;
+      defaultSkillImprovementEnabled: boolean;
+      defaultSkillImprovementModel: string | undefined;
+      defaultSkillImprovementScope: "user" | "all";
+      defaultSkillImprovementExcludedSkills: string[];
     }>;
-    sessionConfig: Partial<{ advancedMemory: boolean; memoryGenerationModel: string | undefined }>;
+    sessionConfig: Partial<{
+      advancedMemory: boolean;
+      memoryGenerationModel: string | undefined;
+      skillImprovementEnabled: boolean;
+      skillImprovementModel: string | undefined;
+      skillImprovementScope: "user" | "all";
+      skillImprovementExcludedSkills: string[];
+    }>;
   },
 ): () => void {
   const state = get();
@@ -419,14 +742,31 @@ async function syncAdvancedMemoryDefaultsAcrossThreads(get: StoreGet): Promise<v
 }
 
 function applySessionConfigMemoryPatch<
-  T extends { advancedMemory?: boolean; memoryGenerationModel?: string },
+  T extends {
+    advancedMemory?: boolean;
+    memoryGenerationModel?: string;
+    skillImprovementEnabled?: boolean;
+    skillImprovementModel?: string;
+    skillImprovementScope?: "user" | "all";
+    skillImprovementExcludedSkills?: string[];
+  },
 >(
   current: T,
-  patch: Partial<{ advancedMemory: boolean; memoryGenerationModel: string | undefined }>,
+  patch: Partial<{
+    advancedMemory: boolean;
+    memoryGenerationModel: string | undefined;
+    skillImprovementEnabled: boolean;
+    skillImprovementModel: string | undefined;
+    skillImprovementScope: "user" | "all";
+    skillImprovementExcludedSkills: string[];
+  }>,
 ): T {
   const next = { ...current, ...patch };
   if (Object.hasOwn(patch, "memoryGenerationModel") && patch.memoryGenerationModel === undefined) {
     delete next.memoryGenerationModel;
+  }
+  if (Object.hasOwn(patch, "skillImprovementModel") && patch.skillImprovementModel === undefined) {
+    delete next.skillImprovementModel;
   }
   return next;
 }

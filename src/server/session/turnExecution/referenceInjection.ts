@@ -89,6 +89,17 @@ export async function resolveReferencedSkills(opts: {
       break;
     }
     totalBytes += bodyBytes;
+    if (context.state.currentTurnId) {
+      context.state.currentTurnSkillUsages.push({
+        skillName: loaded.name,
+        kind: "reference",
+        source: "at-mention",
+        turnId: context.state.currentTurnId,
+        usedAt: new Date().toISOString(),
+        skillPath: loaded.path,
+        skillSource: loaded.source,
+      });
+    }
     skills.push(loaded);
   }
   return skills;

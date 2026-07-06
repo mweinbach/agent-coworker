@@ -1,4 +1,5 @@
 import type { LibreOfficeCapabilityDiagnostic } from "../../../coworkRuntime";
+import type { SkillImprovementService } from "../../../skillImprovement";
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
@@ -57,6 +58,7 @@ export interface JsonRpcRouteContext {
   getConfig(): AgentConfig;
   homedir?: string;
   research: ResearchService;
+  skillImprovement: SkillImprovementService;
   tasks: TaskCoordinator;
   taskRequests?: {
     onStarted?(input: { ws: StartServerSocket; method: string; workspacePath: string }):

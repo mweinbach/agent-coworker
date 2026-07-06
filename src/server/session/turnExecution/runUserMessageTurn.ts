@@ -51,6 +51,7 @@ export type UserMessageTurnRunnerDeps = {
   interactionManager: InteractionManager;
   flushPendingExternalSkillRefresh: () => Promise<void>;
   triggerMemoryGeneration?: () => void;
+  triggerSkillImprovementUsage?: () => void;
   steerCoordinator: SteerCoordinator;
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
   buildUserMessageContent: UserMessageAttachmentHelpers["buildUserMessageContent"];
@@ -100,6 +101,7 @@ export function createUserMessageTurnRunner(
     interactionManager,
     flushPendingExternalSkillRefresh,
     triggerMemoryGeneration,
+    triggerSkillImprovementUsage,
     steerCoordinator,
     classifyTurnError,
     buildUserMessageContent,
@@ -224,6 +226,8 @@ export function createUserMessageTurnRunner(
     context.state.currentTurnId = turnId;
     context.state.turnReferenceInjectionCounter = 0;
     context.state.currentTurnOutcome = "completed";
+    context.state.currentTurnMessageStartIndex = context.state.allMessages.length;
+    context.state.currentTurnSkillUsages = [];
     const cause: "user_message" | "command" = visibleText.startsWith("/")
       ? "command"
       : "user_message";
@@ -623,6 +627,7 @@ export function createUserMessageTurnRunner(
         // never blocks the user-facing turn (no-op unless advanced memory is on).
         if (context.state.currentTurnOutcome === "completed") {
           triggerMemoryGeneration?.();
+          triggerSkillImprovementUsage?.();
         }
       }
     }

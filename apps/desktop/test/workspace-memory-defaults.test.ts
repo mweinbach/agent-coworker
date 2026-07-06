@@ -56,16 +56,28 @@ describe("workspace memory defaults", () => {
         workspace({
           defaultAdvancedMemory: true,
           defaultMemoryGenerationModel: "  together:moonshotai/Kimi-K2.5  ",
+          defaultSkillImprovementEnabled: true,
+          defaultSkillImprovementModel: "  openai:gpt-5.4  ",
+          defaultSkillImprovementScope: "all",
+          defaultSkillImprovementExcludedSkills: ["beta", "alpha", "alpha"],
         }),
       ),
     ).toEqual({
       advancedMemory: true,
       memoryGenerationModel: "together:moonshotai/Kimi-K2.5",
+      skillImprovementEnabled: true,
+      skillImprovementModel: "openai:gpt-5.4",
+      skillImprovementScope: "all",
+      skillImprovementExcludedSkills: ["alpha", "beta"],
     });
 
     expect(resolveControlApplyMemoryDefaults(workspace({}))).toEqual({
       advancedMemory: undefined,
       memoryGenerationModel: null,
+      skillImprovementEnabled: undefined,
+      skillImprovementModel: null,
+      skillImprovementScope: undefined,
+      skillImprovementExcludedSkills: undefined,
     });
   });
 
@@ -75,12 +87,20 @@ describe("workspace memory defaults", () => {
       sessionConfig({
         advancedMemory: true,
         memoryGenerationModel: "anthropic:claude-opus-4-8",
+        skillImprovementEnabled: true,
+        skillImprovementModel: "openai:gpt-5.4",
+        skillImprovementScope: "all",
+        skillImprovementExcludedSkills: ["legacy"],
       }),
     );
 
     expect(resolved).toEqual({
       advancedMemory: true,
       memoryGenerationModel: "anthropic:claude-opus-4-8",
+      skillImprovementEnabled: true,
+      skillImprovementModel: "openai:gpt-5.4",
+      skillImprovementScope: "all",
+      skillImprovementExcludedSkills: ["legacy"],
     });
   });
 
@@ -88,6 +108,10 @@ describe("workspace memory defaults", () => {
     expect(resolveThreadApplyMemoryDefaults(workspace({}), sessionConfig({}))).toEqual({
       advancedMemory: undefined,
       memoryGenerationModel: null,
+      skillImprovementEnabled: undefined,
+      skillImprovementModel: null,
+      skillImprovementScope: undefined,
+      skillImprovementExcludedSkills: undefined,
     });
   });
 
@@ -95,6 +119,10 @@ describe("workspace memory defaults", () => {
     const next = workspace({
       defaultAdvancedMemory: true,
       defaultMemoryGenerationModel: "openai:gpt-5.4",
+      defaultSkillImprovementEnabled: true,
+      defaultSkillImprovementModel: "anthropic:claude-opus-4-8",
+      defaultSkillImprovementScope: "all",
+      defaultSkillImprovementExcludedSkills: ["alpha"],
     });
 
     expect(buildGlobalMemoryDefaultsPatch({ defaultAdvancedMemory: true }, next)).toEqual({
@@ -103,6 +131,12 @@ describe("workspace memory defaults", () => {
     expect(
       buildGlobalMemoryDefaultsPatch({ defaultMemoryGenerationModel: "openai:gpt-5.4" }, next),
     ).toEqual({ defaultMemoryGenerationModel: "openai:gpt-5.4" });
+    expect(buildGlobalMemoryDefaultsPatch({ defaultSkillImprovementEnabled: true }, next)).toEqual({
+      defaultSkillImprovementEnabled: true,
+    });
+    expect(
+      buildGlobalMemoryDefaultsPatch({ defaultSkillImprovementExcludedSkills: ["alpha"] }, next),
+    ).toEqual({ defaultSkillImprovementExcludedSkills: ["alpha"] });
     expect(buildGlobalMemoryDefaultsPatch({ defaultModel: "gpt-5.4" }, next)).toEqual({});
   });
 });

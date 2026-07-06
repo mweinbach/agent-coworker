@@ -55,6 +55,13 @@ export function createSkillTool(ctx: ToolContext) {
       }
 
       ctx.log(`tool< skill ${JSON.stringify({ ok: true })}`);
+      await ctx.onSkillUsed?.({
+        skillName: loaded.name,
+        kind: "tool",
+        source: "skill-tool",
+        ...(loaded.path ? { skillPath: loaded.path } : {}),
+        skillSource: loaded.source,
+      });
       return loaded.body;
     },
   });

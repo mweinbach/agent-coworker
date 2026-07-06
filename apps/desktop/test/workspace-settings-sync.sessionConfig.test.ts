@@ -387,6 +387,10 @@ describe("workspace settings sync", () => {
           defaultModel: "gpt-5.2",
           defaultAdvancedMemory: false,
           defaultMemoryGenerationModel: "openai:gpt-5-mini",
+          defaultSkillImprovementEnabled: false,
+          defaultSkillImprovementModel: "openai:gpt-5-mini",
+          defaultSkillImprovementScope: "user",
+          defaultSkillImprovementExcludedSkills: ["legacy"],
           wsProtocol: "jsonrpc",
           yolo: false,
         },
@@ -399,6 +403,10 @@ describe("workspace settings sync", () => {
           controlSessionConfig: {
             advancedMemory: false,
             memoryGenerationModel: "openai:gpt-5-mini",
+            skillImprovementEnabled: false,
+            skillImprovementModel: "openai:gpt-5-mini",
+            skillImprovementScope: "user",
+            skillImprovementExcludedSkills: ["legacy"],
           },
         },
       },
@@ -407,6 +415,10 @@ describe("workspace settings sync", () => {
     setControlSessionConfigResponse({
       advancedMemory: true,
       memoryGenerationModel: "anthropic:claude-opus-4-8",
+      skillImprovementEnabled: true,
+      skillImprovementModel: "openai:gpt-5.4",
+      skillImprovementScope: "all",
+      skillImprovementExcludedSkills: ["alpha"],
     });
 
     const ok = await requestJsonRpcControlEvent(
@@ -422,9 +434,17 @@ describe("workspace settings sync", () => {
     const otherWorkspace = state.workspaces.find((entry) => entry.id === otherWorkspaceId);
     expect(otherWorkspace?.defaultAdvancedMemory).toBe(true);
     expect(otherWorkspace?.defaultMemoryGenerationModel).toBe("anthropic:claude-opus-4-8");
+    expect(otherWorkspace?.defaultSkillImprovementEnabled).toBe(true);
+    expect(otherWorkspace?.defaultSkillImprovementModel).toBe("openai:gpt-5.4");
+    expect(otherWorkspace?.defaultSkillImprovementScope).toBe("all");
+    expect(otherWorkspace?.defaultSkillImprovementExcludedSkills).toEqual(["alpha"]);
     expect(state.workspaceRuntimeById[otherWorkspaceId].controlSessionConfig).toMatchObject({
       advancedMemory: true,
       memoryGenerationModel: "anthropic:claude-opus-4-8",
+      skillImprovementEnabled: true,
+      skillImprovementModel: "openai:gpt-5.4",
+      skillImprovementScope: "all",
+      skillImprovementExcludedSkills: ["alpha"],
     });
   });
 });

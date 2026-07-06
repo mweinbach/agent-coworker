@@ -21,6 +21,7 @@ import {
 
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
+const skillImprovementScopeSchema = z.enum(["user", "all"]);
 
 const userProfileSchema = z
   .object({
@@ -116,6 +117,11 @@ export const sessionDefaultsApplyRequestSchema = z
         advancedMemory: z.boolean().optional(),
         memoryGenerationModel: z.string().optional(),
         clearMemoryGenerationModel: z.boolean().optional(),
+        skillImprovementEnabled: z.boolean().optional(),
+        skillImprovementModel: z.string().optional(),
+        clearSkillImprovementModel: z.boolean().optional(),
+        skillImprovementScope: skillImprovementScopeSchema.optional(),
+        skillImprovementExcludedSkills: z.array(z.string()).optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         clearToolOutputOverflowChars: z.boolean().optional(),
         preferredChildModel: z.string().optional(),
@@ -177,6 +183,10 @@ export const sessionConfigEventSchema = z
         memoryRequireApproval: z.boolean().optional(),
         advancedMemory: z.boolean().optional(),
         memoryGenerationModel: z.string().optional(),
+        skillImprovementEnabled: z.boolean().optional(),
+        skillImprovementModel: z.string().optional(),
+        skillImprovementScope: skillImprovementScopeSchema.optional(),
+        skillImprovementExcludedSkills: z.array(z.string()).optional(),
         preferredChildModel: z.string().optional(),
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),

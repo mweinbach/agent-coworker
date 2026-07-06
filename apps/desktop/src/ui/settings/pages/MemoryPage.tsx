@@ -4,7 +4,10 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   PencilIcon,
+  PlayIcon,
   PlusIcon,
+  RefreshCwIcon,
+  RotateCcwIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -18,6 +21,7 @@ import {
 } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -200,6 +204,20 @@ function relativeTime(isoString: string): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function futureRelativeTime(isoString: string): string {
+  const diffMs = new Date(isoString).getTime() - Date.now();
+  if (diffMs <= 0) return "now";
+
+  const minutes = Math.ceil(diffMs / 60_000);
+  if (minutes < 60) return `in ${minutes}m`;
+
+  const hours = Math.ceil(diffMs / 3_600_000);
+  if (hours < 24) return `in ${hours}h`;
+
+  const days = Math.ceil(diffMs / 86_400_000);
+  return `in ${days}d`;
+}
+
 export function MemoryPage() {
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
@@ -213,6 +231,17 @@ export function MemoryPage() {
   const deleteWorkspaceMemory = useAppStore((s) => s.deleteWorkspaceMemory);
   const setWorkspaceAdvancedMemory = useAppStore((s) => s.setWorkspaceAdvancedMemory);
   const setWorkspaceMemoryGenerationModel = useAppStore((s) => s.setWorkspaceMemoryGenerationModel);
+  const requestSkillImprovementStatus = useAppStore((s) => s.requestSkillImprovementStatus);
+  const runSkillImprovement = useAppStore((s) => s.runSkillImprovement);
+  const restoreSkillImprovement = useAppStore((s) => s.restoreSkillImprovement);
+  const setWorkspaceSkillImprovementEnabled = useAppStore(
+    (s) => s.setWorkspaceSkillImprovementEnabled,
+  );
+  const setWorkspaceSkillImprovementModel = useAppStore((s) => s.setWorkspaceSkillImprovementModel);
+  const setWorkspaceSkillImprovementScope = useAppStore((s) => s.setWorkspaceSkillImprovementScope);
+  const setWorkspaceSkillImprovementExcludedSkills = useAppStore(
+    (s) => s.setWorkspaceSkillImprovementExcludedSkills,
+  );
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
@@ -285,6 +314,61 @@ export function MemoryPage() {
       memoryGenerationModelSelection,
     ],
   );
+  const skillImprovementStatus = runtime?.skillImprovementStatus ?? null;
+  const skillImprovementLoading = runtime?.skillImprovementLoading ?? false;
+  const skillImprovementPendingActionKeys = runtime?.skillImprovementPendingActionKeys ?? {};
+  const skillImprovementEnabled =
+    liveSessionConfig?.skillImprovementEnabled ??
+    activeWorkspace?.defaultSkillImprovementEnabled ??
+    false;
+  const skillImprovementModel = liveSessionConfig
+    ? (liveSessionConfig.skillImprovementModel ?? "")
+    : (activeWorkspace?.defaultSkillImprovementModel ?? "");
+  const skillImprovementScope =
+    liveSessionConfig?.skillImprovementScope ??
+    activeWorkspace?.defaultSkillImprovementScope ??
+    "user";
+  const skillImprovementExcludedSkills =
+    liveSessionConfig?.skillImprovementExcludedSkills ??
+    activeWorkspace?.defaultSkillImprovementExcludedSkills ??
+    [];
+  const skillImprovementModelSelection =
+    resolveMemoryGenerationModelSelection(skillImprovementModel, fallbackMemoryModelProvider) ||
+    MEMORY_MODEL_DEFAULT_VALUE;
+  const skillImprovementModelGroups = useMemo(
+    () =>
+      buildMemoryGenerationModelGroups(
+        providerCatalog,
+        skillImprovementModelSelection === MEMORY_MODEL_DEFAULT_VALUE
+          ? ""
+          : skillImprovementModelSelection,
+        {
+          ...modelSelectorVisibility,
+          includedProviders: configuredModelProviders,
+        },
+      ),
+    [
+      configuredModelProviders,
+      modelSelectorVisibility,
+      providerCatalog,
+      skillImprovementModelSelection,
+    ],
+  );
+  const skillImprovementSkills = useMemo(
+    () =>
+      (skillImprovementStatus?.skills ?? [])
+        .filter(
+          (skill) =>
+            skill.eligible &&
+            (skillImprovementScope === "all" || skill.sourceKind === "user" || skill.excluded),
+        )
+        .sort((left, right) => left.skillName.localeCompare(right.skillName)),
+    [skillImprovementScope, skillImprovementStatus?.skills],
+  );
+  const skillImprovementPendingJobs = skillImprovementStatus?.pendingJobs ?? [];
+  const skillImprovementHistory = skillImprovementStatus?.runHistory.slice(0, 5) ?? [];
+  const skillImprovementBackups = skillImprovementStatus?.backups ?? [];
+  const skillImprovementBusy = skillImprovementStatus?.busy ?? false;
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);
   const [editingEntry, setEditingEntry] = useState<MemoryListEntry | null>(null);
@@ -315,6 +399,11 @@ export function MemoryPage() {
     if (advancedMemoryEnabled) return;
     requestMemories(activeTarget);
   }, [activeTarget, requestMemories, advancedMemoryEnabled]);
+
+  useEffect(() => {
+    if (!activeTarget) return;
+    void requestSkillImprovementStatus(activeTarget.workspaceId, { cwd: activeTarget.targetPath });
+  }, [activeTarget, requestSkillImprovementStatus]);
 
   useEffect(() => {
     if (!memoriesLoading) {
@@ -421,6 +510,32 @@ export function MemoryPage() {
     void selectWorkspace(target.workspaceId);
   };
 
+  const toggleExcludedSkill = (skillName: string, included: boolean) => {
+    if (!activeTarget) return;
+    const next = included
+      ? skillImprovementExcludedSkills.filter((entry) => entry !== skillName)
+      : [...skillImprovementExcludedSkills, skillName];
+    void setWorkspaceSkillImprovementExcludedSkills(activeTarget.workspaceId, next, {
+      cwd: activeTarget.targetPath,
+    });
+  };
+
+  const handleRestoreSkill = async (skillName: string) => {
+    if (!activeTarget) return;
+    const confirmed = await confirmAction({
+      title: "Restore skill",
+      message: `Restore "${skillName}" from its pre-improvement backup?`,
+      detail: "Current local changes in that skill will be replaced by the stored backup.",
+      kind: "warning",
+      confirmLabel: "Restore",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) return;
+    void restoreSkillImprovement(activeTarget.workspaceId, skillName, {
+      cwd: activeTarget.targetPath,
+    });
+  };
+
   return (
     <>
       <SettingsSection
@@ -481,6 +596,263 @@ export function MemoryPage() {
               </Select>
             }
           />
+        ) : null}
+      </SettingsSection>
+
+      <SettingsSection
+        title="Skill Improvement (Beta)"
+        description="Uses recent skill usage to keep local skill instructions sharper over time."
+      >
+        <SettingsRow
+          title="Enable skill improvement"
+          description="Queues improvement runs after skill usage and keeps a restore backup for each changed skill."
+          control={
+            <Switch
+              checked={skillImprovementEnabled}
+              disabled={!activeTarget}
+              onCheckedChange={(value) => {
+                if (!activeTarget) return;
+                void setWorkspaceSkillImprovementEnabled(activeTarget.workspaceId, value, {
+                  cwd: activeTarget.targetPath,
+                });
+              }}
+              aria-label="Skill improvement"
+            />
+          }
+        />
+        {skillImprovementEnabled ? (
+          <>
+            <SettingsRow
+              title="Improvement model"
+              description="Model used by the headless skill improver."
+              control={
+                <Select
+                  value={skillImprovementModelSelection}
+                  onValueChange={(value) => {
+                    if (!activeTarget) return;
+                    void setWorkspaceSkillImprovementModel(
+                      activeTarget.workspaceId,
+                      value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value,
+                      { cwd: activeTarget.targetPath },
+                    );
+                  }}
+                >
+                  <SelectTrigger className="max-w-72" aria-label="Skill improvement model">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>
+                      Default (session model)
+                    </SelectItem>
+                    {skillImprovementModelGroups.map((group) => (
+                      <SelectGroup key={group.provider}>
+                        <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
+                          {group.label}
+                        </SelectLabel>
+                        {group.options.map((option) => (
+                          <SelectItem key={option.value} value={option.value} className="pl-6">
+                            <span title={option.title}>{option.label}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
+                  </SelectContent>
+                </Select>
+              }
+            />
+            <SettingsRow
+              title="Improvement scope"
+              description="Choose whether only user-authored skills or all eligible local skills can be updated."
+              control={
+                <Select
+                  value={skillImprovementScope}
+                  onValueChange={(value) => {
+                    if (!activeTarget || (value !== "user" && value !== "all")) return;
+                    void setWorkspaceSkillImprovementScope(activeTarget.workspaceId, value, {
+                      cwd: activeTarget.targetPath,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="max-w-56" aria-label="Skill improvement scope">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="user">User skills</SelectItem>
+                    <SelectItem value="all">All eligible skills</SelectItem>
+                  </SelectContent>
+                </Select>
+              }
+            />
+            <SettingsRow
+              title="Included skills"
+              description="Checked skills can be improved when they are used."
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  disabled={!activeTarget || skillImprovementLoading}
+                  onClick={() =>
+                    activeTarget &&
+                    requestSkillImprovementStatus(activeTarget.workspaceId, {
+                      cwd: activeTarget.targetPath,
+                    })
+                  }
+                >
+                  <RefreshCwIcon data-icon="inline-start" />
+                  {skillImprovementLoading ? "Refreshing" : "Refresh"}
+                </Button>
+              }
+            >
+              {skillImprovementLoading && !skillImprovementStatus ? (
+                <div className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground">
+                  Loading eligible skills…
+                </div>
+              ) : skillImprovementSkills.length === 0 ? (
+                <div className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground">
+                  No eligible skills found for this scope.
+                </div>
+              ) : (
+                <div className="grid max-h-48 gap-1 overflow-y-auto rounded-md border border-border/60 p-2 sm:grid-cols-2">
+                  {skillImprovementSkills.map((skill) => {
+                    const checkboxId = `skill-improvement-${skill.skillName.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+                    const checked = !skillImprovementExcludedSkills.includes(skill.skillName);
+                    return (
+                      <label
+                        key={skill.installationId}
+                        htmlFor={checkboxId}
+                        className={cn(
+                          "flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-xs hover:bg-muted/60",
+                          checked && "bg-muted/70",
+                        )}
+                      >
+                        <Checkbox
+                          id={checkboxId}
+                          checked={checked}
+                          onCheckedChange={(value) =>
+                            toggleExcludedSkill(skill.skillName, value === true)
+                          }
+                        />
+                        <span className="min-w-0 flex-1 truncate">{skill.skillName}</span>
+                        <span className="shrink-0 text-[10px] uppercase text-muted-foreground/70">
+                          {skill.scope}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </SettingsRow>
+            <SettingsRow
+              title="Queued jobs"
+              description={
+                skillImprovementStatus?.blockReason ??
+                "Queued jobs run after the debounce window or when started manually."
+              }
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  disabled={
+                    !activeTarget ||
+                    skillImprovementBusy ||
+                    !!skillImprovementPendingActionKeys["run:queued"]
+                  }
+                  onClick={() =>
+                    activeTarget &&
+                    runSkillImprovement(activeTarget.workspaceId, undefined, {
+                      cwd: activeTarget.targetPath,
+                    })
+                  }
+                >
+                  <PlayIcon data-icon="inline-start" />
+                  {skillImprovementPendingActionKeys["run:queued"] ? "Running" : "Run queued"}
+                </Button>
+              }
+            >
+              {skillImprovementPendingJobs.length === 0 ? (
+                <div className="text-xs text-muted-foreground">No queued skill jobs.</div>
+              ) : (
+                <div className="space-y-2">
+                  {skillImprovementPendingJobs.map((job) => (
+                    <div
+                      key={job.skillName}
+                      className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                    >
+                      <span className="font-medium text-foreground">{job.skillName}</span>
+                      <span className="text-muted-foreground">
+                        {job.usageCount} use{job.usageCount === 1 ? "" : "s"} · due{" "}
+                        {futureRelativeTime(job.runAt)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </SettingsRow>
+            <SettingsRow title="History" description="Most recent improvement outcomes.">
+              {skillImprovementHistory.length === 0 ? (
+                <div className="text-xs text-muted-foreground">No skill improvement runs yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {skillImprovementHistory.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <span className="font-medium text-foreground">{entry.skillName}</span>
+                        <span className="ml-2 text-muted-foreground">{entry.message}</span>
+                      </div>
+                      <Badge
+                        variant={entry.status === "completed" ? "default" : "secondary"}
+                        className="h-5 text-[10px] uppercase"
+                      >
+                        {entry.status}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </SettingsRow>
+            <SettingsRow
+              title="Restore backups"
+              description="Backups are created before a skill is changed."
+            >
+              {skillImprovementBackups.length === 0 ? (
+                <div className="text-xs text-muted-foreground">No restore backups available.</div>
+              ) : (
+                <div className="space-y-2">
+                  {skillImprovementBackups.map((backup) => {
+                    const restoreKey = `restore:${backup.skillName}`;
+                    return (
+                      <div
+                        key={backup.key}
+                        className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-medium text-foreground">{backup.skillName}</div>
+                          <div className="truncate text-muted-foreground">
+                            Saved {relativeTime(backup.createdAt)}
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          disabled={!!skillImprovementPendingActionKeys[restoreKey]}
+                          onClick={() => handleRestoreSkill(backup.skillName)}
+                        >
+                          <RotateCcwIcon data-icon="inline-start" />
+                          {skillImprovementPendingActionKeys[restoreKey] ? "Restoring" : "Restore"}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </SettingsRow>
+          </>
         ) : null}
       </SettingsSection>
 

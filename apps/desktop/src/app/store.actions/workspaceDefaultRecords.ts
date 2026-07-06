@@ -52,6 +52,12 @@ export function copyWorkspaceSettings(
     defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars,
     defaultAdvancedMemory: source.defaultAdvancedMemory,
     defaultMemoryGenerationModel: source.defaultMemoryGenerationModel,
+    defaultSkillImprovementEnabled: source.defaultSkillImprovementEnabled,
+    defaultSkillImprovementModel: source.defaultSkillImprovementModel,
+    defaultSkillImprovementScope: source.defaultSkillImprovementScope,
+    defaultSkillImprovementExcludedSkills: source.defaultSkillImprovementExcludedSkills
+      ? [...source.defaultSkillImprovementExcludedSkills]
+      : undefined,
     providerOptions: source.providerOptions,
     userName: source.userName,
     userProfile: source.userProfile ? normalizeWorkspaceUserProfile(source.userProfile) : undefined,

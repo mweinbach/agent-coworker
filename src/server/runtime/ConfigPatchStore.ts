@@ -30,6 +30,10 @@ export type ProjectConfigPatch = Partial<
     | "memoryRequireApproval"
     | "advancedMemory"
     | "memoryGenerationModel"
+    | "skillImprovementEnabled"
+    | "skillImprovementModel"
+    | "skillImprovementScope"
+    | "skillImprovementExcludedSkills"
     | "observabilityEnabled"
     | "backupsEnabled"
     | "toolOutputOverflowChars"
@@ -39,6 +43,7 @@ export type ProjectConfigPatch = Partial<
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
   clearMemoryGenerationModel?: boolean;
+  clearSkillImprovementModel?: boolean;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
@@ -118,14 +123,17 @@ async function persistConfigPatchFile(
   const entries = Object.entries(patch).filter(
     ([key, value]) =>
       key !== "clearMemoryGenerationModel" &&
+      key !== "clearSkillImprovementModel" &&
       key !== "clearToolOutputOverflowChars" &&
       value !== undefined,
   );
   const shouldClearMemoryGenerationModel = patch.clearMemoryGenerationModel === true;
+  const shouldClearSkillImprovementModel = patch.clearSkillImprovementModel === true;
   const shouldClearToolOutputOverflowChars = patch.clearToolOutputOverflowChars === true;
   if (
     entries.length === 0 &&
     !shouldClearMemoryGenerationModel &&
+    !shouldClearSkillImprovementModel &&
     !shouldClearToolOutputOverflowChars
   )
     return;
@@ -184,6 +192,9 @@ async function persistConfigPatchFile(
   if (shouldClearMemoryGenerationModel) {
     delete next.memoryGenerationModel;
   }
+  if (shouldClearSkillImprovementModel) {
+    delete next.skillImprovementModel;
+  }
   await fs.mkdir(configDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
@@ -212,6 +223,26 @@ export async function persistProjectConfigPatch(
       globalPatch.clearMemoryGenerationModel = true;
       delete projectPatch.clearMemoryGenerationModel;
     }
+    if (patch.skillImprovementEnabled !== undefined) {
+      globalPatch.skillImprovementEnabled = patch.skillImprovementEnabled;
+      delete projectPatch.skillImprovementEnabled;
+    }
+    if (patch.skillImprovementModel !== undefined) {
+      globalPatch.skillImprovementModel = patch.skillImprovementModel;
+      delete projectPatch.skillImprovementModel;
+    }
+    if (patch.clearSkillImprovementModel === true) {
+      globalPatch.clearSkillImprovementModel = true;
+      delete projectPatch.clearSkillImprovementModel;
+    }
+    if (patch.skillImprovementScope !== undefined) {
+      globalPatch.skillImprovementScope = patch.skillImprovementScope;
+      delete projectPatch.skillImprovementScope;
+    }
+    if (patch.skillImprovementExcludedSkills !== undefined) {
+      globalPatch.skillImprovementExcludedSkills = patch.skillImprovementExcludedSkills;
+      delete projectPatch.skillImprovementExcludedSkills;
+    }
   }
 
   await persistConfigPatchFile(projectCoworkDir, projectPatch, runtimeProviderOptions);
@@ -223,6 +254,7 @@ export async function persistProjectConfigPatch(
 export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch): AgentConfig {
   const {
     clearMemoryGenerationModel: _clearMemoryGenerationModel,
+    clearSkillImprovementModel: _clearSkillImprovementModel,
     clearToolOutputOverflowChars: _clearToolOutputOverflowChars,
     featureFlags: featureFlagsPatch,
     ...configPatchBase
@@ -250,6 +282,9 @@ export function mergeConfigPatch(config: AgentConfig, patch: ProjectConfigPatch)
   }
   if (patch.clearMemoryGenerationModel) {
     next.memoryGenerationModel = undefined;
+  }
+  if (patch.clearSkillImprovementModel) {
+    next.skillImprovementModel = undefined;
   }
   if (patch.providerOptions !== undefined) {
     next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(

@@ -40,6 +40,10 @@ import {
 } from "./schema.session";
 import { jsonRpcSkillsRequestSchemas, jsonRpcSkillsResultSchemas } from "./schema.skills";
 import {
+  jsonRpcSkillImprovementRequestSchemas,
+  jsonRpcSkillImprovementResultSchemas,
+} from "./schema.skillImprovement";
+import {
   jsonRpcTaskNotificationSchemas,
   jsonRpcTaskRequestSchemas,
   jsonRpcTaskResultSchemas,
@@ -72,6 +76,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcImportRequestSchemas,
   ...jsonRpcMemoryRequestSchemas,
   ...jsonRpcBackupsRequestSchemas,
+  ...jsonRpcSkillImprovementRequestSchemas,
   ...jsonRpcCommandRequestSchemas,
   ...jsonRpcWorkspaceRequestSchemas,
   ...jsonRpcTaskRequestSchemas,
@@ -108,6 +113,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcImportResultSchemas,
   ...jsonRpcMemoryResultSchemas,
   ...jsonRpcBackupsResultSchemas,
+  ...jsonRpcSkillImprovementResultSchemas,
   ...jsonRpcCommandResultSchemas,
   ...jsonRpcWorkspaceResultSchemas,
   ...jsonRpcTaskResultSchemas,

@@ -642,6 +642,37 @@ export type AppStoreState = {
     model: string,
     opts?: { cwd?: string },
   ) => Promise<void>;
+  requestSkillImprovementStatus: (workspaceId: string, opts?: { cwd?: string }) => Promise<void>;
+  runSkillImprovement: (
+    workspaceId: string,
+    skillName?: string,
+    opts?: { cwd?: string },
+  ) => Promise<boolean>;
+  restoreSkillImprovement: (
+    workspaceId: string,
+    skillName: string,
+    opts?: { cwd?: string },
+  ) => Promise<boolean>;
+  setWorkspaceSkillImprovementEnabled: (
+    workspaceId: string,
+    enabled: boolean,
+    opts?: { cwd?: string },
+  ) => Promise<void>;
+  setWorkspaceSkillImprovementModel: (
+    workspaceId: string,
+    model: string,
+    opts?: { cwd?: string },
+  ) => Promise<void>;
+  setWorkspaceSkillImprovementScope: (
+    workspaceId: string,
+    scope: "user" | "all",
+    opts?: { cwd?: string },
+  ) => Promise<void>;
+  setWorkspaceSkillImprovementExcludedSkills: (
+    workspaceId: string,
+    excludedSkills: string[],
+    opts?: { cwd?: string },
+  ) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;

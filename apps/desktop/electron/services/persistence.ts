@@ -318,6 +318,18 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultAdvancedMemory:
         typeof item.defaultAdvancedMemory === "boolean" ? item.defaultAdvancedMemory : undefined,
       defaultMemoryGenerationModel: asOptionalString(item.defaultMemoryGenerationModel),
+      defaultSkillImprovementEnabled:
+        typeof item.defaultSkillImprovementEnabled === "boolean"
+          ? item.defaultSkillImprovementEnabled
+          : undefined,
+      defaultSkillImprovementModel: asOptionalString(item.defaultSkillImprovementModel),
+      defaultSkillImprovementScope:
+        item.defaultSkillImprovementScope === "all" || item.defaultSkillImprovementScope === "user"
+          ? item.defaultSkillImprovementScope
+          : undefined,
+      defaultSkillImprovementExcludedSkills: asOptionalStringArray(
+        item.defaultSkillImprovementExcludedSkills,
+      ),
       yolo: typeof item.yolo === "boolean" ? item.yolo : false,
     });
     seenWorkspaceIds.add(id);

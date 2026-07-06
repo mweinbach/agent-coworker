@@ -79,6 +79,9 @@ export class SessionMetadataManager {
     if (patch.advancedMemory !== undefined) {
       nextConfig = { ...nextConfig, advancedMemory: patch.advancedMemory };
     }
+    if (patch.skillImprovementEnabled !== undefined) {
+      nextConfig = { ...nextConfig, skillImprovementEnabled: patch.skillImprovementEnabled };
+    }
     if (patch.clearMemoryGenerationModel) {
       nextConfig = { ...nextConfig, memoryGenerationModel: undefined };
     }
@@ -86,6 +89,24 @@ export class SessionMetadataManager {
       nextConfig = {
         ...nextConfig,
         memoryGenerationModel: patch.memoryGenerationModel.trim() || undefined,
+      };
+    }
+    if (patch.clearSkillImprovementModel) {
+      nextConfig = { ...nextConfig, skillImprovementModel: undefined };
+    }
+    if (patch.skillImprovementModel !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        skillImprovementModel: patch.skillImprovementModel.trim() || undefined,
+      };
+    }
+    if (patch.skillImprovementScope !== undefined) {
+      nextConfig = { ...nextConfig, skillImprovementScope: patch.skillImprovementScope };
+    }
+    if (patch.skillImprovementExcludedSkills !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        skillImprovementExcludedSkills: [...patch.skillImprovementExcludedSkills],
       };
     }
     if (normalizedChildRouting !== undefined) {
@@ -172,11 +193,26 @@ export class SessionMetadataManager {
     if (patch.advancedMemory !== undefined) {
       persistPatch.advancedMemory = patch.advancedMemory;
     }
+    if (patch.skillImprovementEnabled !== undefined) {
+      persistPatch.skillImprovementEnabled = patch.skillImprovementEnabled;
+    }
     if (patch.clearMemoryGenerationModel) {
       persistPatch.clearMemoryGenerationModel = true;
     }
     if (patch.memoryGenerationModel !== undefined) {
       persistPatch.memoryGenerationModel = patch.memoryGenerationModel.trim() || undefined;
+    }
+    if (patch.clearSkillImprovementModel) {
+      persistPatch.clearSkillImprovementModel = true;
+    }
+    if (patch.skillImprovementModel !== undefined) {
+      persistPatch.skillImprovementModel = patch.skillImprovementModel.trim() || undefined;
+    }
+    if (patch.skillImprovementScope !== undefined) {
+      persistPatch.skillImprovementScope = patch.skillImprovementScope;
+    }
+    if (patch.skillImprovementExcludedSkills !== undefined) {
+      persistPatch.skillImprovementExcludedSkills = [...patch.skillImprovementExcludedSkills];
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
@@ -213,6 +249,15 @@ export class SessionMetadataManager {
       (baseConfig.memoryRequireApproval ?? false) !== (nextConfig.memoryRequireApproval ?? false) ||
       (baseConfig.advancedMemory ?? false) !== (nextConfig.advancedMemory ?? false) ||
       (baseConfig.memoryGenerationModel ?? "") !== (nextConfig.memoryGenerationModel ?? "") ||
+      (baseConfig.skillImprovementEnabled ?? false) !==
+        (nextConfig.skillImprovementEnabled ?? false) ||
+      (baseConfig.skillImprovementModel ?? "") !== (nextConfig.skillImprovementModel ?? "") ||
+      (baseConfig.skillImprovementScope ?? "user") !==
+        (nextConfig.skillImprovementScope ?? "user") ||
+      !stringArrayEqual(
+        baseConfig.skillImprovementExcludedSkills ?? [],
+        nextConfig.skillImprovementExcludedSkills ?? [],
+      ) ||
       baseConfig.preferredChildModel !== nextConfig.preferredChildModel ||
       (baseConfig.childModelRoutingMode ?? "same-provider") !==
         (nextConfig.childModelRoutingMode ?? "same-provider") ||
@@ -281,6 +326,13 @@ export class SessionMetadataManager {
         ...(this.context.state.config.memoryGenerationModel
           ? { memoryGenerationModel: this.context.state.config.memoryGenerationModel }
           : {}),
+        skillImprovementEnabled: this.context.state.config.skillImprovementEnabled ?? false,
+        ...(this.context.state.config.skillImprovementModel
+          ? { skillImprovementModel: this.context.state.config.skillImprovementModel }
+          : {}),
+        skillImprovementScope: this.context.state.config.skillImprovementScope ?? "user",
+        skillImprovementExcludedSkills:
+          this.context.state.config.skillImprovementExcludedSkills ?? [],
         defaultBackupsEnabled,
         preferredChildModel: this.context.state.config.preferredChildModel,
         childModelRoutingMode: this.context.state.config.childModelRoutingMode ?? "same-provider",
@@ -429,6 +481,14 @@ export class SessionMetadataManager {
         "validation_failed",
         "session",
         "memoryGenerationModel cannot be combined with clearMemoryGenerationModel",
+      );
+      return null;
+    }
+    if (patch.skillImprovementModel !== undefined && patch.clearSkillImprovementModel) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "skillImprovementModel cannot be combined with clearSkillImprovementModel",
       );
       return null;
     }

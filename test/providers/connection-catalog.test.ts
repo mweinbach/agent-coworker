@@ -17,6 +17,10 @@ const noCodexAccount = async () => ({
   requiresOpenaiAuth: true,
 });
 
+const unavailableLmStudioFetch: typeof fetch = async () => {
+  throw new Error("LM Studio unavailable in provider catalog test.");
+};
+
 function emptyConnectionStore() {
   return {
     version: 1 as const,
@@ -1437,7 +1441,9 @@ describe("providers/connectionCatalog", () => {
 
     const payload = await getProviderCatalog({
       paths,
+      env: {},
       refresh: true,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",

@@ -10,6 +10,7 @@ import {
   type TaskQuestionResumeStatus,
   taskCreationInputSchema,
 } from "../../shared/tasks";
+import type { CompletedTurnSkillUsage } from "../../skillImprovement";
 import type { AgentConfig } from "../../types";
 import { defaultRuntimeNameForProvider } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
@@ -78,6 +79,7 @@ export type SessionRegistryOptions = {
     sourceSessionId: string;
     allWorkspaces?: boolean;
   }) => Promise<void>;
+  recordSkillImprovementUsage?: (usage: CompletedTurnSkillUsage) => void | Promise<void>;
   onThreadListChanged?: () => void;
   onTaskCreatedFromChat?: (input: { sourceSessionId: string; workspacePath: string }) => void;
 };
@@ -659,6 +661,7 @@ export class SessionRegistry {
         return "Skill mutations are blocked while another session in this workspace is running.";
       },
       refreshSkillsAcrossWorkspaceSessionsImpl: this.options.refreshSkillsAcrossWorkspaceSessions,
+      recordSkillImprovementUsageImpl: this.options.recordSkillImprovementUsage,
     };
   }
 

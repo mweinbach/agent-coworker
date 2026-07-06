@@ -21,7 +21,7 @@ import {
   readSkillInstallManifest,
 } from "./manifest";
 
-type SkillFrontMatter = {
+export type SkillFrontMatter = {
   name: string;
   description: string;
   license?: string;
@@ -30,7 +30,7 @@ type SkillFrontMatter = {
   allowedTools?: string;
 };
 
-type ParsedSkillDocument = {
+export type ParsedSkillDocument = {
   frontMatter: SkillFrontMatter;
   rawFrontMatter: Record<string, unknown>;
   body: string;
@@ -110,7 +110,10 @@ function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> |
   }
 }
 
-function parseSkillFrontMatter(raw: string, skillDirName: string): ParsedSkillDocument | null {
+export function parseSkillFrontMatter(
+  raw: string,
+  skillDirName: string,
+): ParsedSkillDocument | null {
   const { frontMatterRaw, body } = splitFrontMatter(raw);
   if (!frontMatterRaw) {
     return null;

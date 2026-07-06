@@ -10,6 +10,9 @@
   "toolOutputOverflowChars": 25000,
   "includeRawChunks": true,
   "advancedMemory": false,
+  "skillImprovementEnabled": false,
+  "skillImprovementScope": "user",
+  "skillImprovementExcludedSkills": [],
   "observabilityEnabled": false,
   "observability": {
     "provider": "langfuse",

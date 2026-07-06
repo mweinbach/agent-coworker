@@ -460,7 +460,24 @@ export async function createAgentServerRuntime(
 
   skillImprovement = new SkillImprovementService({
     config,
-    getConfig: () => config,
+    // Settings applied through workspace control sessions persist to disk but
+    // never update this module's `config` binding, so always reload the
+    // effective config (optionally for a specific workspace) from disk.
+    getConfig: async (cwd?: string) => {
+      const targetCwd = cwd?.trim() || config.workingDirectory;
+      const fresh = await loadConfig({
+        cwd: targetCwd,
+        env: { ...env, AGENT_WORKING_DIR: targetCwd },
+        homedir: opts.homedir,
+        builtInDir,
+      });
+      const providerOptions = mergeRuntimeProviderOptions(
+        opts.providerOptions,
+        fresh.providerOptions,
+      );
+      if (providerOptions) fresh.providerOptions = providerOptions;
+      return fresh;
+    },
     hasBusySessions: () =>
       [...registry.sessionBindings.values()].some((binding) => binding.runtime?.read.isBusy),
     signalSkillMutation: async () => {
@@ -470,6 +487,7 @@ export async function createAgentServerRuntime(
       });
       await skillMutationBus.publish();
     },
+    broadcastStatus: (event) => workspaceControl.broadcastSkillImprovementStatus(event),
     log: (line) => console.warn(line),
   });
   skillImprovement.start();

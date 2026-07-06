@@ -675,7 +675,7 @@ const skillImprovementPendingJobSchema = z
   })
   .passthrough();
 
-const skillImprovementStatusEventSchema = z
+export const skillImprovementStatusEventSchema = z
   .object({
     type: z.literal("skill_improvement_status"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),

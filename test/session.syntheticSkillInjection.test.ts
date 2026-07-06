@@ -210,6 +210,69 @@ describe("referenced plugin resolution", () => {
   });
 });
 
+describe("referenced skill usage recording", () => {
+  test("records an at-mention usage on the active turn state", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skillrefs-usage-"));
+    const skillsDir = path.join(root, "skills");
+    const skillDir = path.join(skillsDir, "tracked-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ["---", 'name: "tracked-skill"', 'description: "Tracked"', "---", "", "# Tracked"].join("\n"),
+      "utf-8",
+    );
+    const config = makeReferenceConfig(root, skillsDir);
+    const state = {
+      config,
+      currentTurnId: "turn-9",
+      currentTurnSkillUsages: [] as Array<Record<string, unknown>>,
+    };
+
+    const resolved = await resolveReferencedSkills({
+      context: { state } as any,
+      references: [{ kind: "skill", name: "tracked-skill" }],
+      log: () => {},
+    });
+
+    expect(resolved.map((skill) => skill.name)).toEqual(["tracked-skill"]);
+    expect(state.currentTurnSkillUsages).toHaveLength(1);
+    expect(state.currentTurnSkillUsages[0]).toMatchObject({
+      skillName: "tracked-skill",
+      kind: "reference",
+      source: "at-mention",
+      turnId: "turn-9",
+      skillPath: path.join(skillDir, "SKILL.md"),
+      skillSource: "project",
+    });
+  });
+
+  test("does not record usage outside an active turn", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skillrefs-noturn-"));
+    const skillsDir = path.join(root, "skills");
+    const skillDir = path.join(skillsDir, "tracked-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ["---", 'name: "tracked-skill"', 'description: "Tracked"', "---", "", "# Tracked"].join("\n"),
+      "utf-8",
+    );
+    const config = makeReferenceConfig(root, skillsDir);
+    const state = {
+      config,
+      currentTurnId: null,
+      currentTurnSkillUsages: [] as unknown[],
+    };
+
+    await resolveReferencedSkills({
+      context: { state } as any,
+      references: [{ kind: "skill", name: "tracked-skill" }],
+      log: () => {},
+    });
+
+    expect(state.currentTurnSkillUsages).toHaveLength(0);
+  });
+});
+
 describe("referenced skill resolution limits", () => {
   test("skips oversized skill bodies with a clear log", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "skillrefs-oversized-"));

@@ -1,11 +1,18 @@
-import type { ModelMessage, SkillScope } from "../types";
+import type { SkillScope } from "../types";
 
 export const SKILL_IMPROVEMENT_DEBOUNCE_MS = 10 * 60 * 1000;
 export const SKILL_IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60 * 1000;
+/** A claimed job whose run is older than this is treated as crashed and reclaimed. */
+export const SKILL_IMPROVEMENT_STALE_RUNNING_MS = 30 * 60 * 1000;
+/** A cross-process lock older than this is treated as abandoned and broken. */
+export const SKILL_IMPROVEMENT_STALE_LOCK_MS = 30 * 60 * 1000;
+/** Per-job caps so state.json cannot grow without bound between runs. */
+export const SKILL_IMPROVEMENT_MAX_TRANSCRIPTS_PER_JOB = 10;
+export const SKILL_IMPROVEMENT_MAX_USAGES_PER_JOB = 50;
 
-export type SkillImprovementScope = "user" | "all";
+type SkillImprovementScope = "user" | "all";
 
-export type SkillUsageKind = "tool" | "reference";
+type SkillUsageKind = "tool" | "reference";
 
 export type SkillUsageRecord = {
   skillName: string;
@@ -27,8 +34,15 @@ export type CompletedTurnSkillUsage = {
   usages: SkillUsageRecord[];
 };
 
-export type SkillImprovementUsageEvent = SkillUsageRecord & {
+type SkillImprovementUsageEvent = SkillUsageRecord & {
   sessionId: string;
+  workingDirectory: string;
+};
+
+/** One serialized turn transcript, stored once per (session, turn) instead of per usage. */
+type SkillImprovementTranscriptRecord = {
+  sessionId: string;
+  turnId: string;
   workingDirectory: string;
   messageStartIndex: number;
   messageEndIndex: number;
@@ -37,12 +51,24 @@ export type SkillImprovementUsageEvent = SkillUsageRecord & {
 
 export type SkillImprovementJob = {
   skillName: string;
+  /**
+   * Set for project-scope skills, which only exist inside one workspace. The
+   * runner resolves the skill catalog against this directory; global/user/
+   * built-in skills resolve identically everywhere and leave it unset.
+   */
+  workingDirectory?: string;
   runAt: string;
   lastUsageAt: string;
   usageEvents: SkillImprovementUsageEvent[];
+  transcripts: SkillImprovementTranscriptRecord[];
   status?: "pending" | "running";
   startedAt?: string;
   updatedAt: string;
+};
+
+export type ClaimedSkillImprovementJob = {
+  key: string;
+  job: SkillImprovementJob;
 };
 
 export type SkillImprovementRunHistoryEntry = {
@@ -86,7 +112,7 @@ export type SkillImprovementEligibility = {
   sourceKind: "user" | "marketplace" | "plugin" | "built-in" | "invalid";
   reason?: string;
   rootDir: string;
-  skillPath: string | null;
+  skillPath: string;
   hasBackup: boolean;
   pluginName?: string;
 };
@@ -122,6 +148,14 @@ export type SkillImproverRunInput = {
   skillPath: string;
   sourceKind: SkillImprovementEligibility["sourceKind"];
   usageEvents: SkillImprovementUsageEvent[];
+  transcripts: SkillImprovementTranscriptRecord[];
   allSkills: Array<{ name: string; description: string }>;
-  transcriptMessages?: ModelMessage[];
+};
+
+export type SkillImproverRunResult = {
+  ok: boolean;
+  /** True when any file inside the skill directory was written or edited. */
+  changed: boolean;
+  message: string;
+  error?: string;
 };

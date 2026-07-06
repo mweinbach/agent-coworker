@@ -21,7 +21,7 @@ import {
   readSkillInstallManifest,
 } from "./manifest";
 
-export type SkillFrontMatter = {
+type SkillFrontMatter = {
   name: string;
   description: string;
   license?: string;
@@ -30,7 +30,7 @@ export type SkillFrontMatter = {
   allowedTools?: string;
 };
 
-export type ParsedSkillDocument = {
+type ParsedSkillDocument = {
   frontMatter: SkillFrontMatter;
   rawFrontMatter: Record<string, unknown>;
   body: string;

@@ -23,7 +23,7 @@ async function statusForParams(
 ): Promise<Awaited<ReturnType<JsonRpcRouteContext["skillImprovement"]["getStatus"]>>> {
   const binding = await context.workspaceControl.getOrCreateBinding(cwd);
   const sessionId = binding.runtime?.id ?? "skill-improvement";
-  return await context.skillImprovement.getStatus(sessionId);
+  return await context.skillImprovement.getStatus(sessionId, cwd);
 }
 
 export function createSkillImprovementRouteHandlers(
@@ -52,7 +52,7 @@ export function createSkillImprovementRouteHandlers(
         return;
       }
       const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
-      await context.skillImprovement.runNow(parsed.data.skillName);
+      await context.skillImprovement.runNow(parsed.data.skillName, cwd);
       const event = await statusForParams(context, cwd);
       context.jsonrpc.sendResult(ws, message.id, { event });
     },

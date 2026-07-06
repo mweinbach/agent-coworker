@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   mcpServersEventSchema,
   pluginsCatalogEventSchema,
+  skillImprovementStatusEventSchema,
   skillsCatalogEventSchema,
   skillsListEventSchema,
 } from "../../shared/jsonrpcControlSchemas";
@@ -36,6 +37,7 @@ const controlEventNotificationSchema = z.union([
   skillsCatalogEventSchema,
   pluginsCatalogEventSchema,
   mcpServersEventSchema,
+  skillImprovementStatusEventSchema,
 ]);
 
 const workspaceListChangedNotificationSchema = z

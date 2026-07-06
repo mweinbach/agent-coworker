@@ -286,8 +286,10 @@ export interface AgentConfig {
 
   /**
    * Which skill sources the beta improver may target. `user` limits changes to
-   * user-installed writable skills; `all` also allows managed/built-in skills
-   * through a backed-up shadow copy when needed.
+   * user-installed writable skills; `all` adds marketplace/plugin skills
+   * (improved in place after the original is backed up — plugin updates
+   * overwrite in-place improvements) and bundled built-in skills (improved via
+   * a backed-up shadow copy under the global skills directory).
    */
   skillImprovementScope?: "user" | "all";
 

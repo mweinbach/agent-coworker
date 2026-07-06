@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
+import type { PersistedExternalConversationImport } from "../../import/conversations/types";
 import type { PersistentAgentSummary } from "../../shared/agents";
 import { type SessionSnapshot, sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import type { ModelMessage } from "../../types";
@@ -45,6 +46,7 @@ const modelStreamRawFormatSchema = z.enum([
 ]);
 const researchSourcesJsonSchema = z.array(researchSourceSchema);
 const researchThoughtSummariesJsonSchema = z.array(researchThoughtSummarySchema);
+const externalConversationImportMetadataSchema = z.record(z.string(), z.unknown());
 
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
@@ -912,6 +914,80 @@ export class SessionDbRepository {
       .run(creationKey, threadId, now, now);
   }
 
+  getExternalConversationImport(
+    source: PersistedExternalConversationImport["source"],
+    fingerprint: string,
+  ): PersistedExternalConversationImport | null {
+    const row = this.db
+      .query(
+        sql([
+          "SELECT source, fingerprint, imported_session_id, source_id, source_path,",
+          "       original_provider, original_model, imported_at, metadata_json",
+          "       FROM external_conversation_imports",
+          "       WHERE source = ? AND fingerprint = ?",
+          "       LIMIT 1",
+        ]),
+      )
+      .get(source, fingerprint) as Record<string, unknown> | null;
+    if (!row) return null;
+    return {
+      source: source,
+      fingerprint: String(row.fingerprint),
+      importedSessionId: String(row.imported_session_id),
+      sourceId: String(row.source_id),
+      sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+      originalProvider: typeof row.original_provider === "string" ? row.original_provider : null,
+      originalModel: typeof row.original_model === "string" ? row.original_model : null,
+      importedAt: parseRequiredIsoTimestamp(
+        row.imported_at,
+        "external_conversation_imports.imported_at",
+      ),
+      metadata: parseJsonStringWithSchema(
+        row.metadata_json,
+        externalConversationImportMetadataSchema,
+        "external_conversation_imports.metadata_json",
+      ),
+    };
+  }
+
+  recordExternalConversationImport(record: PersistedExternalConversationImport): void {
+    this.db
+      .query(
+        sql([
+          "INSERT INTO external_conversation_imports (",
+          "           source,",
+          "           fingerprint,",
+          "           imported_session_id,",
+          "           source_id,",
+          "           source_path,",
+          "           original_provider,",
+          "           original_model,",
+          "           imported_at,",
+          "           metadata_json",
+          "         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "         ON CONFLICT(source, fingerprint) DO UPDATE SET",
+          "           imported_session_id = excluded.imported_session_id,",
+          "           source_id = excluded.source_id,",
+          "           source_path = excluded.source_path,",
+          "           original_provider = excluded.original_provider,",
+          "           original_model = excluded.original_model,",
+          "           imported_at = excluded.imported_at,",
+          "           metadata_json = excluded.metadata_json",
+        ]),
+      )
+      .run(
+        record.source,
+        record.fingerprint,
+        record.importedSessionId,
+        record.sourceId,
+        record.sourcePath,
+        record.originalProvider,
+        record.originalModel,
+        parseRequiredIsoTimestamp(record.importedAt, "external_conversation_imports.importedAt"),
+        toJsonString(record.metadata),
+      );
+  }
+
   listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
     const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     const rows = this.db
@@ -1223,6 +1299,8 @@ export class SessionDbRepository {
 
     this.addThreadCreationKeysTable();
 
+    this.addExternalConversationImportsTable();
+
     this.db.exec(
       sql([
         "CREATE TABLE IF NOT EXISTS research (",
@@ -1507,6 +1585,28 @@ export class SessionDbRepository {
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_thread_creation_keys_thread ON thread_creation_keys(thread_id)",
+    );
+  }
+
+  addExternalConversationImportsTable(): void {
+    this.db.exec(
+      sql([
+        "CREATE TABLE IF NOT EXISTS external_conversation_imports (",
+        "         source TEXT NOT NULL,",
+        "         fingerprint TEXT NOT NULL,",
+        "         imported_session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,",
+        "         source_id TEXT NOT NULL,",
+        "         source_path TEXT NULL,",
+        "         original_provider TEXT NULL,",
+        "         original_model TEXT NULL,",
+        "         imported_at TEXT NOT NULL,",
+        "         metadata_json TEXT NOT NULL,",
+        "         PRIMARY KEY(source, fingerprint)",
+        "       )",
+      ]),
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_external_conversation_imports_session ON external_conversation_imports(imported_session_id)",
     );
   }
 

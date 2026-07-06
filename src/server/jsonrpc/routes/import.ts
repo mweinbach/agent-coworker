@@ -1,5 +1,8 @@
 import type { ImportableKind, ImportSource } from "../../../import";
+import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
+import { JSONRPC_ERROR_CODES } from "../protocol";
+import { jsonRpcImportRequestSchemas } from "../schema.import";
 
 import {
   captureWorkspaceControlMutationEvents,
@@ -49,6 +52,56 @@ function resolveTargetScope(value: unknown): "workspace" | "user" {
 
 export function createImportRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
+    "cowork/conversationImport/sources/list": async (ws, message) => {
+      const parsed = jsonRpcImportRequestSchemas[
+        "cowork/conversationImport/sources/list"
+      ].safeParse(message.params ?? {});
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "Invalid params",
+        });
+        return;
+      }
+      const sources = await context.conversationImports.discoverSources(parsed.data.sources);
+      context.jsonrpc.sendResult(ws, message.id, { sources });
+    },
+
+    "cowork/conversationImport/preview": async (ws, message) => {
+      const parsed = jsonRpcImportRequestSchemas["cowork/conversationImport/preview"].safeParse(
+        message.params ?? {},
+      );
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "Invalid params",
+        });
+        return;
+      }
+      const result = await context.conversationImports.preview(parsed.data);
+      context.jsonrpc.sendResult(ws, message.id, result);
+    },
+
+    "cowork/conversationImport/import": async (ws, message) => {
+      const parsed = jsonRpcImportRequestSchemas["cowork/conversationImport/import"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "Invalid params",
+        });
+        return;
+      }
+      const result = await context.conversationImports.importSelected({
+        ...parsed.data,
+        ...(parsed.data.provider
+          ? { provider: parsed.data.provider as AgentConfig["provider"] }
+          : {}),
+      });
+      context.jsonrpc.sendResult(ws, message.id, result);
+    },
+
     "cowork/import/list": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);

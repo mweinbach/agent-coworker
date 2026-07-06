@@ -30,8 +30,7 @@ import type { MentionCatalog } from "./composerMentions";
 
 type ComposerSubmitState = ReturnType<typeof getComposerSubmitState>;
 
-import { DraftThreadModelSelector } from "./DraftThreadModelSelector";
-import { ThreadModelIndicator } from "./ThreadModelIndicator";
+import { ThreadModelSelector } from "./ThreadModelSelector";
 
 export function ChatComposer(props: {
   messageBarOverlayRef: Ref<HTMLDivElement>;
@@ -62,7 +61,7 @@ export function ChatComposer(props: {
     options: readonly ReasoningEffortValue[];
   } | null;
   onReasoningEffortChange: (value: ReasoningEffortValue) => void;
-  threadDraft: boolean;
+  modelSelectorDisabled: boolean;
   selectedThreadId: string;
   modelDisplayNames: Record<ProviderName, Record<string, string>>;
   preparingAttachments: boolean;
@@ -94,7 +93,7 @@ export function ChatComposer(props: {
     threadModelConfig,
     reasoningSelector,
     onReasoningEffortChange,
-    threadDraft,
+    modelSelectorDisabled,
     selectedThreadId,
     modelDisplayNames,
     preparingAttachments,
@@ -190,21 +189,13 @@ export function ChatComposer(props: {
                   <PaperclipIcon />
                 </Button>
                 {threadModelConfig ? (
-                  threadDraft ? (
-                    <DraftThreadModelSelector
-                      threadId={selectedThreadId}
-                      provider={threadModelConfig.provider}
-                      model={threadModelConfig.model}
-                      modelDisplayNames={modelDisplayNames}
-                      disabled={inputDisabled}
-                    />
-                  ) : (
-                    <ThreadModelIndicator
-                      provider={threadModelConfig.provider}
-                      model={threadModelConfig.model}
-                      modelDisplayNames={modelDisplayNames}
-                    />
-                  )
+                  <ThreadModelSelector
+                    threadId={selectedThreadId}
+                    provider={threadModelConfig.provider}
+                    model={threadModelConfig.model}
+                    modelDisplayNames={modelDisplayNames}
+                    disabled={modelSelectorDisabled}
+                  />
                 ) : null}
                 {reasoningSelector ? (
                   <ComposerReasoningSelector

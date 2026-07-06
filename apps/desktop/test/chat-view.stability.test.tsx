@@ -414,7 +414,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("shows the active session model as a read-only footer indicator even after messages exist", async () => {
+  test("shows the active session model selector even after messages exist", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -489,12 +489,13 @@ describe("desktop chat view stability", () => {
 
       expect(container.textContent).toContain("Existing reply");
       const attachButton = container.querySelector('[aria-label="Attach files"]');
-      const modelIndicator = container.querySelector('[title="OpenAI / gpt-5.4-session-lock"]');
+      const modelSelector = container.querySelector('[data-slot="composer-model-selector"]');
       const toolsRow = attachButton?.parentElement;
       const footer = toolsRow?.parentElement;
 
       expect(attachButton).not.toBeNull();
-      expect(modelIndicator?.textContent).toContain("gpt-5.4-session-lock");
+      expect(modelSelector?.textContent).toContain("gpt-5.4-session-lock");
+      expect((modelSelector as HTMLButtonElement | null)?.disabled).toBe(false);
       expect(toolsRow?.className).not.toContain("overflow-hidden");
       expect(footer?.className).toContain("flex-wrap");
       expect(container.querySelector('[data-slot="select-trigger"]')).toBeNull();

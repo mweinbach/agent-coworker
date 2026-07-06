@@ -16,6 +16,8 @@ Core tables:
 - `sessions(...)` metadata row per session (`status`, `message_count`, `last_event_seq`, etc.)
 - `session_state(...)` materialized state (`system_prompt`, `messages_json`, `todos_json`, `harness_context_json`)
 - `session_events(...)` append-only semantic event log keyed by `(session_id, seq)`
+- `session_snapshots(...)` projected UI replay snapshots keyed by `session_id`
+- `external_conversation_imports(...)` idempotency and provenance rows for imported Codex, Claude Code, and Cowork conversations
 - `research(...)` global research metadata rows (`status`, `interaction_id`, `last_event_id`, `inputs_json`, `settings_json`, `outputs_markdown`, `thought_summaries_json`, `sources_json`, `error`)
 - `tasks(...)` project-scoped task brief and lifecycle rows with optimistic `revision`
 - `task_threads(...)` maps coordinator task threads to canonical session ids
@@ -86,4 +88,5 @@ When connecting with `resumeSessionId`:
 - Task coordinator: owns task lifecycle, validates work-graph and completion invariants, persists durable user questions and provisional defaults, resumes the primary thread after the final blocking answer, versions artifact bytes, checkpoints meaningful phases, and attaches each task thread to an ordinary persisted session without exposing it in chat listings.
 - CLI/TUI/desktop: list/resume/history operations go through server APIs (`list_sessions`, `get_messages`, etc.).
 - Desktop transcript JSONL remains a cache for fast local rendering, not an authority.
+- Imported external conversations are normal persisted sessions. Their `session_snapshots.feed` stores the reconstructed visible replay, while `session_state.messages_json` stores only sanitized model-facing handoff context and `provider_state_json` stays null.
 - Desktop thread removal sends `session_close` only; explicit "Delete session history" sends `delete_session`.

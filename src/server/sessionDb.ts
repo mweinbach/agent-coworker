@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
+import type { PersistedExternalConversationImport } from "../import/conversations/types";
 import type { SessionUsageSnapshot } from "../session/costTracker";
 import type { AgentProfileSnapshot } from "../shared/agentProfiles";
 import type {
@@ -192,6 +193,7 @@ export type PersistedThreadJournalFailure = {
 };
 
 export type PersistedResearchRecord = ResearchRecord;
+export type { PersistedExternalConversationImport } from "../import/conversations/types";
 
 type SessionDbOptions = {
   paths: Pick<AiCoworkerPaths, "rootDir" | "sessionsDir">;
@@ -480,6 +482,25 @@ export class SessionDb {
 
   getThreadIdByCreationKey(creationKey: string): string | null {
     return this.readRepository.getThreadIdByCreationKey(creationKey);
+  }
+
+  getExternalConversationImport(
+    source: PersistedExternalConversationImport["source"],
+    fingerprint: string,
+  ): PersistedExternalConversationImport | null {
+    return this.readRepository.getExternalConversationImport(source, fingerprint);
+  }
+
+  async recordExternalConversationImport(
+    record: PersistedExternalConversationImport,
+  ): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "record_external_conversation_import",
+      async () => {
+        this.repository.recordExternalConversationImport(record);
+      },
+      { sessionId: record.importedSessionId, source: record.source },
+    );
   }
 
   async rememberThreadCreationKey(creationKey: string, threadId: string): Promise<void> {

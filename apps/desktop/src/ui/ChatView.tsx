@@ -717,6 +717,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     rt?.hydrating === true ||
     (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
+  const modelSelectorDisabled =
+    !threadModelConfig ||
+    inputDisabled ||
+    (thread.draft !== true &&
+      (busy ||
+        hydrating ||
+        transcriptOnly ||
+        thread.status !== "active" ||
+        rt?.sessionKind === "agent" ||
+        !rt?.sessionId));
   const composerSubmitState = getComposerSubmitState({
     busy,
     hasPromptModal: inputDisabled,
@@ -844,7 +854,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             threadModelConfig={threadModelConfig}
             reasoningSelector={threadModelConfig?.reasoning ?? null}
             onReasoningEffortChange={handleReasoningEffortChange}
-            threadDraft={thread.draft === true}
+            modelSelectorDisabled={modelSelectorDisabled}
             selectedThreadId={selectedThreadId}
             modelDisplayNames={modelDisplayNames}
             preparingAttachments={preparingAttachments}

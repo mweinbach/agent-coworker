@@ -5,6 +5,7 @@ import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../../connect";
 import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../coworkRuntime";
 import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
+import { createConversationImportService } from "../../import/conversations";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
@@ -620,6 +621,13 @@ export async function createAgentServerRuntime(
     opts.desktopService?.watchStateChanges?.(() => {
       broadcastWorkspaceListChanged();
     }) ?? null;
+  const conversationImports = createConversationImportService({
+    sessionDb,
+    homedir: opts.homedir ?? env.HOME ?? process.cwd(),
+    getConfig: () => config,
+    desktopService: opts.desktopService ?? null,
+    onWorkspaceListChanged: broadcastWorkspaceListChanged,
+  });
 
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
@@ -627,6 +635,7 @@ export async function createAgentServerRuntime(
     research,
     skillImprovement,
     tasks,
+    conversationImports,
     taskRequests: {
       onStarted: ({ ws, method, workspacePath }) => {
         if (!shouldRegisterTaskSubscriber(method, ws)) return;

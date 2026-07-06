@@ -1,4 +1,5 @@
 import type { LibreOfficeCapabilityDiagnostic } from "../../../coworkRuntime";
+import type { ConversationImportService } from "../../../import/conversations";
 import type { LmStudioLocalService } from "../../../providers/lmstudio/local";
 import type { SkillImprovementService } from "../../../skillImprovement";
 import type { AgentConfig } from "../../../types";
@@ -61,6 +62,7 @@ export interface JsonRpcRouteContext {
   research: ResearchService;
   skillImprovement: SkillImprovementService;
   tasks: TaskCoordinator;
+  conversationImports: ConversationImportService;
   taskRequests?: {
     onStarted?(input: { ws: StartServerSocket; method: string; workspacePath: string }):
       | undefined

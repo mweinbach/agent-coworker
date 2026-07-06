@@ -1632,6 +1632,10 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "skill_improvement_status") {
+      // Pending action keys are request-lifecycle state owned by the run/
+      // restore actions. Background scheduler broadcasts arrive through this
+      // same handler, so wiping the keys here would re-enable Run/Restore
+      // buttons while a manual request is still in flight.
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -1639,7 +1643,6 @@ export function createControlSocketHelpers(
             ...s.workspaceRuntimeById[workspaceId],
             skillImprovementStatus: evt,
             skillImprovementLoading: false,
-            skillImprovementPendingActionKeys: {},
           },
         },
       }));

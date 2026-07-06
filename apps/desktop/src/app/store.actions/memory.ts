@@ -436,8 +436,10 @@ export function createWorkspaceMemoryActions(
           ...(skillName ? { skillName } : {}),
         },
       );
+      // The action owns its pending key: status events no longer clear it, so
+      // unrelated background broadcasts cannot re-enable the button mid-run.
+      setSkillImprovementPending(workspaceId, key, false);
       if (!ok) {
-        setSkillImprovementPending(workspaceId, key, false);
         set((s) => ({
           notifications: pushNotification(s.notifications, {
             id: makeId(),
@@ -489,8 +491,8 @@ export function createWorkspaceMemoryActions(
         },
         errorDetail,
       );
+      setSkillImprovementPending(workspaceId, key, false);
       if (!ok) {
-        setSkillImprovementPending(workspaceId, key, false);
         set((s) => ({
           notifications: pushNotification(s.notifications, {
             id: makeId(),

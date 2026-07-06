@@ -357,8 +357,9 @@ export function MemoryPage() {
   const skillImprovementSkills = useMemo(
     () =>
       (skillImprovementStatus?.skills ?? [])
-        // Excluded skills stay listed (unchecked) so exclusion is reversible.
-        .filter((skill) => skill.included && (skill.eligible || skill.excluded))
+        // Excluded skills stay listed (unchecked) even when the current scope
+        // no longer covers them, so an exclusion is always reversible here.
+        .filter((skill) => (skill.included && skill.eligible) || skill.excluded)
         .sort((left, right) => left.skillName.localeCompare(right.skillName)),
     [skillImprovementStatus?.skills],
   );

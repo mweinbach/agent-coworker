@@ -323,7 +323,15 @@ describe("memory store actions", () => {
     } as any);
 
     const actions = createWorkspaceMemoryActions(set as any, get as any);
+    // Simulate another action still in flight: status events (including
+    // background broadcasts) must never clear pending keys they don't own.
+    state.workspaceRuntimeById[workspaceId].skillImprovementPendingActionKeys = {
+      "run:other": true,
+    };
     await actions.requestSkillImprovementStatus(workspaceId, { cwd: "/tmp/proj" });
+    expect(state.workspaceRuntimeById[workspaceId].skillImprovementPendingActionKeys).toEqual({
+      "run:other": true,
+    });
     const runOk = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
     const restoreOk = await actions.restoreSkillImprovement(workspaceId, "alpha", {
       cwd: "/tmp/proj",
@@ -347,6 +355,10 @@ describe("memory store actions", () => {
     ]);
     expect(state.workspaceRuntimeById[workspaceId].skillImprovementStatus).toEqual(statusEvent);
     expect(state.workspaceRuntimeById[workspaceId].skillImprovementLoading).toBe(false);
+    // Each action clears its own key when it settles; the foreign key survives.
+    expect(state.workspaceRuntimeById[workspaceId].skillImprovementPendingActionKeys).toEqual({
+      "run:other": true,
+    });
   });
 
   test("setWorkspaceSkillImprovementExcludedSkills applies the config patch globally", async () => {

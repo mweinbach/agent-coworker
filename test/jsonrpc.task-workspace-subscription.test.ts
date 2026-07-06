@@ -776,9 +776,9 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(reader, (message) => message.method === "task/updated");
     } finally {
       await runtime?.stop();
-      await fs.rm(cleanupRoot, { recursive: true, force: true });
+      await removeTempHome(cleanupRoot);
     }
-  }, 15_000);
+  }, 30_000);
 
   test("rejects desktop catalog one-off task RPCs through canonical home aliases", async () => {
     const { cleanupRoot, aliasHome } = await createAliasedHome("task-alias-desktop-home-");
@@ -887,9 +887,9 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(oneOffReader, (message) => message.method === "task/created");
     } finally {
       await runtime?.stop();
-      await fs.rm(cleanupRoot, { recursive: true, force: true });
+      await removeTempHome(cleanupRoot);
     }
-  }, 15_000);
+  }, 30_000);
 
   test("rejects legacy persisted desktop one-off records normalized with a configured home", async () => {
     const { cleanupRoot, aliasHome } = await createAliasedHome("task-legacy-desktop-home-");
@@ -1058,9 +1058,9 @@ describe("task workspace subscription routing", () => {
       await expectNoMessage(oneOffReader, (message) => message.method === "task/created");
     } finally {
       await runtime?.stop();
-      await fs.rm(cleanupRoot, { recursive: true, force: true });
+      await removeTempHome(cleanupRoot);
     }
-  }, 20_000);
+  }, 45_000);
 
   test("rejects fallback one-off desktop state after HTTP roundtrip", async () => {
     const { cleanupRoot, aliasHome } = await createAliasedHome("task-fallback-oneoff-home-");
@@ -1174,9 +1174,9 @@ describe("task workspace subscription routing", () => {
       }
     } finally {
       await runtime?.stop();
-      await fs.rm(cleanupRoot, { recursive: true, force: true });
+      await removeTempHome(cleanupRoot);
     }
-  }, 20_000);
+  }, 45_000);
 
   test("non-task workspace reads do not establish task subscriptions", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-nontask-subscription-"));

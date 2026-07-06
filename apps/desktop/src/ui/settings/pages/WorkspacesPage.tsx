@@ -1225,8 +1225,8 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                       YOLO mode
                     </Label>
                     <div className="text-xs text-muted-foreground">
-                      Never ask for approval and run shell commands outside the OS sandbox with
-                      full file and network access.
+                      Never ask for approval and run shell commands outside the OS sandbox with full
+                      file and network access.
                     </div>
                   </div>
                   <ToggleChip

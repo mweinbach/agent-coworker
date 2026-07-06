@@ -78,8 +78,23 @@ jobs:
         with:
           save-cache: "false"
 
-      - name: Setup Rust cache
+      - name: Check Windows sandbox prebuilt
+        id: win_prebuilt
         if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ matrix.build_arch }}" = "arm64" ]; then
+            rust_target="aarch64-pc-windows-msvc"
+          else
+            rust_target="x86_64-pc-windows-msvc"
+          fi
+
+          bun scripts/winSandboxPrebuilt.ts check --target "$rust_target" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Setup Rust cache
+        if: ${{ runner.os == 'Windows' && steps.win_prebuilt.outputs.prebuilt-hit != 'true' }}
         uses: ./.github/actions/setup-rust-cache
         with:
           cache-scope: desktop-${{ matrix.build_arch }}

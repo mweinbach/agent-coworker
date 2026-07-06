@@ -1,0 +1,121 @@
+name: Windows Sandbox Release
+
+on:
+  push:
+    tags:
+      - "win-sandbox-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-sandbox-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build helpers (${{ matrix.label }})
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            rust_target: x86_64-pc-windows-msvc
+          - label: Windows ARM64
+            rust_target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: win-sandbox-${{ matrix.rust_target }}
+
+      - name: Build sandbox helpers
+        shell: pwsh
+        run: |
+          rustup target add ${{ matrix.rust_target }}
+          cargo build --release --bins --manifest-path crates/cowork-win-sandbox/Cargo.toml --target ${{ matrix.rust_target }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage and zip helpers
+        shell: pwsh
+        run: |
+          $releaseDir = "crates/cowork-win-sandbox/target/${{ matrix.rust_target }}/release"
+          $stageDir = "win-sandbox-stage"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          foreach ($name in @("cowork-win-sandbox.exe", "codex-windows-sandbox-setup.exe", "codex-command-runner.exe")) {
+            $src = Join-Path $releaseDir $name
+            if (-not (Test-Path -LiteralPath $src)) {
+              throw "Windows sandbox build did not produce $src"
+            }
+            Copy-Item $src -Destination $stageDir
+          }
+          Compress-Archive -Path "$stageDir/*" -DestinationPath "win-sandbox-${{ matrix.rust_target }}.zip" -Force
+
+      - name: Upload helper archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-sandbox-${{ matrix.rust_target }}
+          path: win-sandbox-${{ matrix.rust_target }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish helper release
+    needs:
+      - build
+    if: ${{ startsWith(github.ref, 'refs/tags/win-sandbox-v') && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+        with:
+          install-command: ""
+
+      - name: Download helper archives
+        uses: actions/download-artifact@v4
+        with:
+          path: helper-assets
+          pattern: win-sandbox-*
+          merge-multiple: true
+
+      - name: Generate prebuilt lock manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bun scripts/winSandboxPrebuilt.ts lock \
+            --tag "$GITHUB_REF_NAME" \
+            --zip x86_64-pc-windows-msvc=helper-assets/win-sandbox-x86_64-pc-windows-msvc.zip \
+            --zip aarch64-pc-windows-msvc=helper-assets/win-sandbox-aarch64-pc-windows-msvc.zip \
+            > prebuilt.lock.json
+
+          {
+            echo '## Commit this file as `crates/cowork-win-sandbox/prebuilt.lock.json`'
+            echo ''
+            echo 'Desktop release builds download these prebuilt helpers only once the lock is committed.'
+            echo ''
+            echo '```json'
+            cat prebuilt.lock.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish release assets
+        # Pinned to an immutable commit SHA: this release-publishing job runs with
+        # contents: write, so the third-party action must not be a mutable tag.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            helper-assets/win-sandbox-*.zip
+            prebuilt.lock.json
+          generate_release_notes: true

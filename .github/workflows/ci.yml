@@ -45,6 +45,18 @@ jobs:
       - name: Lint & format check
         run: bun run check
 
+      - name: Windows sandbox prebuilt lock freshness (advisory)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          output="$(bun scripts/winSandboxPrebuilt.ts check --target x86_64-pc-windows-msvc)"
+          echo "$output"
+          if ! grep -q '^prebuilt-hit=true$' <<< "$output"; then
+            reason="$(grep '^reason=' <<< "$output" || true)"
+            echo "::warning title=Windows sandbox prebuilt lock is stale::Desktop release builds will compile crates/cowork-win-sandbox from source (${reason}). Cut a win-sandbox-v* release and commit the refreshed prebuilt.lock.json to restore fast Windows packaging."
+          fi
+
   test:
     name: Tests
     runs-on: ubuntu-latest

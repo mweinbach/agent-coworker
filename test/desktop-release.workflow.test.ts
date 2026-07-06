@@ -122,6 +122,20 @@ describe("desktop release workflow", () => {
     expect(builderConfig).toContain("verifyUpdateCodeSignature: true");
   });
 
+  test("skips the Cargo cache restore when prebuilt sandbox helpers are available", () => {
+    const packageJob = workflow.match(/package:[\s\S]*?\n {2}publish:/)?.[0] ?? "";
+
+    expect(packageJob).toMatch(
+      /- name: Check Windows sandbox prebuilt[\s\S]*?id: win_prebuilt[\s\S]*?if: \$\{\{ runner\.os == 'Windows' \}\}[\s\S]*?winSandboxPrebuilt\.ts check --target/,
+    );
+    expect(packageJob).toMatch(
+      /- name: Setup Rust cache\n\s+if: \$\{\{ runner\.os == 'Windows' && steps\.win_prebuilt\.outputs\.prebuilt-hit != 'true' \}\}/,
+    );
+    expect(packageJob.indexOf("- name: Check Windows sandbox prebuilt")).toBeLessThan(
+      packageJob.indexOf("- name: Setup Rust cache"),
+    );
+  });
+
   test("builds ARM64 release artifacts without native ARM smoke gating", () => {
     expect(workflow).toContain("pattern: desktop-release-*");
     expect(workflow).toContain("artifact_name: desktop-release-windows-arm64");

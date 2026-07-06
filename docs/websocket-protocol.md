@@ -782,7 +782,11 @@ Projected item kinds:
 - `todos`
 - `error`
 
-Non-turn feed items such as `system`, `log`, `todos`, and `error` are emitted with `turnId: null`.
+Non-turn feed items such as `system`, `log`, and `todos` are emitted with `turnId: null`. `error`
+items emitted while a turn is active carry that turn's `turnId`, linking a `turn/completed` with
+`status: "failed"` to its cause and keeping the error visible in journal-backed `thread/read`
+reconstruction (which drops items without a `turnId`); errors raised outside any turn still use
+`turnId: null`.
 Projected `error` items include optional `data` when the underlying session error carried structured
 data. For `task_locked`, this is the same `lockKind`/`taskId`/`taskStatus` contract returned on
 direct JSON-RPC errors, so clients that render only `item/*` notifications or hydrated

@@ -62,9 +62,122 @@ describe("MCP servers settings page", () => {
 
   test("keys credential drafts by workspace, source, and name", () => {
     expect(mcpCredentialDraftKey("ws-1", { name: "grep", source: "user" })).toBe("ws-1::user:grep");
-    expect(mcpCredentialDraftKey("ws-1", { name: "grep", source: "plugin" })).toBe(
-      "ws-1::plugin:grep",
-    );
+    expect(
+      mcpCredentialDraftKey("ws-1", {
+        name: "grep",
+        source: "plugin",
+        pluginId: "search-plugin",
+        pluginScope: "user",
+      }),
+    ).toBe("ws-1::plugin:user:search-plugin:grep");
+    expect(
+      mcpCredentialDraftKey("ws-1", {
+        name: "grep",
+        source: "plugin",
+        pluginId: "search-plugin",
+        pluginScope: "workspace",
+      }),
+    ).toBe("ws-1::plugin:workspace:search-plugin:grep");
+  });
+
+  test("keeps duplicate plugin OAuth rows scoped by plugin identity", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const authorize = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace",
+              path: "/tmp/workspace",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              ...useAppStore.getState().workspaceRuntimeById["ws-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [
+                {
+                  name: "diligence-stack",
+                  transport: { type: "http", url: "https://user.example.test/mcp" },
+                  enabled: true,
+                  source: "plugin",
+                  inherited: true,
+                  authMode: "missing",
+                  authScope: "user",
+                  authMessage: "OAuth authorization required.",
+                  auth: { type: "oauth" },
+                  pluginId: "diligence-stack",
+                  pluginScope: "user",
+                },
+                {
+                  name: "diligence-stack",
+                  transport: { type: "http", url: "https://workspace.example.test/mcp" },
+                  enabled: true,
+                  source: "plugin",
+                  inherited: false,
+                  authMode: "missing",
+                  authScope: "workspace",
+                  authMessage: "OAuth authorization required.",
+                  auth: { type: "oauth" },
+                  pluginId: "diligence-stack",
+                  pluginScope: "workspace",
+                },
+              ],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+          authorizeWorkspaceMcpServerAuth: authorize,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(McpServersPage));
+      });
+
+      const authButtons = Array.from(
+        container.querySelectorAll('[aria-label="Authenticate diligence-stack"]'),
+      );
+      expect(authButtons).toHaveLength(2);
+
+      await act(async () => {
+        authButtons[1]?.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+
+      expect(authorize).toHaveBeenCalledWith("ws-1", "diligence-stack", "plugin", {
+        pluginId: "diligence-stack",
+        pluginScope: "workspace",
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
   });
 
   test("renders per-server switches and toggles without expanding the row", async () => {
@@ -607,7 +720,10 @@ describe("MCP servers settings page", () => {
           new harness.dom.window.MouseEvent("click", { bubbles: true }),
         );
       });
-      expect(validateMcpServer).toHaveBeenCalledWith("ws-1", "grep", "plugin");
+      expect(validateMcpServer).toHaveBeenCalledWith("ws-1", "grep", "plugin", {
+        pluginId: "search-plugin",
+        pluginScope: "user",
+      });
 
       await act(async () => {
         useAppStore.setState((state) => ({

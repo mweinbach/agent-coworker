@@ -110,6 +110,7 @@ import {
 import { HistoryManager } from "./HistoryManager";
 import { InteractionManager, type PendingPromptReplayEvent } from "./InteractionManager";
 import type { McpManager } from "./McpManager";
+import type { McpServerLookup } from "./mcp/McpServerLookup";
 import { PersistenceManager } from "./PersistenceManager";
 import type { ProviderAuthManager } from "./ProviderAuthManager";
 import type { ProviderCatalogManager } from "./ProviderCatalogManager";
@@ -439,7 +440,7 @@ export class AgentSession {
       guardBusy: () => this.guardBusy(),
       getCoworkPaths: () => this.getCoworkPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
-      getMcpServerByName: async (nameRaw, source) => await this.getMcpServerByName(nameRaw, source),
+      getMcpServerByName: async (nameRaw, lookup) => await this.getMcpServerByName(nameRaw, lookup),
       queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
       updateSessionInfo: (patch, infoOpts) =>
         this.metadataManager.updateSessionInfo(patch, infoOpts),
@@ -1385,20 +1386,28 @@ export class AgentSession {
     await this.getMcpManager().setEnabled(opts);
   }
 
-  async validateMcpServer(nameRaw: string, source?: MCPServerSource) {
-    await this.getMcpManager().validate(nameRaw, source);
+  async validateMcpServer(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
+    await this.getMcpManager().validate(nameRaw, lookup);
   }
 
-  async authorizeMcpServerAuth(nameRaw: string, source?: MCPServerSource) {
-    await this.getMcpManager().authorize(nameRaw, source);
+  async authorizeMcpServerAuth(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
+    await this.getMcpManager().authorize(nameRaw, lookup);
   }
 
-  async callbackMcpServerAuth(nameRaw: string, codeRaw?: string, source?: MCPServerSource) {
-    await this.getMcpManager().callback(nameRaw, codeRaw, source);
+  async callbackMcpServerAuth(
+    nameRaw: string,
+    codeRaw?: string,
+    lookup?: McpServerLookup | MCPServerSource,
+  ) {
+    await this.getMcpManager().callback(nameRaw, codeRaw, lookup);
   }
 
-  async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string, source?: MCPServerSource) {
-    await this.getMcpManager().setApiKey(nameRaw, apiKeyRaw, source);
+  async setMcpServerApiKey(
+    nameRaw: string,
+    apiKeyRaw: string,
+    lookup?: McpServerLookup | MCPServerSource,
+  ) {
+    await this.getMcpManager().setApiKey(nameRaw, apiKeyRaw, lookup);
   }
   getHarnessContext() {
     this.metadataManager.getHarnessContext();
@@ -1958,9 +1967,9 @@ export class AgentSession {
 
   private async getMcpServerByName(
     nameRaw: string,
-    source?: MCPServerSource,
+    lookup?: McpServerLookup,
   ): Promise<MCPRegistryServer | null> {
-    return await this.runtimeSupport.getMcpServerByName(nameRaw, source);
+    return await this.runtimeSupport.getMcpServerByName(nameRaw, lookup);
   }
 
   private waitForPromptResponse<T>(

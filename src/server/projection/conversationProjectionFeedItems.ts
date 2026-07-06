@@ -46,8 +46,12 @@ export function createFeedItemProjection(state: ConversationProjectionState) {
       source: evt.source,
       ...(evt.data !== undefined ? { data: evt.data } : {}),
     };
-    state.opts.sink.emitItemStarted(null, item);
-    state.opts.sink.emitItemCompleted(null, item);
+    // Attach mid-turn errors to their turn: thread/read reconstruction drops
+    // items without a turnId, so a failed turn's cause would otherwise vanish
+    // from the journal-backed transcript.
+    const turnId = state.activeTurnId ?? null;
+    state.opts.sink.emitItemStarted(turnId, item);
+    state.opts.sink.emitItemCompleted(turnId, item);
   };
 
   const emitServerRequest = (request: ProjectionServerRequest) => {

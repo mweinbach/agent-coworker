@@ -62,6 +62,38 @@ describe("shared JSON-RPC control schemas", () => {
     expect(statusResult.event.providers[0]?.usage?.rateLimits[0]?.limitName).toBe("requests");
   });
 
+  test("parses plugin-scoped MCP server target requests", () => {
+    const target = {
+      cwd: "/tmp/project",
+      name: "diligence-stack",
+      source: "plugin",
+      pluginId: "diligence-stack",
+      pluginScope: "workspace",
+    } as const;
+
+    expect(jsonRpcControlRequestSchemas["cowork/mcp/server/validate"].parse(target)).toEqual(
+      target,
+    );
+    expect(mobileJsonRpcControlRequestSchemas["cowork/mcp/server/validate"].parse(target)).toEqual(
+      target,
+    );
+    expect(jsonRpcControlRequestSchemas["cowork/mcp/server/auth/authorize"].parse(target)).toEqual(
+      target,
+    );
+    expect(
+      jsonRpcControlRequestSchemas["cowork/mcp/server/auth/callback"].parse({
+        ...target,
+        code: "1234",
+      }),
+    ).toEqual({ ...target, code: "1234" });
+    expect(
+      jsonRpcControlRequestSchemas["cowork/mcp/server/auth/setApiKey"].parse({
+        ...target,
+        apiKey: "secret",
+      }),
+    ).toEqual({ ...target, apiKey: "secret" });
+  });
+
   test("parses Codex app-server app-pinned update controls", () => {
     const request = {
       cwd: "/tmp/project",

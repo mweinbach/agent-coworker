@@ -2,6 +2,7 @@ import type { EditableMCPServerConfigSource, MCPServerSource } from "../../mcp/c
 import type { MCPServerConfig, PluginScope } from "../../types";
 import { McpAuthFlow } from "./mcp/McpAuthFlow";
 import { McpRegistryFlow } from "./mcp/McpRegistryFlow";
+import { type McpServerLookup, mcpServerLookupFromServer } from "./mcp/McpServerLookup";
 import { McpServerResolver } from "./mcp/McpServerResolver";
 import { McpValidationFlow } from "./mcp/McpValidationFlow";
 import type { SessionContext } from "./SessionContext";
@@ -67,21 +68,23 @@ export class McpManager {
     await this.registryFlow.setEnabled(opts);
   }
 
-  async validate(nameRaw: string, source?: MCPServerSource) {
-    await this.validationFlow.validate(nameRaw, source);
+  async validate(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
+    await this.validationFlow.validate(nameRaw, lookup);
   }
 
-  async authorize(nameRaw: string, source?: MCPServerSource) {
-    await this.authFlow.authorize(nameRaw, source);
+  async authorize(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
+    await this.authFlow.authorize(nameRaw, lookup);
   }
 
-  async callback(nameRaw: string, codeRaw?: string, source?: MCPServerSource) {
-    const validateServer = await this.authFlow.callback(nameRaw, codeRaw, source);
-    if (validateServer) void this.validate(validateServer.name, validateServer.source);
+  async callback(nameRaw: string, codeRaw?: string, lookup?: McpServerLookup | MCPServerSource) {
+    const validateServer = await this.authFlow.callback(nameRaw, codeRaw, lookup);
+    if (validateServer)
+      void this.validate(validateServer.name, mcpServerLookupFromServer(validateServer));
   }
 
-  async setApiKey(nameRaw: string, apiKeyRaw: string, source?: MCPServerSource) {
-    const validateServer = await this.authFlow.setApiKey(nameRaw, apiKeyRaw, source);
-    if (validateServer) void this.validate(validateServer.name, validateServer.source);
+  async setApiKey(nameRaw: string, apiKeyRaw: string, lookup?: McpServerLookup | MCPServerSource) {
+    const validateServer = await this.authFlow.setApiKey(nameRaw, apiKeyRaw, lookup);
+    if (validateServer)
+      void this.validate(validateServer.name, mcpServerLookupFromServer(validateServer));
   }
 }

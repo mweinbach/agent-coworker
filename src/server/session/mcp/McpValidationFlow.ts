@@ -3,6 +3,7 @@ import { resolveMCPServerAuthState } from "../../../mcp/authStore";
 import type { MCPServerSource } from "../../../mcp/configRegistry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { SessionContext } from "../SessionContext";
+import type { McpServerLookup } from "./McpServerLookup";
 import type { McpServerResolver } from "./McpServerResolver";
 
 const MCP_VALIDATION_TIMEOUT_MS = 10_000;
@@ -13,7 +14,7 @@ export class McpValidationFlow {
     private readonly resolver: McpServerResolver,
   ) {}
 
-  async validate(nameRaw: string, source?: MCPServerSource) {
+  async validate(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
     const name = nameRaw.trim();
     const validationStartedAt = Date.now();
     if (!name) {
@@ -24,7 +25,7 @@ export class McpValidationFlow {
 
     this.context.state.connecting = true;
     try {
-      const server = await this.resolver.resolveByName(name, source);
+      const server = await this.resolver.resolveByName(name, lookup);
       if (!server) {
         this.context.emit({
           type: "mcp_server_validation",

@@ -1,5 +1,6 @@
 import type { MCPServerSource } from "../../../mcp/configRegistry";
 import type { SessionEvent } from "../../protocol";
+import type { McpServerLookup } from "../../session/mcp/McpServerLookup";
 
 import {
   captureWorkspaceControlMutationError,
@@ -18,6 +19,21 @@ function resolveMcpSource(value: unknown): MCPServerSource | undefined {
     return value;
   }
   return undefined;
+}
+
+function resolveMcpServerLookup(params: Record<string, unknown>): McpServerLookup | undefined {
+  const source = resolveMcpSource(params.source);
+  const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : undefined;
+  const pluginScope: McpServerLookup["pluginScope"] =
+    params.pluginScope === "workspace" || params.pluginScope === "user"
+      ? params.pluginScope
+      : undefined;
+  const lookup = {
+    ...(source ? { source } : {}),
+    ...(pluginId ? { pluginId } : {}),
+    ...(pluginScope ? { pluginScope } : {}),
+  };
+  return Object.keys(lookup).length > 0 ? lookup : undefined;
 }
 
 export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
@@ -142,11 +158,11 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
-      const source = resolveMcpSource(params.source);
+      const lookup = resolveMcpServerLookup(params);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.validate(name, source),
+        async (runtime) => await runtime.mcp.validate(name, lookup),
         (event): event is Extract<SessionEvent, { type: "mcp_server_validation" }> =>
           event.type === "mcp_server_validation" && event.name === name,
       );
@@ -161,11 +177,11 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
-      const source = resolveMcpSource(params.source);
+      const lookup = resolveMcpServerLookup(params);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.authorizeAuth(name, source),
+        async (runtime) => await runtime.mcp.authorizeAuth(name, lookup),
         (
           event,
         ): event is Extract<
@@ -186,13 +202,13 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
-      const source = resolveMcpSource(params.source);
+      const lookup = resolveMcpServerLookup(params);
       const code =
         typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.callbackAuth(name, code, source),
+        async (runtime) => await runtime.mcp.callbackAuth(name, code, lookup),
         (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );
@@ -207,12 +223,12 @@ export function createMcpRouteHandlers(context: JsonRpcRouteContext): JsonRpcReq
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
-      const source = resolveMcpSource(params.source);
+      const lookup = resolveMcpServerLookup(params);
       const apiKey = typeof params.apiKey === "string" ? params.apiKey : "";
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.mcp.setApiKey(name, apiKey, source),
+        async (runtime) => await runtime.mcp.setApiKey(name, apiKey, lookup),
         (event): event is Extract<SessionEvent, { type: "mcp_server_auth_result" }> =>
           event.type === "mcp_server_auth_result" && event.name === name,
       );

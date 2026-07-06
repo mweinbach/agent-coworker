@@ -1,8 +1,9 @@
-import type { MCPRegistryServer, MCPServerSource } from "../../mcp/configRegistry";
+import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { ServerErrorCode, ServerErrorData, ServerErrorSource } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 import { resolveCoworkHomedir } from "../../utils/coworkHome";
 import type { SessionEvent } from "../protocol";
+import type { McpServerLookup } from "./mcp/McpServerLookup";
 import type { SessionDependencies, SessionRuntimeState } from "./SessionContext";
 
 type PromptBucket<T> = Map<string, PromiseWithResolvers<T>>;
@@ -103,7 +104,7 @@ export class SessionRuntimeSupport {
 
   async getMcpServerByName(
     nameRaw: string,
-    source?: MCPServerSource,
+    lookup: McpServerLookup = {},
   ): Promise<MCPRegistryServer | null> {
     const name = nameRaw.trim();
     if (!name) {
@@ -113,16 +114,30 @@ export class SessionRuntimeSupport {
 
     const { loadMCPConfigRegistry } = await import("../../mcp/configRegistry");
     const registry = await loadMCPConfigRegistry(this.opts.state.config);
+    const pluginId = lookup.pluginId?.trim();
     const server =
       registry.servers.find(
-        (entry) => entry.name === name && (source === undefined || entry.source === source),
+        (entry) =>
+          entry.name === name &&
+          (lookup.source === undefined || entry.source === lookup.source) &&
+          (!pluginId || entry.pluginId === pluginId) &&
+          (!lookup.pluginScope || entry.pluginScope === lookup.pluginScope),
       ) ?? null;
     if (!server) {
-      const sourceDetail = source ? ` from ${source}` : "";
+      const sourceDetail = lookup.source ? ` from ${lookup.source}` : "";
+      const pluginDetail =
+        pluginId || lookup.pluginScope
+          ? ` (${[
+              pluginId ? `pluginId=${pluginId}` : null,
+              lookup.pluginScope ? `pluginScope=${lookup.pluginScope}` : null,
+            ]
+              .filter(Boolean)
+              .join(", ")})`
+          : "";
       this.emitError(
         "validation_failed",
         "session",
-        `MCP server "${name}"${sourceDetail} not found.`,
+        `MCP server "${name}"${sourceDetail}${pluginDetail} not found.`,
       );
       return null;
     }

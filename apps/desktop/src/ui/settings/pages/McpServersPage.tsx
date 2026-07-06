@@ -68,16 +68,41 @@ import {
 } from "./mcpServerEditorState";
 
 type RuntimeMcpServer = WorkspaceRuntime["mcpServers"][number];
+type RuntimeMcpServerIdentity = Pick<RuntimeMcpServer, "name" | "source"> &
+  Partial<Pick<RuntimeMcpServer, "pluginId" | "pluginScope">>;
+type RuntimeMcpPluginTarget = {
+  pluginId?: string;
+  pluginScope?: "workspace" | "user";
+};
 
-function serverIdentityKey(server: Pick<RuntimeMcpServer, "name" | "source">): string {
+function serverIdentityKey(server: RuntimeMcpServerIdentity): string {
+  if (server.source === "plugin") {
+    return [
+      server.source,
+      server.pluginScope ?? "unknown-scope",
+      server.pluginId ?? "unknown-plugin",
+      server.name,
+    ].join(":");
+  }
   return `${server.source}:${server.name}`;
 }
 
 export function mcpCredentialDraftKey(
   workspaceId: string,
-  server: Pick<RuntimeMcpServer, "name" | "source">,
+  server: RuntimeMcpServerIdentity,
 ): string {
   return `${workspaceId}::${serverIdentityKey(server)}`;
+}
+
+function pluginTargetForServer(
+  server: RuntimeMcpServerIdentity,
+): RuntimeMcpPluginTarget | undefined {
+  if (server.source !== "plugin") return undefined;
+  if (!server.pluginId && !server.pluginScope) return undefined;
+  return {
+    ...(server.pluginId ? { pluginId: server.pluginId } : {}),
+    ...(server.pluginScope ? { pluginScope: server.pluginScope } : {}),
+  };
 }
 
 const SOURCE_ORDER: Record<string, number> = {
@@ -304,6 +329,11 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
       ...prev,
       [server.name]: serverIdentityKey(server),
     }));
+    const pluginTarget = pluginTargetForServer(server);
+    if (pluginTarget) {
+      void validateWorkspaceMcpServer(workspaceId, server.name, server.source, pluginTarget);
+      return;
+    }
     void validateWorkspaceMcpServer(workspaceId, server.name, server.source);
   };
 
@@ -763,6 +793,54 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
             ? (validation.toolCount ?? validationTools.length)
             : 0;
           const needsOAuthSignIn = serverNeedsOAuthSignIn(server);
+          const pluginTarget = pluginTargetForServer(server);
+          const authorizeServer = () => {
+            if (!workspace) return;
+            if (pluginTarget) {
+              void authorizeWorkspaceMcpServerAuth(
+                workspace.id,
+                server.name,
+                server.source,
+                pluginTarget,
+              );
+              return;
+            }
+            void authorizeWorkspaceMcpServerAuth(workspace.id, server.name, server.source);
+          };
+          const callbackServer = () => {
+            if (!workspace) return;
+            const code = oauthCode.trim() ? oauthCode : undefined;
+            if (pluginTarget) {
+              void callbackWorkspaceMcpServerAuth(
+                workspace.id,
+                server.name,
+                code,
+                server.source,
+                pluginTarget,
+              );
+              return;
+            }
+            void callbackWorkspaceMcpServerAuth(workspace.id, server.name, code, server.source);
+          };
+          const saveApiKey = () => {
+            if (!workspace) return;
+            if (pluginTarget) {
+              void setWorkspaceMcpServerApiKey(
+                workspace.id,
+                server.name,
+                apiKeyDraft.trim(),
+                server.source,
+                pluginTarget,
+              );
+              return;
+            }
+            void setWorkspaceMcpServerApiKey(
+              workspace.id,
+              server.name,
+              apiKeyDraft.trim(),
+              server.source,
+            );
+          };
 
           return (
             <div
@@ -811,12 +889,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                       className="inline-flex h-6 shrink-0 items-center rounded-md border border-warning/35 bg-warning/12 px-2 text-[11px] font-medium text-warning-foreground shadow-none outline-none transition-colors hover:bg-warning/20 focus-visible:ring-[3px] focus-visible:ring-ring/50"
                       onClick={(event) => {
                         event.stopPropagation();
-                        if (!workspace) return;
-                        void authorizeWorkspaceMcpServerAuth(
-                          workspace.id,
-                          server.name,
-                          server.source,
-                        );
+                        authorizeServer();
                       }}
                     >
                       Authenticate
@@ -983,18 +1056,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   {server.auth?.type === "oauth" ? (
                     <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-3">
                       <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={() =>
-                            workspace &&
-                            void authorizeWorkspaceMcpServerAuth(
-                              workspace.id,
-                              server.name,
-                              server.source,
-                            )
-                          }
-                        >
+                        <Button type="button" size="sm" onClick={authorizeServer}>
                           Sign in
                         </Button>
                         <DropdownMenu
@@ -1048,15 +1110,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                             variant="outline"
                             size="sm"
                             className="h-7 text-xs"
-                            onClick={() =>
-                              workspace &&
-                              void callbackWorkspaceMcpServerAuth(
-                                workspace.id,
-                                server.name,
-                                oauthCode.trim() ? oauthCode : undefined,
-                                server.source,
-                              )
-                            }
+                            onClick={callbackServer}
                           >
                             Continue
                           </Button>
@@ -1080,15 +1134,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         variant="outline"
                         size="sm"
                         className="h-7 text-xs"
-                        onClick={() =>
-                          workspace &&
-                          void setWorkspaceMcpServerApiKey(
-                            workspace.id,
-                            server.name,
-                            apiKeyDraft.trim(),
-                            server.source,
-                          )
-                        }
+                        onClick={saveApiKey}
                       >
                         Save key
                       </Button>

@@ -198,9 +198,19 @@ describe("google native interactions request building", () => {
       configurable: true,
       writable: true,
       value: async (input: RequestInfo | URL) => {
-        fetchCalls += 1;
         const url =
           input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        // Un-awaited background primes from earlier tests can land on this
+        // mock; absorb anything that is not this test's citation so the call
+        // counter stays hermetic. The title fetch arrives with a pinned IP
+        // hostname, so match on the path rather than the host.
+        if (
+          !url.includes("/grounding-api-redirect/example") &&
+          !url.includes("/live-news/new-york-laguardia-plane-crash-march-23")
+        ) {
+          return new Response(null, { status: 404 });
+        }
+        fetchCalls += 1;
         if (url.includes("/grounding-api-redirect/example")) {
           return new Response(null, {
             status: 302,
@@ -271,9 +281,17 @@ describe("google native interactions request building", () => {
       configurable: true,
       writable: true,
       value: async (input: RequestInfo | URL) => {
-        fetchCalls += 1;
         const url =
           input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        // Absorb stray background primes from earlier tests (see above); the
+        // title fetch arrives with a pinned IP hostname, so match on the path.
+        if (
+          !url.includes("/grounding-api-redirect/slow-example") &&
+          !url.includes("/live-news/new-york-laguardia-plane-crash-march-23")
+        ) {
+          return new Response(null, { status: 404 });
+        }
+        fetchCalls += 1;
         if (url.includes("/grounding-api-redirect/slow-example")) {
           fetchStarted.resolve();
           return new Response(null, {

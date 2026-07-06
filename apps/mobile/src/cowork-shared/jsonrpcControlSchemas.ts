@@ -1218,6 +1218,9 @@ export const mcpServerValidateRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
   })
   .strict();
 
@@ -1225,6 +1228,9 @@ export const mcpServerAuthAuthorizeRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
   })
   .strict();
 
@@ -1232,6 +1238,9 @@ export const mcpServerAuthCallbackRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
     code: z.string().optional(),
   })
   .strict();
@@ -1240,6 +1249,9 @@ export const mcpServerAuthSetApiKeyRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
+    source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
     apiKey: z.string(),
   })
   .strict();

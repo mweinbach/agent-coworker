@@ -84,11 +84,11 @@ import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
 import type {
   CloudSyncSettings,
   DesktopSettings,
+  LmStudioStartModalState,
   Notification,
   OnboardingStep,
   PersistedOnboardingState,
   PersistedPrivacyTelemetrySettings,
-  LmStudioStartModalState,
   PersistedProviderUiState,
   PrivacyTelemetrySettings,
   PromptModalState,

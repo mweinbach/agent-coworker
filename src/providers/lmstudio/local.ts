@@ -1,6 +1,6 @@
 import { homedir as nodeHomedir } from "node:os";
 import { join } from "node:path";
-import { execFileCompat, type ExecFileCompatRunner } from "../../utils/execFileCompat";
+import { type ExecFileCompatRunner, execFileCompat } from "../../utils/execFileCompat";
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./client";
 
 const PROBE_TIMEOUT_MS = 2_000;

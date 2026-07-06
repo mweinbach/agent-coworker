@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.17 - 2026-07-06
+
+### Fixed
+
+- **Desktop release packaging** — Scopes package-matrix dependency caches by
+  desktop build architecture so Windows x64 and ARM64 release jobs do not race
+  the same post-job cache save before publishing.
+
 ## 1.2.16 - 2026-07-06
 
 ### Fixed

@@ -49,6 +49,13 @@ roles → `workspace-write`. Explicit `sandbox.mode: "read-only"` stays fully
 immutable. Child-agent `targetPaths` become the writable roots, so write scope is
 enforced by the OS rather than by parsing the command.
 
+YOLO mode (`--yolo` / the desktop workspace toggle) lifts an unscoped,
+non-read-only session to `danger-full-access` — commands run outside the OS
+sandbox with full file and network access, and every approval (ordinary and
+sandbox-escalation alike) auto-approves, so nothing prompts. The hard floors
+above are unaffected: an explicit `read-only` mode, read-only roles, and scoped
+children (`targetPaths`) keep their sandbox even under YOLO.
+
 Reads are full-disk in every sandboxed mode, so global skills/plugins/config
 under `~/.cowork` (e.g. `~/.cowork/skills`, `~/.cowork/plugins`), built-in/bundled
 skill assets, and any skill/plugin scripts the agent runs via `bash` remain
@@ -111,6 +118,9 @@ system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 `danger-full-access`. Unsandboxed fallback because a backend is unavailable uses
 the same protected sandbox-denial approval path, since it also grants full
 filesystem access. This mirrors Codex's `with_escalated_permissions` flow.
+Under YOLO these escalations auto-approve (YOLO is zero-prompt); the bash tool
+never offers an escalation for read-only policies or scoped children, so YOLO
+cannot widen those floors.
 
 ## Per-platform backends
 

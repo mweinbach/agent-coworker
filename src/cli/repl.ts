@@ -745,7 +745,10 @@ export async function runCliRepl(
   await connectToServer(serverUrl, rl, initialResumeThreadId ?? undefined);
 
   console.log("Cowork agent (CLI)");
-  if (opts.yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
+  if (opts.yolo)
+    console.log(
+      "YOLO mode enabled: no approval prompts; shell commands run outside the OS sandbox.",
+    );
   console.log("Type /help for commands. Use /connect to store keys or run OAuth.\n");
 
   activatePrompt(rl);

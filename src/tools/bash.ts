@@ -496,6 +496,7 @@ export function createBashTool(ctx: ToolContext) {
           outputDirectory: ctx.config.outputDirectory,
           uploadsDirectory: ctx.config.uploadsDirectory,
           targetPaths: ctx.agentTargetPaths,
+          yolo: ctx.yolo,
         });
       const preExecClassification = classifyCommandDetailed(command);
       if (!preExecClassification.autoApprove && !(await ctx.approveCommand(command))) {

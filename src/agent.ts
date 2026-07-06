@@ -434,6 +434,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       uploadsDirectory: config.uploadsDirectory,
       toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
       targetPaths: params.agentTargetPaths,
+      yolo: params.yolo,
     });
 
     let taskPauseRequested = false;
@@ -475,6 +476,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       sessionId: params.sessionId,
       shellPolicy,
       sandboxPolicy: turnSandboxPolicy,
+      yolo: params.yolo,
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,

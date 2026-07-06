@@ -201,7 +201,7 @@ Electron + React wrapper (primary client):
 Minimal readline-based interface:
 
 - Connects to server via JSON-RPC WebSocket
-- Supports `--yolo` mode to bypass approvals
+- Supports `--yolo` mode: no approval prompts, commands run outside the OS sandbox
 
 ## Data Flow
 

@@ -86,6 +86,61 @@ describe("resolveSandboxPolicy", () => {
     });
   });
 
+  test("YOLO lifts an unscoped workspace-write session to danger-full-access", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write" },
+      workingDirectory: "/w",
+      yolo: true,
+    });
+    expect(policy).toEqual({ kind: "danger-full-access" });
+  });
+
+  test("YOLO preserves an explicitly disabled network policy", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write", network: false },
+      workingDirectory: "/w",
+      yolo: true,
+    });
+    expect(policy).toEqual({ kind: "danger-full-access", network: false });
+  });
+
+  test("YOLO does not widen an explicit read-only mode", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "read-only", network: true },
+      workingDirectory: "/w",
+      yolo: true,
+    });
+    expect(policy).toEqual({ kind: "read-only", network: true });
+  });
+
+  test("YOLO does not widen a read-only role", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write" },
+      readOnlyRole: true,
+      workingDirectory: "/work/project",
+      yolo: true,
+    });
+    expect(policy).toEqual({
+      kind: "no-project-write",
+      projectRoots: [testRoot("/work/project")],
+      network: true,
+    });
+  });
+
+  test("YOLO does not lift a scoped child beyond its targetPaths", () => {
+    const policy = resolveSandboxPolicy({
+      config: { mode: "workspace-write" },
+      workingDirectory: "/work/project",
+      targetPaths: ["src/auth"],
+      yolo: true,
+    });
+    expect(policy).toEqual({
+      kind: "workspace-write",
+      writableRoots: [testRoot("/work/project/src/auth")],
+      network: true,
+    });
+  });
+
   test("read-only role forbids project writes while preserving temp scratch", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },

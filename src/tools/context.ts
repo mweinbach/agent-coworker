@@ -104,6 +104,14 @@ export interface ToolContext {
    */
   sandboxPolicy?: SandboxPolicy;
 
+  /**
+   * YOLO mode: zero approval prompts, commands run outside the OS sandbox.
+   * Consulted by the bash tool's fallback policy resolution so it matches the
+   * precomputed sandboxPolicy; hard floors (read-only roles, targetPaths)
+   * still hold.
+   */
+  yolo?: boolean;
+
   /** Environment variables inherited by child processes launched from tools. */
   toolEnv?: Record<string, string | undefined>;
 

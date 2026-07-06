@@ -16,7 +16,9 @@ function printUsage() {
   console.log("Options:");
   console.log("  --dir, -d   Run the CLI in the specified directory");
   console.log("  --cli, -c   Compatibility alias; CLI is the default terminal interface");
-  console.log("  --yolo, -y  Skip command approvals (dangerous; use with care)");
+  console.log(
+    "  --yolo, -y  YOLO mode: no approval prompts, commands run outside the OS sandbox (dangerous; use with care)",
+  );
   console.log("  --help, -h  Show help");
   console.log("");
 }

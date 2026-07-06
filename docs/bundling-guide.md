@@ -87,7 +87,7 @@ Desktop launchers can also set `COWORK_DESKTOP_STARTUP_EVENTS=1` to receive vali
 | `--dir`, `-d` | Working directory for the agent |
 | `--host`, `-H` | Bind hostname (default: `127.0.0.1`) |
 | `--port`, `-p` | Bind port (default: `7337`, use `0` for ephemeral) |
-| `--yolo`, `-y` | Skip command approval prompts |
+| `--yolo`, `-y` | YOLO mode: no approval prompts, shell commands run outside the OS sandbox |
 | `--json`, `-j` | Emit machine-readable startup JSON to stdout |
 
 ### Mode 2: Embedded Server (Same Process)

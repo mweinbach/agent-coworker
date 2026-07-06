@@ -1,11 +1,14 @@
 import { motion } from "framer-motion";
 import {
+  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
+  EyeIcon,
+  EyeOffIcon,
   PlusIcon,
   RefreshCcwIcon,
   SlidersHorizontalIcon,
-  Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -27,10 +30,9 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
+import { InputGroupButton } from "../../../components/ui/input-group";
 import {
-  customModelPlaceholderForProvider,
   isCatalogModelEnabled,
-  isCustomCatalogModelEntry,
   isUiDisabledProvider,
   modelChoicesFromCatalog,
   supportsCustomModelIds,
@@ -97,8 +99,6 @@ export function ProvidersPage({
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
   const setProviderConfig = useAppStore((s) => s.setProviderConfig);
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
-  const addCustomProviderModel = useAppStore((s) => s.addCustomProviderModel);
-  const deleteCustomProviderModel = useAppStore((s) => s.deleteCustomProviderModel);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
@@ -150,9 +150,6 @@ export function ProvidersPage({
     Record<string, Record<string, string>>
   >({});
   const [oauthCodesByMethod, setOauthCodesByMethod] = useState<Record<string, string>>({});
-  const [customModelDraftByProvider, setCustomModelDraftByProvider] = useState<
-    Partial<Record<ProviderName, string>>
-  >({});
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(
     initialExpandedSectionId,
   );
@@ -325,20 +322,6 @@ export function ProvidersPage({
     })();
   };
 
-  const submitCustomModel = (provider: ProviderName) => {
-    const modelId = (customModelDraftByProvider[provider] ?? "").trim();
-    if (!modelId) return;
-    setCustomModelDraftByProvider((s) => ({ ...s, [provider]: "" }));
-    void addCustomProviderModel(provider, modelId).then((added) => {
-      if (added) return;
-      // Restore the typed ID on failure so the user can retry without
-      // re-entering it, unless they have already started typing again.
-      setCustomModelDraftByProvider((s) =>
-        (s[provider] ?? "") === "" ? { ...s, [provider]: modelId } : s,
-      );
-    });
-  };
-
   const renderAuthMethod = (opts: {
     provider: ProviderName;
     providerDisplayName: string;
@@ -398,8 +381,18 @@ export function ProvidersPage({
         key={stateKey}
         className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0"
       >
-        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {opts.method.label}
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {opts.method.label}
+          </div>
+          {resultMatch?.ok ? (
+            <div className="flex min-w-0 items-center gap-1 text-xs text-success">
+              <CheckIcon className="size-3.5 shrink-0" aria-hidden />
+              <span className="truncate" title={resultMatch.message}>
+                {resultMatch.message}
+              </span>
+            </div>
+          ) : null}
         </div>
 
         {opts.method.type === "api" ? (
@@ -483,39 +476,43 @@ export function ProvidersPage({
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
-              <Input
-                className="max-w-md"
-                value={isEditingApiKey ? apiKeyValue : (savedApiKeyMask ?? "••••••••")}
-                onChange={(e) => {
-                  if (!isEditingApiKey) return;
-                  const nextValue = e.currentTarget.value;
-                  setApiKeysByMethod((s) => ({ ...s, [stateKey]: nextValue }));
-                }}
-                placeholder={
-                  isEditingApiKey
-                    ? opts.method.id === EXA_AUTH_METHOD_ID
-                      ? "Paste your Exa API key"
-                      : opts.method.id === PARALLEL_AUTH_METHOD_ID
-                        ? "Paste your Parallel API key"
-                        : "Paste your API key"
-                    : "Saved key (hidden)"
-                }
-                type={revealApiKey ? "text" : "password"}
-                readOnly={!isEditingApiKey}
-                aria-label={`${opts.providerDisplayName} ${opts.method.label} API key`}
-              />
-              <Button
-                variant="outline"
-                type="button"
-                disabled={!hasSavedApiKey}
-                onClick={() =>
-                  setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: !revealApiKey }))
-                }
-              >
-                {revealApiKey ? "Hide" : "Reveal"}
-              </Button>
+              <div className="relative min-w-48 max-w-md flex-1">
+                <Input
+                  className="pr-9"
+                  value={isEditingApiKey ? apiKeyValue : (savedApiKeyMask ?? "••••••••")}
+                  onChange={(e) => {
+                    if (!isEditingApiKey) return;
+                    const nextValue = e.currentTarget.value;
+                    setApiKeysByMethod((s) => ({ ...s, [stateKey]: nextValue }));
+                  }}
+                  placeholder={
+                    isEditingApiKey
+                      ? opts.method.id === EXA_AUTH_METHOD_ID
+                        ? "Paste your Exa API key"
+                        : opts.method.id === PARALLEL_AUTH_METHOD_ID
+                          ? "Paste your Parallel API key"
+                          : "Paste your API key"
+                      : "Saved key (hidden)"
+                  }
+                  type={revealApiKey ? "text" : "password"}
+                  readOnly={!isEditingApiKey}
+                  aria-label={`${opts.providerDisplayName} ${opts.method.label} API key`}
+                />
+                <InputGroupButton
+                  size="icon-xs"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  disabled={isEditingApiKey ? !apiKeyValue : !hasSavedApiKey}
+                  onClick={() =>
+                    setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: !revealApiKey }))
+                  }
+                  aria-label={revealApiKey ? "Hide API key" : "Reveal API key"}
+                >
+                  {revealApiKey ? <EyeOffIcon aria-hidden /> : <EyeIcon aria-hidden />}
+                </InputGroupButton>
+              </div>
               {!isEditingApiKey ? (
                 <Button
+                  variant="outline"
                   type="button"
                   disabled={!canConnectProvider}
                   title={!canConnectProvider ? "Add a workspace first." : undefined}
@@ -631,9 +628,10 @@ export function ProvidersPage({
           </div>
         ) : null}
 
-        {resultMatch ? (
-          <div className={cn("text-xs", resultMatch.ok ? "text-success" : "text-destructive")}>
-            {resultMatch.message}
+        {resultMatch && !resultMatch.ok ? (
+          <div className="flex items-start gap-1.5 text-xs text-destructive">
+            <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span>{resultMatch.message}</span>
           </div>
         ) : null}
       </div>
@@ -657,13 +655,9 @@ export function ProvidersPage({
       catalogNameByProvider.get(provider) ?? displayProviderName(provider);
     const allModelIds = modelChoices[provider] ?? [];
     const catalogModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
-    const customModelIds = catalogModels.filter(isCustomCatalogModelEntry).map((model) => model.id);
-    const customModelIdSet = new Set(customModelIds);
-    const standardModelIds = allModelIds.filter((modelId) => !customModelIdSet.has(modelId));
-    const modelPreviewIds = standardModelIds.slice(0, 8);
-    const hiddenPreviewCount = Math.max(0, standardModelIds.length - modelPreviewIds.length);
+    const modelPreviewIds = allModelIds.slice(0, 8);
+    const hiddenPreviewCount = Math.max(0, allModelIds.length - modelPreviewIds.length);
     const enabledModelCount = catalogModels.filter(isCatalogModelEnabled).length;
-    const customDraft = customModelDraftByProvider[provider] ?? "";
     const canUseCustomModels = supportsCustomModelIds(provider);
     const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
       ? status.usage.rateLimits.filter(isVisibleUsageRateLimit)
@@ -1027,7 +1021,12 @@ export function ProvidersPage({
                     </div>
                   ) : null}
                 </div>
-              ) : typeof status?.message === "string" && status.message.trim() ? (
+              ) : status?.mode !== "api_key" &&
+                typeof status?.message === "string" &&
+                status.message.trim() ? (
+                // API-key statuses only carry the generic "API key saved." /
+                // "API key missing." boilerplate — the key field and badge
+                // already say that, so skip the standalone line for them.
                 <div className="border-t border-border/70 pt-4 text-sm text-muted-foreground">
                   {status.message}
                 </div>
@@ -1083,74 +1082,7 @@ export function ProvidersPage({
                 </div>
               ) : null}
 
-              {canUseCustomModels ? (
-                <div className="space-y-2.5 border-t border-border/70 pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Custom models
-                    </div>
-                    {customModelIds.length > 0 ? (
-                      <Badge variant="secondary" className="rounded-sm px-1.5 text-[10px]">
-                        {customModelIds.length}
-                      </Badge>
-                    ) : null}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Input
-                      className="min-w-0 flex-1 sm:min-w-64"
-                      placeholder={customModelPlaceholderForProvider(provider)}
-                      value={customDraft}
-                      onChange={(event) => {
-                        const nextValue = event.currentTarget.value;
-                        setCustomModelDraftByProvider((s) => ({
-                          ...s,
-                          [provider]: nextValue,
-                        }));
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && customDraft.trim()) {
-                          submitCustomModel(provider);
-                        }
-                      }}
-                      aria-label={`${providerDisplayName} custom model ID`}
-                    />
-                    <Button
-                      variant="outline"
-                      type="button"
-                      disabled={!customDraft.trim()}
-                      onClick={() => submitCustomModel(provider)}
-                    >
-                      <PlusIcon data-icon="inline-start" />
-                      Add
-                    </Button>
-                  </div>
-                  {customModelIds.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {customModelIds.map((modelId) => (
-                        <div
-                          key={modelId}
-                          className="inline-flex h-7 max-w-full items-center gap-1 rounded-sm border border-border/60 bg-muted/20 pl-2 text-xs text-foreground"
-                          title={modelId}
-                        >
-                          <span className="min-w-0 max-w-72 truncate">{modelId}</span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="size-6 rounded-sm text-muted-foreground hover:text-destructive"
-                            aria-label={`Remove custom model ${modelId}`}
-                            onClick={() => void deleteCustomProviderModel(provider, modelId)}
-                          >
-                            <Trash2Icon className="size-3" aria-hidden />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {catalogModels.length > 0 || modelPreviewIds.length > 0 ? (
+              {catalogModels.length > 0 || modelPreviewIds.length > 0 || canUseCustomModels ? (
                 <div className="space-y-2 border-t border-border/70 pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1162,17 +1094,15 @@ export function ProvidersPage({
                           ? `${enabledModelCount} of ${catalogModels.length} enabled`
                           : `${allModelIds.length} total`}
                       </div>
-                      {catalogModels.length > 0 ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setManageModelsProvider(provider)}
-                        >
-                          <SlidersHorizontalIcon data-icon="inline-start" />
-                          Manage models
-                        </Button>
-                      ) : null}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setManageModelsProvider(provider)}
+                      >
+                        <SlidersHorizontalIcon data-icon="inline-start" />
+                        Manage models
+                      </Button>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1184,10 +1114,11 @@ export function ProvidersPage({
                     {hiddenPreviewCount > 0 ? (
                       <Badge variant="outline">+{hiddenPreviewCount} more</Badge>
                     ) : null}
-                    {enabledModelCount === 0 ? (
-                      // Key off the enabled count (custom + standard), not the
-                      // standard-only preview chips, so enabled custom models
-                      // don't get mislabeled as "all disabled".
+                    {catalogModels.length > 0 && enabledModelCount === 0 ? (
+                      // Key off the enabled count (custom + standard) so enabled
+                      // custom models don't get mislabeled, and only when the
+                      // catalog actually delivered models — an empty entry means
+                      // "not discovered yet", not "all disabled".
                       <div className="text-xs text-muted-foreground">
                         All models are disabled. Use Manage models to enable some.
                       </div>

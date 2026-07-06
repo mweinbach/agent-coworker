@@ -458,6 +458,11 @@ export default function App() {
           return;
         }
         if (state.view === "settings") {
+          // An open modal surface (Dialog/Sheet/menu) owns Escape: Radix marks
+          // the event consumed when it dismisses a layer, and the DOM check
+          // covers overlays that don't. Mirrors the SettingsShell guard.
+          if (event.defaultPrevented) return;
+          if (document.querySelector('[role="dialog"][data-state="open"]')) return;
           state.closeSettings();
           return;
         }

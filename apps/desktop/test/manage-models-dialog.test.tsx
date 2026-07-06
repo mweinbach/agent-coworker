@@ -13,6 +13,7 @@ mock.module("../src/lib/agentSocket", () => ({
 
 const { useAppStore } = await import("../src/app/store");
 const { ManageModelsDialog } = await import("../src/ui/settings/pages/ManageModelsDialog");
+const { MODEL_CHOICES } = await import("../src/lib/modelChoices");
 
 const CATALOG = [
   {
@@ -66,6 +67,45 @@ describe("manage models dialog", () => {
         "false",
         "true",
       ]);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("falls back to the static registry when the catalog entry has no models", async () => {
+    const harness = setupJsdom();
+    // Entry without a models list — the catalog can lag behind discovery.
+    useAppStore.setState({
+      providerCatalog: [{ id: "anthropic", name: "Anthropic" }] as any,
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(ManageModelsDialog, {
+            provider: "anthropic" as const,
+            onOpenChange: () => {},
+          }),
+        );
+      });
+
+      const doc = harness.dom.window.document;
+      const staticIds = MODEL_CHOICES.anthropic;
+      expect(staticIds.length).toBeGreaterThan(0);
+      expect(doc.body.textContent).not.toContain("No models discovered yet.");
+      expect(doc.body.textContent).toContain(staticIds[0]);
+      const checkboxes = [...doc.querySelectorAll('[role="checkbox"]')];
+      expect(checkboxes).toHaveLength(staticIds.length);
+      // Static fallback models default to enabled.
+      expect(doc.body.textContent).toContain(`${staticIds.length} of ${staticIds.length} enabled`);
 
       await act(async () => {
         root.unmount();

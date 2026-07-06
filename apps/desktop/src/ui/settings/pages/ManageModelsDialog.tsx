@@ -17,6 +17,7 @@ import {
   customModelPlaceholderForProvider,
   isCatalogModelEnabled,
   isCustomCatalogModelEntry,
+  staticCatalogModelsForProvider,
   supportsCustomModelIds,
 } from "../../../lib/modelChoices";
 import { displayProviderName } from "../../../lib/providerDisplayNames";
@@ -41,10 +42,13 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
   const catalogEntry = provider
     ? providerCatalog.find((entry) => entry.id === provider)
     : undefined;
-  const models = useMemo(
-    () => (Array.isArray(catalogEntry?.models) ? catalogEntry.models : []),
-    [catalogEntry],
-  );
+  const models = useMemo(() => {
+    const catalogModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
+    if (catalogModels.length > 0 || !provider) return catalogModels;
+    // The catalog can lag behind (not loaded yet, or an entry without models);
+    // fall back to the static registry so the dialog is never a dead end.
+    return staticCatalogModelsForProvider(provider);
+  }, [catalogEntry, provider]);
 
   // The catalog event is the source of truth; local pending flags only bridge
   // the round-trip so checkboxes respond instantly. Reconcile instead of

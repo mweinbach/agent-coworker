@@ -13,6 +13,7 @@ import {
   modelOptionsFromCatalog,
   reasoningConfigFromCatalog,
   resolveModelDisplayLabel,
+  staticCatalogModelsForProvider,
 } from "../src/lib/modelChoices";
 import type { ProviderName } from "../src/lib/wsProtocol";
 
@@ -480,5 +481,15 @@ describe("modelOptionsForProvider", () => {
     );
 
     expect(providers).toEqual(["openai"]);
+  });
+});
+
+describe("staticCatalogModelsForProvider", () => {
+  test("mirrors the static registry model ids with display metadata", () => {
+    const models = staticCatalogModelsForProvider("anthropic");
+    expect(models.map((model) => model.id)).toEqual([...MODEL_CHOICES.anthropic]);
+    for (const model of models) {
+      expect(model.displayName.length).toBeGreaterThan(0);
+    }
   });
 });

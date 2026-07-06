@@ -302,6 +302,70 @@ describe("app window-mode notification routing", () => {
     }
   });
 
+  test("Escape with an open dialog closes just the dialog, not settings", async () => {
+    const harness = setupJsdom();
+    const closeSettings = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedReadyState();
+      useAppStore.setState({
+        view: "settings",
+        lastNonSettingsView: "chat",
+        closeSettings,
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      // Simulate an open modal surface (e.g. the Manage models dialog).
+      const overlay = harness.dom.window.document.createElement("div");
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("data-state", "open");
+      harness.dom.window.document.body.appendChild(overlay);
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+      expect(closeSettings).not.toHaveBeenCalled();
+
+      // A dismissing Radix layer consumes the event; settings must stay put
+      // even after the layer has already unmounted.
+      overlay.remove();
+      await act(async () => {
+        const consumed = new harness.dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        });
+        consumed.preventDefault();
+        harness.dom.window.dispatchEvent(consumed);
+      });
+      expect(closeSettings).not.toHaveBeenCalled();
+
+      // With no overlay left, Escape closes settings as before.
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+      expect(closeSettings).toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("Escape closes settings-over-chat without dismissing hidden task approvals", async () => {
     const harness = setupJsdom();
     const dismissPrompt = mock(() => {});

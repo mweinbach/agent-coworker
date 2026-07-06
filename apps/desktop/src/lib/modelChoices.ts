@@ -1,3 +1,4 @@
+import { listSupportedModels } from "@cowork/models/registry";
 import {
   isUserFacingProviderEnabled,
   reasoningConfigForProviderModel,
@@ -44,6 +45,25 @@ export function modelOptionsForProvider(
 }
 
 type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
+
+export type ProviderCatalogModelEntry = ProviderCatalogEntry["models"][number];
+
+/**
+ * Static registry models shaped as catalog entries. Fallback for when the live
+ * catalog has not delivered models for a provider (not loaded yet, or the
+ * entry arrived without a models list) so Manage models is never a dead end.
+ */
+export function staticCatalogModelsForProvider(
+  provider: ProviderName,
+): ProviderCatalogModelEntry[] {
+  if (isUiDisabledProvider(provider)) return [];
+  return listSupportedModels(provider).map((model) => ({
+    id: model.id,
+    displayName: model.displayName,
+    knowledgeCutoff: model.knowledgeCutoff,
+    supportsImageInput: model.supportsImageInput,
+  }));
+}
 
 export type ComposerReasoningConfig = NonNullable<
   ProviderCatalogEntry["models"][number]["reasoning"]

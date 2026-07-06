@@ -565,7 +565,7 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("OpenAI");
   });
 
-  test("expanded model provider card renders custom model controls", () => {
+  test("expanded model provider card previews custom models without inline custom controls", () => {
     useAppStore.setState({
       providerStatusByName: {
         nvidia: {
@@ -609,11 +609,43 @@ describe("desktop providers page", () => {
     );
 
     expect(html).toContain("2 models available");
-    expect(html).toContain("Custom models");
+    // Custom model management moved into the Manage models dialog; the card
+    // only previews the enabled models (custom included).
+    expect(html).not.toContain("Custom models");
+    expect(html).not.toContain("custom model ID");
     expect(html).toContain("nvidia/custom-preview-model");
     expect(html).toContain("nvidia/nemotron-3-super-120b-a12b");
     expect(html).toContain("2 of 2 enabled");
     expect(html).toContain("Manage models");
+  });
+
+  test("renders Manage models even when the catalog entry has no models yet", () => {
+    useAppStore.setState({
+      providerStatusByName: {
+        anthropic: {
+          provider: "anthropic",
+          authorized: true,
+          verified: true,
+          mode: "api_key",
+          account: null,
+          message: "API key saved.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+      // Entry without a models list — the catalog can lag behind discovery.
+      providerCatalog: [{ id: "anthropic", name: "Anthropic" }] as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:anthropic",
+      }),
+    );
+
+    expect(html).toContain("Manage models");
+    expect(html).toContain("total");
+    // An empty catalog entry means "not discovered yet", not "all disabled".
+    expect(html).not.toContain("All models are disabled");
   });
 
   test("models surface shows an empty state when nothing is connected", () => {

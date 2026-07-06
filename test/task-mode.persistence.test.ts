@@ -115,6 +115,28 @@ async function waitUntil(
   );
 }
 
+async function waitForTaskStatus(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  taskId: string,
+  status: TaskStatus,
+  timeoutMs: number,
+  label: string,
+): Promise<TaskRecord> {
+  const deadline = Date.now() + timeoutMs;
+  let latest: TaskRecord | undefined;
+  while (Date.now() <= deadline) {
+    await flushAsyncWork();
+    latest = harness.coordinator.get(taskId, harness.workspacePath);
+    if (latest?.status === status) return latest;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(10, remainingMs)));
+  }
+  throw new Error(
+    `${label} did not reach ${status}; latest status was ${latest?.status ?? "missing"}`,
+  );
+}
+
 function pauseNextTaskStatusWrite(harness: Awaited<ReturnType<typeof createHarness>>) {
   const reached = deferred();
   const released = deferred();
@@ -1134,16 +1156,10 @@ describe("task mode persistence", () => {
       });
 
       releaseQuiesce.resolve();
-      const completed = await expectSettlesWithin(
-        (async () => {
-          for (let attempt = 0; attempt < 20; attempt += 1) {
-            await flushAsyncWork();
-            const latest = harness.coordinator.get(created.task.id, harness.workspacePath);
-            if (latest?.status === "completed") return latest;
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-          throw new Error("deferred completion did not finalize");
-        })(),
+      const completed = await waitForTaskStatus(
+        harness,
+        created.task.id,
+        "completed",
         1_000,
         "deferred completion",
       );
@@ -5035,16 +5051,10 @@ describe("task mode persistence", () => {
       expect(harness.coordinator.get(task.id, harness.workspacePath)?.status).toBe("working");
 
       releaseQuiesce.resolve();
-      const completed = await expectSettlesWithin(
-        (async () => {
-          for (let attempt = 0; attempt < 20; attempt += 1) {
-            await flushAsyncWork();
-            const latest = harness.coordinator.get(task.id, harness.workspacePath);
-            if (latest?.status === "completed") return latest;
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-          throw new Error("deferred artifact-settlement completion did not finalize");
-        })(),
+      const completed = await waitForTaskStatus(
+        harness,
+        task.id,
+        "completed",
         1_000,
         "deferred artifact-settlement completion",
       );
@@ -5140,16 +5150,10 @@ describe("task mode persistence", () => {
       });
 
       releaseQuiesce.resolve();
-      const completed = await expectSettlesWithin(
-        (async () => {
-          for (let attempt = 0; attempt < 20; attempt += 1) {
-            await flushAsyncWork();
-            const latest = harness.coordinator.get(task.id, harness.workspacePath);
-            if (latest?.status === "completed") return latest;
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-          throw new Error("deferred active-revision completion did not finalize");
-        })(),
+      const completed = await waitForTaskStatus(
+        harness,
+        task.id,
+        "completed",
         1_000,
         "deferred active-revision completion",
       );
@@ -5263,16 +5267,10 @@ describe("task mode persistence", () => {
       expect(harness.sessionDb.getTaskDirectiveReceipt(created.task.id, proposalKey)).toBeNull();
       expect(proposeCheckpointNotifications()).toHaveLength(0);
 
-      const completed = await expectSettlesWithin(
-        (async () => {
-          for (let attempt = 0; attempt < 20; attempt += 1) {
-            await flushAsyncWork();
-            const latest = harness.coordinator.get(created.task.id, harness.workspacePath);
-            if (latest?.status === "completed") return latest;
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-          throw new Error("deferred terminal commit did not complete");
-        })(),
+      const completed = await waitForTaskStatus(
+        harness,
+        created.task.id,
+        "completed",
         1_000,
         "deferred terminal commit",
       );

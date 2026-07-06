@@ -676,6 +676,73 @@ describe("AgentSession", () => {
       });
     });
 
+    test("setConfig emits and persists skill improvement defaults", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const excludedSkills = ["drafting", "release-notes"];
+      const { session, events } = makeSession({ persistProjectConfigPatchImpl });
+
+      await session.setConfig({
+        skillImprovementEnabled: true,
+        skillImprovementModel: " openai:gpt-5.2 ",
+        skillImprovementScope: "all",
+        skillImprovementExcludedSkills: excludedSkills,
+      });
+      excludedSkills.push("mutated-after-set");
+
+      const cfgEvt = events
+        .filter(
+          (evt): evt is Extract<SessionEvent, { type: "session_config" }> =>
+            evt.type === "session_config",
+        )
+        .at(-1);
+      expect(cfgEvt).toBeDefined();
+      expect(cfgEvt?.config.skillImprovementEnabled).toBe(true);
+      expect(cfgEvt?.config.skillImprovementModel).toBe("openai:gpt-5.2");
+      expect(cfgEvt?.config.skillImprovementScope).toBe("all");
+      expect(cfgEvt?.config.skillImprovementExcludedSkills).toEqual(["drafting", "release-notes"]);
+      expect(session.getSessionConfigEvent().config.skillImprovementExcludedSkills).toEqual([
+        "drafting",
+        "release-notes",
+      ]);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        skillImprovementEnabled: true,
+        skillImprovementModel: "openai:gpt-5.2",
+        skillImprovementScope: "all",
+        skillImprovementExcludedSkills: ["drafting", "release-notes"],
+      });
+    });
+
+    test("setConfig can clear the persisted skill improvement model override", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          skillImprovementEnabled: true,
+          skillImprovementModel: "openai:gpt-5.2",
+        },
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setConfig({
+        clearSkillImprovementModel: true,
+      });
+
+      const cfgEvt = events
+        .filter(
+          (evt): evt is Extract<SessionEvent, { type: "session_config" }> =>
+            evt.type === "session_config",
+        )
+        .at(-1);
+      expect(cfgEvt).toBeDefined();
+      expect("skillImprovementModel" in (cfgEvt?.config ?? {})).toBe(false);
+      expect(session.getSessionConfigEvent().config.skillImprovementEnabled).toBe(true);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        clearSkillImprovementModel: true,
+      });
+    });
+
     test("session_config keeps the persisted backup default separate from a live override", async () => {
       const { session, events } = makeSession({
         config: {

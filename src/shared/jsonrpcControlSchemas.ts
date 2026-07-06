@@ -665,6 +665,7 @@ const skillImprovementEligibilitySchema = z
 
 const skillImprovementPendingJobSchema = z
   .object({
+    key: z.string(),
     skillName: z.string(),
     runAt: z.string(),
     lastUsageAt: z.string(),

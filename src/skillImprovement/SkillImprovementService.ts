@@ -162,8 +162,9 @@ function buildEligibilityEntries(input: {
 function summarizePendingJobs(
   jobs: Record<string, SkillImprovementJob>,
 ): SkillImprovementPendingJobSummary[] {
-  return Object.values(jobs)
-    .map((job) => ({
+  return Object.entries(jobs)
+    .map(([key, job]) => ({
+      key,
       skillName: job.skillName,
       runAt: job.runAt,
       lastUsageAt: job.lastUsageAt,

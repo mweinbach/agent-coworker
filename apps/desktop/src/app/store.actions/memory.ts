@@ -459,10 +459,11 @@ export function createWorkspaceMemoryActions(
           id: makeId(),
           ts: nowIso(),
           kind: outcome?.status === "failed" ? "error" : "info",
-          title:
-            outcome?.status === "failed"
+          title: !outcome
+            ? "No skill improvements were due"
+            : outcome.status === "failed"
               ? "Skill improvement failed"
-              : outcome?.status === "skipped"
+              : outcome.status === "skipped"
                 ? "Skill improvement finished without changes"
                 : "Skill improvement complete",
           detail: outcome

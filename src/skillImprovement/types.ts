@@ -118,6 +118,8 @@ export type SkillImprovementEligibility = {
 };
 
 export type SkillImprovementPendingJobSummary = {
+  /** Unique queue key; project-scope jobs from different workspaces can share a skillName. */
+  key: string;
   skillName: string;
   runAt: string;
   lastUsageAt: string;

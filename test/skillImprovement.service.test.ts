@@ -136,6 +136,9 @@ describe("SkillImprovementService", () => {
     expect(state.pendingJobs.alpha?.status).toBe("pending");
     expect(state.runHistory[0]?.status).toBe("skipped");
     expect(state.runHistory[0]?.message).toContain("paused");
+    // Summaries expose the unique queue key so clients can key lists by it.
+    const status = await service.getStatus("session-1");
+    expect(status.pendingJobs[0]).toMatchObject({ key: "alpha", skillName: "alpha" });
   });
 
   test("scheduler run while busy reschedules silently (no history spam)", async () => {

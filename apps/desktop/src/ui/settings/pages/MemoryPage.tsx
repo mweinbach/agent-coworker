@@ -775,7 +775,7 @@ export function MemoryPage() {
                 <div className="space-y-2">
                   {skillImprovementPendingJobs.map((job) => (
                     <div
-                      key={job.skillName}
+                      key={job.key}
                       className="flex flex-wrap items-center justify-between gap-2 text-xs"
                     >
                       <span className="font-medium text-foreground">{job.skillName}</span>

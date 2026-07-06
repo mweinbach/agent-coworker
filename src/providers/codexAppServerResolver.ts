@@ -728,7 +728,7 @@ export async function getCodexAppServerInstallStatus(
       source: "missing",
       pinnedVersion,
       pinMatchesCurrent: false,
-      message: `Cowork-managed Codex app-server ${pinnedVersion} is not installed. Cowork will download it before first use.`,
+      message: `Cowork-managed Codex runtime ${pinnedVersion} has not been downloaded yet. Account sign-in can still be connected; Cowork will download the runtime before first Codex turn.`,
     };
   }
   const pinMatchesCurrent = command.source === "managed" && command.version === pinnedVersion;
@@ -745,8 +745,8 @@ export async function getCodexAppServerInstallStatus(
       command.source === "system"
         ? "Using the Codex installation on PATH."
         : command.source === "managed"
-          ? `Using Cowork-managed Codex app-server ${pinnedVersion}.`
-          : "Using explicit Codex app-server override.",
+          ? `Using Cowork-managed Codex runtime ${pinnedVersion}.`
+          : "Using explicit Codex runtime override.",
   };
 }
 
@@ -769,7 +769,7 @@ export async function updateManagedCodexAppServer(
     pinnedVersion: CODEX_APP_SERVER_MANAGED_VERSION,
     pinMatchesCurrent,
     ...(command.source === "managed" ? { managedPath: command.command } : {}),
-    message: `Installed Cowork-managed Codex app-server ${
+    message: `Installed Cowork-managed Codex runtime ${
       command.version ?? CODEX_APP_SERVER_MANAGED_VERSION
     }.`,
   };

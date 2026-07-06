@@ -234,15 +234,21 @@ export function ProvidersPage({
     [providerAuthMethodsByProvider],
   );
 
-  useEffect(() => {
-    if (!canConnectProvider) return;
-    void refreshProviderStatus();
-  }, [canConnectProvider, refreshProviderStatus]);
+  const refreshProviderAndRuntimeStatus = useCallback(
+    async (opts?: { refreshBedrockDiscovery?: boolean }) => {
+      try {
+        await refreshProviderStatus(opts);
+      } finally {
+        await checkCodexAppServerStatus({ checkLatest: false });
+      }
+    },
+    [checkCodexAppServerStatus, refreshProviderStatus],
+  );
 
   useEffect(() => {
     if (!canConnectProvider) return;
-    void checkCodexAppServerStatus({ checkLatest: false });
-  }, [canConnectProvider, checkCodexAppServerStatus]);
+    void refreshProviderAndRuntimeStatus();
+  }, [canConnectProvider, refreshProviderAndRuntimeStatus]);
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {
@@ -252,7 +258,7 @@ export function ProvidersPage({
         <button
           type="button"
           className={buttonVariants({ variant: "outline", size: "sm", className: "shrink-0" })}
-          onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
+          onClick={() => void refreshProviderAndRuntimeStatus({ refreshBedrockDiscovery: true })}
           disabled={providerStatusRefreshing}
         >
           {providerStatusRefreshing ? "Refreshing…" : "Refresh status"}
@@ -262,7 +268,12 @@ export function ProvidersPage({
     return () => {
       settingsChrome.setChrome(null);
     };
-  }, [settingsChrome, canConnectProvider, providerStatusRefreshing, refreshProviderStatus]);
+  }, [
+    settingsChrome,
+    canConnectProvider,
+    providerStatusRefreshing,
+    refreshProviderAndRuntimeStatus,
+  ]);
 
   useEffect(() => {
     if (!providerLastAuthResult?.ok) return;
@@ -657,14 +668,14 @@ export function ProvidersPage({
     const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
       ? status.usage.rateLimits.filter(isVisibleUsageRateLimit)
       : [];
-    const codexSourceLabel =
+    const codexRuntimeLabel =
       codexAppServerStatus?.source === "system"
-        ? "System"
+        ? "System Codex"
         : codexAppServerStatus?.source === "managed"
-          ? "Cowork managed"
+          ? "Downloaded"
           : codexAppServerStatus?.source === "override"
             ? "Override"
-            : "Not installed";
+            : "Not downloaded";
 
     if (provider === "lmstudio") {
       const lmStudioEnabled = providerUiState.lmstudio.enabled;
@@ -1026,9 +1037,9 @@ export function ProvidersPage({
                 <div className="space-y-2 border-t border-border/70 pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      App server
+                      Codex runtime
                     </div>
-                    <Badge variant="secondary">{codexSourceLabel}</Badge>
+                    <Badge variant="secondary">{codexRuntimeLabel}</Badge>
                   </div>
                   <div className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[5.75rem_minmax(0,1fr)]">
                     {codexAppServerStatus?.version ? (
@@ -1055,7 +1066,7 @@ export function ProvidersPage({
                       Status
                     </div>
                     <div className="text-sm text-foreground/95">
-                      {codexAppServerStatus?.message ?? "Checking Codex app-server."}
+                      {codexAppServerStatus?.message ?? "Checking Codex runtime."}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">

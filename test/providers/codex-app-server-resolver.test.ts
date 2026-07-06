@@ -224,7 +224,7 @@ describe("codex app-server resolver", () => {
         source: "missing",
         pinnedVersion: CODEX_APP_SERVER_MANAGED_VERSION,
         pinMatchesCurrent: false,
-        message: `Cowork-managed Codex app-server ${CODEX_APP_SERVER_MANAGED_VERSION} is not installed. Cowork will download it before first use.`,
+        message: `Cowork-managed Codex runtime ${CODEX_APP_SERVER_MANAGED_VERSION} has not been downloaded yet. Account sign-in can still be connected; Cowork will download the runtime before first Codex turn.`,
       });
     },
   );
@@ -262,7 +262,7 @@ describe("codex app-server resolver", () => {
         version: CODEX_APP_SERVER_MANAGED_VERSION,
         pinnedVersion: CODEX_APP_SERVER_MANAGED_VERSION,
         pinMatchesCurrent: true,
-        message: `Using Cowork-managed Codex app-server ${CODEX_APP_SERVER_MANAGED_VERSION}.`,
+        message: `Using Cowork-managed Codex runtime ${CODEX_APP_SERVER_MANAGED_VERSION}.`,
       });
       expect("latestVersion" in status).toBe(false);
       expect("updateAvailable" in status).toBe(false);
@@ -289,7 +289,7 @@ describe("codex app-server resolver", () => {
       version: CODEX_APP_SERVER_MANAGED_VERSION,
       pinnedVersion: CODEX_APP_SERVER_MANAGED_VERSION,
       pinMatchesCurrent: true,
-      message: `Installed Cowork-managed Codex app-server ${CODEX_APP_SERVER_MANAGED_VERSION}.`,
+      message: `Installed Cowork-managed Codex runtime ${CODEX_APP_SERVER_MANAGED_VERSION}.`,
     });
     expect(status.command).toContain(path.join(".cowork", "codex-app-server", "versions"));
     expect(requestedVersions).toEqual([CODEX_APP_SERVER_MANAGED_VERSION]);

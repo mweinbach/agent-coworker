@@ -272,7 +272,7 @@ describe("getProviderStatuses", () => {
     }
   });
 
-  test("codex-cli: verified via codex app-server account and exposes usage snapshots", async () => {
+  test("codex-cli: verifies ChatGPT account and exposes usage snapshots", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     codexAppServerAuthInternal.setAuthOverridesForTests({
@@ -294,7 +294,7 @@ describe("getProviderStatuses", () => {
       expect(codex?.verified).toBe(true);
       expect(codex?.mode).toBe("oauth");
       expect(codex?.account?.email).toBe("backend.com");
-      expect(codex?.message).toContain("Verified via codex app-server ChatGPT account");
+      expect(codex?.message).toBe("ChatGPT account verified (pro).");
       expect(codex?.usage).toEqual({
         email: "backend.com",
         planType: "pro",

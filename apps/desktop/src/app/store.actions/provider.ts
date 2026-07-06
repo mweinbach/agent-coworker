@@ -770,7 +770,7 @@ export function createProviderActions(
               detail:
                 typeof (status as { message?: unknown }).message === "string"
                   ? (status as { message: string }).message
-                  : "Installed the latest Cowork-managed Codex app-server.",
+                  : "Installed the latest Cowork-managed Codex runtime.",
             }),
           }));
         }

@@ -428,8 +428,8 @@ async function getCodexCliStatus(opts: {
       account: accountResult.account.email ? { email: accountResult.account.email } : null,
       message:
         accountResult.account.type === "apiKey"
-          ? "Verified via codex app-server API key account."
-          : `Verified via codex app-server ChatGPT account${
+          ? "Codex API key account verified."
+          : `ChatGPT account verified${
               accountResult.account.planType ? ` (${accountResult.account.planType})` : ""
             }.`,
       checkedAt: opts.checkedAt,

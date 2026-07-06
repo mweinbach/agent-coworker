@@ -75,7 +75,7 @@ describe("shared JSON-RPC control schemas", () => {
         pinnedVersion: "0.136.0",
         pinMatchesCurrent: true,
         managedPath: "/tmp/codex-app-server",
-        message: "Installed Cowork-managed Codex app-server 0.136.0.",
+        message: "Installed Cowork-managed Codex runtime 0.136.0.",
       },
     };
 

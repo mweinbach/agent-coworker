@@ -79,6 +79,7 @@ const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
   requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
   refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
+  checkCodexAppServerStatus: useAppStore.getState().checkCodexAppServerStatus,
 };
 
 describe("desktop providers page", () => {
@@ -366,10 +367,16 @@ describe("desktop providers page", () => {
     expect(html).not.toContain(">Continue<");
   });
 
-  test("mount only triggers the consolidated provider refresh", async () => {
+  test("mount refreshes providers before checking Codex runtime status", async () => {
     const requestProviderCatalog = mock(async () => {});
     const requestProviderAuthMethods = mock(async () => {});
-    const refreshProviderStatus = mock(async () => {});
+    const calls: string[] = [];
+    const refreshProviderStatus = mock(async () => {
+      calls.push("provider");
+    });
+    const checkCodexAppServerStatus = mock(async () => {
+      calls.push("runtime");
+    });
     const harness = setupJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -383,6 +390,7 @@ describe("desktop providers page", () => {
           requestProviderCatalog,
           requestProviderAuthMethods,
           refreshProviderStatus,
+          checkCodexAppServerStatus,
         });
       });
 
@@ -391,6 +399,9 @@ describe("desktop providers page", () => {
       });
 
       expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
+      expect(checkCodexAppServerStatus).toHaveBeenCalledTimes(1);
+      expect(checkCodexAppServerStatus).toHaveBeenCalledWith({ checkLatest: false });
+      expect(calls).toEqual(["provider", "runtime"]);
       expect(requestProviderCatalog).not.toHaveBeenCalled();
       expect(requestProviderAuthMethods).not.toHaveBeenCalled();
     } finally {
@@ -842,7 +853,7 @@ describe("desktop providers page", () => {
         pinnedVersion: "0.136.0",
         pinMatchesCurrent: true,
         managedPath: "/Users/max/.cowork/codex-app-server/current/darwin-arm64/codex-app-server",
-        message: "Using Cowork-managed Codex app-server 0.136.0.",
+        message: "Using Cowork-managed Codex runtime 0.136.0.",
       },
     });
 
@@ -973,11 +984,11 @@ describe("desktop providers page", () => {
     expect(html).toContain("0% remaining");
     expect(html).toContain("Using credits");
     expect(html).toContain("42.13 remaining");
-    expect(html).toContain("App server");
-    expect(html).toContain("Cowork managed");
+    expect(html).toContain("Codex runtime");
+    expect(html).toContain("Downloaded");
     expect(html).toContain("0.136.0");
     expect(html).toContain("Required");
-    expect(html).toContain("Using Cowork-managed Codex app-server 0.136.0.");
+    expect(html).toContain("Using Cowork-managed Codex runtime 0.136.0.");
     expect(html).not.toContain("Latest");
     expect(html).not.toContain("Pin");
     expect(html).not.toContain("Clear");
@@ -989,6 +1000,59 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("API key");
     expect(html).not.toContain("Credits balance");
     expect(html).not.toContain("42.125");
+  });
+
+  test("codex card separates connected account from missing downloaded runtime", () => {
+    useAppStore.setState({
+      providerStatusByName: {
+        google: {
+          provider: "google",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Not connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        "codex-cli": {
+          provider: "codex-cli",
+          authorized: true,
+          verified: true,
+          mode: "oauth",
+          account: { email: "max@example.com" },
+          message: "ChatGPT account verified (pro).",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      },
+      providerCatalog: [
+        { id: "google", name: "Google" },
+        { id: "openai", name: "OpenAI" },
+        { id: "codex-cli", name: "Codex CLI" },
+      ] as any,
+      codexAppServerStatus: {
+        available: false,
+        source: "missing",
+        pinnedVersion: "0.142.3",
+        pinMatchesCurrent: false,
+        message:
+          "Cowork-managed Codex runtime 0.142.3 has not been downloaded yet. Account sign-in can still be connected; Cowork will download the runtime before first Codex turn.",
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:codex-cli",
+      }),
+    );
+
+    expect(html).toContain("Connected");
+    expect(html).toContain("ChatGPT account verified (pro).");
+    expect(html).toContain("Codex runtime");
+    expect(html).toContain("Not downloaded");
+    expect(html).toContain("Cowork-managed Codex runtime 0.142.3 has not been downloaded yet.");
+    expect(html).not.toContain("Verified via codex app-server");
+    expect(html).not.toContain("App server");
+    expect(html).not.toContain("Not installed");
   });
 
   test("opencode sibling provider card shows saved-key reuse action", () => {

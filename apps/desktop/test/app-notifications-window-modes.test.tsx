@@ -128,18 +128,6 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
   } as never);
 }
 
-async function waitForDomCondition(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() > deadline) {
-      throw new Error("Timed out waiting for DOM condition");
-    }
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
-  }
-}
-
 describe("app window-mode notification routing", () => {
   beforeEach(() => {
     showNotification.mockClear();
@@ -226,13 +214,10 @@ describe("app window-mode notification routing", () => {
 
       await act(async () => {
         useAppStore.getState().closeSettings();
+        root?.render(createElement(App));
       });
-      await waitForDomCondition(
-        () =>
-          container.querySelector(".app-shell--chat") !== null &&
-          container.querySelector(".app-topbar") !== null,
-      );
 
+      expect(useAppStore.getState().view).toBe("chat");
       expect(container.querySelector(".app-shell--settings")).toBeNull();
       expect(container.querySelector(".app-shell--chat")).not.toBeNull();
       expect(container.querySelector(".app-sidebar")).not.toBeNull();

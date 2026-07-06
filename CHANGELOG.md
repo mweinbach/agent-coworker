@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.15 - 2026-07-06
+
+### Fixed
+
+- **GitHub release validation** — Makes the desktop settings shell regression
+  test deterministic after closing settings so CI does not depend on runner
+  timer throughput.
+
 ## 1.2.14 - 2026-07-06
 
 ### Fixed

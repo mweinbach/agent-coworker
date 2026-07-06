@@ -15,6 +15,7 @@ import type {
 } from "../src/server/jsonrpc/routes/types";
 import { createWorkspaceBackupRouteHandlers } from "../src/server/jsonrpc/routes/workspaceBackups";
 import type { SessionEvent } from "../src/server/protocol";
+import type { McpServerLookup } from "../src/server/session/mcp/McpServerLookup";
 
 type RouteHarness = ReturnType<typeof createRouteHarness>;
 
@@ -74,14 +75,14 @@ function createRuntimeDouble(session: Record<string, any>) {
       delete: async (name: string) => await session.deleteMcpServer?.(name),
       setEnabled: async (opts: Record<string, unknown>) =>
         await session.setMcpServerEnabled?.(opts),
-      validate: async (name: string, source?: string) =>
-        await session.validateMcpServer?.(name, source),
-      authorizeAuth: async (name: string, source?: string) =>
-        await session.authorizeMcpServerAuth?.(name, source),
-      callbackAuth: async (name: string, code?: string, source?: string) =>
-        await session.callbackMcpServerAuth?.(name, code, source),
-      setApiKey: async (name: string, apiKey: string, source?: string) =>
-        await session.setMcpServerApiKey?.(name, apiKey, source),
+      validate: async (name: string, lookup?: string | McpServerLookup) =>
+        await session.validateMcpServer?.(name, lookup),
+      authorizeAuth: async (name: string, lookup?: string | McpServerLookup) =>
+        await session.authorizeMcpServerAuth?.(name, lookup),
+      callbackAuth: async (name: string, code?: string, lookup?: string | McpServerLookup) =>
+        await session.callbackMcpServerAuth?.(name, code, lookup),
+      setApiKey: async (name: string, apiKey: string, lookup?: string | McpServerLookup) =>
+        await session.setMcpServerApiKey?.(name, apiKey, lookup),
       migrateLegacyServers: async (scope: "workspace" | "user") =>
         await session.migrateLegacyMcpServers?.(scope),
     },
@@ -871,9 +872,14 @@ describe("JSON-RPC extracted route review fixes", () => {
       cwd: "C:/workspace",
       name: "grep",
       source: "plugin",
+      pluginId: "grep-toolkit",
+      pluginScope: "workspace",
     });
 
-    expect(received).toEqual(["grep", "plugin"]);
+    expect(received).toEqual([
+      "grep",
+      { source: "plugin", pluginId: "grep-toolkit", pluginScope: "workspace" },
+    ]);
   });
 
   test("runtime LibreOffice check returns diagnostic status", async () => {
@@ -1084,24 +1090,30 @@ describe("JSON-RPC extracted route review fixes", () => {
       cwd: "C:/workspace",
       name: "grep",
       source: "plugin",
+      pluginId: "grep-toolkit",
+      pluginScope: "workspace",
     });
     await harness.invoke(handlers, "cowork/mcp/server/auth/callback", {
       cwd: "C:/workspace",
       name: "grep",
       source: "plugin",
+      pluginId: "grep-toolkit",
+      pluginScope: "workspace",
       code: "1234",
     });
     await harness.invoke(handlers, "cowork/mcp/server/auth/setApiKey", {
       cwd: "C:/workspace",
       name: "grep",
       source: "plugin",
+      pluginId: "grep-toolkit",
+      pluginScope: "workspace",
       apiKey: "secret",
     });
 
     expect(received).toEqual([
-      ["grep", "plugin"],
-      ["grep", "1234", "plugin"],
-      ["grep", "secret", "plugin"],
+      ["grep", { source: "plugin", pluginId: "grep-toolkit", pluginScope: "workspace" }],
+      ["grep", "1234", { source: "plugin", pluginId: "grep-toolkit", pluginScope: "workspace" }],
+      ["grep", "secret", { source: "plugin", pluginId: "grep-toolkit", pluginScope: "workspace" }],
     ]);
   });
 

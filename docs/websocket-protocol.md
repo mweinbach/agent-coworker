@@ -2106,7 +2106,7 @@ Layered MCP server snapshot with auth status, source attribution, and file diagn
 | `files` | `Array<{ source, path, exists, editable, legacy, parseError?, serverCount }>` | File-level diagnostics per layer |
 | `warnings` | `string[]` | Optional non-fatal parse warnings |
 
-Server-targeting MCP requests (`cowork/mcp/server/validate` and `cowork/mcp/server/auth/*`) accept params `{ cwd?, name, source? }`. `source` is optional for compatibility, but clients that render rows from `mcp_servers.servers` should pass the row's `source` so duplicate server names from different layers resolve to the intended entry.
+Server-targeting MCP requests (`cowork/mcp/server/validate` and `cowork/mcp/server/auth/*`) accept params `{ cwd?, name, source?, pluginId?, pluginScope? }`. `source` is optional for compatibility, but clients that render rows from `mcp_servers.servers` should pass the row's `source`; for plugin-sourced rows, also pass the row's `pluginId` and `pluginScope` so duplicate plugin installs resolve to the intended entry.
 
 ---
 

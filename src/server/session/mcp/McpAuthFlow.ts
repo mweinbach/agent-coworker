@@ -14,6 +14,7 @@ import {
   exchangeMCPServerOAuthCode,
 } from "../../../mcp/oauthProvider";
 import type { SessionContext } from "../SessionContext";
+import type { McpServerLookup } from "./McpServerLookup";
 import type { McpServerResolver } from "./McpServerResolver";
 
 const AUTO_OAUTH_POLL_INTERVAL_MS = 250;
@@ -77,10 +78,10 @@ export class McpAuthFlow {
     this.autoCallbackControllers.clear();
   }
 
-  async authorize(nameRaw: string, source?: MCPServerSource) {
+  async authorize(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
     if (!this.context.guardBusy()) return;
 
-    const server = await this.resolver.resolveByName(nameRaw, source);
+    const server = await this.resolver.resolveByName(nameRaw, lookup);
     if (!server) return;
 
     if (server.auth?.type !== "oauth") {
@@ -144,11 +145,11 @@ export class McpAuthFlow {
   async callback(
     nameRaw: string,
     codeRaw?: string,
-    source?: MCPServerSource,
+    lookup?: McpServerLookup | MCPServerSource,
   ): Promise<McpServerRef | null> {
     if (!this.context.guardBusy()) return null;
 
-    const server = await this.resolver.resolveByName(nameRaw, source);
+    const server = await this.resolver.resolveByName(nameRaw, lookup);
     if (!server) return null;
 
     if (server.auth?.type !== "oauth") {
@@ -348,11 +349,11 @@ export class McpAuthFlow {
   async setApiKey(
     nameRaw: string,
     apiKeyRaw: string,
-    source?: MCPServerSource,
+    lookup?: McpServerLookup | MCPServerSource,
   ): Promise<McpServerRef | null> {
     if (!this.context.guardBusy()) return null;
 
-    const server = await this.resolver.resolveByName(nameRaw, source);
+    const server = await this.resolver.resolveByName(nameRaw, lookup);
     if (!server) return null;
 
     if (server.auth?.type !== "api_key") {

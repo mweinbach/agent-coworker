@@ -20,6 +20,7 @@ import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared"
 import type { SessionConfigPatch } from "../protocol";
 import type { AgentSession } from "./AgentSession";
 import type { PendingPromptReplayEvent } from "./InteractionManager";
+import type { McpServerLookup } from "./mcp/McpServerLookup";
 import type { SeededSessionContext } from "./SessionContext";
 import type { TaskLockError } from "./taskLocks";
 
@@ -347,20 +348,28 @@ export class SessionMcpService {
     await this.session.setMcpServerEnabled(opts);
   }
 
-  async validate(name: string, source?: MCPServerSource): Promise<void> {
-    await this.session.validateMcpServer(name, source);
+  async validate(name: string, lookup?: McpServerLookup | MCPServerSource): Promise<void> {
+    await this.session.validateMcpServer(name, lookup);
   }
 
-  async authorizeAuth(name: string, source?: MCPServerSource): Promise<void> {
-    await this.session.authorizeMcpServerAuth(name, source);
+  async authorizeAuth(name: string, lookup?: McpServerLookup | MCPServerSource): Promise<void> {
+    await this.session.authorizeMcpServerAuth(name, lookup);
   }
 
-  async callbackAuth(name: string, code?: string, source?: MCPServerSource): Promise<void> {
-    await this.session.callbackMcpServerAuth(name, code, source);
+  async callbackAuth(
+    name: string,
+    code?: string,
+    lookup?: McpServerLookup | MCPServerSource,
+  ): Promise<void> {
+    await this.session.callbackMcpServerAuth(name, code, lookup);
   }
 
-  async setApiKey(name: string, apiKey: string, source?: MCPServerSource): Promise<void> {
-    await this.session.setMcpServerApiKey(name, apiKey, source);
+  async setApiKey(
+    name: string,
+    apiKey: string,
+    lookup?: McpServerLookup | MCPServerSource,
+  ): Promise<void> {
+    await this.session.setMcpServerApiKey(name, apiKey, lookup);
   }
 }
 

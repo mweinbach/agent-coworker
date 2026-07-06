@@ -1563,6 +1563,8 @@ const mcpServerValidateRequestSchema = z
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
     source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
   })
   .strict();
 
@@ -1571,6 +1573,8 @@ const mcpServerAuthAuthorizeRequestSchema = z
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
     source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
   })
   .strict();
 
@@ -1579,6 +1583,8 @@ const mcpServerAuthCallbackRequestSchema = z
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
     source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
     code: z.string().optional(),
   })
   .strict();
@@ -1588,6 +1594,8 @@ const mcpServerAuthSetApiKeyRequestSchema = z
     cwd: optionalNonEmptyTrimmedStringSchema,
     name: nonEmptyTrimmedStringSchema,
     source: mcpSessionEventSourceSchema.optional(),
+    pluginId: z.string().trim().min(1).optional(),
+    pluginScope: pluginScopeSchema.optional(),
     apiKey: z.string(),
   })
   .strict();

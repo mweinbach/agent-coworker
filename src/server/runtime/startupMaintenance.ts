@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 
-import { SessionBackupManager, getSessionBackupsRootDirs } from "../sessionBackup";
+import { getSessionBackupsRootDirs, SessionBackupManager } from "../sessionBackup";
 import type { SessionDb } from "../sessionDb";
 import { sweepStaleSessionTmpFiles } from "../sessionStore";
 

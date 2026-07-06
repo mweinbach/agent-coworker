@@ -71,9 +71,9 @@ export class McpAuthFlow {
   ) {}
 
   close() {
-    for (const controller of this.autoCallbackControllers.values()) {
-      controller.abort();
-    }
+    // Auto OAuth may still be exchanging tokens after an ephemeral workspace-control
+    // session is disposed. Do not abort in-flight completion — it reads/writes auth
+    // via config and must finish even when control sinks are gone.
     this.autoCallbackControllers.clear();
   }
 

@@ -476,6 +476,8 @@ export type MarketplacesListEntry = Extract<
   { type: "marketplaces_list" }
 >["marketplaces"][number];
 
+export type MarketplaceDetail = Extract<SessionEvent, { type: "marketplace_detail" }>["detail"];
+
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
@@ -529,6 +531,10 @@ export type WorkspaceRuntime = {
   marketplacesError: string | null;
   marketplaceMutationPendingKeys: Record<string, true>;
   marketplaceMutationError: string | null;
+  selectedMarketplaceId: string | null;
+  selectedMarketplaceDetail: MarketplaceDetail | null;
+  marketplaceDetailLoading: boolean;
+  marketplaceDetailError: string | null;
   importItemsByKey: Record<string, ImportRuntimeState>;
   importPendingKeys: Record<string, true>;
   memories: MemoryListEntry[];

@@ -225,6 +225,74 @@ describe("marketplace sources section", () => {
     }
   });
 
+  test("clicking a source row selects the marketplace for the detail dialog", async () => {
+    const previousState = useAppStore.getState();
+    const selectMarketplaceMock = mock(async (_id: string | null) => {});
+    const removeMarketplaceMock = mock(async (_id: string) => {});
+    confirmActionMock.mockClear();
+    confirmActionMock.mockResolvedValue(true);
+
+    useAppStore.setState({
+      ...previousState,
+      workspaces: [projectWorkspace(workspaceId)],
+      selectedWorkspaceId: workspaceId,
+      refreshMarketplaces: mock(async () => {}) as typeof previousState.refreshMarketplaces,
+      selectMarketplace: selectMarketplaceMock as typeof previousState.selectMarketplace,
+      removeMarketplace: removeMarketplaceMock as typeof previousState.removeMarketplace,
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          ...emptyCatalogs(),
+          marketplaces: [builtInMarketplace, customMarketplace],
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(MarketplaceSourcesList, { workspaceId }));
+        await flushUi();
+      });
+
+      const rowButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Acme Extras"),
+      );
+      await act(async () => {
+        clickButton(harness, rowButton);
+        await flushUi();
+      });
+      expect(selectMarketplaceMock).toHaveBeenCalledWith("acme/cowork-extras");
+
+      // The trash button stays independent: removing does not open the detail dialog.
+      selectMarketplaceMock.mockClear();
+      await act(async () => {
+        clickButton(
+          harness,
+          harness.dom.window.document.querySelector("button[aria-label='Remove Acme Extras']"),
+        );
+        await flushUi();
+      });
+      expect(removeMarketplaceMock).toHaveBeenCalledWith("acme/cowork-extras");
+      expect(selectMarketplaceMock).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("remove is skipped when the confirmation dialog is cancelled", async () => {
     const previousState = useAppStore.getState();
     const removeMarketplaceMock = mock(async (_id: string) => {});

@@ -195,4 +195,82 @@ describe("McpAuthFlow", () => {
       await fs.rm(builtInConfigDir, { recursive: true, force: true });
     }
   });
+
+  test("close does not abort in-flight auto OAuth completion", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const server = inheritedOauthServer("quartr");
+    const { flow, events } = createHarness(config, server);
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const userAuthFile = path.join(home, ".cowork", "auth", "mcp-credentials.json");
+
+    try {
+      mockAuthorizeMcpServerOAuth.mockResolvedValue({
+        challenge: {
+          method: "auto",
+          instructions: "Complete sign-in in your browser.",
+          url: "https://mcp.quartr.com/oauth/authorize?client_id=test-client",
+          expiresAt,
+        },
+        pending: {
+          challengeId: "challenge-close",
+          state: "state-close",
+          codeVerifier: "code-verifier-close",
+          redirectUri: "http://127.0.0.1:1455/oauth/callback",
+          createdAt,
+          expiresAt,
+          authorizationServerUrl: "https://mcp.quartr.com",
+          resource: "https://mcp.quartr.com/",
+        },
+        openedBrowser: true,
+      });
+
+      let consumeCalls = 0;
+      mockConsumeCapturedOAuthCode.mockImplementation(async () => {
+        consumeCalls += 1;
+        return consumeCalls >= 3 ? "oauth-code-close" : undefined;
+      });
+
+      mockExchangeMcpServerOAuthCode.mockImplementation(async ({ code }: any) => ({
+        tokens: {
+          accessToken: `access-for-${code}`,
+          refreshToken: "refresh-token-close",
+          tokenType: "Bearer",
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+          scope: "read",
+          updatedAt: new Date().toISOString(),
+        },
+        message: "OAuth token exchange successful.",
+      }));
+
+      await flow.authorize("quartr");
+      flow.close();
+
+      await waitForCondition(async () => {
+        const raw = await fs.readFile(userAuthFile, "utf-8").catch(() => null);
+        if (!raw) return false;
+        const parsed = JSON.parse(raw) as {
+          servers?: Record<string, { oauth?: { tokens?: { accessToken?: string } } }>;
+        };
+        return parsed.servers?.quartr?.oauth?.tokens?.accessToken === "access-for-oauth-code-close";
+      });
+
+      expect(
+        events.some(
+          (event) =>
+            event.type === "mcp_server_auth_result" &&
+            event.name === "quartr" &&
+            event.ok &&
+            event.mode === "oauth",
+        ),
+      ).toBe(true);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
 });

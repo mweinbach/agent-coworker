@@ -446,6 +446,10 @@ export class SessionSkillService {
     await this.session.listMarketplaces();
   }
 
+  async readMarketplaceDetail(marketplaceId: string): Promise<void> {
+    await this.session.readMarketplaceDetail(marketplaceId);
+  }
+
   async addMarketplace(sourceInput: string): Promise<void> {
     await this.session.addMarketplace(sourceInput);
   }

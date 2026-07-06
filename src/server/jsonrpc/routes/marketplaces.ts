@@ -14,6 +14,12 @@ function isMarketplacesListEvent(
   return event.type === "marketplaces_list";
 }
 
+function isMarketplaceDetailEvent(
+  event: SessionEvent,
+): event is Extract<SessionEvent, { type: "marketplace_detail" }> {
+  return event.type === "marketplace_detail";
+}
+
 export function createMarketplacesRouteHandlers(
   context: JsonRpcRouteContext,
 ): JsonRpcRequestHandlerMap {
@@ -26,6 +32,24 @@ export function createMarketplacesRouteHandlers(
         cwd,
         async (runtime) => await runtime.skills.listMarketplaces(),
         isMarketplacesListEvent,
+        MARKETPLACE_EVENT_TIMEOUT_MS,
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
+    "cowork/marketplaces/detail": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const marketplaceId = typeof params.id === "string" ? params.id.trim() : "";
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (runtime) => await runtime.skills.readMarketplaceDetail(marketplaceId),
+        isMarketplaceDetailEvent,
         MARKETPLACE_EVENT_TIMEOUT_MS,
       );
       if (context.utils.isSessionError(event)) {

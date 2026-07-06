@@ -209,6 +209,7 @@ export function registerControlSocketLifecycleHooks() {
     RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
+    RUNTIME.mcpOAuthRefreshPollGenerations.clear();
     RUNTIME.agentProfilesCatalogGenerations.clear();
     persistCalls = 0;
   });

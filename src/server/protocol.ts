@@ -1,4 +1,5 @@
 import type { ImportableItem, ImportableKind, ImportSource } from "../import";
+import type { MarketplaceDetail } from "../plugins/marketplaceDetail";
 import type { MarketplaceListEntry } from "../plugins/marketplaceRegistry";
 import type { ProviderStatus } from "../providerStatus";
 import type { ProviderAuthChallenge, ProviderAuthMethod } from "../providers/authRegistry";
@@ -433,6 +434,11 @@ export type SessionEvent =
       type: "marketplaces_list";
       sessionId: string;
       marketplaces: MarketplaceListEntry[];
+    }
+  | {
+      type: "marketplace_detail";
+      sessionId: string;
+      detail: MarketplaceDetail;
     }
   | {
       type: "import_list";

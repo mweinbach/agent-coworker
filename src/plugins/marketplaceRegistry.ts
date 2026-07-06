@@ -287,6 +287,31 @@ export async function fetchConfiguredMarketplaces(opts: {
   return await fetchMarketplaceSources(sources, opts.fetchImpl);
 }
 
+/**
+ * Resolve one configured marketplace by id and fetch its manifest. Unlike the
+ * list fetches, failures here throw so callers can surface them as errors.
+ */
+export async function fetchConfiguredMarketplaceById(opts: {
+  config: MarketplaceRegistryConfig;
+  id: string;
+  fetchImpl?: FetchLike;
+}): Promise<{ source: ConfiguredMarketplace; document: ParsedMarketplaceDocument }> {
+  const id = marketplaceIdForRepo(opts.id);
+  const sources = await listConfiguredMarketplaces(opts.config);
+  const source = sources.find((entry) => entry.id === id);
+  if (!source) {
+    throw new Error(`Marketplace "${opts.id}" is not configured.`);
+  }
+  const effectiveFetchImpl = resolveMarketplaceFetchImpl(opts.fetchImpl);
+  const document = await fetchRemotePluginMarketplace({
+    repo: source.repo,
+    ref: source.ref,
+    marketplacePath: source.marketplacePath,
+    ...(effectiveFetchImpl ? { fetchImpl: effectiveFetchImpl } : {}),
+  });
+  return { source, document };
+}
+
 export type MarketplaceListEntry = {
   id: string;
   repo: string;

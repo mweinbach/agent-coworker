@@ -147,6 +147,158 @@ describe("marketplace store actions", () => {
     expect(state.workspaceRuntimeById[otherWorkspaceId].marketplaces).toEqual([builtInMarketplace]);
   });
 
+  test("selectMarketplace requests the detail and applies the marketplace_detail event", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      marketplaceDetailError: "stale detail error",
+    };
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    const detail = {
+      source: customMarketplace,
+      plugins: [
+        {
+          name: "acme-toolkit",
+          displayName: "Acme Toolkit",
+          category: "Design",
+          installed: false,
+          installSource: "https://github.com/acme/cowork-extras/tree/main/plugins/acme-toolkit",
+          skills: [],
+          mcpServers: [],
+        },
+      ],
+      skills: [],
+      connectors: [],
+    };
+
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let loadingDuringRequest: boolean | null = null;
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: Record<string, unknown>) => {
+        requests.push({ method, params });
+        loadingDuringRequest = state.workspaceRuntimeById[workspaceId].marketplaceDetailLoading;
+        return {
+          event: {
+            type: "marketplace_detail",
+            sessionId: "jsonrpc-control",
+            detail,
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createMarketplaceActions(set, get).selectMarketplace("acme/cowork-extras");
+
+    expect(requests).toEqual([
+      {
+        method: "cowork/marketplaces/detail",
+        params: { cwd: "/tmp/workspace", id: "acme/cowork-extras" },
+      },
+    ]);
+    expect(loadingDuringRequest).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceId).toBe(
+      "acme/cowork-extras",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceDetail).toEqual(detail);
+    expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailError).toBeNull();
+  });
+
+  test("selectMarketplace(null) clears the selection and detail state", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      selectedMarketplaceId: "acme/cowork-extras",
+      selectedMarketplaceDetail: {
+        source: customMarketplace,
+        plugins: [],
+        skills: [],
+        connectors: [],
+      },
+      marketplaceDetailError: "stale detail error",
+    };
+    const { get, set } = createStoreHarness(state);
+
+    await createMarketplaceActions(set, get).selectMarketplace(null);
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceId).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceDetail).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailError).toBeNull();
+  });
+
+  test("marketplace_detail events for a no-longer-selected marketplace are ignored", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      selectedMarketplaceId: "acme/other-marketplace",
+    };
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        event: {
+          type: "marketplace_detail",
+          sessionId: "jsonrpc-control",
+          detail: {
+            source: customMarketplace,
+            plugins: [],
+            skills: [],
+            connectors: [],
+          },
+        },
+      }),
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createMarketplaceActions(set, get).readMarketplaceDetail("acme/cowork-extras");
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceDetail).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceId).toBe(
+      "acme/other-marketplace",
+    );
+  });
+
+  test("readMarketplaceDetail surfaces the server error inline", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      selectedMarketplaceId: "acme/cowork-extras",
+    };
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => {
+        throw new Error('Failed to read marketplace: Marketplace "acme/gone" is not configured.');
+      },
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createMarketplaceActions(set, get).readMarketplaceDetail("acme/gone");
+
+    expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailError).toBe(
+      'Failed to read marketplace: Marketplace "acme/gone" is not configured.',
+    );
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceDetail).toBeNull();
+  });
+
   test("addMarketplace sends the source input and clears its pending key on success", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId] = {

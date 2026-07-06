@@ -11,6 +11,7 @@ import { confirmAction } from "../../../lib/desktopCommands";
 import type { PluginCatalogEntry } from "../../../lib/wsProtocol";
 import { EntityIcon, SettingsSection } from "../SettingsPrimitives";
 import { matchesQuery, NoMatchesState, pluginIcon, skillIcon } from "./catalogShared";
+import { MarketplaceDetailDialog } from "./MarketplaceDetailDialog";
 
 type MarketplacePluginEntry = Extract<PluginCatalogEntry, { installed: false }>;
 
@@ -215,11 +216,12 @@ function marketplaceMetaLine(entry: MarketplacesListEntry): string {
   return parts.join(" · ");
 }
 
-/** The configured marketplace catalogs, with per-source counts and removal. */
+/** The configured marketplace catalogs, with per-source counts, detail dialog, and removal. */
 export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string }) {
   const runtime = useAppStore((s) => s.workspaceRuntimeById[workspaceId]);
   const refreshMarketplaces = useAppStore((s) => s.refreshMarketplaces);
   const removeMarketplace = useAppStore((s) => s.removeMarketplace);
+  const selectMarketplace = useAppStore((s) => s.selectMarketplace);
   const dismissMarketplaceMutationError = useAppStore((s) => s.dismissMarketplaceMutationError);
 
   // The sources list is only served by `cowork/marketplaces/read`; available
@@ -273,32 +275,38 @@ export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string })
               key={entry.id}
               className={
                 entry.fetchError
-                  ? "flex items-center gap-3 bg-destructive/5 px-4 py-3"
-                  : "flex items-center gap-3 px-4 py-3"
+                  ? "flex items-center gap-3 bg-destructive/5 px-4 py-3 transition-colors hover:bg-destructive/10"
+                  : "flex items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
               }
             >
-              <EntityIcon name={displayName} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-foreground">
-                    {displayName}
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                onClick={() => void selectMarketplace(entry.id)}
+              >
+                <EntityIcon name={displayName} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {displayName}
+                    </span>
+                    {entry.builtIn ? (
+                      <Badge variant="secondary" className="shrink-0">
+                        Built-in
+                      </Badge>
+                    ) : null}
                   </span>
-                  {entry.builtIn ? (
-                    <Badge variant="secondary" className="shrink-0">
-                      Built-in
-                    </Badge>
-                  ) : null}
-                </div>
-                {entry.fetchError ? (
-                  <div className="truncate text-xs text-destructive">
-                    Unreachable: {entry.fetchError}
-                  </div>
-                ) : (
-                  <div className="truncate text-xs text-muted-foreground">
-                    {marketplaceMetaLine(entry)}
-                  </div>
-                )}
-              </div>
+                  {entry.fetchError ? (
+                    <span className="block truncate text-xs text-destructive">
+                      Unreachable: {entry.fetchError}
+                    </span>
+                  ) : (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {marketplaceMetaLine(entry)}
+                    </span>
+                  )}
+                </span>
+              </button>
               {!entry.builtIn ? (
                 <Button
                   type="button"
@@ -307,7 +315,8 @@ export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string })
                   className="shrink-0 text-muted-foreground hover:text-destructive"
                   aria-label={`Remove ${displayName}`}
                   disabled={removePending}
-                  onClick={async () => {
+                  onClick={async (event) => {
+                    event.stopPropagation();
                     const confirmed = await confirmAction({
                       title: "Remove marketplace",
                       message: `Remove "${displayName}"?`,
@@ -330,6 +339,7 @@ export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string })
           );
         })
       )}
+      <MarketplaceDetailDialog workspaceId={workspaceId} />
     </SettingsSection>
   );
 }

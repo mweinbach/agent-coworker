@@ -14,6 +14,7 @@ import {
   installPluginsFromSource,
   updatePluginInstallation,
 } from "../../plugins";
+import { buildMarketplaceDetail } from "../../plugins/marketplaceDetail";
 import {
   addMarketplace as addMarketplaceToRegistry,
   buildMarketplaceListEntries,
@@ -499,6 +500,31 @@ export class SkillManager {
         "internal_error",
         "session",
         `Failed to list marketplaces: ${String(err)}`,
+      );
+    }
+  }
+
+  async readMarketplaceDetail(marketplaceIdRaw: string) {
+    const marketplaceId = marketplaceIdRaw.trim();
+    if (!marketplaceId) {
+      this.context.emitError("validation_failed", "session", "Marketplace ID is required");
+      return;
+    }
+    try {
+      const detail = await buildMarketplaceDetail({
+        config: this.context.state.config,
+        id: marketplaceId,
+      });
+      this.context.emit({
+        type: "marketplace_detail",
+        sessionId: this.context.id,
+        detail,
+      });
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to read marketplace: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

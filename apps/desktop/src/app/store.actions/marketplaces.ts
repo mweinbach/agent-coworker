@@ -32,8 +32,71 @@ export function createMarketplaceActions(
   get: StoreGet,
 ): Pick<
   AppStoreActions,
-  "refreshMarketplaces" | "addMarketplace" | "removeMarketplace" | "dismissMarketplaceMutationError"
+  | "refreshMarketplaces"
+  | "selectMarketplace"
+  | "readMarketplaceDetail"
+  | "addMarketplace"
+  | "removeMarketplace"
+  | "dismissMarketplaceMutationError"
 > {
+  const readMarketplaceDetail = async (id: string, targetWorkspaceId?: string) => {
+    const workspaceId = targetWorkspaceId ?? managementWorkspaceIdFor(get);
+    if (!workspaceId) return;
+    ensureWorkspaceRuntime(get, set, workspaceId);
+    set((s) => ({
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...s.workspaceRuntimeById[workspaceId],
+          marketplaceDetailLoading: true,
+          marketplaceDetailError: null,
+        },
+      },
+    }));
+    await ensureServerRunning(get, set, workspaceId);
+    const readyRuntime = get().workspaceRuntimeById[workspaceId];
+    if (!readyRuntime?.serverUrl || readyRuntime.error) {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            marketplaceDetailLoading: false,
+            marketplaceDetailError: "Unable to load marketplace details.",
+          },
+        },
+      }));
+      return;
+    }
+    ensureControlSocket(get, set, workspaceId);
+    const cwd = workspacePathFor(get, workspaceId);
+    // Assembling the detail re-fetches the marketplace manifest over the
+    // network, so the loading flag stays set until the `marketplace_detail`
+    // event lands.
+    const rpcError: { message?: string } = {};
+    const ok = await requestJsonRpcControlEvent(
+      get,
+      set,
+      workspaceId,
+      "cowork/marketplaces/detail",
+      { cwd, id },
+      rpcError,
+    );
+    if (!ok) {
+      const detail = rpcError.message?.trim() || "Unable to load marketplace details.";
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            marketplaceDetailLoading: false,
+            marketplaceDetailError: detail,
+          },
+        },
+      }));
+    }
+  };
+
   return {
     refreshMarketplaces: async (targetWorkspaceId?: string) => {
       const workspaceId = targetWorkspaceId ?? managementWorkspaceIdFor(get);
@@ -99,6 +162,28 @@ export function createMarketplaceActions(
         }));
       }
     },
+
+    selectMarketplace: async (id: string | null) => {
+      const workspaceId = managementWorkspaceIdFor(get);
+      if (!workspaceId) return;
+      ensureWorkspaceRuntime(get, set, workspaceId);
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            selectedMarketplaceId: id,
+            selectedMarketplaceDetail: null,
+            marketplaceDetailLoading: false,
+            marketplaceDetailError: null,
+          },
+        },
+      }));
+      if (id === null) return;
+      await readMarketplaceDetail(id, workspaceId);
+    },
+
+    readMarketplaceDetail,
 
     addMarketplace: async (sourceInput: string) => {
       const workspaceId = managementWorkspaceIdFor(get);

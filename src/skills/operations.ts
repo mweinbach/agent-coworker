@@ -129,7 +129,7 @@ async function stageCopySourceIfNeeded(
   };
 }
 
-function installSourceFromOrigin(installation: SkillInstallationEntry): string | null {
+export function installSourceFromOrigin(installation: SkillInstallationEntry): string | null {
   const origin = installation.origin;
   if (!origin) {
     return null;

@@ -93,6 +93,71 @@ describe("server JSON-RPC marketplace controls", () => {
     }
   });
 
+  test("marketplaces detail assembles the marketplace contents", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    marketplaceRegistryInternal.setDefaultFetchImplForTests(
+      createMarketplaceFetch({
+        [BUILT_IN_MARKETPLACE_REPO]: marketplaceDoc("cowork-builtin", ["s1", "s2"]),
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request(
+        "cowork/marketplaces/detail",
+        { cwd: tmpDir, id: BUILT_IN_ID },
+        REQUEST_TIMEOUT_MS,
+      );
+
+      expect(response.error).toBeUndefined();
+      expect(response.result.event.type).toBe("marketplace_detail");
+      expect(response.result.event.detail.source).toMatchObject({
+        id: BUILT_IN_ID,
+        repo: BUILT_IN_MARKETPLACE_REPO,
+        builtIn: true,
+        displayName: "cowork-builtin Display",
+        pluginCount: 0,
+        skillCount: 2,
+      });
+      expect(response.result.event.detail.plugins).toEqual([]);
+      expect(response.result.event.detail.skills).toHaveLength(2);
+      expect(response.result.event.detail.skills[0]).toMatchObject({
+        name: "s1",
+        installed: false,
+        installSource: `https://github.com/${BUILT_IN_MARKETPLACE_REPO}/tree/main/skills/s1`,
+      });
+      expect(response.result.event.detail.connectors).toEqual([]);
+      rpc.close();
+    } finally {
+      marketplaceRegistryInternal.resetForTests();
+      await stopTestServer(server);
+    }
+  });
+
+  test("marketplaces detail rejects unknown ids with a standard error", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    marketplaceRegistryInternal.setDefaultFetchImplForTests(createMarketplaceFetch({}));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request(
+        "cowork/marketplaces/detail",
+        { cwd: tmpDir, id: "acme/unknown" },
+        REQUEST_TIMEOUT_MS,
+      );
+
+      expect(response.result).toBeUndefined();
+      expect(response.error.message).toContain("Failed to read marketplace");
+      expect(response.error.message).toContain('Marketplace "acme/unknown" is not configured.');
+      rpc.close();
+    } finally {
+      marketplaceRegistryInternal.resetForTests();
+      await stopTestServer(server);
+    }
+  });
+
   test("marketplaces add persists a new marketplace and remove deletes it", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

@@ -329,6 +329,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/plugins/update`
 - marketplace registry controls (configure additional plugin/skill marketplaces)
   - `cowork/marketplaces/read`
+  - `cowork/marketplaces/detail`
   - `cowork/marketplaces/add`
   - `cowork/marketplaces/remove`
 - import controls (import plugins/skills already on disk from Claude Code `~/.claude` and Codex `~/.codex`)
@@ -389,6 +390,7 @@ Marketplace entries (plugins and skills) may carry optional icon metadata in `in
 Marketplace registry controls let a client configure additional marketplaces beyond the built-in one. A marketplace is a public GitHub repository whose manifest lives at `.agents/plugins/marketplace.json` (the built-in layout). User-added marketplaces persist in `~/.cowork/config/marketplaces.json`; the built-in marketplace is implicit — always present, always listed first, never persisted, never removable. Marketplace identity is the lowercase-normalized `owner/repo` slug. Catalog snapshots (`availablePlugins` / `availableSkills`) and update-check annotation aggregate every configured marketplace in list order, deduping same-name offers with earlier marketplaces (built-in first) winning; a single failing marketplace marks the snapshot partial (`availablePluginsPartial` / `availableSkillsPartial`) while the others still contribute rows.
 
 - `cowork/marketplaces/read` — params `{ cwd? }`. Returns `{ event }` where `event.type` is `marketplaces_list` (see [marketplaces_list](#marketplaces_list)). Each entry's `displayName`, `pluginCount`, and `skillCount` come from fetching that marketplace's manifest; when a fetch fails the entry carries `fetchError` instead and omits the counts.
+- `cowork/marketplaces/detail` — params `{ cwd?, id: string }`. Returns `{ event }` where `event.type` is `marketplace_detail` (see [marketplace_detail](#marketplace_detail)): everything the marketplace includes — its plugins, standalone skills, and connectors (MCP servers) from installed plugins — annotated with local installed/enabled state. An unknown id or a manifest fetch failure returns a standard error with the underlying message.
 - `cowork/marketplaces/add` — params `{ cwd?, sourceInput: string }`. `sourceInput` accepts `owner/repo` shorthand, `https://github.com/owner/repo`, or `https://github.com/owner/repo/tree/<ref>` (ref defaults to `main`). The server validates the source by fetching and parsing its manifest before persisting; on failure the request returns a standard error with the underlying fetch/parse message (duplicates — including the built-in marketplace — are rejected). On success the result returns the updated `marketplaces_list` event and the server refreshes the remote-inclusive plugin and skill catalogs so marketplace rows update immediately.
 - `cowork/marketplaces/remove` — params `{ cwd?, id: string }`. Removes a configured marketplace by id. Removing the built-in marketplace or an unknown id returns an error. On success the result returns the updated `marketplaces_list` event and the same catalog refreshes as `cowork/marketplaces/add`.
 
@@ -2804,6 +2806,94 @@ Configured marketplace registry snapshot (built-in marketplace first, then user-
 | `marketplaces[].skillCount` | `number?` | Skill entry count from the fetched manifest; omitted when the fetch failed |
 | `marketplaces[].fetchError` | `string?` | Manifest fetch/parse error; present only when the fetch failed |
 | `marketplaces[].addedAt` | `string?` | ISO timestamp when the user added the marketplace; absent for the built-in entry |
+
+---
+
+### marketplace_detail
+
+Everything one configured marketplace includes, annotated with local installed state. Returned by `cowork/marketplaces/detail`. The detail is assembled server-side: the marketplace manifest is fetched fresh, then matched against the local plugin catalog and skill installations.
+
+```json
+{
+  "type": "marketplace_detail",
+  "sessionId": "...",
+  "detail": {
+    "source": {
+      "id": "mweinbach/cowork-skills-plugins",
+      "repo": "mweinbach/cowork-skills-plugins",
+      "ref": "main",
+      "url": "https://github.com/mweinbach/cowork-skills-plugins/tree/main",
+      "marketplacePath": ".agents/plugins/marketplace.json",
+      "builtIn": true,
+      "displayName": "Cowork Skills & Plugins",
+      "pluginCount": 2,
+      "skillCount": 1
+    },
+    "plugins": [
+      {
+        "name": "workspace-tools",
+        "displayName": "Workspace Tools",
+        "category": "Productivity",
+        "installed": true,
+        "enabled": true,
+        "skills": ["documents", "spreadsheets"],
+        "mcpServers": ["workspace-tools-server"]
+      },
+      {
+        "name": "figma-toolkit",
+        "displayName": "Figma Toolkit",
+        "category": "Design",
+        "installed": false,
+        "installSource": "https://github.com/mweinbach/cowork-skills-plugins/tree/main/plugins/figma-toolkit",
+        "skills": [],
+        "mcpServers": []
+      }
+    ],
+    "skills": [
+      {
+        "name": "create-skill",
+        "displayName": "Create Skill",
+        "category": "Authoring",
+        "installed": false,
+        "installSource": "https://github.com/mweinbach/cowork-skills-plugins/tree/main/skills/create-skill"
+      }
+    ],
+    "connectors": [
+      {
+        "name": "workspace-tools-server",
+        "pluginName": "workspace-tools",
+        "pluginDisplayName": "Workspace Tools",
+        "installed": true
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"marketplace_detail"` | — |
+| `sessionId` | `string` | Session identifier |
+| `detail.source` | `MarketplaceListEntry` | Same entry shape as a `marketplaces_list` item for the requested id (counts always present since the manifest fetch succeeded) |
+| `detail.plugins` | `array` | Every plugin entry in the manifest, manifest order |
+| `detail.plugins[].name` | `string` | Plugin id from the manifest |
+| `detail.plugins[].displayName` | `string` | Manifest `interface.displayName`, falling back to `name` |
+| `detail.plugins[].category` | `string?` | Manifest category |
+| `detail.plugins[].icon` | `string?` | Manifest icon/logo URL or `data:` URI |
+| `detail.plugins[].installed` | `boolean` | True when an installed plugin with the same id records this marketplace as its provenance |
+| `detail.plugins[].enabled` | `boolean?` | Present only when installed |
+| `detail.plugins[].installSource` | `string?` | GitHub tree URL for `cowork/plugins/install`; present only when not installed |
+| `detail.plugins[].skills` | `string[]` | Bundled skill raw names of the installed copy; empty when not installed |
+| `detail.plugins[].mcpServers` | `string[]` | Bundled MCP server names of the installed copy; empty when not installed |
+| `detail.skills` | `array` | Every standalone skill entry in the manifest, manifest order |
+| `detail.skills[].installed` | `boolean` | True when a standalone installation matches by origin repo + name (or recorded install source) |
+| `detail.skills[].enabled` | `boolean?` | Present only when installed |
+| `detail.skills[].installSource` | `string?` | GitHub tree URL for `cowork/skills/install`; present only when not installed |
+| `detail.connectors` | `array` | MCP servers contributed by this marketplace's installed plugins; connectors of uninstalled plugins are unknowable from the manifest |
+| `detail.connectors[].name` | `string` | MCP server name |
+| `detail.connectors[].pluginName` | `string` | Owning plugin id |
+| `detail.connectors[].pluginDisplayName` | `string` | Owning plugin display name |
+| `detail.connectors[].installed` | `boolean` | Always `true` (only installed plugins contribute connectors) |
 
 ---
 

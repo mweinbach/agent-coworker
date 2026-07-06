@@ -64,6 +64,8 @@ type RequestJsonRpcControlEventOptions = {
 };
 
 const REQUEST_TIMEOUT_MS = 5_000;
+const MCP_OAUTH_REFRESH_POLL_INTERVAL_MS = 1_000;
+const MCP_OAUTH_REFRESH_POLL_TIMEOUT_MS = 10 * 60_000;
 
 function applyMemorySessionConfigPatch(
   current: Extract<SessionEvent, { type: "session_config" }>["config"],
@@ -409,6 +411,7 @@ export function createControlSocketHelpers(
                 pluginMutationPendingKeys: {},
                 pluginMutationError: null,
                 marketplacesLoading: false,
+                marketplaceDetailLoading: false,
                 marketplaceMutationPendingKeys: {},
                 marketplaceMutationError: null,
                 workspaceBackupsLoading: false,
@@ -842,6 +845,77 @@ export function createControlSocketHelpers(
     return startJsonRpcControlBootstrap(get, set, workspaceId);
   }
 
+  function mcpOAuthPollKey(workspaceId: string, serverName: string): string {
+    return `${workspaceId}:${serverName}`;
+  }
+
+  function clearMcpOAuthRefreshPollsForWorkspace(workspaceId: string) {
+    for (const key of [...RUNTIME.mcpOAuthRefreshPollGenerations.keys()]) {
+      if (key.startsWith(`${workspaceId}:`)) {
+        RUNTIME.mcpOAuthRefreshPollGenerations.delete(key);
+      }
+    }
+  }
+
+  async function refreshWorkspaceMcpServers(get: StoreGet, set: StoreSet, workspaceId: string) {
+    const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+    await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", { cwd });
+  }
+
+  function scheduleMcpOAuthServersRefresh(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+    serverName: string,
+  ) {
+    const pollKey = mcpOAuthPollKey(workspaceId, serverName);
+    const generation = (RUNTIME.mcpOAuthRefreshPollGenerations.get(pollKey) ?? 0) + 1;
+    RUNTIME.mcpOAuthRefreshPollGenerations.set(pollKey, generation);
+    const startedAt = Date.now();
+
+    const poll = async () => {
+      if (RUNTIME.mcpOAuthRefreshPollGenerations.get(pollKey) !== generation) {
+        return;
+      }
+      if (isWorkspaceDisposed(workspaceId)) {
+        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        return;
+      }
+
+      const runtime = get().workspaceRuntimeById[workspaceId];
+      const server = runtime?.mcpServers.find((entry) => entry.name === serverName);
+      if (server?.authMode === "oauth") {
+        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        return;
+      }
+      if (Date.now() - startedAt >= MCP_OAUTH_REFRESH_POLL_TIMEOUT_MS) {
+        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        return;
+      }
+
+      await refreshWorkspaceMcpServers(get, set, workspaceId);
+
+      if (RUNTIME.mcpOAuthRefreshPollGenerations.get(pollKey) !== generation) {
+        return;
+      }
+      const updated = get().workspaceRuntimeById[workspaceId]?.mcpServers.find(
+        (entry) => entry.name === serverName,
+      );
+      if (updated?.authMode === "oauth") {
+        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        return;
+      }
+
+      setTimeout(() => {
+        void poll();
+      }, MCP_OAUTH_REFRESH_POLL_INTERVAL_MS);
+    };
+
+    setTimeout(() => {
+      void poll();
+    }, MCP_OAUTH_REFRESH_POLL_INTERVAL_MS);
+  }
+
   function applyJsonRpcControlEvent(
     get: StoreGet,
     set: StoreSet,
@@ -1096,6 +1170,9 @@ export function createControlSocketHelpers(
           detail: `${evt.challenge.instructions}${evt.challenge.url ? ` URL: ${evt.challenge.url}` : ""}`,
         }),
       }));
+      if (evt.challenge.method === "auto") {
+        scheduleMcpOAuthServersRefresh(get, set, workspaceId, evt.name);
+      }
       return;
     }
 
@@ -1116,6 +1193,10 @@ export function createControlSocketHelpers(
           detail: evt.message,
         }),
       }));
+      if (evt.ok && evt.mode === "oauth") {
+        RUNTIME.mcpOAuthRefreshPollGenerations.delete(mcpOAuthPollKey(workspaceId, evt.name));
+        void refreshWorkspaceMcpServers(get, set, workspaceId);
+      }
       return;
     }
 
@@ -1220,6 +1301,29 @@ export function createControlSocketHelpers(
           },
         },
       }));
+      return;
+    }
+
+    if (evt.type === "marketplace_detail") {
+      set((s) => {
+        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        // Ignore stale details when the user switched (or closed) the selected
+        // marketplace while a slower fetch was still in flight.
+        if (workspaceRuntime.selectedMarketplaceId !== evt.detail.source.id) {
+          return s;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...workspaceRuntime,
+              selectedMarketplaceDetail: evt.detail,
+              marketplaceDetailLoading: false,
+              marketplaceDetailError: null,
+            },
+          },
+        };
+      });
       return;
     }
 
@@ -1777,6 +1881,7 @@ export function createControlSocketHelpers(
       }
     }
     disposedWorkspaces.add(workspaceId);
+    clearMcpOAuthRefreshPollsForWorkspace(workspaceId);
     const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
     cleanup?.();
     jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);

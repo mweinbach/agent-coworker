@@ -1117,6 +1117,56 @@ const marketplacesListEventSchema = z
   })
   .passthrough();
 
+const marketplaceDetailPluginEntrySchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    displayName: nonEmptyTrimmedStringSchema,
+    category: z.string().optional(),
+    icon: z.string().optional(),
+    installed: z.boolean(),
+    enabled: z.boolean().optional(),
+    installSource: z.string().optional(),
+    skills: z.array(z.string()),
+    mcpServers: z.array(z.string()),
+  })
+  .passthrough();
+
+const marketplaceDetailSkillEntrySchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    displayName: nonEmptyTrimmedStringSchema,
+    category: z.string().optional(),
+    icon: z.string().optional(),
+    installed: z.boolean(),
+    enabled: z.boolean().optional(),
+    installSource: z.string().optional(),
+  })
+  .passthrough();
+
+const marketplaceDetailConnectorEntrySchema = z
+  .object({
+    name: nonEmptyTrimmedStringSchema,
+    pluginName: nonEmptyTrimmedStringSchema,
+    pluginDisplayName: nonEmptyTrimmedStringSchema,
+    installed: z.boolean(),
+  })
+  .passthrough();
+
+const marketplaceDetailEventSchema = z
+  .object({
+    type: z.literal("marketplace_detail"),
+    sessionId: nonEmptyTrimmedStringSchema.optional(),
+    detail: z
+      .object({
+        source: marketplaceListEntrySchema,
+        plugins: z.array(marketplaceDetailPluginEntrySchema),
+        skills: z.array(marketplaceDetailSkillEntrySchema),
+        connectors: z.array(marketplaceDetailConnectorEntrySchema),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
 const pluginMutationResultEventSchema = z.union([
   skillsListEventSchema,
   skillsCatalogEventSchema,
@@ -1549,6 +1599,13 @@ const marketplacesReadRequestSchema = z
   })
   .strict();
 
+const marketplacesDetailRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    id: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
 const marketplacesAddRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -1826,6 +1883,7 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/plugins/install/preview": pluginsInstallPreviewRequestSchema,
   "cowork/plugins/install": pluginsInstallRequestSchema,
   "cowork/marketplaces/read": marketplacesReadRequestSchema,
+  "cowork/marketplaces/detail": marketplacesDetailRequestSchema,
   "cowork/marketplaces/add": marketplacesAddRequestSchema,
   "cowork/marketplaces/remove": marketplacesRemoveRequestSchema,
   "cowork/import/list": importListRequestSchema,
@@ -1922,6 +1980,7 @@ export const jsonRpcControlResultSchemas = {
   "cowork/plugins/install/preview": sessionEventEnvelope(pluginInstallPreviewEventSchema),
   "cowork/plugins/install": sessionEventsEnvelope(pluginInstallResultEventSchema),
   "cowork/marketplaces/read": sessionEventEnvelope(marketplacesListEventSchema),
+  "cowork/marketplaces/detail": sessionEventEnvelope(marketplaceDetailEventSchema),
   "cowork/marketplaces/add": sessionEventEnvelope(marketplacesListEventSchema),
   "cowork/marketplaces/remove": sessionEventEnvelope(marketplacesListEventSchema),
   "cowork/import/list": sessionEventEnvelope(importListEventSchema),

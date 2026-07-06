@@ -858,6 +858,10 @@ export class AgentSession {
     await this.getSkillManager().listMarketplaces();
   }
 
+  async readMarketplaceDetail(marketplaceId: string) {
+    await this.getSkillManager().readMarketplaceDetail(marketplaceId);
+  }
+
   async addMarketplace(sourceInput: string) {
     await this.getSkillManager().addMarketplace(sourceInput);
   }

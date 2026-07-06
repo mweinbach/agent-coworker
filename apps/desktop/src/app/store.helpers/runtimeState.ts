@@ -75,6 +75,8 @@ export type RuntimeMaps = {
   workspacePickerOpen: boolean;
   /** Monotonic counter so overlapping provider status refreshes do not clear `providerStatusRefreshing` early. */
   providerStatusRefreshGeneration: number;
+  /** Per-workspace/server counter so stale MCP OAuth refresh polls stop after auth completes. */
+  mcpOAuthRefreshPollGenerations: Map<string, number>;
   /** Per-workspace counter used to ignore stale subagent profile catalog reads after mutations. */
   agentProfilesCatalogGenerations: Map<string, number>;
 };
@@ -100,6 +102,7 @@ export const RUNTIME: RuntimeMaps = {
   sessionSnapshots: new Map(),
   workspacePickerOpen: false,
   providerStatusRefreshGeneration: 0,
+  mcpOAuthRefreshPollGenerations: new Map(),
   agentProfilesCatalogGenerations: new Map(),
 };
 
@@ -338,6 +341,10 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     marketplacesError: null,
     marketplaceMutationPendingKeys: {},
     marketplaceMutationError: null,
+    selectedMarketplaceId: null,
+    selectedMarketplaceDetail: null,
+    marketplaceDetailLoading: false,
+    marketplaceDetailError: null,
     importItemsByKey: {},
     importPendingKeys: {},
     memories: [],

@@ -1,3 +1,6 @@
+import { z } from "zod";
+
+import type { SessionSnapshot } from "../../../../../src/shared/sessionSnapshot";
 import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetBatchPatchResult,
@@ -37,6 +40,34 @@ const disposedWorkspaceIds = new Set<string>();
 const noopSet: StoreSet = () => {};
 const DESKTOP_JSONRPC_OPEN_TIMEOUT_MS = 5_000;
 const DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS = 10_000;
+const jsonRpcDesktopThreadRecordSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    title: z.string().nullable().optional(),
+    createdAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+    modelProvider: z.string().nullable().optional(),
+    model: z.string().nullable().optional(),
+    cwd: z.string().nullable().optional(),
+    messageCount: z.number().int().nonnegative().optional(),
+    lastEventSeq: z.number().int().nonnegative().optional(),
+    status: z
+      .object({
+        type: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+const jsonRpcDesktopThreadListResultSchema = z
+  .object({
+    threads: z.array(jsonRpcDesktopThreadRecordSchema),
+    // Older desktop tests and lightweight mocks may omit total; the renderer only
+    // hydrates sessions from the validated thread rows.
+    total: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
 
 export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
   readyPromise?: Promise<void>;
@@ -44,7 +75,7 @@ export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
     method: string,
     params?: unknown,
     options?: JsonRpcRequestRetryOptions,
-  ) => Promise<any>;
+  ) => Promise<unknown>;
   respond?: (
     requestId: string | number,
     result: unknown,
@@ -63,16 +94,7 @@ type JsonRpcSocketMessage = {
   method: string;
   params?: unknown;
 };
-type JsonRpcThreadRecord = {
-  id: string;
-  title?: string | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-  modelProvider?: string | null;
-  model?: string | null;
-  cwd?: string | null;
-  status?: { type?: string | null } | null;
-};
+type JsonRpcThreadRecord = z.infer<typeof jsonRpcDesktopThreadRecordSchema>;
 
 type JsonRpcRequestRetryOptions = {
   retryable?: boolean;
@@ -80,7 +102,50 @@ type JsonRpcRequestRetryOptions = {
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type JsonRpcResultSchema = z.ZodType;
+
+function formatJsonRpcResultError(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+      return `${path}${issue.message}`;
+    })
+    .join("; ");
+}
+
+export function parseJsonRpcResult<TSchema extends JsonRpcResultSchema>(
+  method: string,
+  schema: TSchema,
+  result: unknown,
+): z.infer<TSchema> {
+  const parsed = schema.safeParse(result);
+  if (!parsed.success) {
+    throw new Error(`Invalid ${method} response: ${formatJsonRpcResultError(parsed.error)}`);
+  }
+  return parsed.data;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function parseThreadReadSnapshotResult(
+  method: string,
+  result: unknown,
+): Record<string, unknown> | null {
+  const record = optionalRecord(result);
+  if (!record || !("coworkSnapshot" in record)) {
+    throw new Error(`Invalid ${method} response: missing coworkSnapshot`);
+  }
+  if (record.coworkSnapshot === null) return null;
+  const snapshot = optionalRecord(record.coworkSnapshot);
+  if (!snapshot || typeof snapshot.sessionId !== "string" || snapshot.sessionId.trim() === "") {
+    throw new Error(`Invalid ${method} response: coworkSnapshot.sessionId must be a string`);
+  }
+  return snapshot;
 }
 
 function resolveJsonRpcSocketImpl(): JsonRpcSocketConstructor {
@@ -439,18 +504,18 @@ export function ensureWorkspaceJsonRpcSocket(
   return socket;
 }
 
-export async function requestJsonRpc(
+export async function requestJsonRpc<T = Record<string, unknown>>(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
   method: string,
   params?: unknown,
-): Promise<any> {
+): Promise<T> {
   const socket = ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
   if (!socket) {
     throw new Error("JSON-RPC workspace socket is unavailable");
   }
-  return await socket.request(method, params, getJsonRpcRequestRetryOptions(method, params));
+  return (await socket.request(method, params, getJsonRpcRequestRetryOptions(method, params))) as T;
 }
 
 function hasStableStringKey(params: unknown, key: string): boolean {
@@ -489,12 +554,12 @@ export async function requestJsonRpcThreadList(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
-): Promise<any[]> {
+): Promise<z.infer<typeof jsonRpcDesktopThreadListResultSchema>["threads"]> {
   const workspace = getWorkspaceById(get, workspaceId);
   const result = await requestJsonRpc(get, set, workspaceId, "thread/list", {
     cwd: workspace?.path,
   });
-  return Array.isArray((result as any)?.threads) ? (result as any).threads : [];
+  return parseJsonRpcResult("thread/list", jsonRpcDesktopThreadListResultSchema, result).threads;
 }
 
 export async function requestJsonRpcThreadRead(
@@ -502,11 +567,11 @@ export async function requestJsonRpcThreadRead(
   set: StoreSet | undefined,
   workspaceId: string,
   threadId: string,
-): Promise<any | null> {
+): Promise<SessionSnapshot | null> {
   const result = await requestJsonRpc(get, set, workspaceId, "thread/read", {
     threadId,
   });
-  return (result as any)?.coworkSnapshot ?? null;
+  return parseThreadReadSnapshotResult("thread/read", result) as SessionSnapshot | null;
 }
 
 export async function startJsonRpcThread(
@@ -713,7 +778,7 @@ export async function previewJsonRpcWorkspacePresentation(
   set: StoreSet | undefined,
   workspaceId: string,
   filePath: string,
-): Promise<any> {
+): Promise<unknown> {
   const workspace = getWorkspaceById(get, workspaceId);
   return await requestJsonRpc(get, set, workspaceId, "cowork/workspace/presentation/preview", {
     cwd: workspace?.path,

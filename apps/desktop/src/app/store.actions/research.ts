@@ -1,3 +1,6 @@
+import type { z } from "zod";
+import { jsonRpcResearchResultSchemas } from "../../../../../src/server/jsonrpc/schema.research";
+
 import {
   MAX_RESEARCH_UPLOAD_BYTES,
   type ResearchExportFormat,
@@ -17,6 +20,7 @@ import {
   waitForControlSession,
 } from "../store.helpers";
 import {
+  parseJsonRpcResult,
   registerWorkspaceJsonRpcLifecycle,
   registerWorkspaceJsonRpcRouter,
   requestJsonRpc,
@@ -62,6 +66,27 @@ const defaultResearchActionDeps: ResearchActionDeps = {
   syncDesktopStateCache,
   waitForControlSession,
 };
+
+type ResearchResultMethod = keyof typeof jsonRpcResearchResultSchemas;
+type ResearchResult<M extends ResearchResultMethod> = z.infer<
+  (typeof jsonRpcResearchResultSchemas)[M]
+>;
+
+async function requestResearchResult<M extends ResearchResultMethod>(
+  deps: Pick<ResearchActionDeps, "requestJsonRpc">,
+  get: StoreGet,
+  set: StoreSet,
+  workspaceId: string,
+  method: M,
+  params: unknown,
+): Promise<ResearchResult<M>> {
+  const result = await deps.requestJsonRpc(get, set, workspaceId, method, params);
+  return parseJsonRpcResult(
+    method,
+    jsonRpcResearchResultSchemas[method],
+    result,
+  ) as ResearchResult<M>;
+}
 
 function isResearchRecord(value: unknown): value is ResearchRecord {
   return (
@@ -450,7 +475,8 @@ export function createResearchActions(
             for (const researchId of get().researchSubscribedIds) {
               const record = get().researchById[researchId];
               try {
-                const result: any = await deps.requestJsonRpc(
+                const result = await requestResearchResult(
+                  deps,
                   get,
                   set,
                   workspaceId,
@@ -460,7 +486,7 @@ export function createResearchActions(
                     ...(record?.lastEventId ? { afterEventId: record.lastEventId } : {}),
                   },
                 );
-                if (isResearchRecord(result?.research)) {
+                if (result.research) {
                   applyResearchRecord(result.research);
                 }
               } catch {
@@ -554,12 +580,12 @@ export function createResearchActions(
     ) {
       return;
     }
-    const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/subscribe", {
+    const result = await requestResearchResult(deps, get, set, workspaceId, "research/subscribe", {
       researchId: research.id,
       ...(research.lastEventId ? { afterEventId: research.lastEventId } : {}),
     });
-    const subscribedResearch = isResearchRecord(result?.research) ? result.research : research;
-    if (isResearchRecord(result?.research)) {
+    const subscribedResearch = result.research ?? research;
+    if (result.research) {
       applyResearchRecord(result.research);
     }
     if (isResearchTerminalStatus(subscribedResearch.status)) {
@@ -577,16 +603,15 @@ export function createResearchActions(
     try {
       for (const file of files ?? []) {
         const payload = await serializeFile(file);
-        const result: any = await deps.requestJsonRpc(
+        const result = await requestResearchResult(
+          deps,
           get,
           set,
           workspaceId,
           "research/uploadFile",
           payload,
         );
-        if (typeof result?.file?.fileId === "string") {
-          fileIds.push(result.file.fileId);
-        }
+        fileIds.push(result.file.fileId);
       }
       return fileIds;
     } catch (error) {
@@ -602,7 +627,7 @@ export function createResearchActions(
       return;
     }
     try {
-      await deps.requestJsonRpc(get, set, workspaceId, "research/discardUploads", {
+      await requestResearchResult(deps, get, set, workspaceId, "research/discardUploads", {
         fileIds,
       });
     } catch {
@@ -617,7 +642,8 @@ export function createResearchActions(
         if (!workspaceId) {
           return null;
         }
-        const result: any = await deps.requestJsonRpc(
+        const result = await requestResearchResult(
+          deps,
           get,
           set,
           workspaceId,
@@ -626,7 +652,7 @@ export function createResearchActions(
             researchId,
           },
         );
-        if (!isResearchRecord(result?.research)) {
+        if (!result.research) {
           return null;
         }
         applyResearchRecord(result.research);
@@ -648,7 +674,8 @@ export function createResearchActions(
         if (!workspaceId) {
           return null;
         }
-        const result: any = await deps.requestJsonRpc(
+        const result = await requestResearchResult(
+          deps,
           get,
           set,
           workspaceId,
@@ -658,7 +685,7 @@ export function createResearchActions(
             input,
           },
         );
-        if (!isResearchRecord(result?.research)) {
+        if (!result.research) {
           return null;
         }
         applyResearchRecord(result.research);
@@ -716,15 +743,17 @@ export function createResearchActions(
           set({ researchListLoading: false });
           return;
         }
-        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/list", {});
-        const research = Array.isArray(result?.research)
-          ? result.research.filter((entry: unknown): entry is ResearchRecord =>
-              isResearchRecord(entry),
-            )
-          : [];
-        applyResearchCollection(research);
+        const result = await requestResearchResult(
+          deps,
+          get,
+          set,
+          workspaceId,
+          "research/list",
+          {},
+        );
+        applyResearchCollection(result.research);
         await Promise.allSettled(
-          research.map(async (record: ResearchRecord) => {
+          result.research.map(async (record) => {
             if (record.status === "pending" || record.status === "running") {
               await ensureResearchSubscription(workspaceId, record);
             }
@@ -747,10 +776,10 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/get", {
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/get", {
           researchId,
         });
-        if (isResearchRecord(result?.research)) {
+        if (result.research) {
           applyResearchRecord(result.research);
           await ensureResearchSubscription(workspaceId, result.research);
         }
@@ -784,7 +813,7 @@ export function createResearchActions(
         deps.syncDesktopStateCache(get);
         attachedFileIds = await uploadFiles(workspaceId, files);
         startRequested = true;
-        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/start", {
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/start", {
           input,
           ...(title ? { title } : {}),
           settings: {
@@ -793,9 +822,6 @@ export function createResearchActions(
           },
           ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
         });
-        if (!isResearchRecord(result?.research)) {
-          return null;
-        }
         applyResearchRecord(result.research, { select: true });
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
@@ -823,10 +849,10 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/cancel", {
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/cancel", {
           researchId,
         });
-        if (isResearchRecord(result?.research)) {
+        if (result.research) {
           applyResearchRecord(result.research);
         }
       } catch (error) {
@@ -855,11 +881,11 @@ export function createResearchActions(
         if (!workspaceId) {
           return;
         }
-        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/rename", {
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/rename", {
           researchId,
           title: trimmed,
         });
-        if (isResearchRecord(result?.research)) {
+        if (result.research) {
           applyResearchRecord(result.research);
         }
       } catch (error) {
@@ -889,16 +915,20 @@ export function createResearchActions(
         }
         attachedFileIds = await uploadFiles(workspaceId, files);
         followUpRequested = true;
-        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/followup", {
-          parentResearchId,
-          input,
-          ...(title ? { title } : {}),
-          ...(settings ? { settings } : {}),
-          ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
-        });
-        if (!isResearchRecord(result?.research)) {
-          return null;
-        }
+        const result = await requestResearchResult(
+          deps,
+          get,
+          set,
+          workspaceId,
+          "research/followup",
+          {
+            parentResearchId,
+            input,
+            ...(title ? { title } : {}),
+            ...(settings ? { settings } : {}),
+            ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
+          },
+        );
         applyResearchRecord(result.research, { select: true });
         await ensureResearchSubscription(workspaceId, result.research);
         return result.research;
@@ -940,19 +970,11 @@ export function createResearchActions(
             ? s.researchExportPendingIds
             : [...s.researchExportPendingIds, researchId],
         }));
-        const result: any = await deps.requestJsonRpc(get, set, workspaceId, "research/export", {
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/export", {
           researchId,
           format,
         });
-        const outputPath = typeof result?.path === "string" ? result.path : null;
-        if (!outputPath) {
-          notify(
-            "error",
-            "Unable to export research",
-            "The export completed without a downloadable file path.",
-          );
-          return null;
-        }
+        const outputPath = result.path;
         const defaultFileName = buildResearchExportFileName(
           get().researchById[researchId]?.title,
           format,

@@ -414,7 +414,7 @@ export function modelMessagesToPiMessages(
 
       out.push({
         role: "assistant",
-        content: content as any,
+        content: content as unknown as PiMessage["content"],
         api: `${provider}-responses`,
         provider: provider,
         model: "unknown",
@@ -472,25 +472,28 @@ function modelContentFromAssistantPart(
   return null;
 }
 
-export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessage[] {
+export function piTurnMessagesToModelMessages(messages: readonly unknown[]): ModelMessage[] {
   // Note: This intentionally never emits 'user' role messages,
   // as it is only used to extract the new turn output (assistant/toolResults) to append to the chat.
   const out: ModelMessage[] = [];
-  for (const rawMessage of messages as any[]) {
-    if (!rawMessage || typeof rawMessage !== "object") continue;
-    const role = asString(rawMessage.role);
+  for (const rawMessage of messages) {
+    const message = asRecord(rawMessage);
+    if (!message) continue;
+    const role = asString(message.role);
     if (role === "assistant") {
       const parts: Array<Record<string, unknown>> = [];
-      const hasStructuredContent = Array.isArray(rawMessage.content);
-      const rawContent = hasStructuredContent ? rawMessage.content : [];
-      for (const partRaw of rawContent) {
+      const rawContent: readonly unknown[] | undefined = Array.isArray(message.content)
+        ? message.content
+        : undefined;
+      const hasStructuredContent = rawContent !== undefined;
+      for (const partRaw of rawContent ?? []) {
         const part = asRecord(partRaw);
         if (!part) continue;
         const mapped = modelContentFromAssistantPart(part);
         if (mapped) parts.push(mapped);
       }
       if (parts.length === 0 && !hasStructuredContent) {
-        const fallbackText = safeJsonStringify(rawMessage.content);
+        const fallbackText = safeJsonStringify(message.content);
         if (fallbackText.trim()) {
           parts.push({ type: "text", text: fallbackText });
         }
@@ -500,8 +503,8 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
     }
 
     if (role === "toolResult") {
-      const toolCallId = asNonEmptyString(rawMessage.toolCallId) ?? `tool_${Date.now()}`;
-      const toolName = asNonEmptyString(rawMessage.toolName) ?? "tool";
+      const toolCallId = asNonEmptyString(message.toolCallId) ?? `tool_${Date.now()}`;
+      const toolName = asNonEmptyString(message.toolName) ?? "tool";
       out.push({
         role: "tool",
         content: [
@@ -509,8 +512,8 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
             type: "tool-result",
             toolCallId,
             toolName,
-            output: toolOutputFromPiToolResultContent(rawMessage.content),
-            isError: rawMessage.isError === true,
+            output: toolOutputFromPiToolResultContent(message.content),
+            isError: message.isError === true,
           },
         ],
       } as ModelMessage);
@@ -519,11 +522,12 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
   return out;
 }
 
-export function extractPiAssistantText(messages: PiMessage[]): string {
+export function extractPiAssistantText(messages: readonly unknown[]): string {
   const chunks: string[] = [];
-  for (const rawMessage of messages as any[]) {
-    if (rawMessage?.role !== "assistant" || !Array.isArray(rawMessage.content)) continue;
-    for (const rawPart of rawMessage.content) {
+  for (const rawMessage of messages) {
+    const message = asRecord(rawMessage);
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const rawPart of message.content) {
       const part = asRecord(rawPart);
       if (part?.type !== "text") continue;
       if (!shouldPersistAssistantTextPhase(assistantTextPhase(part))) continue;
@@ -534,11 +538,12 @@ export function extractPiAssistantText(messages: PiMessage[]): string {
   return chunks.join("\n\n").trim();
 }
 
-export function extractPiReasoningText(messages: PiMessage[]): string | undefined {
+export function extractPiReasoningText(messages: readonly unknown[]): string | undefined {
   const chunks: string[] = [];
-  for (const rawMessage of messages as any[]) {
-    if (rawMessage?.role !== "assistant" || !Array.isArray(rawMessage.content)) continue;
-    for (const rawPart of rawMessage.content) {
+  for (const rawMessage of messages) {
+    const message = asRecord(rawMessage);
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const rawPart of message.content) {
       const part = asRecord(rawPart);
       if (part?.type !== "thinking") continue;
       const text = asString(part.thinking);

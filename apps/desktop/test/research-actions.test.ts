@@ -39,6 +39,16 @@ type TestState = {
   researchExportPendingIds: string[];
 };
 
+function researchUploadFile(fileId: string) {
+  return {
+    fileId,
+    filename: `${fileId}.txt`,
+    mimeType: "text/plain",
+    path: `/tmp/${fileId}.txt`,
+    uploadedAt: "2026-04-21T00:00:00.000Z",
+  };
+}
+
 function createHarness(overrides: Partial<TestState> = {}) {
   const state: TestState = {
     notifications: [],
@@ -89,7 +99,7 @@ function createHarness(overrides: Partial<TestState> = {}) {
 }
 
 describe("research actions", () => {
-  const requestJsonRpcMock = mock(async () => ({ path: "/tmp/report.pdf" }));
+  const requestJsonRpcMock = mock(async () => ({ path: "/tmp/report.pdf", sizeBytes: 123 }));
   const saveExportedFileMock = mock(async () => "/Users/test/Downloads/report.pdf");
 
   const deps = {
@@ -108,7 +118,10 @@ describe("research actions", () => {
   beforeEach(() => {
     __internalResearchActionBindings.reset();
     requestJsonRpcMock.mockReset();
-    requestJsonRpcMock.mockImplementation(async () => ({ path: "/tmp/report.pdf" }));
+    requestJsonRpcMock.mockImplementation(async () => ({
+      path: "/tmp/report.pdf",
+      sizeBytes: 123,
+    }));
     saveExportedFileMock.mockReset();
     saveExportedFileMock.mockImplementation(async () => "/Users/test/Downloads/report.pdf");
   });
@@ -171,7 +184,7 @@ describe("research actions", () => {
     expect(harness.state.notifications[0]?.detail).toBe("disk full");
   });
 
-  test("exportResearch reports a missing export path and clears pending state", async () => {
+  test("exportResearch reports an invalid export response and clears pending state", async () => {
     const harness = createHarness();
     const actions = createResearchActions(harness.set as never, harness.get as never, deps);
     requestJsonRpcMock.mockImplementationOnce(async () => ({}));
@@ -184,9 +197,7 @@ describe("research actions", () => {
     expect(harness.state.notifications).toHaveLength(1);
     expect(harness.state.notifications[0]?.kind).toBe("error");
     expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
-    expect(harness.state.notifications[0]?.detail).toBe(
-      "The export completed without a downloadable file path.",
-    );
+    expect(harness.state.notifications[0]?.detail).toContain("Invalid research/export response");
   });
 
   test("startResearch rejects oversized files before reading attachment bytes", async () => {
@@ -235,7 +246,7 @@ describe("research actions", () => {
       if (method === "research/uploadFile") {
         const callCount = requestJsonRpcMock.mock.calls.filter((call) => call[3] === method).length;
         if (callCount === 1) {
-          return { file: { fileId: "file-1" } };
+          return { file: researchUploadFile("file-1") };
         }
         throw new Error("upload failed");
       }
@@ -273,7 +284,7 @@ describe("research actions", () => {
 
     requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
       if (method === "research/uploadFile") {
-        return { file: { fileId: "file-2" } };
+        return { file: researchUploadFile("file-2") };
       }
       if (method === "research/followup") {
         throw new Error("follow-up failed");
@@ -306,7 +317,7 @@ describe("research actions", () => {
 
     requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
       if (method === "research/uploadFile") {
-        return { file: { fileId: "file-4" } };
+        return { file: researchUploadFile("file-4") };
       }
       if (method === "research/followup") {
         const error = new Error("parent research is not completed") as Error & {
@@ -442,7 +453,7 @@ describe("research actions", () => {
 
     requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
       if (method === "research/uploadFile") {
-        return { file: { fileId: "file-3" } };
+        return { file: researchUploadFile("file-3") };
       }
       if (method === "research/start") {
         throw new Error("socket closed");
@@ -474,7 +485,7 @@ describe("research actions", () => {
 
     requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
       if (method === "research/uploadFile") {
-        return { file: { fileId: "file-5" } };
+        return { file: researchUploadFile("file-5") };
       }
       if (method === "research/start") {
         const error = new Error("research input is required") as Error & {
@@ -538,7 +549,7 @@ describe("research actions", () => {
           routeHandler = handler;
           return () => {};
         },
-        requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
+        requestJsonRpc: async () => ({ path: "/tmp/report.pdf", sizeBytes: 123 }),
       } as never,
     );
 
@@ -599,7 +610,7 @@ describe("research actions", () => {
           routeHandler = handler;
           return () => {};
         },
-        requestJsonRpc: async () => ({ path: "/tmp/report.pdf" }),
+        requestJsonRpc: async () => ({ path: "/tmp/report.pdf", sizeBytes: 123 }),
       } as never,
     );
 

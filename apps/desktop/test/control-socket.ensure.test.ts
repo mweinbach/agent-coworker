@@ -553,6 +553,20 @@ describe("control socket helpers over JSON-RPC", () => {
     );
   });
 
+  test("requestWorkspaceSessions rejects malformed JSON-RPC thread/list results", async () => {
+    const workspaceId = "ws-invalid-thread-list";
+    const { get, set } = createState(workspaceId);
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return { threads: [{ title: "missing id" }] };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const sessions = await helpers.requestWorkspaceSessions(get as any, set as any, workspaceId);
+
+    expect(sessions).toBeNull();
+  });
+
   test("pending waiter diagnostics reflect in-flight JSON-RPC waits", async () => {
     const workspaceId = "ws-waiters";
     const { get, set } = createState(workspaceId);

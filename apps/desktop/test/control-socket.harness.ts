@@ -122,10 +122,15 @@ function makeThreadListEntry(threadId: string) {
   return {
     id: threadId,
     title: threadId,
+    preview: "",
     modelProvider: "openai",
     model: "gpt-5.2",
+    cwd: "/tmp/workspace",
     createdAt: "2026-03-20T00:00:00.000Z",
     updatedAt: "2026-03-20T00:00:00.000Z",
+    messageCount: 1,
+    lastEventSeq: 1,
+    status: { type: "idle" },
   };
 }
 

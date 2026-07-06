@@ -7,6 +7,7 @@ import {
 } from "../shared/providerContinuation";
 import type { ModelMessage } from "../types";
 import { resolveGoogleInteractionsModel } from "./googleInteractionsModel";
+import type { GoogleNativeStepRequest } from "./googleNative/types";
 import {
   classifyGoogleInteractionError,
   googleTurnMessagesToModelMessages,
@@ -14,6 +15,7 @@ import {
   type RunGoogleNativeInteractionStep,
   runGoogleNativeInteractionStep,
 } from "./googleNativeInteractions";
+import type { ResolvedPiRuntimeModel } from "./pi/types";
 import {
   extractPiAssistantText,
   extractPiReasoningText,
@@ -43,6 +45,7 @@ import {
 } from "./piRuntimeOptions";
 import type {
   LlmRuntime,
+  PartialTurnError,
   RuntimeRunTurnParams,
   RuntimeRunTurnResult,
   RuntimeStepOverride,
@@ -294,6 +297,11 @@ export function createGoogleInteractionsRuntime(
         let nextInteractionInputStartIndex = 0;
 
         // Build a PiModel-compatible object for shared utilities (telemetry, etc.)
+        const piModelInput: Array<"text" | "image"> = resolved.model.input.filter(
+          (modality): modality is "text" | "image" => modality === "text" || modality === "image",
+        );
+        const piModelCompatibleInput: Array<"text" | "image"> =
+          piModelInput.length > 0 ? piModelInput : ["text"];
         const piModelCompat = {
           id: resolved.model.id,
           name: resolved.model.name,
@@ -301,12 +309,12 @@ export function createGoogleInteractionsRuntime(
           provider: "google",
           baseUrl: "https://generativelanguage.googleapis.com/v1beta",
           reasoning: resolved.model.reasoning,
-          input: resolved.model.input,
+          input: piModelCompatibleInput,
           contextWindow: resolved.model.contextWindow,
           maxTokens: resolved.model.maxTokens,
           ...(resolved.model.cost ? { cost: resolved.model.cost } : {}),
         };
-        const resolvedCompat = {
+        const resolvedCompat: ResolvedPiRuntimeModel = {
           model: piModelCompat,
           apiKey: resolved.apiKey,
         };
@@ -374,7 +382,7 @@ export function createGoogleInteractionsRuntime(
 
           const stepState = buildStepState(
             { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
-            resolvedCompat as any,
+            resolvedCompat,
             overrides,
             stepMessages,
           );
@@ -395,7 +403,7 @@ export function createGoogleInteractionsRuntime(
           const span = startModelCallSpan(
             telemetry,
             params,
-            resolvedCompat as any,
+            resolved.model.id,
             step + 1,
             mergedStreamOptions,
             stepState.piMessages,
@@ -420,7 +428,7 @@ export function createGoogleInteractionsRuntime(
               systemPrompt: params.system,
               messages,
               tools: piTools,
-              streamOptions: mergedStreamOptions as any,
+              streamOptions: mergedStreamOptions as GoogleNativeStepRequest["streamOptions"],
               previousInteractionId: previousId,
               onEvent: async (event) => {
                 if (!includeUnknownRawParts && event.type === "unknown") return;
@@ -559,7 +567,7 @@ export function createGoogleInteractionsRuntime(
             }
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
-            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
+            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult]));
             needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
               toolCall,
               toolResult,
@@ -582,8 +590,8 @@ export function createGoogleInteractionsRuntime(
         });
 
         return {
-          text: extractPiAssistantText(turnMessages as any),
-          reasoningText: extractPiReasoningText(turnMessages as any),
+          text: extractPiAssistantText(turnMessages),
+          reasoningText: extractPiReasoningText(turnMessages),
           responseMessages: googleTurnMessagesToModelMessages(turnMessages),
           usage,
           ...(finalProviderState ? { providerState: finalProviderState } : {}),
@@ -591,7 +599,7 @@ export function createGoogleInteractionsRuntime(
       } catch (error) {
         if (error && typeof error === "object") {
           try {
-            (error as any).usage = usage;
+            (error as PartialTurnError).usage = usage;
             const responseMessages =
               typeof turnMessages !== "undefined" && Array.isArray(turnMessages)
                 ? googleTurnMessagesToModelMessages(turnMessages)

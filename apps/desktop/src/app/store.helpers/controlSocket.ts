@@ -636,7 +636,7 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
-      let threads: unknown[] = [];
+      let threads: Awaited<ReturnType<typeof requestJsonRpcThreadList>> = [];
       try {
         threads = await requestJsonRpcThreadList(get, set, workspaceId);
       } catch {
@@ -645,26 +645,39 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
-      const sessions = (threads as any[]).map((thread: any) => {
+      const sessions = threads.flatMap((thread) => {
         const existingThread = get().threads.find(
           (entry) =>
             entry.workspaceId === workspaceId &&
             (entry.id === thread.id || entry.sessionId === thread.id),
         );
-        return {
-          sessionId: thread.id,
-          title: thread.title ?? "New session",
-          titleSource: existingThread?.titleSource ?? ("manual" as const),
-          titleModel: null,
-          provider: thread.modelProvider,
-          model: thread.model,
-          createdAt: thread.createdAt,
-          updatedAt: thread.updatedAt,
-          messageCount: thread.messageCount ?? existingThread?.messageCount ?? 0,
-          lastEventSeq: thread.lastEventSeq ?? existingThread?.lastEventSeq ?? 0,
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        };
+        const provider = deps.isProviderName(thread.modelProvider) ? thread.modelProvider : null;
+        const model = typeof thread.model === "string" && thread.model.trim() ? thread.model : null;
+        if (!provider || !model) return [];
+        const createdAt =
+          typeof thread.createdAt === "string"
+            ? thread.createdAt
+            : (existingThread?.createdAt ?? deps.nowIso());
+        const updatedAt =
+          typeof thread.updatedAt === "string"
+            ? thread.updatedAt
+            : (existingThread?.lastMessageAt ?? createdAt);
+        return [
+          {
+            sessionId: thread.id,
+            title: typeof thread.title === "string" && thread.title ? thread.title : "New session",
+            titleSource: existingThread?.titleSource ?? ("manual" as const),
+            titleModel: null,
+            provider,
+            model,
+            createdAt,
+            updatedAt,
+            messageCount: thread.messageCount ?? existingThread?.messageCount ?? 0,
+            lastEventSeq: thread.lastEventSeq ?? existingThread?.lastEventSeq ?? 0,
+            hasPendingAsk: false,
+            hasPendingApproval: false,
+          },
+        ];
       });
       let removedSessionSnapshotIds: string[] = [];
       set((s) => {

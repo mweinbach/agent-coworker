@@ -42,6 +42,7 @@ import {
 } from "./piRuntimeOptions";
 import type {
   LlmRuntime,
+  PartialTurnError,
   RuntimeRunTurnParams,
   RuntimeRunTurnResult,
   RuntimeStepOverride,
@@ -191,7 +192,7 @@ export function createOpenAiResponsesRuntime(
             finalProviderState.requestFingerprint = initialRequestFingerprint;
           }
           activeProviderState = finalProviderState ?? activeProviderState;
-          const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord as any]);
+          const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord]);
           if (!providerManagedContinuation) {
             stepMessages = [...stepMessages, ...assistantModelMessages];
           }
@@ -225,7 +226,7 @@ export function createOpenAiResponsesRuntime(
             }
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
-            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
+            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult]));
             needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
               toolCall,
               toolResult,
@@ -244,19 +245,19 @@ export function createOpenAiResponsesRuntime(
         }
 
         return {
-          text: extractPiAssistantText(turnMessages as any),
-          reasoningText: extractPiReasoningText(turnMessages as any),
-          responseMessages: piTurnMessagesToModelMessages(turnMessages as any),
+          text: extractPiAssistantText(turnMessages),
+          reasoningText: extractPiReasoningText(turnMessages),
+          responseMessages: piTurnMessagesToModelMessages(turnMessages),
           usage,
           ...(finalProviderState ? { providerState: finalProviderState } : {}),
         };
       } catch (error) {
         if (error && typeof error === "object") {
           try {
-            (error as any).usage = usage;
+            (error as PartialTurnError).usage = usage;
             const responseMessages =
               typeof turnMessages !== "undefined" && Array.isArray(turnMessages)
-                ? piTurnMessagesToModelMessages(turnMessages as any)
+                ? piTurnMessagesToModelMessages(turnMessages)
                 : [];
             Object.defineProperty(error, "responseMessages", {
               value: responseMessages,

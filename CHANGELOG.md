@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.21 - 2026-07-06
+
+### Fixed
+
+- **JSON-RPC boundary result validation** — Adds schema-backed result parsing for
+  desktop JSON-RPC thread hydration and research actions, and tightens runtime
+  bridge casts around Pi/OpenAI/Google message conversion. Google model-call
+  telemetry now passes the model id through correctly.
+- **Plugin marketplace hash races** — Pins plugin install/update to a single
+  immutable commit SHA per operation so GitHub path-cache propagation races can
+  no longer fail updates with "Marketplace source hash mismatch" while the
+  branch-ref caches converge. Hash mismatches that survive pinning now name the
+  commit so a truly stale manifest is actionable.
+- **Expired OAuth connector sign-in** — Shows the collapsed-row Authenticate
+  pill for OAuth connectors in the "error" authMode (expired authorization),
+  not just "missing" or "oauth_pending", so re-authorization no longer requires
+  expanding the row to reach Sign in.
+- **Lint hygiene** — Excludes generated JSON-RPC docs from Biome's file scan and
+  applies an optional chain in the plugin catalog test so `bun run check` and
+  `bun run lint` are warning-clean.
+
 ## 1.2.20 - 2026-07-06
 
 ### Added

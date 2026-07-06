@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.14 - 2026-07-06
+
+### Fixed
+
+- **GitHub CI validation hardening** — Removes the mobile toolbar test's
+  cross-file activity grouping mock, injects resumed `runTurn` mocks into the
+  exact persisted provider-options fixture, and drives desktop settings
+  restoration through the real navigation action.
+
 ## 1.2.13 - 2026-07-06
 
 ### Fixed

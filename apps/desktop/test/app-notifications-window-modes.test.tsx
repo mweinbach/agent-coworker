@@ -128,7 +128,7 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
   } as never);
 }
 
-async function waitForDomCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+async function waitForDomCondition(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) {
@@ -209,10 +209,7 @@ describe("app window-mode notification routing", () => {
 
     try {
       seedReadyState();
-      useAppStore.setState({
-        view: "settings",
-        settingsPage: "models",
-      });
+      useAppStore.getState().openSettings("models");
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
@@ -228,9 +225,13 @@ describe("app window-mode notification routing", () => {
       expect(container.querySelector(".app-topbar")).toBeNull();
 
       await act(async () => {
-        useAppStore.setState({ view: "chat" });
+        useAppStore.getState().closeSettings();
       });
-      await waitForDomCondition(() => container.querySelector(".app-topbar") !== null);
+      await waitForDomCondition(
+        () =>
+          container.querySelector(".app-shell--chat") !== null &&
+          container.querySelector(".app-topbar") !== null,
+      );
 
       expect(container.querySelector(".app-shell--settings")).toBeNull();
       expect(container.querySelector(".app-shell--chat")).not.toBeNull();

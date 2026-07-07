@@ -67,12 +67,30 @@ describe("bash tool", () => {
     expect(mac).not.toContain("PowerShell");
   });
 
+  test("resolves shell candidates via platform which() in both lanes", async () => {
+    const seen: string[] = [];
+    await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      env: { Path: "C:\\tools" },
+      exists: (p: string) => p.toLowerCase() === "c:\\tools\\pwsh.exe",
+      execRunner: async (file: string) => {
+        seen.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+    expect(seen).toEqual(["C:\\tools\\pwsh.exe"]);
+  });
+
   test("prefers pwsh before powershell.exe on Windows", async () => {
     const seen: string[] = [];
     const result = await bashInternal.runShellCommandWithExec({
       command: "echo hi",
       cwd: "C:/tmp",
       platform: "win32",
+      // No candidate resolves: assert the bare-name fallback ORDER.
+      exists: () => false,
       execRunner: async (file: string) => {
         seen.push(file);
         if (file === "pwsh") {
@@ -92,6 +110,7 @@ describe("bash tool", () => {
       command: "echo hi",
       cwd: "C:/tmp",
       platform: "win32",
+      exists: () => false,
       execRunner: async (file: string) => {
         seen.push(file);
         if (file === "pwsh") {
@@ -284,7 +303,7 @@ describe("bash tool", () => {
       OPENAI_API_KEY: "must-not-leak",
     };
 
-    const filtered = bashInternal.minimalSandboxEnv(source);
+    const filtered = bashInternal.minimalSandboxEnv(source, "win32");
 
     expect(filtered.Path).toBe(source.Path);
     expect(filtered.PATH).toBeUndefined();
@@ -405,6 +424,8 @@ describe("bash tool", () => {
       requireEnforcingBackend: false,
       capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
       approveUnsandboxed: approve,
+      // Pin candidate resolution so the assertion is host-independent.
+      exists: () => false,
       execRunner: async (file: string) => {
         calls.push(file);
         return { stdout: "hi\n", stderr: "", exitCode: 0 };

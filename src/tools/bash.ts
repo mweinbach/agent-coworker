@@ -1,6 +1,8 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { minimalSandboxEnv } from "../platform/env";
+import { which } from "../platform/exec";
 import { hostPlatform } from "../platform/host";
 import {
   classifySandboxDenial,
@@ -28,51 +30,6 @@ import { defineTool } from "./defineTool";
 const DEFAULT_TIMEOUT_SECONDS = 300; // 5 minutes
 const MAX_TIMEOUT_SECONDS = 600; // 10 minutes
 
-const SANDBOX_ENV_ALLOWLIST = new Set([
-  "CI",
-  "COLORTERM",
-  "COMSPEC",
-  "HOME",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "LOGNAME",
-  "PATH",
-  "PATHEXT",
-  "SHELL",
-  "SystemRoot",
-  "TEMP",
-  "TERM",
-  "TMP",
-  "TMPDIR",
-  "USER",
-  "USERNAME",
-  "WINDIR",
-  // Cowork runtime pointers (not secrets). The presentations/artifact helpers
-  // resolve the managed @oai/artifact-tool package via these:
-  // NODE_OPTIONS carries the `--import=<resolver>` hook and the two COWORK_* vars
-  // point at the managed node_modules / ESM resolver. They are NOT baked into the
-  // shell prelude, so they must survive the allowlist or sandboxed helper commands
-  // fail to find the runtime.
-  "COWORK_RUNTIME_DIR",
-  "COWORK_RUNTIME_VERSION",
-  "COWORK_RUNTIME_ASSET",
-  "COWORK_RUNTIME_BIN",
-  "COWORK_RUNTIME_NODE",
-  "COWORK_RUNTIME_PYTHON",
-  "COWORK_RUNTIME_GIT",
-  "COWORK_RUNTIME_NODE_MODULES",
-  "COWORK_RUNTIME_NODE_RESOLVER",
-  "COWORK_RUNTIME_POPPLER_BIN",
-  "COWORK_RUNTIME_SOFFICE",
-  "COWORK_RUNTIME_LIBREOFFICE_DIR",
-  "COWORK_RUNTIME_LIBREOFFICE_BINARY",
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "PYTHONDONTWRITEBYTECODE",
-  "SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION",
-]);
-
 // Patterns that may indicate secrets in command output (redacted in logs only).
 const SECRET_PATTERNS = [
   /(?:api[_-]?key|apikey|token|password|secret|auth[_-]?token)["']?\s*[:=]\s*["']?[\w\-./+=]{8,}/gi,
@@ -99,23 +56,6 @@ function redactSecrets(text: string): string {
     });
   }
   return result;
-}
-
-function minimalSandboxEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const env: Record<string, string> = {};
-  const sourceKeys = Object.keys(source);
-  for (const key of SANDBOX_ENV_ALLOWLIST) {
-    // Environment keys are case-insensitive on Windows, but Node preserves the
-    // spelling it inherited (normally `Path`, not `PATH`). Preserve that exact
-    // key so passing an explicit child env never drops the Windows search path.
-    const sourceKey =
-      (Object.hasOwn(source, key) ? key : undefined) ??
-      sourceKeys.find((candidate) => candidate.toLowerCase() === key.toLowerCase());
-    if (!sourceKey || Object.hasOwn(env, sourceKey)) continue;
-    const value = source[sourceKey];
-    if (typeof value === "string") env[sourceKey] = value;
-  }
-  return env;
 }
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
@@ -218,53 +158,10 @@ let runShellCommandOverrideForTests:
   | ((opts: RunShellCommandOpts) => Promise<ShellRunResult>)
   | null = null;
 
-/** Read the search-path env var case-insensitively (Windows uses `Path`, not `PATH`). */
-function readPathVar(env: Record<string, string | undefined> | undefined): string {
-  const source = env ?? process.env;
-  for (const key of Object.keys(source)) {
-    if (key.toUpperCase() === "PATH") {
-      const value = source[key];
-      if (value) return value;
-    }
-  }
-  return process.env.PATH ?? "";
-}
-
-/**
- * Resolve the first shell candidate to a concrete program path. Absolute
- * candidates are checked with `exists`; bare names (e.g. `pwsh`,
- * `powershell.exe`) are searched on PATH (also trying common executable
- * extensions on Windows). Returns the candidate with its `file` rewritten to the
- * resolved path, or `null` when none resolve.
- */
-function resolveInnerCandidate(
-  plan: { file: string; args: string[] }[],
-  exists: (p: string) => boolean,
-  env: Record<string, string | undefined> | undefined,
-  platform: NodeJS.Platform,
-): { file: string; args: string[] } | null {
-  const pathDirs = readPathVar(env).split(path.delimiter).filter(Boolean);
-  const exts = platform === "win32" ? ["", ".exe", ".cmd", ".bat", ".com"] : [""];
-  for (const candidate of plan) {
-    if (path.isAbsolute(candidate.file)) {
-      if (exists(candidate.file)) return candidate;
-      continue;
-    }
-    for (const dir of pathDirs) {
-      for (const ext of exts) {
-        const resolved = path.join(dir, candidate.file + ext);
-        if (exists(resolved)) return { file: resolved, args: candidate.args };
-      }
-    }
-  }
-  return null;
-}
-
 async function runShellCommandWithExec(
   opts: RunShellCommandOpts & { platform: NodeJS.Platform; execRunner: ExecRunner },
 ): Promise<ShellRunResult> {
   const maxBuffer = 1024 * 1024 * 10;
-  const exists = opts.exists ?? ((p: string) => fsSync.existsSync(p));
 
   const command = buildPlatformShellCommandWithRuntimePrelude({
     command: opts.command,
@@ -273,6 +170,21 @@ async function runShellCommandWithExec(
   });
   const plan = buildPlatformShellExecutionPlan(opts.platform, command);
   const policy = opts.policy;
+
+  // Resolve every shell candidate through THE resolver (platform/exec.which)
+  // so the sandboxed and unsandboxed lanes bind the SAME binary — they used
+  // two different mechanisms (hand-rolled PATH walk vs spawn-layer lookup)
+  // and could bind different shells on one machine. Unresolved candidates
+  // keep their bare name: the spawn layer's ENOENT then advances the
+  // fallback chain exactly as before.
+  const resolvedPlan = plan.map((step) => {
+    const file = which(step.file, {
+      env: opts.env,
+      platform: opts.platform,
+      ...(opts.exists ? { exists: opts.exists } : {}),
+    });
+    return file ? { ...step, file, resolved: true } : { ...step, resolved: false };
+  });
 
   // Oversized win32 commands ship as a -File temp script (see
   // buildPlatformShellExecutionPlan). All steps of a plan share one script:
@@ -283,8 +195,8 @@ async function runShellCommandWithExec(
   }
   try {
     const inner =
-      policy && plan.length > 0
-        ? (resolveInnerCandidate(plan, exists, opts.env, opts.platform) ?? plan[0])
+      policy && resolvedPlan.length > 0
+        ? (resolvedPlan.find((step) => step.resolved) ?? resolvedPlan[0])
         : null;
     const transformed =
       policy && inner
@@ -405,7 +317,7 @@ async function runShellCommandWithExec(
     }
 
     // Unsandboxed: try shell candidates until one is not missing (ENOENT).
-    for (const candidate of plan) {
+    for (const candidate of resolvedPlan) {
       const result = await opts.execRunner(candidate.file, candidate.args, {
         cwd: opts.cwd,
         maxBuffer,

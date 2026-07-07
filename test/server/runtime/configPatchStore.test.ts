@@ -4,11 +4,57 @@ import os from "node:os";
 import path from "node:path";
 import {
   mergeConfigPatch,
+  type ProjectConfigPatch,
   persistProjectConfigPatch,
 } from "../../../src/server/runtime/ConfigPatchStore";
+import { defaultRuntimeNameForProvider } from "../../../src/types";
 import { makeConfig } from "../../session/agentSession.harness";
 
 describe("ConfigPatchStore", () => {
+  test("persists model selection defaults and round-trips them through runtime config", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
+    const projectCoworkDir = path.join(dir, "project", ".cowork");
+    const configPath = path.join(projectCoworkDir, "config.json");
+    const modelPatch = {
+      provider: "openai",
+      model: "gpt-5.5",
+      preferredChildModel: "claude-opus-4-8",
+      childModelRoutingMode: "cross-provider-allowlist",
+      preferredChildModelRef: "anthropic:claude-opus-4-8",
+      allowedChildModelRefs: ["anthropic:claude-opus-4-8", "google:gemini-3-pro"],
+    } satisfies ProjectConfigPatch;
+
+    await persistProjectConfigPatch(projectCoworkDir, modelPatch);
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(persisted).toEqual(modelPatch);
+
+    const merged = mergeConfigPatch(
+      {
+        ...makeConfig(dir),
+        provider: "google",
+        runtime: defaultRuntimeNameForProvider("google"),
+        model: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
+      },
+      modelPatch,
+    );
+
+    expect(merged.provider).toBe("openai");
+    expect(merged.runtime).toBe(defaultRuntimeNameForProvider("openai"));
+    expect(merged.model).toBe("gpt-5.5");
+    expect(merged.preferredChildModel).toBe("claude-opus-4-8");
+    expect(merged.childModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(merged.preferredChildModelRef).toBe("anthropic:claude-opus-4-8");
+    expect(merged.allowedChildModelRefs).toEqual([
+      "anthropic:claude-opus-4-8",
+      "google:gemini-3-pro",
+    ]);
+  });
+
   test("persists advanced memory defaults to global config when provided", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, "project", ".cowork");

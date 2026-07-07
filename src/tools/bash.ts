@@ -273,144 +273,167 @@ async function runShellCommandWithExec(
   const plan = buildPlatformShellExecutionPlan(opts.platform, command);
   const policy = opts.policy;
 
-  const inner =
-    policy && plan.length > 0
-      ? (resolveInnerCandidate(plan, exists, opts.env, opts.platform) ?? plan[0])
-      : null;
-  const transformed =
-    policy && inner
-      ? sandboxManager.transform({
-          file: inner.file,
-          args: inner.args,
-          policy,
-          cwd: opts.cwd,
-          platform: opts.platform,
-          capabilities: opts.capabilities,
-        })
-      : null;
-
-  const requiresSandboxEnforcement =
-    policy !== undefined && (policy.kind !== "danger-full-access" || !policyAllowsNetwork(policy));
-  const backendDoesNotEnforcePolicy =
-    !transformed ||
-    transformed.sandbox === "none" ||
-    !transformed.enforcement.integrity ||
-    !transformed.enforcement.process ||
-    (policy?.kind !== "danger-full-access" && !transformed.enforcement.filesystem) ||
-    (policy !== undefined && !policyAllowsNetwork(policy) && !transformed.enforcement.network);
-
-  // Hard-floor contexts (read-only roles, scoped children) require every policy
-  // dimension to be enforced. A degraded or missing backend must fail closed —
-  // never run such a context unenforced, and never offer a fallback.
-  if (
-    policy &&
-    requiresSandboxEnforcement &&
-    opts.requireEnforcingBackend &&
-    backendDoesNotEnforcePolicy
-  ) {
-    return {
-      stdout: "",
-      stderr: `Refusing to run: this context requires an enforcing OS sandbox, which is unavailable (${transformed?.warning ?? "no backend"}).`,
-      exitCode: 1,
-      errorCode: "SANDBOX_REQUIRED",
-      sandbox: "none",
-      sandboxWarning: transformed?.warning,
-    };
+  // Oversized win32 commands ship as a -File temp script (see
+  // buildPlatformShellExecutionPlan). All steps of a plan share one script:
+  // materialize it before any spawn, remove it when the run settles.
+  const tempScript = plan.find((step) => step.tempScript)?.tempScript;
+  if (tempScript) {
+    fsSync.writeFileSync(tempScript.path, tempScript.content);
   }
+  try {
+    const inner =
+      policy && plan.length > 0
+        ? (resolveInnerCandidate(plan, exists, opts.env, opts.platform) ?? plan[0])
+        : null;
+    const transformed =
+      policy && inner
+        ? sandboxManager.transform({
+            file: inner.file,
+            args: inner.args,
+            policy,
+            cwd: opts.cwd,
+            platform: opts.platform,
+            capabilities: opts.capabilities,
+          })
+        : null;
 
-  // Fail closed when configured to require an enforcing backend. A backend whose
-  // native probe cannot prove the requested dimensions is not enough to satisfy
-  // the default safety contract.
-  if (policy && requiresSandboxEnforcement && opts.requireBackend && backendDoesNotEnforcePolicy) {
-    const reason = transformed?.warning ?? "OS sandbox backend unavailable";
-    const stderr =
-      transformed && transformed.sandbox !== "none"
-        ? `Refusing to run: ${reason} (sandbox.requireBackend is enabled and requires filesystem/network enforcement).`
-        : `Refusing to run unsandboxed: ${reason} (sandbox.requireBackend is enabled).`;
-    return {
-      stdout: "",
-      stderr,
-      exitCode: 1,
-      errorCode: "SANDBOX_REQUIRED",
-      sandbox: "none",
-      sandboxWarning: transformed?.warning,
-    };
-  }
+    const requiresSandboxEnforcement =
+      policy !== undefined &&
+      (policy.kind !== "danger-full-access" || !policyAllowsNetwork(policy));
+    const backendDoesNotEnforcePolicy =
+      !transformed ||
+      transformed.sandbox === "none" ||
+      !transformed.enforcement.integrity ||
+      !transformed.enforcement.process ||
+      (policy?.kind !== "danger-full-access" && !transformed.enforcement.filesystem) ||
+      (policy !== undefined && !policyAllowsNetwork(policy) && !transformed.enforcement.network);
 
-  // A restrictive policy whose backend does NOT enforce filesystem/network scope
-  // is effectively unsandboxed for FS/network. This includes no backend at all
-  // (`sandbox === "none"`) and any backend that fails its native capability or
-  // integrity probe. Running it grants full filesystem/network access despite
-  // workspace-write / no-network expectations, so require explicit unsandboxed
-  // approval BEFORE executing — mirroring the escalate-on-failure prompt —
-  // rather than silently running under it and only warning afterwards. The
-  // requireEnforcingBackend / requireBackend gates above already fail closed for
-  // stricter contexts; danger-full-access with network allowed is not restrictive
-  // and never reaches here.
-  if (
-    policy &&
-    requiresSandboxEnforcement &&
-    backendDoesNotEnforcePolicy &&
-    opts.approveUnsandboxed
-  ) {
-    if (!(await opts.approveUnsandboxed())) {
+    // Hard-floor contexts (read-only roles, scoped children) require every policy
+    // dimension to be enforced. A degraded or missing backend must fail closed —
+    // never run such a context unenforced, and never offer a fallback.
+    if (
+      policy &&
+      requiresSandboxEnforcement &&
+      opts.requireEnforcingBackend &&
+      backendDoesNotEnforcePolicy
+    ) {
       return {
         stdout: "",
-        stderr: `Refusing to run: ${transformed?.warning ?? "OS sandbox backend does not enforce filesystem/network scope"} (declined).`,
+        stderr: `Refusing to run: this context requires an enforcing OS sandbox, which is unavailable (${transformed?.warning ?? "no backend"}).`,
         exitCode: 1,
         errorCode: "SANDBOX_REQUIRED",
         sandbox: "none",
         sandboxWarning: transformed?.warning,
       };
     }
-    await opts.assertCanMutate?.();
-  }
 
-  // A backend is present and either enforcing or the unsandboxed fallback was
-  // approved above. Run the possibly wrapped command.
-  if (policy && transformed && transformed.sandbox !== "none") {
-    const result = await opts.execRunner(transformed.file, transformed.args, {
-      cwd: opts.cwd,
-      maxBuffer,
-      signal: opts.abortSignal,
-      timeoutMs: opts.timeoutMs,
-      // Passing an `env` object replaces (not merges) the child environment.
-      // The OS sandbox confines filesystem writes, but NOT environment access:
-      // a sandboxed command can still read every variable it is handed and (with
-      // network allowed, the default) exfiltrate it. So the child must never see
-      // the server's full process env — which carries provider API keys and other
-      // secrets. Filter to the compatibility allowlist (PATH/HOME/locale plus the
-      // Cowork runtime pointers; see SANDBOX_ENV_ALLOWLIST).
-      // The versioned runtime PATH directories are injected into the command
-      // string by buildPlatformShellCommandWithRuntimePrelude. Sandbox marker vars
-      // overlay last.
-      env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
-    });
-    return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
-  }
+    // Fail closed when configured to require an enforcing backend. A backend whose
+    // native probe cannot prove the requested dimensions is not enough to satisfy
+    // the default safety contract.
+    if (
+      policy &&
+      requiresSandboxEnforcement &&
+      opts.requireBackend &&
+      backendDoesNotEnforcePolicy
+    ) {
+      const reason = transformed?.warning ?? "OS sandbox backend unavailable";
+      const stderr =
+        transformed && transformed.sandbox !== "none"
+          ? `Refusing to run: ${reason} (sandbox.requireBackend is enabled and requires filesystem/network enforcement).`
+          : `Refusing to run unsandboxed: ${reason} (sandbox.requireBackend is enabled).`;
+      return {
+        stdout: "",
+        stderr,
+        exitCode: 1,
+        errorCode: "SANDBOX_REQUIRED",
+        sandbox: "none",
+        sandboxWarning: transformed?.warning,
+      };
+    }
 
-  // Unsandboxed: try shell candidates until one is not missing (ENOENT).
-  for (const candidate of plan) {
-    const result = await opts.execRunner(candidate.file, candidate.args, {
-      cwd: opts.cwd,
-      maxBuffer,
-      signal: opts.abortSignal,
-      timeoutMs: opts.timeoutMs,
-      env: opts.env,
-    });
-    if (result.errorCode !== "ENOENT") {
-      return { ...result, sandbox: "none", sandboxWarning: transformed?.warning };
+    // A restrictive policy whose backend does NOT enforce filesystem/network scope
+    // is effectively unsandboxed for FS/network. This includes no backend at all
+    // (`sandbox === "none"`) and any backend that fails its native capability or
+    // integrity probe. Running it grants full filesystem/network access despite
+    // workspace-write / no-network expectations, so require explicit unsandboxed
+    // approval BEFORE executing — mirroring the escalate-on-failure prompt —
+    // rather than silently running under it and only warning afterwards. The
+    // requireEnforcingBackend / requireBackend gates above already fail closed for
+    // stricter contexts; danger-full-access with network allowed is not restrictive
+    // and never reaches here.
+    if (
+      policy &&
+      requiresSandboxEnforcement &&
+      backendDoesNotEnforcePolicy &&
+      opts.approveUnsandboxed
+    ) {
+      if (!(await opts.approveUnsandboxed())) {
+        return {
+          stdout: "",
+          stderr: `Refusing to run: ${transformed?.warning ?? "OS sandbox backend does not enforce filesystem/network scope"} (declined).`,
+          exitCode: 1,
+          errorCode: "SANDBOX_REQUIRED",
+          sandbox: "none",
+          sandboxWarning: transformed?.warning,
+        };
+      }
+      await opts.assertCanMutate?.();
+    }
+
+    // A backend is present and either enforcing or the unsandboxed fallback was
+    // approved above. Run the possibly wrapped command.
+    if (policy && transformed && transformed.sandbox !== "none") {
+      const result = await opts.execRunner(transformed.file, transformed.args, {
+        cwd: opts.cwd,
+        maxBuffer,
+        signal: opts.abortSignal,
+        timeoutMs: opts.timeoutMs,
+        // Passing an `env` object replaces (not merges) the child environment.
+        // The OS sandbox confines filesystem writes, but NOT environment access:
+        // a sandboxed command can still read every variable it is handed and (with
+        // network allowed, the default) exfiltrate it. So the child must never see
+        // the server's full process env — which carries provider API keys and other
+        // secrets. Filter to the compatibility allowlist (PATH/HOME/locale plus the
+        // Cowork runtime pointers; see SANDBOX_ENV_ALLOWLIST).
+        // The versioned runtime PATH directories are injected into the command
+        // string by buildPlatformShellCommandWithRuntimePrelude. Sandbox marker vars
+        // overlay last.
+        env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
+      });
+      return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
+    }
+
+    // Unsandboxed: try shell candidates until one is not missing (ENOENT).
+    for (const candidate of plan) {
+      const result = await opts.execRunner(candidate.file, candidate.args, {
+        cwd: opts.cwd,
+        maxBuffer,
+        signal: opts.abortSignal,
+        timeoutMs: opts.timeoutMs,
+        env: opts.env,
+      });
+      if (result.errorCode !== "ENOENT") {
+        return { ...result, sandbox: "none", sandboxWarning: transformed?.warning };
+      }
+    }
+
+    return {
+      stdout: "",
+      stderr: `No compatible shell executable was found for platform ${opts.platform}.`,
+      exitCode: 1,
+      errorCode: "ENOENT",
+      sandbox: "none",
+      sandboxWarning: transformed?.warning,
+    };
+  } finally {
+    if (tempScript) {
+      try {
+        fsSync.unlinkSync(tempScript.path);
+      } catch {
+        // Best-effort cleanup; the OS temp dir is the backstop.
+      }
     }
   }
-
-  return {
-    stdout: "",
-    stderr: `No compatible shell executable was found for platform ${opts.platform}.`,
-    exitCode: 1,
-    errorCode: "ENOENT",
-    sandbox: "none",
-    sandboxWarning: transformed?.warning,
-  };
 }
 
 function buildBashToolDescription(): string {

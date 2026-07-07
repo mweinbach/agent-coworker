@@ -1,8 +1,19 @@
+import os from "node:os";
 import path from "node:path";
 
 import { hostPlatform } from "./host";
 
-export type PlatformShellExecutionStep = { file: string; args: string[] };
+export type PlatformShellExecutionStep = {
+  file: string;
+  args: string[];
+  /** The original model-authored script, for logs/UI — `args` may carry an
+   * opaque -EncodedCommand payload instead of readable text. */
+  displayCommand?: string;
+  /** When present, the executor must write `content` to `path` (plain byte
+   * write; a UTF-8 BOM is already embedded) before spawning any step of the
+   * plan and delete it afterwards. All steps of one plan share one script. */
+  tempScript?: { path: string; content: string };
+};
 
 /**
  * The command dialect the bash tool's shell actually parses on a platform:
@@ -69,38 +80,107 @@ function envValue(env: Record<string, string | undefined>, name: string): string
   return key ? env[key] : undefined;
 }
 
+/**
+ * UTF-8 output pin for both pwsh 7 and Windows PowerShell 5.1, so child
+ * output decodes identically to POSIX platforms. [Console]::OutputEncoding
+ * can throw in consoleless hosts, hence the try/catch. PYTHONUTF8 makes
+ * Python child processes emit UTF-8 regardless of the ANSI code page.
+ * Exported for tests. Empty on POSIX (UTF-8 is ambient there).
+ */
+export function encodingPrelude(platform: NodeJS.Platform = hostPlatform()): string {
+  if (platform !== "win32") return "";
+  return [
+    "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
+    "$OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$env:PYTHONUTF8 = '1'",
+  ].join("; ");
+}
+
+/**
+ * Exit-code contract (pinned; matches GitHub Actions' PowerShell wrapper):
+ * if any native command ran, the shell exits with the LAST native command's
+ * exit code — even when a cmdlet ran afterwards. Cmdlet-only scripts exit 0,
+ * or 1 when PowerShell itself reports a terminating error. 5.1-safe (no `??`).
+ */
+const POWERSHELL_EXIT_CODE_GUARD =
+  "if ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }";
+
+/**
+ * CreateProcess caps the command line at 32,767 UTF-16 units. -EncodedCommand
+ * is base64(UTF-16LE) ≈ 2.67x the script's char count, so scripts beyond this
+ * threshold switch to a temp-file `-File` transport instead of failing with a
+ * brand-new "command line too long" error class.
+ */
+const WIN32_ENCODED_COMMAND_LIMIT = 30000;
+
+/** Shells whose `-lc <command>` contract is sh-compatible. fish/nushell/pwsh
+ * as $SHELL parse POSIX commands differently (or not at all), and their
+ * non-ENOENT failures would mask the /bin/bash fallback — skip them. */
+const SH_COMPATIBLE_BASENAMES = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
+
+function isShCompatibleUserShell(userShell: string): boolean {
+  const base = userShell.split(/[\\/]/).pop() ?? "";
+  return SH_COMPATIBLE_BASENAMES.has(base);
+}
+
+/**
+ * Build the per-platform shell invocation for a model-authored command.
+ *
+ * The transport guarantee on every platform: the command string crosses
+ * EXACTLY ONE shell interpretation layer.
+ * - POSIX: single argv element to `bash -lc` (or an sh-compatible $SHELL).
+ * - win32: `pwsh -EncodedCommand base64(utf16le(script))` — no PowerShell CLI
+ *   re-parse, so embedded quotes/backticks/$ survive byte-exact (the
+ *   `git commit -m "..."` corruption class). Scripts too large for the
+ *   CreateProcess command-line ceiling ship as a `-File` temp script instead;
+ *   the executor materializes `tempScript` before spawn and removes it after.
+ *   The script is wrapped with a UTF-8 encoding prelude and the pinned
+ *   exit-code guard (see POWERSHELL_EXIT_CODE_GUARD).
+ */
 export function buildPlatformShellExecutionPlan(
   platform: NodeJS.Platform,
   command: string,
-  opts: { userShell?: string } = {},
+  opts: { userShell?: string; tempDir?: string; scriptId?: string } = {},
 ): PlatformShellExecutionStep[] {
   if (platform === "win32") {
-    const args = [
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      command,
-    ];
+    const script = `${encodingPrelude(platform)}\n${command}\n${POWERSHELL_EXIT_CODE_GUARD}`;
+    const encoded = Buffer.from(script, "utf16le").toString("base64");
+    const baseArgs = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"];
+
+    if (encoded.length <= WIN32_ENCODED_COMMAND_LIMIT) {
+      const args = [...baseArgs, "-EncodedCommand", encoded];
+      return [
+        { file: "pwsh", args, displayCommand: command },
+        { file: "powershell.exe", args, displayCommand: command },
+      ];
+    }
+
+    // Oversized: -File temp script. UTF-8 BOM is embedded in the content so a
+    // plain byte write is correct on both pwsh 7 (UTF-8 default) and
+    // Windows PowerShell 5.1 (ANSI default without a BOM).
+    const scriptId = opts.scriptId ?? crypto.randomUUID();
+    const tempDir = opts.tempDir ?? os.tmpdir();
+    const scriptPath = path.win32.join(tempDir, `cowork-shell-${scriptId}.ps1`);
+    const tempScript = { path: scriptPath, content: "\ufeff" + script };
+    const args = [...baseArgs, "-File", scriptPath];
     return [
-      { file: "pwsh", args },
-      { file: "powershell.exe", args },
+      { file: "pwsh", args, displayCommand: command, tempScript },
+      { file: "powershell.exe", args, displayCommand: command, tempScript },
     ];
   }
 
-  const userShell = opts.userShell ?? process.env.SHELL?.trim();
+  const userShell = (opts.userShell ?? process.env.SHELL?.trim()) || undefined;
   const plan: PlatformShellExecutionStep[] = [];
 
-  if (userShell) {
-    plan.push({ file: userShell, args: ["-lc", command] });
+  if (userShell && isShCompatibleUserShell(userShell)) {
+    plan.push({ file: userShell, args: ["-lc", command], displayCommand: command });
   }
 
   plan.push(
-    { file: "/bin/bash", args: ["-lc", command] },
-    { file: "/bin/sh", args: ["-lc", command] },
-    { file: "bash", args: ["-lc", command] },
-    { file: "sh", args: ["-lc", command] },
+    { file: "/bin/bash", args: ["-lc", command], displayCommand: command },
+    { file: "/bin/sh", args: ["-lc", command], displayCommand: command },
+    { file: "bash", args: ["-lc", command], displayCommand: command },
+    { file: "sh", args: ["-lc", command], displayCommand: command },
   );
 
   return plan;

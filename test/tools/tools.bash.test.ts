@@ -87,7 +87,7 @@ describe("bash tool", () => {
   });
 
   test("falls back through POSIX shell candidates", async () => {
-    await withEnv("SHELL", "/missing/user-shell", async () => {
+    await withEnv("SHELL", "/missing/bash", async () => {
       const seen: string[] = [];
       const result = await bashInternal.runShellCommandWithExec({
         command: "echo hi",
@@ -102,7 +102,7 @@ describe("bash tool", () => {
         },
       });
 
-      expect(seen).toEqual(["/missing/user-shell", "/bin/bash", "/bin/sh"]);
+      expect(seen).toEqual(["/missing/bash", "/bin/bash", "/bin/sh"]);
       expect(result.stdout.trim()).toBe("hi");
     });
   });
@@ -155,11 +155,14 @@ describe("bash tool", () => {
       },
     });
 
-    const commandArg = seen[0]?.args.at(-1);
+    // The win32 transport is -EncodedCommand: decode the payload to assert on
+    // the script PowerShell actually parses (exactly one interpretation layer).
+    const encodedArg = seen[0]?.args.at(-1);
+    const commandArg = Buffer.from(encodedArg as string, "base64").toString("utf16le");
     expect(commandArg).toContain(
       "$env:PATH = 'C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\node\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python\\Scripts;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\poppler\\Library\\bin' + ';' + $env:PATH",
     );
-    expect(commandArg?.endsWith("node --version; python --version")).toBe(true);
+    expect(commandArg).toContain("node --version; python --version");
     expect(result.stdout).toContain("Python 3.12.13");
   });
 

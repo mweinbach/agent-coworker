@@ -5,6 +5,7 @@ import readline from "node:readline";
 
 import { z } from "zod";
 import { modelSupportsImageInputSync } from "../models/metadata";
+import { decodeTextBuffer, splitLines } from "../platform/text";
 import { getAttachmentByteLengthValidationMessage } from "../shared/attachments";
 import {
   googleMultimodalPartTypeForMime,
@@ -17,6 +18,28 @@ import { resolveMaybeRelative, truncateLine } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
+
+/** UTF-16 files must be fully decoded (no streaming decoder for them here);
+ * cap how much we are willing to buffer. UTF-8 files of any size still stream. */
+const MAX_UTF16_DECODE_BYTES = 100_000_000;
+
+type SniffedBom = "utf-8" | "utf-16le" | "utf-16be" | null;
+
+async function sniffBom(abs: string): Promise<SniffedBom> {
+  const fh = await fs.open(abs, "r");
+  try {
+    const buf = Buffer.alloc(3);
+    const { bytesRead } = await fh.read(buf, 0, 3, 0);
+    if (bytesRead >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return "utf-8";
+    if (bytesRead >= 2) {
+      if (buf[0] === 0xff && buf[1] === 0xfe) return "utf-16le";
+      if (buf[0] === 0xfe && buf[1] === 0xff) return "utf-16be";
+    }
+    return null;
+  } finally {
+    await fh.close();
+  }
+}
 
 function binaryMediaGuardMessage(filePath: string, mimeType: string): string {
   const basename = path.basename(filePath);
@@ -115,20 +138,49 @@ export function createReadTool(ctx: ToolContext) {
       const end = start + limit;
       const numbered: string[] = [];
 
+      // The documented canonical view: LF-normalized lines regardless of the
+      // file's true EOL bytes; edit round-trips the real EOL (platform/text).
+      // BOMs are decoded, never leaked into line 1 where a model would copy
+      // them into an edit oldString. UTF-16 (a common PowerShell redirection
+      // artifact on Windows) is decoded instead of mojibaked.
       let lineNo = 0;
-      const stream = createReadStream(abs, { encoding: "utf-8" });
-      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-      try {
-        for await (const line of rl) {
+      const bom = await sniffBom(abs);
+      if (bom === "utf-16le" || bom === "utf-16be") {
+        const stat = await fs.stat(abs);
+        if (Number(stat.size) > MAX_UTF16_DECODE_BYTES) {
+          throw new Error(
+            `read blocked: ${abs} is a ${bom} file of ${Number(stat.size)} bytes (max ${MAX_UTF16_DECODE_BYTES} for UTF-16 decoding).`,
+          );
+        }
+        const { text } = decodeTextBuffer(new Uint8Array(await Bun.file(abs).arrayBuffer()));
+        const lines = splitLines(text);
+        // Match readline semantics: a final newline does not open an empty line.
+        if (lines.length > 1 && lines.at(-1) === "") lines.pop();
+        for (const line of lines) {
           lineNo += 1;
           if (lineNo <= start) continue;
           if (lineNo > end) break;
           if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
           numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
         }
-      } finally {
-        rl.close();
-        stream.destroy();
+      } else {
+        const stream = createReadStream(abs, { encoding: "utf-8" });
+        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        try {
+          for await (let line of rl) {
+            lineNo += 1;
+            if (lineNo === 1 && bom === "utf-8" && line.charCodeAt(0) === 0xfeff) {
+              line = line.slice(1);
+            }
+            if (lineNo <= start) continue;
+            if (lineNo > end) break;
+            if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
+            numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+          }
+        } finally {
+          rl.close();
+          stream.destroy();
+        }
       }
 
       if (lineNo === 0 && start === 0) {

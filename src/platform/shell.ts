@@ -1,6 +1,41 @@
 import path from "node:path";
 
+import { hostPlatform } from "./host";
+
 export type PlatformShellExecutionStep = { file: string; args: string[] };
+
+/**
+ * The command dialect the bash tool's shell actually parses on a platform:
+ * PowerShell on Windows (pwsh/powershell.exe), POSIX sh elsewhere.
+ * This is the ONE platform fact the model is told about command execution;
+ * everything else (binary selection, quoting transport, PATH prelude) is
+ * owned by this module and invisible to the model.
+ */
+export type ShellDialect = "posix" | "powershell";
+
+export function shellDialect(platform: NodeJS.Platform = hostPlatform()): ShellDialect {
+  return platform === "win32" ? "powershell" : "posix";
+}
+
+/**
+ * PowerShell's lexer treats the Unicode smart-quote family (U+2018–U+201B) as
+ * single-quote delimiters, so they must be escaped (by doubling, like ASCII
+ * `'`) or they terminate the string and inject.
+ */
+const POWERSHELL_QUOTE_FAMILY = /['‘’‚‛]/g;
+
+/**
+ * Quote a value for safe embedding in a command of the given dialect.
+ * posix: single-quote wrap with `'\''` escaping. powershell: single-quote wrap
+ * doubling every character PowerShell's lexer accepts as a single quote
+ * (ASCII and smart variants).
+ */
+export function quoteShellValue(value: string, dialect: ShellDialect): string {
+  if (dialect === "powershell") {
+    return `'${value.replace(POWERSHELL_QUOTE_FAMILY, (q) => q + q)}'`;
+  }
+  return quotePosixShellValue(value);
+}
 
 export function quotePosixShellValue(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;

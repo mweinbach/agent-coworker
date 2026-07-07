@@ -62,6 +62,13 @@ describe("research service", () => {
       );
 
       expect(failed?.error).toContain("resume stream exploded");
+      // cleanupTerminalState (which deletes the store) runs strictly AFTER the
+      // status→failed persist that waitFor above observes, so wait for the
+      // side-effect itself rather than racing it.
+      await waitFor(
+        () => deleteResearchFileSearchStoreMock.mock.calls.length,
+        (count) => count >= 1,
+      );
       expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledWith(
         expect.objectContaining({
           fileSearchStoreName: "file-search-stores/resume-store",
@@ -151,6 +158,12 @@ describe("research service", () => {
       );
 
       expect(failed?.inputs.fileSearchStoreName).toBeUndefined();
+      // Store deletion happens in cleanupTerminalState, strictly after the
+      // status→failed persist observed above — wait for it, don't race it.
+      await waitFor(
+        () => deleteResearchFileSearchStoreMock.mock.calls.length,
+        (count) => count >= 1,
+      );
       expect(deleteResearchFileSearchStoreMock).toHaveBeenCalledWith(
         expect.objectContaining({
           fileSearchStoreName: "file-search-stores/mock-store",

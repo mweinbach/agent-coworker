@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -15,7 +16,15 @@ import type {
   ExternalConversation,
   ExternalConversationItem,
 } from "../types";
-import { asNumber, asRecord, asString, pathExists, readJsonlRecords } from "./common";
+import {
+  asNumber,
+  asRecord,
+  asString,
+  listFilesRecursive,
+  pathExists,
+  readJsonlRecords,
+  statSafe,
+} from "./common";
 import type { ConversationSourceAdapter } from "./types";
 
 const CODEX_SOURCE = "codex" as const;
@@ -24,6 +33,19 @@ type CodexThreadRow = Record<string, unknown>;
 
 function codexStatePath(homedir: string): string {
   return path.join(homedir, ".codex", "state_5.sqlite");
+}
+
+function codexSessionsPath(homedir: string): string {
+  return path.join(homedir, ".codex", "sessions");
+}
+
+function codexArchivedSessionsPath(homedir: string): string {
+  return path.join(homedir, ".codex", "archived_sessions");
+}
+
+function isSqlitePath(candidatePath: string): boolean {
+  const name = path.basename(candidatePath).toLowerCase();
+  return name.endsWith(".sqlite") || name.endsWith(".sqlite3") || name.endsWith(".db");
 }
 
 function readThreadCount(dbPath: string): number | undefined {
@@ -42,11 +64,47 @@ function readThreadCount(dbPath: string): number | undefined {
   }
 }
 
-function resolveRolloutPath(row: CodexThreadRow, stateDbPath: string): string | null {
+async function countCodexRollouts(candidatePath: string): Promise<number | undefined> {
+  const stat = await statSafe(candidatePath);
+  if (!stat) return undefined;
+  if (stat.isFile()) return candidatePath.endsWith(".jsonl") ? 1 : 0;
+  const files = await listFilesRecursive(candidatePath, (filePath) => filePath.endsWith(".jsonl"));
+  return files.length;
+}
+
+function readTableColumns(db: Database, tableName: string): Set<string> {
+  const rows = db.query(`PRAGMA table_info(${tableName})`).all() as Array<Record<string, unknown>>;
+  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
+function buildCodexThreadsQuery(db: Database, includeArchived: boolean): string {
+  const columns = readTableColumns(db, "threads");
+  const where = !includeArchived && columns.has("archived") ? "WHERE archived = 0" : "";
+  const orderExpr = columns.has("updated_at_ms")
+    ? "updated_at_ms"
+    : columns.has("updated_at")
+      ? "updated_at"
+      : "rowid";
+  return `SELECT * FROM threads ${where} ORDER BY ${orderExpr} DESC LIMIT ?`;
+}
+
+async function resolveRolloutPath(
+  row: CodexThreadRow,
+  stateDbPath: string,
+): Promise<string | null> {
   const rolloutPath = asString(row.rollout_path);
   if (!rolloutPath) return null;
   if (path.isAbsolute(rolloutPath)) return rolloutPath;
-  return path.resolve(path.dirname(stateDbPath), rolloutPath);
+  const codexRoot = path.dirname(stateDbPath);
+  const candidates = [
+    path.resolve(codexRoot, rolloutPath),
+    path.resolve(codexRoot, "sessions", rolloutPath),
+    path.resolve(codexRoot, "archived_sessions", rolloutPath),
+  ];
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) return candidate;
+  }
+  return candidates[1] ?? candidates[0] ?? null;
 }
 
 function rowTimestamp(
@@ -235,6 +293,40 @@ export async function parseCodexRollout(input: {
   return { items, warnings, summary: null };
 }
 
+async function codexRolloutFileToConversation(filePath: string): Promise<ExternalConversation> {
+  const sourceId = path.relative(path.dirname(filePath), filePath) || path.basename(filePath);
+  const stat = await fs.stat(filePath).catch(() => null);
+  const fallbackTs = (stat?.mtime ?? new Date(0)).toISOString();
+  const parsed = await parseCodexRollout({
+    rolloutPath: filePath,
+    sourceId,
+    fallbackCreatedAt: fallbackTs,
+    fallbackUpdatedAt: fallbackTs,
+  });
+  const warnings = [
+    ...parsed.warnings,
+    {
+      code: "missing_cwd" as const,
+      message: "Codex rollout file did not include thread metadata with a working directory.",
+    },
+  ];
+  const firstUser = parsed.items.find((item) => item.kind === "user");
+  return normalizeExternalConversation({
+    source: CODEX_SOURCE,
+    sourceId,
+    sourcePath: filePath,
+    cwd: null,
+    title: firstUser?.text ?? "Imported Codex chat",
+    createdAt: fallbackTs,
+    updatedAt: fallbackTs,
+    originalProvider: "openai",
+    originalModel: null,
+    items: parsed.items,
+    summary: parsed.summary,
+    warnings,
+  });
+}
+
 async function threadRowToConversation(
   row: CodexThreadRow,
   stateDbPath: string,
@@ -243,7 +335,7 @@ async function threadRowToConversation(
   if (!sourceId) return null;
   const createdAt = rowTimestamp(row, "created_at_ms", "created_at", new Date(0).toISOString());
   const updatedAt = rowTimestamp(row, "updated_at_ms", "updated_at", createdAt);
-  const rolloutPath = resolveRolloutPath(row, stateDbPath);
+  const rolloutPath = await resolveRolloutPath(row, stateDbPath);
   const parsed = rolloutPath
     ? await parseCodexRollout({
         rolloutPath,
@@ -296,18 +388,27 @@ export const codexConversationAdapter: ConversationSourceAdapter = {
     const paths =
       opts.explicitPaths && opts.explicitPaths.length > 0
         ? opts.explicitPaths
-        : [codexStatePath(opts.homedir)];
+        : [
+            codexStatePath(opts.homedir),
+            codexSessionsPath(opts.homedir),
+            codexArchivedSessionsPath(opts.homedir),
+          ];
     const candidates: ConversationSourceCandidate[] = [];
     for (const candidatePath of paths) {
       const available = await pathExists(candidatePath);
+      const conversationCount = available
+        ? isSqlitePath(candidatePath)
+          ? readThreadCount(candidatePath)
+          : await countCodexRollouts(candidatePath)
+        : undefined;
       candidates.push({
         source: CODEX_SOURCE,
         id: `codex:${candidatePath}`,
         path: candidatePath,
         available,
         ...(available
-          ? { conversationCount: readThreadCount(candidatePath) }
-          : { warning: "Codex state database was not found." }),
+          ? { conversationCount }
+          : { warning: "Codex conversation source was not found." }),
       });
     }
     return candidates;
@@ -318,15 +419,31 @@ export const codexConversationAdapter: ConversationSourceAdapter = {
     opts: ConversationPreviewOptions,
   ): Promise<ExternalConversation[]> {
     if (!candidate.available) return [];
+    const limit = Math.max(1, Math.min(1000, Math.floor(opts.limit ?? 250)));
+    if (!isSqlitePath(candidate.path)) {
+      const stat = await statSafe(candidate.path);
+      const files = stat?.isFile()
+        ? [candidate.path]
+        : await listFilesRecursive(candidate.path, (filePath) => filePath.endsWith(".jsonl"));
+      const sorted = await Promise.all(
+        files.map(async (filePath) => ({
+          filePath,
+          stat: await fs.stat(filePath).catch(() => null),
+        })),
+      );
+      sorted.sort((left, right) => (right.stat?.mtimeMs ?? 0) - (left.stat?.mtimeMs ?? 0));
+      return await Promise.all(
+        sorted.slice(0, limit).map((entry) => codexRolloutFileToConversation(entry.filePath)),
+      );
+    }
+
     let db: Database | null = null;
     try {
       db = new Database(candidate.path, { readonly: true, strict: false });
       const includeArchived = opts.includeArchived === true;
-      const limit = Math.max(1, Math.min(1000, Math.floor(opts.limit ?? 250)));
-      const sql = includeArchived
-        ? "SELECT * FROM threads ORDER BY COALESCE(updated_at_ms, updated_at * 1000) DESC LIMIT ?"
-        : "SELECT * FROM threads WHERE archived = 0 ORDER BY COALESCE(updated_at_ms, updated_at * 1000) DESC LIMIT ?";
-      const rows = db.query(sql).all(limit) as CodexThreadRow[];
+      const rows = db
+        .query(buildCodexThreadsQuery(db, includeArchived))
+        .all(limit) as CodexThreadRow[];
       const conversations = await Promise.all(
         rows.map((row) => threadRowToConversation(row, candidate.path)),
       );

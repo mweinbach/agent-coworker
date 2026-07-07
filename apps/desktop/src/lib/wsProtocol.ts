@@ -13,6 +13,16 @@ export type {
   ImportableKind,
   ImportSource,
 } from "../../../../src/import";
+export type {
+  ConversationImportSource,
+  ConversationImportWarning,
+  ConversationPreviewItem,
+  ConversationSourceCandidate,
+  ConversationSourceRequest,
+  ConversationWorkspaceMapping,
+  ConversationWorkspaceMappingInput,
+  ConversationWorkspaceMappingsValidateResult,
+} from "../../../../src/import/conversations";
 export type { SessionEvent } from "../../../../src/server/protocol";
 export type {
   CodexAppServerInstallStatus,

@@ -82,3 +82,33 @@ export function resolveWorkspaceMappingInput(input: {
     name: workspace.name,
   };
 }
+
+export async function validateWorkspaceMappingInput(input: {
+  mapping: ConversationWorkspaceMappingInput;
+  workspaces: WorkspaceMappingWorkspace[];
+}): Promise<ConversationWorkspaceMapping | { error: string }> {
+  const resolved = resolveWorkspaceMappingInput(input);
+  if ("error" in resolved) return resolved;
+  if (input.mapping.kind === "create") {
+    const realPath = await canonicalizeExistingPath(resolved.workspacePath);
+    if (!realPath) {
+      return {
+        status: "missing",
+        originalPath: resolved.workspacePath,
+        reason: "path_missing",
+      };
+    }
+    const fallbackName = path.basename(realPath) || realPath;
+    const name = resolved.name ?? fallbackName;
+    return {
+      status: "create",
+      workspacePath: realPath,
+      name,
+    };
+  }
+  return {
+    status: "matched",
+    workspaceId: resolved.workspaceId ?? "",
+    workspacePath: resolved.workspacePath,
+  };
+}

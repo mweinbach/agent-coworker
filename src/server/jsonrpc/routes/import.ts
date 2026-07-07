@@ -63,7 +63,7 @@ export function createImportRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         });
         return;
       }
-      const sources = await context.conversationImports.discoverSources(parsed.data.sources);
+      const sources = await context.conversationImports.discoverSources(parsed.data);
       context.jsonrpc.sendResult(ws, message.id, { sources });
     },
 
@@ -82,6 +82,21 @@ export function createImportRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       context.jsonrpc.sendResult(ws, message.id, result);
     },
 
+    "cowork/conversationImport/workspaceMappings/validate": async (ws, message) => {
+      const parsed = jsonRpcImportRequestSchemas[
+        "cowork/conversationImport/workspaceMappings/validate"
+      ].safeParse(message.params);
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "Invalid params",
+        });
+        return;
+      }
+      const result = await context.conversationImports.validateWorkspaceMappings(parsed.data);
+      context.jsonrpc.sendResult(ws, message.id, result);
+    },
+
     "cowork/conversationImport/import": async (ws, message) => {
       const parsed = jsonRpcImportRequestSchemas["cowork/conversationImport/import"].safeParse(
         message.params,
@@ -97,6 +112,9 @@ export function createImportRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         ...parsed.data,
         ...(parsed.data.provider
           ? { provider: parsed.data.provider as AgentConfig["provider"] }
+          : {}),
+        ...(parsed.data.defaultProvider
+          ? { defaultProvider: parsed.data.defaultProvider as AgentConfig["provider"] }
           : {}),
       });
       context.jsonrpc.sendResult(ws, message.id, result);

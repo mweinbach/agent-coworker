@@ -97,6 +97,14 @@ export type ConversationSourceRequest = {
   path?: string;
 };
 
+export type ConversationSourceSelectionOptions = {
+  sources?: ConversationSourceRequest[];
+  includeCodex?: boolean;
+  includeClaudeCode?: boolean;
+  includeCowork?: boolean;
+  explicitPaths?: string[];
+};
+
 export type ConversationPreviewItem = {
   source: ConversationImportSource;
   sourceId: string;
@@ -163,4 +171,10 @@ export type ConversationImportPersistResult = {
   threadId: string;
   snapshotFeed: SessionFeedItem[];
   modelMessages: ModelMessage[];
+};
+
+export type ConversationWorkspaceMappingsValidateResult = {
+  valid: boolean;
+  mappings: Record<string, ConversationWorkspaceMapping>;
+  errors: Array<{ fingerprint: string; message: string }>;
 };

@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -32,6 +33,55 @@ async function writeCodexSkill(home: string, name: string): Promise<void> {
     path.join(dir, "SKILL.md"),
     ["---", `name: ${name}`, `description: ${name} description`, "---", "", "Body"].join("\n"),
   );
+}
+
+async function writeCodexConversation(home: string, cwd: string): Promise<string> {
+  const codexRoot = path.join(home, ".codex");
+  const sessionsDir = path.join(codexRoot, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.writeFile(
+    path.join(sessionsDir, "conversation.jsonl"),
+    `${[
+      {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: "import this Codex chat" },
+      },
+      {
+        timestamp: "2026-01-01T00:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "imported from Codex" }],
+        },
+      },
+    ]
+      .map((record) => JSON.stringify(record))
+      .join("\n")}\n`,
+  );
+  const statePath = path.join(codexRoot, "state_5.sqlite");
+  const db = new Database(statePath);
+  try {
+    db.exec(
+      "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, model TEXT, rollout_path TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER)",
+    );
+    db.query(
+      "INSERT INTO threads (id, title, cwd, model, rollout_path, created_at, updated_at, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "codex-thread-1",
+      "Codex import fixture",
+      cwd,
+      "gpt-5.5",
+      "conversation.jsonl",
+      1767225600,
+      1767225601,
+      0,
+    );
+  } finally {
+    db.close();
+  }
+  return statePath;
 }
 
 describe("server JSON-RPC import methods", () => {
@@ -151,4 +201,89 @@ describe("server JSON-RPC import methods", () => {
       await stopTestServer(server);
     }
   });
+
+  test("previews, imports, and dedupes Codex conversations", async () => {
+    const tmpDir = await makeTmpProject("agent-harness-conversation-import-");
+    const fakeHome = await makeTmpProject("agent-harness-conversation-import-home-");
+    const statePath = await writeCodexConversation(fakeHome, tmpDir);
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { homedir: fakeHome }));
+    try {
+      const rpc = await connectJsonRpc(url);
+      const sources = await rpc.request(
+        "cowork/conversationImport/sources/list",
+        { includeCodex: true },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(sources.result.sources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ source: "codex", path: statePath, available: true }),
+        ]),
+      );
+
+      const preview = await rpc.request(
+        "cowork/conversationImport/preview",
+        { sources: [{ source: "codex", path: statePath }], limit: 10 },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(preview.result.conversations).toHaveLength(1);
+      const conversation = preview.result.conversations[0];
+      expect(conversation).toEqual(
+        expect.objectContaining({
+          source: "codex",
+          sourceId: "codex-thread-1",
+          title: "Codex import fixture",
+          mapping: expect.objectContaining({ status: "matched" }),
+          alreadyImportedThreadId: null,
+        }),
+      );
+
+      const validate = await rpc.request(
+        "cowork/conversationImport/workspaceMappings/validate",
+        { mappings: { [conversation.fingerprint]: { kind: "create", path: tmpDir } } },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(validate.result.valid).toBe(true);
+
+      const imported = await rpc.request(
+        "cowork/conversationImport/import",
+        {
+          sources: [{ source: "codex", path: statePath }],
+          selected: [{ source: "codex", fingerprint: conversation.fingerprint }],
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.5",
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(imported.result.imported).toHaveLength(1);
+      expect(imported.result.imported[0]).toEqual(
+        expect.objectContaining({
+          source: "codex",
+          fingerprint: conversation.fingerprint,
+          workspacePath: tmpDir,
+          title: "Codex import fixture",
+        }),
+      );
+
+      const duplicate = await rpc.request(
+        "cowork/conversationImport/import",
+        {
+          sources: [{ source: "codex", path: statePath }],
+          selected: [{ source: "codex", fingerprint: conversation.fingerprint }],
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(duplicate.result.skipped).toEqual([
+        expect.objectContaining({
+          source: "codex",
+          fingerprint: conversation.fingerprint,
+          existingThreadId: imported.result.imported[0].threadId,
+          reason: "already_imported",
+        }),
+      ]);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
 });

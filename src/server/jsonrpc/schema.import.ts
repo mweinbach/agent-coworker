@@ -85,6 +85,10 @@ export const jsonRpcImportRequestSchemas = {
   "cowork/conversationImport/sources/list": z
     .object({
       sources: z.array(conversationSourceRequestSchema).optional(),
+      includeCodex: z.boolean().optional(),
+      includeClaudeCode: z.boolean().optional(),
+      includeCowork: z.boolean().optional(),
+      explicitPaths: z.array(z.string().trim().min(1)).optional(),
     })
     .strict()
     .optional()
@@ -92,19 +96,35 @@ export const jsonRpcImportRequestSchemas = {
   "cowork/conversationImport/preview": z
     .object({
       sources: z.array(conversationSourceRequestSchema).optional(),
+      includeCodex: z.boolean().optional(),
+      includeClaudeCode: z.boolean().optional(),
+      includeCowork: z.boolean().optional(),
+      explicitPaths: z.array(z.string().trim().min(1)).optional(),
       limit: z.number().int().positive().max(1000).optional(),
       includeArchived: z.boolean().optional(),
     })
     .strict()
     .optional()
     .default({}),
+  "cowork/conversationImport/workspaceMappings/validate": z
+    .object({
+      mappings: z.record(z.string(), workspaceMappingInputSchema),
+    })
+    .strict(),
   "cowork/conversationImport/import": z
     .object({
       sources: z.array(conversationSourceRequestSchema).optional(),
+      includeCodex: z.boolean().optional(),
+      includeClaudeCode: z.boolean().optional(),
+      includeCowork: z.boolean().optional(),
+      explicitPaths: z.array(z.string().trim().min(1)).optional(),
       selected: z.array(selectedConversationSchema).min(1),
       mappings: z.record(z.string(), workspaceMappingInputSchema).optional(),
       provider: z.enum(PROVIDER_NAMES).optional(),
       model: z.string().trim().min(1).optional(),
+      defaultProvider: z.enum(PROVIDER_NAMES).optional(),
+      defaultModel: z.string().trim().min(1).optional(),
+      mode: z.literal("skip-existing").optional(),
       includeArchived: z.boolean().optional(),
     })
     .strict(),
@@ -152,6 +172,20 @@ export const jsonRpcImportResultSchemas = {
   "cowork/conversationImport/preview": z
     .object({
       conversations: z.array(conversationPreviewItemSchema),
+    })
+    .strict(),
+  "cowork/conversationImport/workspaceMappings/validate": z
+    .object({
+      valid: z.boolean(),
+      mappings: z.record(z.string(), conversationWorkspaceMappingSchema),
+      errors: z.array(
+        z
+          .object({
+            fingerprint: z.string(),
+            message: z.string(),
+          })
+          .strict(),
+      ),
     })
     .strict(),
   "cowork/conversationImport/import": z

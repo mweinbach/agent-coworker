@@ -239,8 +239,10 @@ export async function parseClaudeCodeJsonl(
         continue;
       }
       if (block.type === "thinking") {
-        const text = normalizeText(asString(block.thinking) ?? "");
-        if (text) {
+        const summary = normalizeText(
+          asString(block.summary) ?? extractTextFromContent(block.summary),
+        );
+        if (summary) {
           items.push({
             kind: "reasoning",
             id: makeExternalItemId({
@@ -248,11 +250,11 @@ export async function parseClaudeCodeJsonl(
               sourceId,
               index: items.length,
               kind: "reasoning",
-              seed: text,
+              seed: summary,
             }),
             ts,
             mode: "summary",
-            text,
+            text: summary,
           });
         }
         warnings.push({

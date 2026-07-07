@@ -1,9 +1,22 @@
-import type { ImportableItem, ImportableKind, ImportSource } from "../../lib/wsProtocol";
+import type {
+  ConversationImportSource,
+  ConversationPreviewItem,
+  ConversationSourceCandidate,
+  ConversationSourceRequest,
+  ConversationWorkspaceMappingInput,
+  ConversationWorkspaceMappingsValidateResult,
+  ImportableItem,
+  ImportableKind,
+  ImportSource,
+  ProviderName,
+} from "../../lib/wsProtocol";
 import {
   type AppStoreActions,
   ensureControlSocket,
   ensureServerRunning,
+  requestJsonRpcControl,
   requestJsonRpcControlEvent,
+  requestWorkspaceSessions,
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
@@ -21,10 +34,29 @@ function itemPendingKey(item: ImportableItem, targetScope: "workspace" | "user")
   return `${item.kind}:${item.source}:${item.id}:${targetScope}`;
 }
 
+type ConversationSourceSelectionParams = {
+  sources?: ConversationSourceRequest[];
+  includeCodex?: boolean;
+  includeClaudeCode?: boolean;
+  includeCowork?: boolean;
+  explicitPaths?: string[];
+};
+
+type ConversationImportResult = Awaited<ReturnType<AppStoreActions["importConversations"]>>;
+
 export function createImportActions(
   set: StoreSet,
   get: StoreGet,
-): Pick<AppStoreActions, "listImportable" | "importPlugin" | "importSkill"> {
+): Pick<
+  AppStoreActions,
+  | "listImportable"
+  | "importPlugin"
+  | "importSkill"
+  | "listConversationImportSources"
+  | "previewConversationImports"
+  | "validateConversationWorkspaceMappings"
+  | "importConversations"
+> {
   const setImportState = (
     workspaceId: string,
     key: string,
@@ -73,7 +105,79 @@ export function createImportActions(
     });
   };
 
+  const requestConversationImport = async <T>(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> => {
+    const workspaceId = managementWorkspaceIdFor(get);
+    if (!workspaceId) throw new Error("No workspace is available for conversation import.");
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+    return (await requestJsonRpcControl(get, set, workspaceId, method, params)) as T;
+  };
+
   return {
+    listConversationImportSources: async (params: ConversationSourceSelectionParams = {}) =>
+      await requestConversationImport<{ sources: ConversationSourceCandidate[] }>(
+        "cowork/conversationImport/sources/list",
+        params,
+      ),
+
+    previewConversationImports: async (
+      params: ConversationSourceSelectionParams & {
+        limit?: number;
+        includeArchived?: boolean;
+      } = {},
+    ) =>
+      await requestConversationImport<{ conversations: ConversationPreviewItem[] }>(
+        "cowork/conversationImport/preview",
+        params,
+      ),
+
+    validateConversationWorkspaceMappings: async (params: {
+      mappings: Record<string, ConversationWorkspaceMappingInput>;
+    }) =>
+      await requestConversationImport<ConversationWorkspaceMappingsValidateResult>(
+        "cowork/conversationImport/workspaceMappings/validate",
+        params,
+      ),
+
+    importConversations: async (
+      params: ConversationSourceSelectionParams & {
+        selected: Array<{ source: ConversationImportSource; fingerprint: string }>;
+        mappings?: Record<string, ConversationWorkspaceMappingInput>;
+        defaultProvider?: ProviderName;
+        defaultModel?: string;
+        mode?: "skip-existing";
+        includeArchived?: boolean;
+      },
+    ) => {
+      const result = await requestConversationImport<ConversationImportResult>(
+        "cowork/conversationImport/import",
+        params,
+      );
+      const workspaceIds = new Set<string>();
+      for (const imported of result.imported) {
+        const workspaceId =
+          imported.workspaceId ??
+          get().workspaces.find((workspace) => workspace.path === imported.workspacePath)?.id;
+        if (workspaceId) workspaceIds.add(workspaceId);
+      }
+      for (const created of result.createdWorkspaces) {
+        if (get().workspaces.some((workspace) => workspace.id === created.workspaceId)) {
+          workspaceIds.add(created.workspaceId);
+        }
+      }
+      if (workspaceIds.size === 0) {
+        const workspaceId = managementWorkspaceIdFor(get);
+        if (workspaceId) workspaceIds.add(workspaceId);
+      }
+      await Promise.all(
+        [...workspaceIds].map((workspaceId) => requestWorkspaceSessions(get, set, workspaceId)),
+      );
+      return result;
+    },
+
     listImportable: async (source: ImportSource, kind: ImportableKind) => {
       const workspaceId = managementWorkspaceIdFor(get);
       if (!workspaceId) return;

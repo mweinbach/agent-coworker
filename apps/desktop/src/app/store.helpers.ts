@@ -33,6 +33,12 @@ import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type {
   CodexAppServerInstallStatus,
+  ConversationImportSource,
+  ConversationPreviewItem,
+  ConversationSourceCandidate,
+  ConversationSourceRequest,
+  ConversationWorkspaceMappingInput,
+  ConversationWorkspaceMappingsValidateResult,
   ImportableItem,
   ImportableKind,
   ImportSource,
@@ -371,6 +377,55 @@ export type AppStoreState = {
 
   openSkills: () => Promise<void>;
   openResearch: () => Promise<void>;
+  listConversationImportSources: (params?: {
+    sources?: ConversationSourceRequest[];
+    includeCodex?: boolean;
+    includeClaudeCode?: boolean;
+    includeCowork?: boolean;
+    explicitPaths?: string[];
+  }) => Promise<{ sources: ConversationSourceCandidate[] }>;
+  previewConversationImports: (params?: {
+    sources?: ConversationSourceRequest[];
+    includeCodex?: boolean;
+    includeClaudeCode?: boolean;
+    includeCowork?: boolean;
+    explicitPaths?: string[];
+    limit?: number;
+    includeArchived?: boolean;
+  }) => Promise<{ conversations: ConversationPreviewItem[] }>;
+  validateConversationWorkspaceMappings: (params: {
+    mappings: Record<string, ConversationWorkspaceMappingInput>;
+  }) => Promise<ConversationWorkspaceMappingsValidateResult>;
+  importConversations: (params: {
+    sources?: ConversationSourceRequest[];
+    includeCodex?: boolean;
+    includeClaudeCode?: boolean;
+    includeCowork?: boolean;
+    explicitPaths?: string[];
+    selected: Array<{ source: ConversationImportSource; fingerprint: string }>;
+    mappings?: Record<string, ConversationWorkspaceMappingInput>;
+    defaultProvider?: ProviderName;
+    defaultModel?: string;
+    mode?: "skip-existing";
+    includeArchived?: boolean;
+  }) => Promise<{
+    imported: Array<{
+      source: ConversationImportSource;
+      fingerprint: string;
+      threadId: string;
+      workspaceId: string | null;
+      workspacePath: string;
+      title: string;
+    }>;
+    skipped: Array<{
+      source: ConversationImportSource;
+      fingerprint: string;
+      existingThreadId: string;
+      reason: "already_imported";
+    }>;
+    failed: Array<{ source: ConversationImportSource; fingerprint: string; message: string }>;
+    createdWorkspaces: Array<{ workspaceId: string; path: string; name: string }>;
+  }>;
   openNewTask: (workspaceId?: string) => Promise<void>;
   refreshTasks: (workspaceId?: string) => Promise<void>;
   startTask: (opts: { workspaceId: string; task: TaskCreationInput }) => Promise<TaskRecord | null>;

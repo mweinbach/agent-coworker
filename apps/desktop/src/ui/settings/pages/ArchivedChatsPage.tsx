@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { confirmAction } from "../../../lib/desktopCommands";
+import { ConversationImportDialog } from "../import/ConversationImportDialog";
 import { SettingsEmptyState, SettingsRow, SettingsSection } from "../SettingsPrimitives";
 
 function formatArchivedDate(isoString?: string): string {
@@ -55,6 +56,17 @@ export function ArchivedChatsPage() {
 
   return (
     <>
+      <SettingsSection
+        title="Conversation import"
+        description="Import Codex, Claude Code, or Cowork backup chats as normal Cowork threads."
+        action={<ConversationImportDialog />}
+      >
+        <SettingsRow
+          title="Safe imports"
+          description="Imported chats keep their visible replay history, while future turns use sanitized context without external provider continuation state."
+        />
+      </SettingsSection>
+
       <SettingsSection
         title="Auto-delete Settings"
         description="Configure how long archived conversation history remains before being permanently deleted from your computer."

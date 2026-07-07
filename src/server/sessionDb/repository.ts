@@ -914,24 +914,11 @@ export class SessionDbRepository {
       .run(creationKey, threadId, now, now);
   }
 
-  getExternalConversationImport(
-    source: PersistedExternalConversationImport["source"],
-    fingerprint: string,
-  ): PersistedExternalConversationImport | null {
-    const row = this.db
-      .query(
-        sql([
-          "SELECT source, fingerprint, imported_session_id, source_id, source_path,",
-          "       original_provider, original_model, imported_at, metadata_json",
-          "       FROM external_conversation_imports",
-          "       WHERE source = ? AND fingerprint = ?",
-          "       LIMIT 1",
-        ]),
-      )
-      .get(source, fingerprint) as Record<string, unknown> | null;
-    if (!row) return null;
+  private mapExternalConversationImportRow(
+    row: Record<string, unknown>,
+  ): PersistedExternalConversationImport {
     return {
-      source: source,
+      source: String(row.source) as PersistedExternalConversationImport["source"],
       fingerprint: String(row.fingerprint),
       importedSessionId: String(row.imported_session_id),
       sourceId: String(row.source_id),
@@ -948,6 +935,56 @@ export class SessionDbRepository {
         "external_conversation_imports.metadata_json",
       ),
     };
+  }
+
+  getExternalConversationImport(
+    source: PersistedExternalConversationImport["source"],
+    fingerprint: string,
+  ): PersistedExternalConversationImport | null {
+    const row = this.db
+      .query(
+        sql([
+          "SELECT source, fingerprint, imported_session_id, source_id, source_path,",
+          "       original_provider, original_model, imported_at, metadata_json",
+          "       FROM external_conversation_imports",
+          "       WHERE source = ? AND fingerprint = ?",
+          "       LIMIT 1",
+        ]),
+      )
+      .get(source, fingerprint) as Record<string, unknown> | null;
+    return row ? this.mapExternalConversationImportRow(row) : null;
+  }
+
+  listExternalConversationImports(opts?: {
+    source?: PersistedExternalConversationImport["source"];
+    limit?: number;
+  }): PersistedExternalConversationImport[] {
+    const limit = Math.max(1, Math.min(1000, Math.floor(opts?.limit ?? 250)));
+    const rows = opts?.source
+      ? (this.db
+          .query(
+            sql([
+              "SELECT source, fingerprint, imported_session_id, source_id, source_path,",
+              "       original_provider, original_model, imported_at, metadata_json",
+              "       FROM external_conversation_imports",
+              "       WHERE source = ?",
+              "       ORDER BY imported_at DESC",
+              "       LIMIT ?",
+            ]),
+          )
+          .all(opts.source, limit) as Record<string, unknown>[])
+      : (this.db
+          .query(
+            sql([
+              "SELECT source, fingerprint, imported_session_id, source_id, source_path,",
+              "       original_provider, original_model, imported_at, metadata_json",
+              "       FROM external_conversation_imports",
+              "       ORDER BY imported_at DESC",
+              "       LIMIT ?",
+            ]),
+          )
+          .all(limit) as Record<string, unknown>[]);
+    return rows.map((row) => this.mapExternalConversationImportRow(row));
   }
 
   recordExternalConversationImport(record: PersistedExternalConversationImport): void {

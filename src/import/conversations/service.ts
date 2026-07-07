@@ -17,10 +17,16 @@ import type {
   ConversationPreviewItem,
   ConversationSourceCandidate,
   ConversationSourceRequest,
+  ConversationSourceSelectionOptions,
   ConversationWorkspaceMappingInput,
+  ConversationWorkspaceMappingsValidateResult,
   ExternalConversation,
 } from "./types";
-import { mapConversationWorkspace, resolveWorkspaceMappingInput } from "./workspaceMapping";
+import {
+  mapConversationWorkspace,
+  resolveWorkspaceMappingInput,
+  validateWorkspaceMappingInput,
+} from "./workspaceMapping";
 
 export type ConversationImportService = ReturnType<typeof createConversationImportService>;
 
@@ -73,10 +79,28 @@ function hashWorkspaceId(value: string): string {
 }
 
 function normalizeSourceRequests(
-  requests?: ConversationSourceRequest[],
+  input?: ConversationSourceRequest[] | ConversationSourceSelectionOptions,
 ): ConversationSourceRequest[] {
-  if (requests && requests.length > 0) return requests;
-  return [{ source: "codex" }, { source: "claude-code" }];
+  if (Array.isArray(input)) {
+    return input.length > 0 ? input : [{ source: "codex" }, { source: "claude-code" }];
+  }
+  if (input?.sources && input.sources.length > 0) return input.sources;
+
+  const explicitPaths = input?.explicitPaths?.filter((entry) => entry.trim()) ?? [];
+  const hasIncludeFlag =
+    input?.includeCodex !== undefined ||
+    input?.includeClaudeCode !== undefined ||
+    input?.includeCowork !== undefined;
+  const sources: ConversationImportSource[] = hasIncludeFlag
+    ? [
+        ...(input?.includeCodex === true ? (["codex"] as const) : []),
+        ...(input?.includeClaudeCode === true ? (["claude-code"] as const) : []),
+        ...(input?.includeCowork === true ? (["cowork"] as const) : []),
+      ]
+    : ["codex", "claude-code"];
+
+  if (explicitPaths.length === 0) return sources.map((source) => ({ source }));
+  return sources.flatMap((source) => explicitPaths.map((path) => ({ source, path })));
 }
 
 function groupExplicitPathsBySource(
@@ -215,7 +239,7 @@ function markUnsupportedOriginalModel(input: {
 
 export function createConversationImportService(opts: ServiceOptions) {
   async function discoverSources(
-    requests?: ConversationSourceRequest[],
+    requests?: ConversationSourceRequest[] | ConversationSourceSelectionOptions,
   ): Promise<ConversationSourceCandidate[]> {
     const normalized = normalizeSourceRequests(requests);
     const grouped = groupExplicitPathsBySource(normalized);
@@ -232,12 +256,13 @@ export function createConversationImportService(opts: ServiceOptions) {
     return candidates;
   }
 
-  async function loadConversations(input: {
-    sources?: ConversationSourceRequest[];
-    limit?: number;
-    includeArchived?: boolean;
-  }): Promise<ExternalConversation[]> {
-    const candidates = await discoverSources(input.sources);
+  async function loadConversations(
+    input: ConversationSourceSelectionOptions & {
+      limit?: number;
+      includeArchived?: boolean;
+    },
+  ): Promise<ExternalConversation[]> {
+    const candidates = await discoverSources(input);
     const conversations: ExternalConversation[] = [];
     for (const candidate of candidates) {
       if (!candidate.available) continue;
@@ -255,11 +280,12 @@ export function createConversationImportService(opts: ServiceOptions) {
     return conversations;
   }
 
-  async function preview(input: {
-    sources?: ConversationSourceRequest[];
-    limit?: number;
-    includeArchived?: boolean;
-  }): Promise<ConversationImportPreviewResult> {
+  async function preview(
+    input: ConversationSourceSelectionOptions & {
+      limit?: number;
+      includeArchived?: boolean;
+    },
+  ): Promise<ConversationImportPreviewResult> {
     const config = opts.getConfig();
     const { workspaces } = await listWorkspaceSummaries({
       workingDirectory: config.workingDirectory,
@@ -297,14 +323,18 @@ export function createConversationImportService(opts: ServiceOptions) {
     };
   }
 
-  async function importSelected(input: {
-    sources?: ConversationSourceRequest[];
-    selected: Array<{ source: ConversationImportSource; fingerprint: string }>;
-    mappings?: Record<string, ConversationWorkspaceMappingInput>;
-    provider?: AgentConfig["provider"];
-    model?: string;
-    includeArchived?: boolean;
-  }): Promise<ConversationImportImportResult> {
+  async function importSelected(
+    input: ConversationSourceSelectionOptions & {
+      selected: Array<{ source: ConversationImportSource; fingerprint: string }>;
+      mappings?: Record<string, ConversationWorkspaceMappingInput>;
+      provider?: AgentConfig["provider"];
+      model?: string;
+      defaultProvider?: AgentConfig["provider"];
+      defaultModel?: string;
+      mode?: "skip-existing";
+      includeArchived?: boolean;
+    },
+  ): Promise<ConversationImportImportResult> {
     const config = opts.getConfig();
     const conversations = await loadConversations({
       sources: input.sources,
@@ -328,8 +358,8 @@ export function createConversationImportService(opts: ServiceOptions) {
       createdWorkspaces: [],
     };
     const modelSelection = selectImportModel({
-      requestedProvider: input.provider,
-      requestedModel: input.model,
+      requestedProvider: input.provider ?? input.defaultProvider,
+      requestedModel: input.model ?? input.defaultModel,
       defaultProvider: config.provider,
       defaultModel: config.model,
     });
@@ -457,9 +487,40 @@ export function createConversationImportService(opts: ServiceOptions) {
     return result;
   }
 
+  async function validateWorkspaceMappings(input: {
+    mappings: Record<string, ConversationWorkspaceMappingInput>;
+  }): Promise<ConversationWorkspaceMappingsValidateResult> {
+    const config = opts.getConfig();
+    const { workspaces } = await listWorkspaceSummaries({
+      workingDirectory: config.workingDirectory,
+      desktopService: opts.desktopService,
+      homedir: opts.homedir,
+    });
+    const result: ConversationWorkspaceMappingsValidateResult = {
+      valid: true,
+      mappings: {},
+      errors: [],
+    };
+    for (const [fingerprint, mapping] of Object.entries(input.mappings)) {
+      const validation = await validateWorkspaceMappingInput({ mapping, workspaces });
+      if ("error" in validation) {
+        result.valid = false;
+        result.errors.push({ fingerprint, message: validation.error });
+        continue;
+      }
+      if (validation.status === "missing") {
+        result.valid = false;
+        result.errors.push({ fingerprint, message: "Workspace path does not exist." });
+      }
+      result.mappings[fingerprint] = validation;
+    }
+    return result;
+  }
+
   return {
     discoverSources,
     preview,
     importSelected,
+    validateWorkspaceMappings,
   };
 }

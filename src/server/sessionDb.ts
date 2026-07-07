@@ -491,6 +491,13 @@ export class SessionDb {
     return this.readRepository.getExternalConversationImport(source, fingerprint);
   }
 
+  listExternalConversationImports(opts?: {
+    source?: PersistedExternalConversationImport["source"];
+    limit?: number;
+  }): PersistedExternalConversationImport[] {
+    return this.readRepository.listExternalConversationImports(opts);
+  }
+
   async recordExternalConversationImport(
     record: PersistedExternalConversationImport,
   ): Promise<void> {

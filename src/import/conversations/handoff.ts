@@ -9,9 +9,12 @@ const MAX_SUMMARY_CHARS = 20_000;
 
 const SENSITIVE_TOKEN_PATTERNS = [
   /call_[A-Za-z0-9_-]+/g,
+  /toolu_[A-Za-z0-9_-]+/g,
   /resp_[A-Za-z0-9_-]+/g,
+  /response_[A-Za-z0-9_-]+/g,
   /thread_[A-Za-z0-9_-]+/g,
   /run_[A-Za-z0-9_-]+/g,
+  /msg_[A-Za-z0-9_-]+/g,
   /gAAAAA[A-Za-z0-9_-]+/g,
   /[A-Za-z0-9+/=]{160,}/g,
 ];

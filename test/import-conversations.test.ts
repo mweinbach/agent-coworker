@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,12 +6,17 @@ import path from "node:path";
 
 import {
   buildSafeHandoffText,
+  buildSafeModelMessages,
+  claudeCodeConversationAdapter,
+  codexConversationAdapter,
+  createConversationImportService,
   type ExternalConversation,
   parseClaudeCodeJsonl,
   parseCodexRollout,
   persistImportedConversation,
 } from "../src/import/conversations";
 import { SessionDb } from "../src/server/sessionDb";
+import type { AgentConfig } from "../src/types";
 
 const tempDirs: string[] = [];
 
@@ -144,6 +150,102 @@ describe("conversation import parsers", () => {
     expect(parsed.warnings.some((warning) => warning.code === "tool_protocol_redacted")).toBe(true);
   });
 
+  test("discovers Codex state and resolves relative rollout paths under sessions", async () => {
+    const home = await makeTempDir();
+    const codexRoot = path.join(home, ".codex");
+    const sessionsDir = path.join(codexRoot, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const rollout = path.join(sessionsDir, "rollout.jsonl");
+    await fs.writeFile(
+      rollout,
+      jsonl([
+        {
+          timestamp: "2026-01-01T00:00:00.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "import me" },
+        },
+        {
+          timestamp: "2026-01-01T00:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "imported" }],
+          },
+        },
+      ]),
+    );
+    const statePath = path.join(codexRoot, "state_5.sqlite");
+    const sqlite = new Database(statePath);
+    try {
+      sqlite.exec(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, model TEXT, rollout_path TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER)",
+      );
+      sqlite
+        .query(
+          "INSERT INTO threads (id, title, cwd, model, rollout_path, created_at, updated_at, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "thread-1",
+          "Relative rollout",
+          home,
+          "gpt-5.5",
+          "rollout.jsonl",
+          1767225600,
+          1767225601,
+          0,
+        );
+    } finally {
+      sqlite.close();
+    }
+
+    const candidates = await codexConversationAdapter.discover({ homedir: home });
+    const stateCandidate = candidates.find((candidate) => candidate.path === statePath);
+    expect(stateCandidate).toMatchObject({ available: true, conversationCount: 1 });
+    if (!stateCandidate) throw new Error("missing Codex state candidate");
+
+    const conversations = await codexConversationAdapter.preview(stateCandidate, { limit: 10 });
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]).toMatchObject({
+      source: "codex",
+      sourceId: "thread-1",
+      cwd: home,
+      sourcePath: rollout,
+      title: "Relative rollout",
+    });
+    expect(conversations[0]?.items.map((item) => item.kind)).toEqual(["user", "assistant"]);
+  });
+
+  test("discovers standalone Codex JSONL rollouts without importing Cowork auth caches", async () => {
+    const home = await makeTempDir();
+    const sessionsDir = path.join(home, ".codex", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const rollout = path.join(sessionsDir, "standalone.jsonl");
+    await fs.writeFile(
+      rollout,
+      jsonl([
+        {
+          timestamp: "2026-01-01T00:00:00.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "hello from file" },
+        },
+      ]),
+    );
+    const coworkAuth = path.join(home, ".cowork", "auth", "codex-cli", "sessions");
+    await fs.mkdir(coworkAuth, { recursive: true });
+    await fs.writeFile(path.join(coworkAuth, "ignored.jsonl"), jsonl([]));
+
+    const candidates = await codexConversationAdapter.discover({ homedir: home });
+    expect(candidates.some((candidate) => candidate.path.includes(".cowork"))).toBe(false);
+    const sessionsCandidate = candidates.find((candidate) => candidate.path === sessionsDir);
+    expect(sessionsCandidate).toMatchObject({ available: true, conversationCount: 1 });
+    if (!sessionsCandidate) throw new Error("missing Codex sessions candidate");
+
+    const conversations = await codexConversationAdapter.preview(sessionsCandidate, { limit: 10 });
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]?.items[0]).toMatchObject({ kind: "user", text: "hello from file" });
+  });
+
   test("parses Claude Code JSONL and omits thinking signatures from handoff", async () => {
     const dir = await makeTempDir();
     const file = path.join(dir, "session.jsonl");
@@ -224,6 +326,115 @@ describe("conversation import parsers", () => {
     expect(handoff).not.toContain("signature-secret");
     expect(handoff).not.toContain("toolu_secret");
   });
+
+  test("redacts non-summary Claude thinking content instead of importing it", async () => {
+    const dir = await makeTempDir();
+    const file = path.join(dir, "thinking.jsonl");
+    await fs.writeFile(
+      file,
+      jsonl([
+        {
+          type: "user",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          cwd: dir,
+          sessionId: "claude-thinking",
+          message: { role: "user", content: "question" },
+        },
+        {
+          type: "assistant",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          cwd: dir,
+          sessionId: "claude-thinking",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            content: [
+              {
+                type: "thinking",
+                thinking: "hidden chain of thought must not import",
+                signature: "signature-secret",
+              },
+              { type: "text", text: "answer" },
+            ],
+          },
+        },
+      ]),
+    );
+
+    const conversation = await parseClaudeCodeJsonl(file, dir);
+    const handoff = buildSafeHandoffText(conversation);
+
+    expect(conversation.items.map((item) => item.kind)).toEqual(["user", "assistant"]);
+    expect(handoff).not.toContain("hidden chain of thought");
+    expect(handoff).not.toContain("signature-secret");
+    expect(conversation.warnings.some((warning) => warning.code === "reasoning_redacted")).toBe(
+      true,
+    );
+  });
+
+  test("imports explicit Claude thinking summaries as visible reasoning summaries", async () => {
+    const dir = await makeTempDir();
+    const file = path.join(dir, "summary.jsonl");
+    await fs.writeFile(
+      file,
+      jsonl([
+        {
+          type: "assistant",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          cwd: dir,
+          sessionId: "claude-summary",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            content: [{ type: "thinking", summary: "visible reasoning summary" }],
+          },
+        },
+      ]),
+    );
+
+    const conversation = await parseClaudeCodeJsonl(file, dir);
+    expect(conversation.items).toEqual([
+      expect.objectContaining({
+        kind: "reasoning",
+        mode: "summary",
+        text: "visible reasoning summary",
+      }),
+    ]);
+  });
+
+  test("discovers Claude Code project folders and decodes cwd fallback", async () => {
+    const home = await makeTempDir();
+    const projectPath = "/Users/alice/Projects/demo";
+    const encodedProject = projectPath.replace(/\//g, "-");
+    const projectDir = path.join(home, ".claude", "projects", encodedProject);
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, "session.jsonl"),
+      jsonl([
+        {
+          type: "user",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          sessionId: "claude-project",
+          message: { role: "user", content: "hello" },
+        },
+      ]),
+    );
+
+    const candidates = await claudeCodeConversationAdapter.discover({ homedir: home });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ available: true, conversationCount: 1 });
+    const conversations = await claudeCodeConversationAdapter.preview(candidates[0]!, {
+      limit: 10,
+    });
+    expect(conversations[0]).toMatchObject({ cwd: projectPath, sourceId: "claude-project" });
+  });
+
+  test("safe handoff creates only plain model messages", () => {
+    const messages = buildSafeModelMessages(conversationFixture("/tmp/workspace"));
+    expect(messages).toEqual([expect.objectContaining({ role: "user" })]);
+    expect(JSON.stringify(messages)).not.toContain('"role":"tool"');
+    expect(JSON.stringify(messages)).not.toContain("call_should_not_leak");
+  });
 });
 
 describe("conversation import persistence", () => {
@@ -275,6 +486,63 @@ describe("conversation import persistence", () => {
         conversation.fingerprint,
       );
       expect(importRecord?.importedSessionId).toBe(first.threadId);
+      expect(db.listExternalConversationImports({ source: "claude-code" })).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("validates workspace mapping inputs before import", async () => {
+    const dir = await makeTempDir();
+    const rootDir = path.join(dir, ".cowork");
+    const sessionsDir = path.join(rootDir, "sessions");
+    const workspace = path.join(dir, "workspace");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.mkdir(workspace);
+    const db = await SessionDb.create({
+      paths: { rootDir, sessionsDir },
+      dbPath: path.join(rootDir, "sessions.db"),
+    });
+    const config = {
+      provider: "openai",
+      model: "gpt-5.5",
+      preferredChildModel: "gpt-5.5",
+      workingDirectory: workspace,
+      userName: "Tester",
+      knowledgeCutoff: "Unknown",
+      projectCoworkDir: rootDir,
+      userCoworkDir: rootDir,
+      builtInDir: dir,
+      builtInConfigDir: dir,
+      skillsDirs: [],
+      memoryDirs: [],
+      configDirs: [],
+    } as AgentConfig;
+    try {
+      const service = createConversationImportService({
+        sessionDb: db,
+        homedir: dir,
+        getConfig: () => config,
+      });
+      const realWorkspace = await fs.realpath(workspace);
+      const valid = await service.validateWorkspaceMappings({
+        mappings: { fingerprint: { kind: "create", path: workspace, name: "Workspace" } },
+      });
+      expect(valid.valid).toBe(true);
+      expect(valid.mappings.fingerprint).toMatchObject({
+        status: "create",
+        workspacePath: realWorkspace,
+        name: "Workspace",
+      });
+
+      const missing = await service.validateWorkspaceMappings({
+        mappings: { fingerprint: { kind: "create", path: path.join(dir, "missing") } },
+      });
+      expect(missing.valid).toBe(false);
+      expect(missing.errors[0]).toMatchObject({
+        fingerprint: "fingerprint",
+        message: "Workspace path does not exist.",
+      });
     } finally {
       db.close();
     }

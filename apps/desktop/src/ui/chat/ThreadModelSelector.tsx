@@ -8,12 +8,14 @@ export function ThreadModelSelector({
   model,
   modelDisplayNames,
   disabled,
+  defaultOpen,
 }: {
   threadId: string;
   provider: ProviderName;
   model: string;
   modelDisplayNames: Record<ProviderName, Record<string, string>>;
   disabled?: boolean;
+  defaultOpen?: boolean;
 }) {
   const setThreadModel = useAppStore((s) => s.setThreadModel);
 
@@ -23,6 +25,7 @@ export function ThreadModelSelector({
       model={model}
       modelDisplayNames={modelDisplayNames}
       disabled={disabled}
+      defaultOpen={defaultOpen}
       onChange={(selection) => setThreadModel(threadId, selection.provider, selection.model)}
     />
   );

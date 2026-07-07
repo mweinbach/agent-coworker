@@ -192,6 +192,22 @@ export type PersistedThreadJournalFailure = {
   lastFailureMessage: string;
 };
 
+export type PersistedThreadMetadata = {
+  threadId: string;
+  pinned: boolean;
+  pinnedAt: string | null;
+  archived: boolean;
+  archivedAt: string | null;
+  updatedAt: string;
+};
+
+export type PersistedThreadMetadataPatch = {
+  threadId: string;
+  pinned?: boolean;
+  archived?: boolean;
+  updatedAt?: string;
+};
+
 export type PersistedResearchRecord = ResearchRecord;
 export type { PersistedExternalConversationImport } from "../import/conversations/types";
 
@@ -476,6 +492,22 @@ export class SessionDb {
       async () => {
         this.repository.recordThreadJournalFailure(input);
       },
+      { threadId: input.threadId },
+    );
+  }
+
+  getThreadMetadata(threadId: string): PersistedThreadMetadata | null {
+    return this.readRepository.getThreadMetadata(threadId);
+  }
+
+  listThreadMetadata(): PersistedThreadMetadata[] {
+    return this.readRepository.listThreadMetadata();
+  }
+
+  async setThreadMetadata(input: PersistedThreadMetadataPatch): Promise<PersistedThreadMetadata> {
+    return await this.writeCoordinator.runExclusive(
+      "set_thread_metadata",
+      async () => this.repository.setThreadMetadata(input),
       { threadId: input.threadId },
     );
   }

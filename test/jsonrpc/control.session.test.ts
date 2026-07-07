@@ -96,6 +96,50 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("thread metadata JSON-RPC methods persist pinned and archived flags", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await rpc.request("thread/start", { cwd: tmpDir });
+      const threadId = created.result.thread.id as string;
+
+      const pinned = await rpc.request("thread/pinned/set", { threadId, pinned: true });
+      expect(pinned.result.thread).toMatchObject({ id: threadId, pinned: true, archived: false });
+
+      const archived = await rpc.request("thread/archived/set", { threadId, archived: true });
+      expect(archived.result.thread).toMatchObject({
+        id: threadId,
+        pinned: true,
+        archived: true,
+      });
+      expect(archived.result.thread.archivedAt).toBeString();
+
+      const listed = await rpc.request("thread/list", { cwd: tmpDir });
+      expect(
+        listed.result.threads.find((thread: { id: string }) => thread.id === threadId),
+      ).toMatchObject({
+        id: threadId,
+        pinned: true,
+        archived: true,
+      });
+
+      const db = new Database(path.join(tmpDir, ".cowork", "sessions.db"));
+      try {
+        const row = db
+          .query("select pinned, archived from thread_metadata where thread_id = ?")
+          .get(threadId) as { pinned: number; archived: number } | null;
+        expect(row).toEqual({ pinned: 1, archived: 1 });
+      } finally {
+        db.close();
+      }
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("session delete rejects targets from another workspace", async () => {
     const tmpDir = await makeTmpProject();
     const otherTmpDir = await makeTmpProject();

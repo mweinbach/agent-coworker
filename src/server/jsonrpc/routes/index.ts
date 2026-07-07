@@ -18,6 +18,7 @@ import { createSkillImprovementRouteHandlers } from "./skillImprovement";
 import { createSkillsRouteHandlers } from "./skills";
 import { createTaskRouteHandlers } from "./tasks";
 import { createThreadRouteHandlers } from "./thread";
+import { createThreadManagementRouteHandlers } from "./threadManagement";
 import { createTurnRouteHandlers } from "./turn";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 import { createWorkspaceRouteHandlers } from "./workspace";
@@ -31,6 +32,7 @@ export function createJsonRpcRequestRouter(
 ): JsonRpcRequestHandler {
   const handlers: JsonRpcRequestHandlerMap = {
     ...createThreadRouteHandlers(context),
+    ...createThreadManagementRouteHandlers(context),
     ...createTurnRouteHandlers(context),
     ...createSessionRouteHandlers(context),
     ...createAgentRouteHandlers(context),

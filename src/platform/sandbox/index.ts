@@ -11,16 +11,21 @@ import {
 } from "./detect";
 import type { SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
-import { buildWindowsSandboxCommand } from "./windows";
+import { buildWindowsSandboxCommand, windowsSandboxHome } from "./windows";
 
+export type { SandboxDeniedInput, SandboxDeniedOptions } from "./denied";
 export { classifySandboxDenial, describeSandboxDenial, isLikelySandboxDenied } from "./denied";
+export { resetSandboxProbeCachesForTests } from "./detect";
 export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
 export {
   DEFAULT_SANDBOX_CONFIG,
   deriveWritableRoots,
   policyAllowsNetwork,
+  protectedMetadataPaths,
   resolveSandboxPolicy,
+  scratchRoots,
 } from "./policy";
+export { windowsSandboxHome } from "./windows";
 
 /** Concrete sandbox backend selected for a given platform + policy. */
 export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-sandbox";
@@ -216,12 +221,14 @@ export class SandboxManager {
               `Windows sandbox is not ready for ${missing.join(", ")} enforcement`,
           );
         }
+        // Prefer the home the probe verified against; fall back to the shared
+        // resolver so the build and detect layers can never disagree.
         const wrapped = buildWindowsSandboxCommand(
           inner,
           input.policy,
           input.cwd,
           capabilities.windowsHelperPath,
-          capabilities.windowsSandboxHome,
+          capabilities.windowsSandboxHome ?? windowsSandboxHome(),
         );
         return {
           ...wrapped,

@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { collectExistingProtectedMetadataPaths } from "./bwrap";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
+  protectedMetadataPaths,
   type SandboxPolicy,
+  scratchRoots,
   tmpScratchRoots,
   withTmpScratch,
 } from "./policy";
@@ -133,7 +134,7 @@ export function buildSeatbeltCommand(
     const writableRoots =
       policy.kind === "workspace-write"
         ? policy.writableRoots
-        : tmpScratchRoots(policy.projectRoots ?? [], ["/tmp", "/private/tmp"]);
+        : tmpScratchRoots(policy.projectRoots ?? [], scratchRoots("darwin"));
     const rootKinds = policy.kind === "workspace-write" ? (policy.writableRootKinds ?? {}) : {};
     const writeSection = buildWritePolicy(
       writableRoots,
@@ -184,7 +185,7 @@ function buildWritePolicy(
       .map(([root]) => canonicalizeRoot(root)),
   );
   const roots = addTmpScratch
-    ? withTmpScratch([...canonicalExplicit], ["/tmp", "/private/tmp"])
+    ? withTmpScratch([...canonicalExplicit], scratchRoots("darwin"))
     : [...canonicalExplicit];
 
   // No writable roots → emit NO allow so the base `(deny default)` denies all
@@ -224,7 +225,10 @@ function buildWritePolicy(
     // /tmp scratch family (recursively scanning all of /tmp would be slow and
     // pointless), mirroring the bwrap backend.
     if (metadataScanRoots.has(root)) {
-      for (const dir of collectExistingProtectedMetadataPaths(root, fsExists, fsIsDirectory)) {
+      for (const dir of protectedMetadataPaths([root], {
+        exists: fsExists,
+        isDirectory: fsIsDirectory,
+      })) {
         protectedDirs.add(dir);
       }
     }

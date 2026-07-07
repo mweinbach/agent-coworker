@@ -994,6 +994,8 @@ posixBackendDescribe("bwrap argv generation", () => {
 });
 
 describe("windows wrapper", () => {
+  const WIN_SANDBOX_HOME = "C:/Users/test/.cowork";
+
   test("workspace-write: helper invocation with mode + writable roots", () => {
     const policy: SandboxPolicy = {
       kind: "workspace-write",
@@ -1005,6 +1007,7 @@ describe("windows wrapper", () => {
       policy,
       "/work",
       "C:/h/cowork-win-sandbox.exe",
+      WIN_SANDBOX_HOME,
     );
     expect(file).toBe("C:/h/cowork-win-sandbox.exe");
     expect(args).toContain("--mode");
@@ -1014,18 +1017,21 @@ describe("windows wrapper", () => {
     expect(args.slice(-4)).toEqual(["--", "/bin/bash", "-lc", "echo hi"]);
   });
 
-  test("no-project-write: helper uses read-only mode without writable roots", () => {
+  test("no-project-write: helper grants ONLY temp scratch as writable (mac/linux parity)", () => {
     const policy: SandboxPolicy = { kind: "no-project-write", network: true };
     const { args } = buildWindowsSandboxCommand(
       INNER,
       policy,
       "/work",
       "C:/h/cowork-win-sandbox.exe",
+      WIN_SANDBOX_HOME,
     );
-    expect(args).toContain("--mode");
-    expect(args).toContain("read-only");
+    // Scratch-only writable roots require the helper's workspace-write mode:
+    // its read-only profile ignores --writable-root entirely.
+    expect(args[args.indexOf("--mode") + 1]).toBe("workspace-write");
     expect(args).not.toContain("no-project-write");
-    expect(args).not.toContain("--writable-root");
+    const writable = args.flatMap((arg, i) => (arg === "--writable-root" ? [args[i + 1]] : []));
+    expect(writable).toEqual([canonicalizeRoot(os.tmpdir())]);
     expect(args).toContain("--allow-network");
   });
 });

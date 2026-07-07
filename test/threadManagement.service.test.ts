@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +8,13 @@ import { SessionDb } from "../src/server/sessionDb";
 import { LocalThreadHost } from "../src/server/threads/localThreadHost";
 import type { AgentConfig } from "../src/types";
 
-async function makeHarness(opts: { isTaskThread?: (sessionId: string) => boolean } = {}) {
+async function makeHarness(
+  opts: {
+    isTaskThread?: (sessionId: string) => boolean;
+    registry?: Partial<SessionRegistry>;
+    worktreeService?: ConstructorParameters<typeof LocalThreadHost>[0]["worktreeService"];
+  } = {},
+) {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-thread-management-"));
   const rootDir = path.join(workspace, ".cowork");
   const sessionsDir = path.join(rootDir, "sessions");
@@ -40,16 +46,69 @@ async function makeHarness(opts: { isTaskThread?: (sessionId: string) => boolean
     createJsonRpcThreadSession: () => {
       throw new Error("not used");
     },
+    ...opts.registry,
   } as unknown as SessionRegistry;
   const host = new LocalThreadHost({
     sessionDb,
     registry,
     threadJournal,
     taskCoordinator: { isTaskThread: opts.isTaskThread ?? (() => false) },
+    worktreeService: opts.worktreeService,
     getConfig: () => config,
     homedir: workspace,
   });
   return { workspace, sessionDb, threadJournal, host };
+}
+
+function makeRuntime(opts: {
+  id: string;
+  cwd: string;
+  provider?: AgentConfig["provider"];
+  model?: string;
+  title?: string;
+  isBusy?: boolean;
+  messageCount?: number;
+  sendUserMessage?: (prompt: string) => Promise<void>;
+}) {
+  const provider = opts.provider ?? "google";
+  const model = opts.model ?? "gemini-3-flash-preview";
+  const now = "2026-07-01T00:00:10.000Z";
+  return {
+    id: opts.id,
+    read: {
+      sessionKind: "root",
+      parentSessionId: null,
+      role: null,
+      isBusy: opts.isBusy ?? false,
+      workingDirectory: opts.cwd,
+      publicConfig: { provider, model, providerOptions: {} },
+      info: {
+        title: opts.title ?? "Forked thread",
+        titleSource: "manual",
+        titleModel: null,
+        provider,
+        model,
+        createdAt: now,
+        updatedAt: now,
+        lastMessagePreview: null,
+      },
+      getLatestAssistantText: () => undefined,
+    },
+    snapshot: {
+      peek: () => ({ messageCount: opts.messageCount ?? 1, lastEventSeq: 0 }),
+    },
+    lifecycle: {
+      waitForPersistenceIdle: mock(async () => undefined),
+    },
+    turns: {
+      sendUserMessage: opts.sendUserMessage ?? mock(async () => undefined),
+      activeTurnId: null,
+    },
+    settings: {
+      configEvent: { config: { providerOptions: {} } },
+      setConfig: mock(async () => undefined),
+    },
+  };
 }
 
 async function persistThread(sessionDb: SessionDb, workspace: string) {
@@ -184,6 +243,103 @@ describe("LocalThreadHost", () => {
         "Unknown thread: missing",
       );
       expect(sessionDb.getThreadMetadata("missing")).toBeNull();
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
+  test("forkThread seeds a new root thread in a managed worktree", async () => {
+    const bindings = new Map<string, { runtime: ReturnType<typeof makeRuntime> }>();
+    let sourceRuntime: ReturnType<typeof makeRuntime> | null = null;
+    const created: Array<{
+      cwd: string;
+      provider: AgentConfig["provider"] | undefined;
+      model: string | undefined;
+      opts: { seedContext?: unknown; title?: string };
+    }> = [];
+    const sendUserMessage = mock(async () => undefined);
+    const worktreePath = path.join(os.tmpdir(), "cowork-fork-worktree");
+    const worktreeService = {
+      createWorktree: mock(async () => ({
+        path: worktreePath,
+        repoRoot: "/repo",
+        branchName: "cowork/fork/thread-one",
+        baseRef: "HEAD",
+        baseCommit: "abc123",
+      })),
+    };
+    const registry = {
+      sessionBindings: bindings,
+      loadThreadBinding: (sessionId: string) => {
+        if (sessionId === "thread-1" && sourceRuntime) return { runtime: sourceRuntime };
+        return bindings.get(sessionId) ?? null;
+      },
+      createJsonRpcThreadSession: (
+        cwd: string,
+        provider?: AgentConfig["provider"],
+        model?: string,
+        opts: { seedContext?: unknown; title?: string } = {},
+      ) => {
+        created.push({ cwd, provider, model, opts });
+        const runtime = makeRuntime({
+          id: "fork-1",
+          cwd,
+          provider,
+          model,
+          title: opts.title,
+          sendUserMessage,
+        });
+        bindings.set(runtime.id, { runtime });
+        return runtime;
+      },
+    };
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness({
+      registry,
+      worktreeService,
+    });
+    try {
+      await persistThread(sessionDb, workspace);
+      sourceRuntime = makeRuntime({ id: "thread-1", cwd: workspace, title: "Thread One" });
+
+      const result = await host.forkThread({
+        threadId: "thread-1",
+        environment: { type: "worktree", ref: "HEAD" },
+        prompt: "continue here",
+      });
+
+      expect(worktreeService.createWorktree).toHaveBeenCalledWith({
+        sourceCwd: workspace,
+        titleHint: "Fork of Thread One",
+        ref: "HEAD",
+        branchName: undefined,
+      });
+      expect(created).toHaveLength(1);
+      expect(created[0]).toMatchObject({
+        cwd: worktreePath,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        opts: { title: "Fork of Thread One" },
+      });
+      expect(created[0]?.opts.seedContext).toEqual({
+        messages: [{ role: "user", content: "hello" }],
+        todos: [],
+        harnessContext: null,
+      });
+      expect(sendUserMessage).toHaveBeenCalledWith("continue here");
+      expect(result).toMatchObject({
+        sourceThreadId: "thread-1",
+        forked: true,
+        queued: true,
+        thread: { threadId: "fork-1", cwd: worktreePath },
+        environment: {
+          type: "worktree",
+          cwd: worktreePath,
+          branchName: "cowork/fork/thread-one",
+          baseRef: "HEAD",
+          baseCommit: "abc123",
+        },
+      });
     } finally {
       await threadJournal.close();
       sessionDb.close();

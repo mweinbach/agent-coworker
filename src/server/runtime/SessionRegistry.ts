@@ -207,6 +207,11 @@ export class SessionRegistry {
     cwd: string,
     provider?: AgentConfig["provider"],
     model?: string,
+    opts: {
+      seedContext?: SeededSessionContext;
+      title?: string;
+      titleSource?: SessionInfoState["titleSource"];
+    } = {},
   ): SessionRuntime {
     const binding: SessionBinding = {
       session: null,
@@ -222,9 +227,22 @@ export class SessionRegistry {
     };
     const built = this.buildSession(binding, undefined, {
       config: threadConfig,
+      ...(opts.seedContext ? { seedContext: opts.seedContext } : {}),
+      ...(opts.title
+        ? {
+            sessionInfoPatch: {
+              title: opts.title,
+              titleSource: opts.titleSource ?? "manual",
+              titleModel: null,
+            },
+          }
+        : {}),
     });
     binding.session = built.session;
     binding.runtime = built.runtime;
+    if (opts.title) {
+      built.runtime.settings.setTitle(opts.title);
+    }
     this.options.threadJournal.ensureSink(binding, built.session.id, (sinkBinding, sinkId, sink) =>
       this.addBindingSink(sinkBinding, sinkId, sink),
     );

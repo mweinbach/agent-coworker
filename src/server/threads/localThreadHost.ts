@@ -4,12 +4,14 @@ import {
 } from "../../models/threadReasoningOptions";
 import type { AgentConfig } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
-import { createOneOffChatWorkspace } from "../../utils/oneOffChats";
+import { createOneOffChatWorkspace, isPathInsideOneOffChatsRoot } from "../../utils/oneOffChats";
 import { sameWorkspacePath } from "../../utils/workspacePath";
+import type { ManagedWorktree, WorktreeService } from "../git/WorktreeService";
 import { projectThreadTurnsFromJournal } from "../jsonrpc/threadReadProjector";
 import { type JsonRpcWorkspaceSummary, listWorkspaceSummaries } from "../jsonrpc/workspaceCatalog";
 import type { SessionRegistry } from "../runtime/SessionRegistry";
 import type { ThreadJournal } from "../runtime/ThreadJournal";
+import type { SeededSessionContext } from "../session/SessionContext";
 import type { SessionRuntime } from "../session/SessionRuntime";
 import { getSessionTaskLock } from "../session/taskLocks";
 import type {
@@ -41,6 +43,7 @@ import type {
   SetThreadArchivedInput,
   SetThreadPinnedInput,
   SetThreadTitleInput,
+  ThreadEnvironment,
   ThreadHostAdapter,
   ThreadSummary,
 } from "./types";
@@ -79,6 +82,7 @@ type LocalThreadHostDeps = {
   threadJournal: ThreadJournal;
   taskCoordinator: Pick<TaskCoordinator, "isTaskThread">;
   desktopService?: WebDesktopServiceLike | null;
+  worktreeService?: WorktreeService | null;
   getConfig: () => AgentConfig;
   homedir?: string;
   onThreadListChanged?: () => void;
@@ -457,8 +461,41 @@ export class LocalThreadHost implements ThreadHostAdapter {
     };
   }
 
-  async forkThread(_input: ForkThreadInput): Promise<ForkThreadResult> {
-    return { status: "unsupported", reason: "fork_thread ships in a later phase" };
+  async forkThread(input: ForkThreadInput): Promise<ForkThreadResult> {
+    const threadId = this.requireThreadId(input.threadId, "fork_thread");
+    const prompt = input.prompt?.trim();
+    if (input.prompt !== undefined && !prompt) {
+      throw new Error("fork_thread prompt must be non-empty when provided");
+    }
+    const source = await this.loadForkSource(threadId);
+    const environment = input.environment ?? { type: "local" };
+    const forkTitle = input.title?.trim() || `Fork of ${source.title}`;
+    const target = await this.resolveForkTarget(source, environment, forkTitle);
+    const selection = this.resolveForkModelSelection(source, input.model);
+    const runtime = this.deps.registry.createJsonRpcThreadSession(
+      target.cwd,
+      selection.provider,
+      selection.model,
+      {
+        seedContext: this.buildSeedContext(source),
+        title: forkTitle,
+      },
+    );
+    if (input.thinking?.trim()) {
+      await this.applyThinking(runtime, input.thinking);
+    }
+    await runtime.lifecycle.waitForPersistenceIdle();
+    await this.upsertDesktopThread(runtime, target.workspaceId);
+    if (prompt) {
+      void runtime.turns.sendUserMessage(prompt).catch(() => undefined);
+    }
+    return {
+      sourceThreadId: threadId,
+      thread: await this.getThreadSummary(runtime.id),
+      forked: true,
+      queued: Boolean(prompt),
+      environment: target.environment,
+    };
   }
 
   async handoffThread(_input: HandoffThreadInput): Promise<HandoffStartResult> {
@@ -529,14 +566,26 @@ export class LocalThreadHost implements ThreadHostAdapter {
   }> {
     if (input.target.type === "project") {
       const target = input.target;
-      if (target.environment?.type === "worktree") {
-        throw new Error("Managed worktree thread environments ship in a later phase");
-      }
       const workspaceIndex = await this.loadWorkspaceIndex();
       const workspace = workspaceIndex.workspaces.find(
         (candidate) => candidate.id === target.projectId && candidate.workspaceKind === "project",
       );
       if (!workspace) throw new Error(`Unknown project: ${target.projectId}`);
+      if (target.environment?.type === "worktree") {
+        const worktree = await this.createManagedWorktree(
+          workspace.path,
+          target.environment,
+          workspace.name,
+        );
+        return {
+          cwd: worktree.path,
+          workspaceId: await this.ensureDesktopWorkspace(
+            worktree.path,
+            `${workspace.name} worktree`,
+            "project",
+          ),
+        };
+      }
       return {
         cwd: workspace.path,
         workspaceId: await this.ensureDesktopWorkspace(workspace.path, workspace.name, "project"),
@@ -551,6 +600,117 @@ export class LocalThreadHost implements ThreadHostAdapter {
       cwd: workspace.path,
       workspaceId: await this.ensureDesktopWorkspace(workspace.path, workspace.name, "oneOffChat"),
     };
+  }
+
+  private async loadForkSource(threadId: string): Promise<PersistedSessionRecord> {
+    this.assertThreadIsNotTaskOwned(threadId);
+    this.assertThreadCanReceiveTurns(threadId);
+    const binding = this.deps.registry.loadThreadBinding(threadId);
+    const runtime = binding?.runtime;
+    if (!runtime) throw new Error(`Unknown thread: ${threadId}`);
+    if (runtime.read.isBusy) {
+      throw new Error("Cannot fork a thread while it is running");
+    }
+    await runtime.lifecycle.waitForPersistenceIdle();
+    const record = this.deps.sessionDb.getSessionRecord(threadId);
+    if (!record) throw new Error(`Unknown thread: ${threadId}`);
+    if (record.sessionKind !== "root" || record.parentSessionId !== null || record.role !== null) {
+      throw new Error("Only root threads can be forked");
+    }
+    return record;
+  }
+
+  private buildSeedContext(record: PersistedSessionRecord): SeededSessionContext {
+    return {
+      messages: structuredClone(record.messages),
+      todos: structuredClone(record.todos),
+      harnessContext: record.harnessContext ? structuredClone(record.harnessContext) : null,
+    };
+  }
+
+  private resolveForkModelSelection(
+    source: PersistedSessionRecord,
+    model: string | undefined,
+  ): { provider: AgentConfig["provider"]; model: string } {
+    if (!model?.trim()) {
+      return { provider: source.provider, model: source.model };
+    }
+    const selection = parseThreadModelSelection(model, source.provider, {
+      home: resolveAuthHomeDir(this.deps.getConfig(), this.deps.homedir),
+    });
+    return {
+      provider: selection.provider ?? source.provider,
+      model: selection.model ?? source.model,
+    };
+  }
+
+  private async resolveForkTarget(
+    source: PersistedSessionRecord,
+    environment: ThreadEnvironment,
+    titleHint: string,
+  ): Promise<{
+    cwd: string;
+    workspaceId: string | null;
+    environment: ForkThreadResult["environment"];
+  }> {
+    if (environment.type === "worktree") {
+      const worktree = await this.createManagedWorktree(
+        source.workingDirectory,
+        environment,
+        titleHint,
+      );
+      return {
+        cwd: worktree.path,
+        workspaceId: await this.ensureDesktopWorkspace(
+          worktree.path,
+          `${titleHint} worktree`,
+          "project",
+        ),
+        environment: this.worktreeResultEnvironment(worktree),
+      };
+    }
+
+    return {
+      cwd: source.workingDirectory,
+      workspaceId: await this.ensureDesktopWorkspace(
+        source.workingDirectory,
+        titleHint,
+        this.workspaceKindForPath(source.workingDirectory),
+      ),
+      environment: { type: "local", cwd: source.workingDirectory },
+    };
+  }
+
+  private async createManagedWorktree(
+    sourceCwd: string,
+    environment: Extract<ThreadEnvironment, { type: "worktree" }>,
+    titleHint: string,
+  ): Promise<ManagedWorktree> {
+    const service = this.deps.worktreeService;
+    if (!service) throw new Error("Managed worktrees are unavailable");
+    const startingState = environment.startingState ?? {};
+    return await service.createWorktree({
+      sourceCwd,
+      titleHint,
+      ref: environment.ref ?? startingState.ref,
+      branchName: environment.branchName ?? startingState.branchName,
+    });
+  }
+
+  private worktreeResultEnvironment(
+    worktree: ManagedWorktree,
+  ): Extract<ForkThreadResult["environment"], { type: "worktree" }> {
+    return {
+      type: "worktree",
+      cwd: worktree.path,
+      branchName: worktree.branchName,
+      baseRef: worktree.baseRef,
+      baseCommit: worktree.baseCommit,
+    };
+  }
+
+  private workspaceKindForPath(workspacePath: string): "project" | "oneOffChat" {
+    return isPathInsideOneOffChatsRoot(workspacePath, this.deps.homedir) ? "oneOffChat" : "project";
   }
 
   private async applyModelAndThinking(

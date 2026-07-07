@@ -10,7 +10,7 @@ import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../../startServer/types";
 import type { TaskCoordinator } from "../../tasks/TaskCoordinator";
-import type { ThreadSummary } from "../../threads/types";
+import type { ForkThreadInput, ForkThreadResult, ThreadSummary } from "../../threads/types";
 import type { WebDesktopServiceLike } from "../../webDesktopService";
 import type { JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteRequest } from "../protocol";
 
@@ -113,6 +113,7 @@ export interface JsonRpcRouteContext {
   };
   desktopService?: WebDesktopServiceLike | null;
   threadManagement?: {
+    forkThread(input: ForkThreadInput): Promise<ForkThreadResult>;
     setPinned(input: { threadId: string; pinned: boolean }): Promise<ThreadSummary>;
     setArchived(input: { threadId: string; archived: boolean }): Promise<ThreadSummary>;
   };

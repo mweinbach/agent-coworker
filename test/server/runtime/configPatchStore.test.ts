@@ -26,10 +26,7 @@ describe("ConfigPatchStore", () => {
 
     await persistProjectConfigPatch(projectCoworkDir, modelPatch);
 
-    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
-      string,
-      unknown
-    >;
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     expect(persisted).toEqual(modelPatch);
 
     const merged = mergeConfigPatch(

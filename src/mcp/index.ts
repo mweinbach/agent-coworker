@@ -8,6 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { childEnv } from "../platform/env";
 import { buildCodexAppsMcpServer } from "../server/connectors/openaiNativeConnectors";
 import { CODEX_APPS_MCP_SERVER_NAME } from "../shared/openaiNativeConnectors";
 import type { AgentConfig, MCPServerConfig } from "../types";
@@ -253,7 +254,12 @@ async function createRuntimeMcpClient(opts: {
       ? new StdioClientTransport({
           command: opts.transport.command,
           args: opts.transport.args ?? [],
-          env: opts.transport.env,
+          // The MCP SDK applies its safe default environment only when `env`
+          // is undefined — a configured env used to REPLACE it, spawning
+          // Windows children without SystemRoot/PATH/APPDATA (winsock and
+          // command resolution fail). Merge overrides onto the platform-safe
+          // defaults instead (win32 case-aware key merge).
+          env: opts.transport.env ? childEnv(opts.transport.env) : undefined,
           cwd: opts.transport.cwd,
         })
       : opts.transport.type === "sse"

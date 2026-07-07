@@ -3,16 +3,18 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { PROTECTED_METADATA_DIR_NAMES } from "../utils/paths";
 import { hostPlatform } from "./host";
 import { pathImplForPlatform } from "./pathImpl";
 
 /**
- * Metadata directory names (`.git`, `.cowork`) that must stay read-only even inside a
- * writable root, on every platform. Re-exported from src/utils/paths.ts so there is a
- * single source of truth; the definition moves here in a later migration phase.
+ * Metadata directory names that must stay read-only even inside a writable root.
+ * Writing into `.git` (e.g. hooks) or `.cowork` (project config/skills/memory)
+ * is a privilege-escalation vector, so both the shell sandbox policy and the
+ * built-in write/edit file tools carve these back out of their writable roots.
+ * Defined HERE (src/utils/paths.ts re-exports) so the deny-side fold logic and
+ * the names it folds live in one module.
  */
-export { PROTECTED_METADATA_DIR_NAMES };
+export const PROTECTED_METADATA_DIR_NAMES = [".git", ".cowork"] as const;
 
 export type CaseSensitivity = "sensitive" | "insensitive";
 

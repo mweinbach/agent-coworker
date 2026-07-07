@@ -1,17 +1,17 @@
-import fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 import {
   resolveAdvancedMemoryReadRoots,
   resolveAdvancedMemoryWriteRoots,
 } from "../advancedMemory/store";
+import {
+  canonicalize as platformCanonicalize,
+  canonicalizeSync as platformCanonicalizeSync,
+} from "../platform/paths";
 import { discoverPlugins } from "../plugins/discovery";
 import { readPluginManifest } from "../plugins/manifest";
 import type { AgentConfig } from "../types";
 import { isPathInside, PROTECTED_METADATA_DIR_NAMES, pathCrossesProtectedMetadata } from "./paths";
 
-const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const WRITE_ROOT_LABEL =
   "workingDirectory/outputDirectory/uploadsDirectory/project root/active advanced-memory folder";
 const READ_ROOT_LABEL =
@@ -190,25 +190,18 @@ export function isReadPathAllowed(filePath: string, config: AgentConfig): boolea
   return isCanonicalPathInsideRoots(filePath, readRoots(config));
 }
 
+/**
+ * Canonicalization for permission boundaries uses THE single engine
+ * (platform/paths: NATIVE realpath + longest-existing-prefix walk). The local
+ * walkers this replaces used JS realpath, which does not resolve on-disk
+ * casing — on macOS/Windows a differently-cased spelling of an existing
+ * credential directory (`.COWORK/AUTH`) canonicalized to the caller's casing
+ * and slipped past the case-sensitive deny compare. Native realpath returns
+ * the true on-disk casing for every existing prefix, so the deny checks below
+ * compare canonical forms.
+ */
 async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
-  const resolved = path.resolve(targetPath);
-  const tail: string[] = [];
-  let cursor = resolved;
-
-  while (true) {
-    try {
-      const canonical = await fsPromises.realpath(cursor);
-      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
-    } catch (err) {
-      const parsedCode = errorWithCodeSchema.safeParse(err);
-      const code = parsedCode.success ? parsedCode.data.code : undefined;
-      if (code !== "ENOENT") throw err;
-      const parent = path.dirname(cursor);
-      if (parent === cursor) return resolved;
-      tail.push(path.basename(cursor));
-      cursor = parent;
-    }
-  }
+  return await platformCanonicalize(targetPath);
 }
 
 async function canonicalizeRoot(rootPath: string): Promise<string> {
@@ -216,24 +209,7 @@ async function canonicalizeRoot(rootPath: string): Promise<string> {
 }
 
 function canonicalizeExistingPrefixSync(targetPath: string): string {
-  const resolved = path.resolve(targetPath);
-  const tail: string[] = [];
-  let cursor = resolved;
-
-  while (true) {
-    try {
-      const canonical = fs.realpathSync(cursor);
-      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
-    } catch (err) {
-      const parsedCode = errorWithCodeSchema.safeParse(err);
-      const code = parsedCode.success ? parsedCode.data.code : undefined;
-      if (code !== "ENOENT") throw err;
-      const parent = path.dirname(cursor);
-      if (parent === cursor) return resolved;
-      tail.push(path.basename(cursor));
-      cursor = parent;
-    }
-  }
+  return platformCanonicalizeSync(targetPath);
 }
 
 function canonicalizeRootSync(rootPath: string): string {

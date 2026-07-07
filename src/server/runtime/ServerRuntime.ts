@@ -7,6 +7,7 @@ import { checkLibreOfficeCapability, ensureCoworkRuntimeReady } from "../../cowo
 import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
 import { createConversationImportService } from "../../import/conversations";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../../observability/otel";
+import { home } from "../../platform/paths";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
@@ -623,7 +624,11 @@ export async function createAgentServerRuntime(
     }) ?? null;
   const conversationImports = createConversationImportService({
     sessionDb,
-    homedir: opts.homedir ?? env.HOME ?? process.cwd(),
+    // HOME is normally unset on Windows; the old `env.HOME ?? process.cwd()`
+    // fallback made external-conversation discovery silently probe the
+    // workspace cwd and find nothing there. platform home() resolves the real
+    // profile dir on every OS (with the COWORK_HOME_OVERRIDE test lever).
+    homedir: opts.homedir ?? home(env),
     getConfig: () => config,
     desktopService: opts.desktopService ?? null,
     onWorkspaceListChanged: broadcastWorkspaceListChanged,

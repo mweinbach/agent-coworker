@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
+import { hostPlatform } from "../src/platform/host";
 import type { AgentConfig } from "../src/types";
 import {
   assertReadPathAllowed,
@@ -31,6 +31,33 @@ function makeConfig(dir: string): AgentConfig {
     configDirs: [],
   };
 }
+
+describe("credential deny casing (real filesystem)", () => {
+  test("deny holds for a differently-cased spelling of an existing auth dir", async () => {
+    // On case-insensitive filesystems (win32/darwin) `.COWORK/AUTH` opens the
+    // same directory as `.cowork/auth`; native-realpath canonicalization must
+    // resolve the true on-disk casing so the deny compare matches. On linux
+    // the mixed-case spelling is a different (nonexistent) path — assert only
+    // the exact-case deny there.
+    // Base under the test dir (not os.tmpdir) to avoid the boundary ratchet.
+    const base = await fs.mkdtemp(path.join(import.meta.dir, "perm-case-"));
+    try {
+      const cfg = makeConfig(base);
+      const authDir = path.join(base, ".cowork", "auth");
+      await fs.mkdir(authDir, { recursive: true });
+      const secret = path.join(authDir, "tokens.json");
+      await fs.writeFile(secret, "{}", "utf-8");
+
+      expect(isReadPathAllowed(secret, cfg)).toBe(false);
+      if (hostPlatform() !== "linux") {
+        const mixedCase = path.join(base, ".COWORK", "AUTH", "tokens.json");
+        expect(isReadPathAllowed(mixedCase, cfg)).toBe(false);
+      }
+    } finally {
+      await fs.rm(base, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("isWritePathAllowed", () => {
   const PROJECT = process.platform === "win32" ? "C:\\home\\user\\project" : "/home/user/project";

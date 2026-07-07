@@ -2,6 +2,7 @@ import path from "node:path";
 import fg from "fast-glob";
 
 import { z } from "zod";
+import { normalizeGlobPattern, splitAbsoluteGlob } from "../platform/paths";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
@@ -35,7 +36,7 @@ const globEntrySchema = z.union([
     .passthrough(),
 ]);
 function assertSafeGlobPattern(pattern: string): void {
-  const normalizedPattern = pattern.replace(/\\/g, "/");
+  const normalizedPattern = normalizeGlobPattern(pattern);
   const maybeNegatedPattern = normalizedPattern.startsWith("!")
     ? normalizedPattern.slice(1)
     : normalizedPattern;
@@ -64,20 +65,15 @@ export function createGlobTool(ctx: ToolContext) {
       ctx.log(`tool> glob ${JSON.stringify(normalizedInput)}`);
       const effectiveMaxResults = normalizedInput.maxResults;
 
-      let normalizedPattern = normalizedInput.pattern.replace(/\\/g, "/");
+      // Backslashes become "/" only on win32 hosts or for win32-shaped patterns;
+      // POSIX fast-glob escapes like `\*` are preserved (see normalizeGlobPattern).
+      let normalizedPattern = normalizeGlobPattern(normalizedInput.pattern);
       let effectiveCwd = normalizedInput.cwd;
 
-      const isAbsolutePattern =
-        path.isAbsolute(normalizedPattern) || /^[A-Za-z]:[/\\]/.test(normalizedPattern);
-      if (isAbsolutePattern) {
-        const firstGlobIndex = normalizedPattern.search(/[*?[{]/);
-        const staticPrefix =
-          firstGlobIndex === -1 ? normalizedPattern : normalizedPattern.slice(0, firstGlobIndex);
-        const lastSlash = staticPrefix.lastIndexOf("/");
-        if (lastSlash !== -1) {
-          effectiveCwd = staticPrefix.slice(0, lastSlash) || "/";
-          normalizedPattern = normalizedPattern.slice(lastSlash + 1);
-        }
+      const absoluteSplit = splitAbsoluteGlob(normalizedInput.pattern);
+      if (absoluteSplit) {
+        effectiveCwd = absoluteSplit.root;
+        normalizedPattern = absoluteSplit.rest;
       }
 
       assertSafeGlobPattern(normalizedPattern);

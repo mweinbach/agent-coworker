@@ -106,6 +106,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           }
         };
       },
+      threadControl: context.deps.getThreadControlImpl?.(context.id) ?? undefined,
       agentControl:
         context.state.sessionInfo.sessionKind === "agent" || !context.deps.createAgentSessionImpl
           ? undefined

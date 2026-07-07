@@ -275,7 +275,12 @@ function getRequiredH3Permission(
   if (ALWAYS_ALLOWED_H3_RPC_METHODS.has(method)) {
     return null;
   }
-  if (method === "thread/start" || method.startsWith("turn/")) {
+  if (
+    method === "thread/start" ||
+    method === "thread/pinned/set" ||
+    method === "thread/archived/set" ||
+    method.startsWith("turn/")
+  ) {
     return "turns";
   }
   // Reading workspace control state (session/workspace config, provider options,

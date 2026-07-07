@@ -22,6 +22,8 @@ import type {
   PersistedSessionRecord,
   PersistedThreadJournalEvent,
   PersistedThreadJournalFailure,
+  PersistedThreadMetadata,
+  PersistedThreadMetadataPatch,
 } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
 import {
@@ -887,6 +889,92 @@ export class SessionDbRepository {
       );
   }
 
+  getThreadMetadata(threadId: string): PersistedThreadMetadata | null {
+    const row = this.db
+      .query(
+        sql([
+          "SELECT",
+          "             thread_id,",
+          "             pinned,",
+          "             pinned_at,",
+          "             archived,",
+          "             archived_at,",
+          "             updated_at",
+          "           FROM thread_metadata",
+          "           WHERE thread_id = ?",
+          "           LIMIT 1",
+        ]),
+      )
+      .get(threadId) as Record<string, unknown> | null;
+    return row ? this.mapThreadMetadataRow(row) : null;
+  }
+
+  listThreadMetadata(): PersistedThreadMetadata[] {
+    const rows = this.db
+      .query(
+        sql([
+          "SELECT",
+          "             thread_id,",
+          "             pinned,",
+          "             pinned_at,",
+          "             archived,",
+          "             archived_at,",
+          "             updated_at",
+          "           FROM thread_metadata",
+        ]),
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapThreadMetadataRow(row));
+  }
+
+  setThreadMetadata(input: PersistedThreadMetadataPatch): PersistedThreadMetadata {
+    const existing = this.getThreadMetadata(input.threadId);
+    const now = parseRequiredIsoTimestamp(
+      input.updatedAt ?? new Date().toISOString(),
+      "thread_metadata.updatedAt",
+    );
+    const pinned = input.pinned ?? existing?.pinned ?? false;
+    const archived = input.archived ?? existing?.archived ?? false;
+    const pinnedAt =
+      input.pinned === undefined ? (existing?.pinnedAt ?? null) : input.pinned ? now : null;
+    const archivedAt =
+      input.archived === undefined ? (existing?.archivedAt ?? null) : input.archived ? now : null;
+    this.db
+      .query(
+        sql([
+          "INSERT INTO thread_metadata (",
+          "           thread_id, pinned, pinned_at, archived, archived_at, updated_at",
+          "         ) VALUES (?, ?, ?, ?, ?, ?)",
+          "         ON CONFLICT(thread_id) DO UPDATE SET",
+          "           pinned = excluded.pinned,",
+          "           pinned_at = excluded.pinned_at,",
+          "           archived = excluded.archived,",
+          "           archived_at = excluded.archived_at,",
+          "           updated_at = excluded.updated_at",
+        ]),
+      )
+      .run(input.threadId, pinned ? 1 : 0, pinnedAt, archived ? 1 : 0, archivedAt, now);
+    return {
+      threadId: input.threadId,
+      pinned,
+      pinnedAt,
+      archived,
+      archivedAt,
+      updatedAt: now,
+    };
+  }
+
+  private mapThreadMetadataRow(row: Record<string, unknown>): PersistedThreadMetadata {
+    return {
+      threadId: String(row.thread_id),
+      pinned: Boolean(parseBooleanInteger(row.pinned, "thread_metadata.pinned")),
+      pinnedAt: typeof row.pinned_at === "string" ? row.pinned_at : null,
+      archived: Boolean(parseBooleanInteger(row.archived, "thread_metadata.archived")),
+      archivedAt: typeof row.archived_at === "string" ? row.archived_at : null,
+      updatedAt: parseRequiredIsoTimestamp(row.updated_at, "thread_metadata.updated_at"),
+    };
+  }
+
   getThreadIdByCreationKey(creationKey: string): string | null {
     const row = this.db
       .query("SELECT thread_id FROM thread_creation_keys WHERE creation_key = ? LIMIT 1")
@@ -1606,6 +1694,24 @@ export class SessionDbRepository {
         "         last_failure_message TEXT NOT NULL",
         "       )",
       ]),
+    );
+  }
+
+  addThreadMetadataTable(): void {
+    this.db.exec(
+      sql([
+        "CREATE TABLE IF NOT EXISTS thread_metadata (",
+        "         thread_id TEXT PRIMARY KEY,",
+        "         pinned INTEGER NOT NULL DEFAULT 0,",
+        "         pinned_at TEXT NULL,",
+        "         archived INTEGER NOT NULL DEFAULT 0,",
+        "         archived_at TEXT NULL,",
+        "         updated_at TEXT NOT NULL",
+        "       )",
+      ]),
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_thread_metadata_flags ON thread_metadata(pinned, archived, updated_at DESC)",
     );
   }
 

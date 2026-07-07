@@ -31,6 +31,7 @@ import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 import { resolveTasksFeatureEnabled } from "../tasks/flags";
 import type { TaskCoordinator } from "../tasks/TaskCoordinator";
+import type { ThreadControl } from "../threads/types";
 import type { WorkspaceBackupService } from "../workspaceBackups";
 import {
   mergeConfigPatch,
@@ -82,6 +83,7 @@ export type SessionRegistryOptions = {
   recordSkillImprovementUsage?: (usage: CompletedTurnSkillUsage) => void | Promise<void>;
   onThreadListChanged?: () => void;
   onTaskCreatedFromChat?: (input: { sourceSessionId: string; workspacePath: string }) => void;
+  getThreadControl?: (sessionId: string) => ThreadControl | null;
   fileLog?: { appendSessionEvent: (event: SessionEvent) => void } | null;
 };
 
@@ -551,6 +553,7 @@ export class SessionRegistry {
       applyTaskDirectiveImpl: async (sessionId, directive) =>
         await this.options.taskCoordinator.applyDirective(sessionId, directive),
       createTaskImpl: async (sessionId, input) => await this.createTaskFromChat(sessionId, input),
+      getThreadControlImpl: this.options.getThreadControl,
       emit,
       createAgentSessionImpl: async (agentOpts) => await this.getAgentControl().spawn(agentOpts),
       listAgentSessionsImpl: async (parentSessionId) =>

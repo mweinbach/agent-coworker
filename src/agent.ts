@@ -23,6 +23,7 @@ import type {
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
 import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./server/agents/roles";
 import { filterToolsForProfile, filterToolsForRole } from "./server/agents/toolPolicy";
+import type { ThreadControl } from "./server/threads/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
 import type { AgentProfileSnapshot } from "./shared/agentProfiles";
 import type { AgentRole } from "./shared/agents";
@@ -105,6 +106,7 @@ export interface RunTurnParams {
   /** Plugins the user @-mentioned this turn; rendered as a soft-awareness system block. */
   referencedPlugins?: ReferencedPluginContext[];
   agentControl?: AgentControl;
+  threadControl?: ThreadControl;
   prepareStep?: RuntimePrepareStep;
   registerSteerHandler?: RuntimeRegisterSteerHandler;
 
@@ -478,6 +480,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       sandboxPolicy: turnSandboxPolicy,
       yolo: params.yolo,
       agentControl: params.agentControl,
+      threadControl: params.threadControl,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,

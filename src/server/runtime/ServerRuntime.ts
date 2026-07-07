@@ -34,6 +34,7 @@ import {
   requireWorkspacePath,
   shouldIncludeJsonRpcThreadSummary,
 } from "../jsonrpc/routes/shared";
+import type { JsonRpcThread } from "../jsonrpc/routes/types";
 import { jsonRpcTaskRequestSchemas } from "../jsonrpc/schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../jsonrpc/taskPermissions";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
@@ -45,6 +46,8 @@ import { readSkillCatalogMtimeSnapshot } from "../skillCatalogMtime";
 import { refreshSessionsForSkillMutation } from "../skillMutationRefresh";
 import type { StartServerSocket } from "../startServer/types";
 import { TaskCoordinator } from "../tasks/TaskCoordinator";
+import { LocalThreadHost } from "../threads/localThreadHost";
+import { ThreadManagementService } from "../threads/ThreadManagementService";
 import type { WebDesktopServiceLike } from "../webDesktopService";
 import { isErrorWithCode, isPlainObject, mergeRuntimeProviderOptions } from "./ConfigPatchStore";
 import { SessionRegistry } from "./SessionRegistry";
@@ -381,6 +384,8 @@ export async function createAgentServerRuntime(
   let workspaceControl: WorkspaceControl;
   let skillMutationBus: SkillMutationBus;
   let skillImprovement: SkillImprovementService;
+  let localThreadHost: LocalThreadHost | null = null;
+  let threadManagement: ThreadManagementService | null = null;
   registry = new SessionRegistry({
     config,
     env,
@@ -420,7 +425,22 @@ export async function createAgentServerRuntime(
     recordSkillImprovementUsage: async (usage) =>
       await skillImprovement.recordCompletedTurnUsage(usage),
     onTaskCreatedFromChat: subscribeSourceChatToTaskWorkspace,
+    getThreadControl: (sessionId) => {
+      if (!localThreadHost?.isSessionEligibleForTools(sessionId)) return null;
+      return threadManagement?.createControl(sessionId) ?? null;
+    },
   });
+  localThreadHost = new LocalThreadHost({
+    sessionDb,
+    registry,
+    threadJournal,
+    taskCoordinator: tasks,
+    desktopService: opts.desktopService ?? null,
+    getConfig: () => config,
+    homedir: opts.homedir,
+    onThreadListChanged: broadcastWorkspaceListChanged,
+  });
+  threadManagement = new ThreadManagementService([localThreadHost]);
   tasks.setThreadFactory(async ({ task, provider, model }) => {
     const runtime = registry.createJsonRpcThreadSession(
       task.workspacePath,
@@ -629,6 +649,17 @@ export async function createAgentServerRuntime(
     onWorkspaceListChanged: broadcastWorkspaceListChanged,
   });
 
+  const withJsonRpcThreadMetadata = (thread: JsonRpcThread): JsonRpcThread => {
+    const metadata = sessionDb.getThreadMetadata(thread.id);
+    return {
+      ...thread,
+      pinned: metadata?.pinned ?? false,
+      pinnedAt: metadata?.pinnedAt ?? null,
+      archived: metadata?.archived ?? false,
+      archivedAt: metadata?.archivedAt ?? null,
+    };
+  };
+
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
     homedir: opts.homedir,
@@ -699,6 +730,16 @@ export async function createAgentServerRuntime(
       readState: async (cwd) => await workspaceControl.readState(cwd),
     },
     desktopService: opts.desktopService ?? null,
+    threadManagement: {
+      setPinned: async (input) => {
+        if (!localThreadHost) throw new Error("Thread management is unavailable");
+        return await localThreadHost.setPinned(input);
+      },
+      setArchived: async (input) => {
+        if (!localThreadHost) throw new Error("Thread management is unavailable");
+        return await localThreadHost.setArchived(input);
+      },
+    },
     journal: {
       enqueue: async (event) => await threadJournal.enqueue(event),
       waitForIdle: async (threadId) => await threadJournal.waitForIdle(threadId),
@@ -768,8 +809,10 @@ export async function createAgentServerRuntime(
         requireWorkspacePath(params, method, config.workingDirectory, opts.homedir),
       extractTextInput: extractJsonRpcTextInput,
       extractInput: extractJsonRpcInput,
-      buildThreadFromSession: buildJsonRpcThreadFromSession,
-      buildThreadFromRecord: buildJsonRpcThreadFromRecord,
+      buildThreadFromSession: (runtime) =>
+        withJsonRpcThreadMetadata(buildJsonRpcThreadFromSession(runtime)),
+      buildThreadFromRecord: (record) =>
+        withJsonRpcThreadMetadata(buildJsonRpcThreadFromRecord(record)),
       shouldIncludeThreadSummary: shouldIncludeJsonRpcThreadSummary,
       buildControlSessionStateEvents,
       isSessionError: isJsonRpcSessionError,

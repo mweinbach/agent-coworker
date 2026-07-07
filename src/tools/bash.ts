@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-
+import { hostPlatform } from "../platform/host";
 import {
   classifySandboxDenial,
   DEFAULT_SANDBOX_CONFIG,
@@ -17,6 +17,7 @@ import {
 import {
   buildPlatformShellCommandWithRuntimePrelude,
   buildPlatformShellExecutionPlan,
+  promptGuidance as shellPromptGuidance,
 } from "../platform/shell";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import { classifyCommandDetailed } from "../utils/approval";
@@ -436,12 +437,12 @@ async function runShellCommandWithExec(
   }
 }
 
-function buildBashToolDescription(): string {
+function buildBashToolDescription(platform: NodeJS.Platform = hostPlatform()): string {
+  // Single-dialect: the model sees only THIS host's shell rules, rendered from
+  // the same module that owns execution (src/platform/shell.ts).
   return `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
 
-Platform notes:
-- Windows: runs in PowerShell, preferring \`pwsh\` and falling back to \`powershell.exe\`
-- macOS/Linux: runs in bash (or sh fallback)
+${shellPromptGuidance({ platform })}
 
 IMPORTANT: Prefer dedicated tools over bash equivalents:
 - Reading files: use read (not cat/head/tail)
@@ -453,8 +454,6 @@ IMPORTANT: Prefer dedicated tools over bash equivalents:
 Rules:
 - Always quote file paths containing spaces with double quotes
 - Prefer absolute paths; avoid cd
-- On Windows, do not rely on \`&&\`, \`export\`, or \`source\`; use PowerShell syntax such as \`;\`, \`$env:NAME = "value"\`, and separate tool calls when that is clearer
-- On Windows, prefer \`py -3\` or \`python\` for Python commands
 - Large text output may be saved to the workspace scratchpad when overflow protection is enabled
 
 Timeout: commands default to a ${DEFAULT_TIMEOUT_SECONDS}s timeout and are killed if they exceed it. You may request up to ${MAX_TIMEOUT_SECONDS}s for explicitly long-running operations.`;

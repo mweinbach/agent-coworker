@@ -40,12 +40,30 @@ describe("bash tool", () => {
     bashInternal.resetRunShellCommandForTests();
   });
 
-  test("advertises Windows PowerShell guidance in the tool description", async () => {
+  test("description carries only the HOST dialect, rendered from platform.shell", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    expect(t.description).toContain("preferring `pwsh` and falling back to `powershell.exe`");
-    expect(t.description).toContain("do not rely on `&&`, `export`, or `source`");
-    expect(t.description).toContain("prefer `py -3` or `python`");
+    if (process.platform === "win32") {
+      expect(t.description).toContain("executes PowerShell on this machine");
+      expect(t.description).not.toContain("executes bash on this machine");
+    } else {
+      expect(t.description).toContain("executes bash on this machine");
+      expect(t.description).not.toContain("executes PowerShell on this machine");
+    }
+    expect(t.description).not.toContain("prefer `py -3`");
+    expect(t.description).not.toContain("On Windows,");
+  });
+
+  test("per-platform descriptions are single-dialect (parameterized)", () => {
+    const win = bashInternal.buildBashToolDescription("win32");
+    expect(win).toContain("executes PowerShell on this machine");
+    expect(win).toContain("Run Python as `python`");
+    expect(win).not.toContain("prefer `py -3`");
+    expect(win).not.toContain("executes bash on this machine");
+    const mac = bashInternal.buildBashToolDescription("darwin");
+    expect(mac).toContain("executes bash on this machine");
+    expect(mac).toContain("Run Python as `python3`");
+    expect(mac).not.toContain("PowerShell");
   });
 
   test("prefers pwsh before powershell.exe on Windows", async () => {

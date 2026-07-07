@@ -75,8 +75,6 @@ Rules:
 - The system handles command approval automatically. Call bash directly — don't use AskUserQuestion to pre-request permission.
 - Always quote file paths containing spaces with double quotes.
 - Use absolute paths. Avoid cd.
-- On Windows, the bash tool runs in PowerShell. Do not rely on `&&`, `export`, or `source`; use `;`, separate tool calls, and `$env:NAME = "value"` instead.
-- On Windows, prefer `py -3` or `python` for Python commands.
 - Prefer dedicated tools over bash equivalents: read instead of cat/head/tail, write instead of echo >, glob instead of find, grep instead of rg.
 - For pip: always use --break-system-packages. For npm: global packages may use a custom prefix — verify availability.
 

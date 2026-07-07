@@ -133,10 +133,25 @@ export function codexThreadConfig(
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
+/**
+ * Remove a `## <heading>` section (through the next `## ` heading or EOF).
+ * Used to strip Cowork's host-shell guidance from Codex turns: Codex executes
+ * through its own shell, and carrying PowerShell/bash rules for a shell it
+ * does not use produced contradictory instructions (audit row 8).
+ */
+function stripPromptSection(text: string, heading: string): string {
+  const pattern = new RegExp(
+    `\\n*^## ${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$[\\s\\S]*?(?=^## |(?![\\s\\S]))`,
+    "m",
+  );
+  return text.replace(pattern, "\n");
+}
+
 export function codexDeveloperInstructions(
   system: string,
   env?: Record<string, string | undefined>,
 ): string {
+  system = stripPromptSection(system, "Shell Execution Policy");
   const coworkRuntimeInstructions = system.includes(COWORK_RUNTIME_INSTRUCTIONS_HEADING)
     ? null
     : renderCoworkRuntimeInstructions(env);

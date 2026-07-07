@@ -186,6 +186,96 @@ export function buildPlatformShellExecutionPlan(
   return plan;
 }
 
+/**
+ * The canonical Python invocation for a platform+environment: the managed
+ * runtime's absolute interpreter when COWORK_RUNTIME_PYTHON is set, otherwise
+ * bare `python` (win32; the runtime PATH prelude guarantees it when the
+ * managed runtime is active) or `python3` (POSIX). NEVER `py -3` — the py
+ * launcher resolves via the Windows registry and bypasses the runtime PATH
+ * prelude, which is how Windows sessions ended up on system Python with
+ * missing packages while macOS/Linux sessions worked.
+ */
+export function pythonInvocation(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): { command: string; display: string } {
+  const runtimePython = envValue(env, "COWORK_RUNTIME_PYTHON");
+  if (runtimePython) return { command: runtimePython, display: runtimePython };
+  const bare = platform === "win32" ? "python" : "python3";
+  return { command: bare, display: bare };
+}
+
+/**
+ * The ONE platform fact the model is told about command execution: which
+ * dialect the bash tool's shell parses on THIS host. Rendered into the system
+ * prompt's Shell Execution Policy section AND the bash tool description —
+ * never hand-written prose. A macOS session never carries Windows rules and
+ * vice versa. Codex executes through its own shell, so `executor: "codex"`
+ * renders nothing (its runtime owns the equivalent guidance).
+ */
+export function promptGuidance(
+  opts: {
+    platform?: NodeJS.Platform;
+    executor?: "cowork" | "codex" | "external";
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): string {
+  if (opts.executor === "codex") return "";
+  const platform = opts.platform ?? hostPlatform();
+  const python = pythonInvocation(opts.env ?? process.env, platform);
+  if (shellDialect(platform) === "powershell") {
+    return [
+      "The `bash` tool executes PowerShell on this machine (`pwsh`, falling back to `powershell.exe`).",
+      '- Write PowerShell syntax: chain with `;`, set env vars with `$env:NAME = "value"`, list files with `Get-ChildItem -Force`.',
+      "- Do not use POSIX-only constructs: `export`, `source`, heredocs, or `&&`/`||` chaining (unavailable on the `powershell.exe` fallback).",
+      `- Run Python as \`${python.display}\` (never \`py -3\`; it bypasses the managed runtime).`,
+    ].join("\n");
+  }
+  return [
+    "The `bash` tool executes bash on this machine (login shell, `sh` fallback).",
+    "- Standard POSIX syntax applies: `&&` chaining, `export NAME=value`, `ls -la`.",
+    `- Run Python as \`${python.display}\`.`,
+  ].join("\n");
+}
+
+/**
+ * Canned cross-platform commands for harness prompts and evals — the command
+ * strings a model would be expected to produce on the given platform. Absorbs
+ * packages/harness/src/platformCommands.ts (which now re-exports this).
+ */
+export interface PlatformCommands {
+  runPythonScript(scriptPath: string): string;
+  printWorkingDirectory(): string;
+  listDirectory(dirPath?: string): string;
+  countLines(filePath: string): string;
+}
+
+export function commands(
+  platform: NodeJS.Platform = hostPlatform(),
+  env: NodeJS.ProcessEnv = process.env,
+): PlatformCommands {
+  const dialect = shellDialect(platform);
+  const python = pythonInvocation(env, platform);
+  const q = (value: string) => quoteShellValue(value, dialect);
+  if (dialect === "powershell") {
+    // A quoted executable path needs PowerShell's call operator.
+    const invoke = /[\s'‘’‚‛]/.test(python.command) ? `& ${q(python.command)}` : python.command;
+    return {
+      runPythonScript: (scriptPath) => `${invoke} ${q(scriptPath)}`,
+      printWorkingDirectory: () => "(Get-Location).Path",
+      listDirectory: (dirPath) =>
+        dirPath ? `Get-ChildItem -Force ${q(dirPath)}` : "Get-ChildItem -Force",
+      countLines: (filePath) => `(Get-Content ${q(filePath)} | Measure-Object -Line).Lines`,
+    };
+  }
+  return {
+    runPythonScript: (scriptPath) => `${q(python.command)} ${q(scriptPath)}`,
+    printWorkingDirectory: () => "pwd",
+    listDirectory: (dirPath) => (dirPath ? `ls -la ${q(dirPath)}` : "ls -la"),
+    countLines: (filePath) => `wc -l ${q(filePath)}`,
+  };
+}
+
 export function buildPlatformShellCommandWithRuntimePrelude(opts: {
   command: string;
   platform: NodeJS.Platform;

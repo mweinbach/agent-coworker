@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MODEL_REGISTRY_ENTRIES } from "../src/models/registry";
+import { promptGuidance as shellPromptGuidance } from "../src/platform/shell";
 import {
   loadAgentPrompt,
   loadSubAgentPrompt,
@@ -149,10 +150,18 @@ function expectNoWorkspacePackageScaffoldingGuidance(prompt: string) {
 }
 
 function expectWindowsShellGuidance(prompt: string) {
+  // Host-specific single-dialect section rendered from src/platform/shell.ts:
+  // the model sees only THIS host's rules, and `py -3` is banished everywhere.
   expect(prompt).toContain("## Shell Execution Policy");
-  expect(prompt).toContain("the `bash` tool actually runs PowerShell");
-  expect(prompt).toContain("do not rely on `&&`, `export`, or `source`");
-  expect(prompt).toContain("prefer `py -3` or `python`");
+  expect(prompt).toContain(shellPromptGuidance());
+  if (process.platform === "win32") {
+    expect(prompt).toContain("executes PowerShell on this machine");
+    expect(prompt).not.toContain("executes bash on this machine");
+  } else {
+    expect(prompt).toContain("executes bash on this machine");
+    expect(prompt).not.toContain("executes PowerShell on this machine");
+  }
+  expect(prompt).not.toContain("prefer `py -3`");
 }
 
 function expectImageInspectionGuidance(prompt: string) {

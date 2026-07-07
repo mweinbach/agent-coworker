@@ -3,7 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { buildPlatformShellExecutionPlan, encodingPrelude } from "../../src/platform/shell";
+import {
+  buildPlatformShellExecutionPlan,
+  commands,
+  encodingPrelude,
+  promptGuidance,
+  pythonInvocation,
+} from "../../src/platform/shell";
+import { codexDeveloperInstructions } from "../../src/runtime/codexAppServer/config";
 import { __internal as bashInternal } from "../../src/tools/bash";
 
 function decodeEncodedCommand(args: string[]): string {
@@ -112,6 +119,100 @@ describe("buildPlatformShellExecutionPlan — POSIX", () => {
       const plan = buildPlatformShellExecutionPlan("darwin", "pwd", { userShell: shell });
       expect(plan[0]?.file).toBe("/bin/bash");
     }
+  });
+});
+
+describe("pythonInvocation — the one Python answer", () => {
+  test("managed runtime interpreter wins on every platform", () => {
+    const env = { COWORK_RUNTIME_PYTHON: "C:\\rt\\python\\python.exe" };
+    expect(pythonInvocation(env, "win32").display).toBe("C:\\rt\\python\\python.exe");
+    expect(pythonInvocation({ cowork_runtime_python: "/rt/bin/python" }, "win32").display).toBe(
+      "/rt/bin/python",
+    );
+  });
+
+  test("bare fallback: python on win32 (PATH prelude resolves it), python3 on POSIX", () => {
+    expect(pythonInvocation({}, "win32").display).toBe("python");
+    expect(pythonInvocation({}, "darwin").display).toBe("python3");
+    expect(pythonInvocation({}, "linux").display).toBe("python3");
+  });
+
+  test("never py -3", () => {
+    for (const platform of ["win32", "darwin", "linux"] as const) {
+      expect(pythonInvocation({}, platform).display).not.toContain("py -3");
+      expect(promptGuidance({ platform, env: {} })).not.toContain("prefer `py -3`");
+    }
+  });
+});
+
+describe("promptGuidance — single dialect, module-owned", () => {
+  test("win32 renders PowerShell rules only", () => {
+    const text = promptGuidance({ platform: "win32", env: {} });
+    expect(text).toContain("executes PowerShell on this machine");
+    expect(text).toContain("$env:NAME");
+    expect(text).not.toContain("executes bash");
+  });
+
+  test("posix renders bash rules only", () => {
+    const text = promptGuidance({ platform: "linux", env: {} });
+    expect(text).toContain("executes bash on this machine");
+    expect(text).not.toContain("PowerShell");
+  });
+
+  test("codex executor renders nothing — Codex owns its shell", () => {
+    expect(promptGuidance({ platform: "win32", executor: "codex" })).toBe("");
+  });
+});
+
+describe("codexDeveloperInstructions strips the Shell Execution Policy section", () => {
+  test("host shell rules never reach a Codex turn", () => {
+    const system = [
+      "Base prompt.",
+      "",
+      "## Shell Execution Policy",
+      "",
+      promptGuidance({ platform: "win32", env: {} }),
+      "",
+      "## Another Section",
+      "",
+      "Kept.",
+    ].join("\n");
+    const rendered = codexDeveloperInstructions(system);
+    expect(rendered).not.toContain("Shell Execution Policy");
+    expect(rendered).not.toContain("executes PowerShell");
+    expect(rendered).toContain("Base prompt.");
+    expect(rendered).toContain("## Another Section");
+    expect(rendered).toContain("Kept.");
+  });
+
+  test("section at end of prompt is stripped too", () => {
+    const system = `Base.\n\n## Shell Execution Policy\n\n${promptGuidance({ platform: "linux", env: {} })}`;
+    const rendered = codexDeveloperInstructions(system);
+    expect(rendered).not.toContain("Shell Execution Policy");
+    expect(rendered).toContain("Base.");
+  });
+});
+
+describe("commands — canned cross-platform command strings", () => {
+  test("powershell shapes with safe quoting", () => {
+    const c = commands("win32", {});
+    expect(c.runPythonScript("build it.py")).toBe("python 'build it.py'");
+    expect(c.printWorkingDirectory()).toBe("(Get-Location).Path");
+    expect(c.listDirectory("C:\\my dir")).toBe("Get-ChildItem -Force 'C:\\my dir'");
+    expect(c.countLines("notes.md")).toBe("(Get-Content 'notes.md' | Measure-Object -Line).Lines");
+  });
+
+  test("quoted interpreter paths get the call operator", () => {
+    const c = commands("win32", { COWORK_RUNTIME_PYTHON: "C:\\Program Files\\rt\\python.exe" });
+    expect(c.runPythonScript("s.py")).toBe("& 'C:\\Program Files\\rt\\python.exe' 's.py'");
+  });
+
+  test("posix shapes", () => {
+    const c = commands("linux", {});
+    expect(c.runPythonScript("it's.py")).toBe("'python3' 'it'\\''s.py'");
+    expect(c.printWorkingDirectory()).toBe("pwd");
+    expect(c.listDirectory()).toBe("ls -la");
+    expect(c.countLines("a.md")).toBe("wc -l 'a.md'");
   });
 });
 

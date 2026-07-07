@@ -4,6 +4,7 @@ import { z } from "zod";
 import { minimalSandboxEnv } from "../platform/env";
 import { which } from "../platform/exec";
 import { hostPlatform } from "../platform/host";
+import { run as procRun } from "../platform/proc";
 import {
   classifySandboxDenial,
   DEFAULT_SANDBOX_CONFIG,
@@ -23,7 +24,6 @@ import {
 } from "../platform/shell";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import { classifyCommandDetailed } from "../utils/approval";
-import { execFileCompat } from "../utils/execFileCompat";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -82,7 +82,11 @@ async function execFileAsync(
     env?: Record<string, string | undefined>;
   },
 ): Promise<ExecResult> {
-  const result = await execFileCompat(file, args, {
+  // proc.run spawns POSIX children detached (own process group) and kills the
+  // whole TREE on timeout/abort/overflow — so a timed-out `pwsh -Command` /
+  // `bash -lc` wrapper no longer leaves its grandchildren (npm, dev servers,
+  // builds) running. Same errorCode contract as the old execFileCompat engine.
+  const result = await procRun(file, args, {
     cwd: opts.cwd,
     maxBuffer: opts.maxBuffer,
     ...(opts.env ? { env: opts.env } : {}),

@@ -1,7 +1,7 @@
+import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, test } from "bun:test";
 
 /**
  * Platform-boundary ratchet.
@@ -27,8 +27,13 @@ import { describe, expect, test } from "bun:test";
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
 const BASELINE_PATH = path.join(import.meta.dir, "platform-boundary.baseline.json");
 
-/** src/platform is the sanctioned home for platform branching. */
-const EXEMPT_PREFIXES = ["src/platform/"];
+/**
+ * src/platform is the sanctioned home for platform branching; its OWN test
+ * surface (test/platform, the shared test helpers) legitimately uses the raw
+ * APIs as differential oracles (e.g. pathString vs node:path.win32, home()
+ * vs os.homedir()).
+ */
+const EXEMPT_PREFIXES = ["src/platform/", "test/platform/", "test/helpers/platform"];
 /** This test (and its baseline) mention the banned tokens by necessity. */
 const EXEMPT_FILES = new Set(["test/platform-boundary.test.ts"]);
 
@@ -100,7 +105,10 @@ const BANNED_TOKENS: BannedToken[] = [
 ];
 
 function listTrackedSourceFiles(): string[] {
-  const out = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, maxBuffer: 64 * 1024 * 1024 });
+  const out = execFileSync("git", ["ls-files", "-z"], {
+    cwd: REPO_ROOT,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   return out
     .toString("utf8")
     .split("\0")
@@ -150,7 +158,9 @@ describe("platform boundary", () => {
     if (process.env.PLATFORM_BOUNDARY_UPDATE === "1") {
       const next: Record<string, number> = {};
       const raised: string[] = [];
-      for (const [file, offenses] of [...scanned.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      for (const [file, offenses] of [...scanned.entries()].sort(([a], [b]) =>
+        a.localeCompare(b),
+      )) {
         const count = totalCount(offenses);
         const prior = baseline[file];
         if (fs.existsSync(BASELINE_PATH) && (prior === undefined || count > prior)) {

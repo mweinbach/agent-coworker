@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -224,7 +223,7 @@ describe("runShellCommandWithExec temp-script lifecycle", () => {
     let contentDuringRun = "";
     const result = await bashInternal.runShellCommandWithExec({
       command: big,
-      cwd: os.tmpdir(),
+      cwd: import.meta.dir,
       platform: "win32",
       execRunner: async (_file: string, args: string[]) => {
         sawPath = args[args.indexOf("-File") + 1];
@@ -246,7 +245,7 @@ describe("runShellCommandWithExec temp-script lifecycle", () => {
     const seen: string[] = [];
     const result = await bashInternal.runShellCommandWithExec({
       command: big,
-      cwd: os.tmpdir(),
+      cwd: import.meta.dir,
       platform: "win32",
       execRunner: async (_file: string, args: string[]) => {
         seen.push(args[args.indexOf("-File") + 1] as string);

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MODEL_REGISTRY_ENTRIES } from "../src/models/registry";
+import { hostPlatform } from "../src/platform/host";
 import { promptGuidance as shellPromptGuidance } from "../src/platform/shell";
 import {
   loadAgentPrompt,
@@ -154,7 +155,7 @@ function expectWindowsShellGuidance(prompt: string) {
   // the model sees only THIS host's rules, and `py -3` is banished everywhere.
   expect(prompt).toContain("## Shell Execution Policy");
   expect(prompt).toContain(shellPromptGuidance());
-  if (process.platform === "win32") {
+  if (hostPlatform() === "win32") {
     expect(prompt).toContain("executes PowerShell on this machine");
     expect(prompt).not.toContain("executes bash on this machine");
   } else {

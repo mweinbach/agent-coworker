@@ -1,3 +1,4 @@
+import { hostPlatform } from "../../src/platform/host";
 import {
   afterEach,
   bashInternal,
@@ -43,7 +44,7 @@ describe("bash tool", () => {
   test("description carries only the HOST dialect, rendered from platform.shell", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    if (process.platform === "win32") {
+    if (hostPlatform() === "win32") {
       expect(t.description).toContain("executes PowerShell on this machine");
       expect(t.description).not.toContain("executes bash on this machine");
     } else {

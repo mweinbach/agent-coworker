@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { hostPlatform } from "./host";
+import { pathImplForPlatform } from "./pathImpl";
 
 export type PlatformShellExecutionStep = {
   file: string;
@@ -54,10 +55,6 @@ export function quotePosixShellValue(value: string): string {
 
 export function quotePowerShellSingleQuotedValue(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-function pathImplForPlatform(platform: NodeJS.Platform): typeof path.posix | typeof path.win32 {
-  return platform === "win32" ? path.win32 : path.posix;
 }
 
 function dedupePathDirs(pathDirs: string[], platform: NodeJS.Platform): string[] {
@@ -161,7 +158,7 @@ export function buildPlatformShellExecutionPlan(
     const scriptId = opts.scriptId ?? crypto.randomUUID();
     const tempDir = opts.tempDir ?? os.tmpdir();
     const scriptPath = path.win32.join(tempDir, `cowork-shell-${scriptId}.ps1`);
-    const tempScript = { path: scriptPath, content: "\ufeff" + script };
+    const tempScript = { path: scriptPath, content: `\ufeff${script}` };
     const args = [...baseArgs, "-File", scriptPath];
     return [
       { file: "pwsh", args, displayCommand: command, tempScript },

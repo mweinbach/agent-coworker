@@ -277,6 +277,7 @@ function getRequiredH3Permission(
   }
   if (
     method === "thread/start" ||
+    method === "thread/fork" ||
     method === "thread/pinned/set" ||
     method === "thread/archived/set" ||
     method.startsWith("turn/")

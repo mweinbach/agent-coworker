@@ -17,6 +17,7 @@ import { SkillImprovementService } from "../../skillImprovement";
 import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
 import { resolveVersion } from "../../version";
+import { WorktreeService } from "../git/WorktreeService";
 import { decodeJsonRpcMessage } from "../jsonrpc/decodeJsonRpcMessage";
 import {
   buildJsonRpcErrorResponse,
@@ -382,6 +383,7 @@ export async function createAgentServerRuntime(
     },
   });
   const threadJournal = new ThreadJournal(sessionDb);
+  const worktreeService = new WorktreeService({ homedir: opts.homedir });
   let workspaceControl: WorkspaceControl;
   let skillMutationBus: SkillMutationBus;
   let skillImprovement: SkillImprovementService;
@@ -437,6 +439,7 @@ export async function createAgentServerRuntime(
     threadJournal,
     taskCoordinator: tasks,
     desktopService: opts.desktopService ?? null,
+    worktreeService,
     getConfig: () => config,
     homedir: opts.homedir,
     onThreadListChanged: broadcastWorkspaceListChanged,
@@ -736,6 +739,10 @@ export async function createAgentServerRuntime(
     },
     desktopService: opts.desktopService ?? null,
     threadManagement: {
+      forkThread: async (input) => {
+        if (!localThreadHost) throw new Error("Thread management is unavailable");
+        return await localThreadHost.forkThread(input);
+      },
       setPinned: async (input) => {
         if (!localThreadHost) throw new Error("Thread management is unavailable");
         return await localThreadHost.setPinned(input);

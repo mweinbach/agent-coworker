@@ -15,22 +15,31 @@ const promptSchema = z.string().trim().min(1).max(100_000);
 const modelSchema = z.string().trim().min(1).optional();
 const thinkingSchema = z.string().trim().min(1).optional();
 
+const worktreeStartingStateSchema = z
+  .object({
+    ref: z.string().trim().min(1).optional(),
+    branchName: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const threadEnvironmentSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("local") }).strict(),
+  z
+    .object({
+      type: z.literal("worktree"),
+      ref: z.string().trim().min(1).optional(),
+      branchName: z.string().trim().min(1).optional(),
+      startingState: worktreeStartingStateSchema.optional(),
+    })
+    .strict(),
+]);
+
 const createThreadTargetSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("project"),
       projectId: z.string().trim().min(1),
-      environment: z
-        .discriminatedUnion("type", [
-          z.object({ type: z.literal("local") }).strict(),
-          z
-            .object({
-              type: z.literal("worktree"),
-              startingState: z.unknown().optional(),
-            })
-            .strict(),
-        ])
-        .optional(),
+      environment: threadEnvironmentSchema.optional(),
     })
     .strict(),
   z
@@ -178,16 +187,49 @@ export function createThreadManagementTools(ctx: ToolContext): Record<string, un
     }),
 
     fork_thread: defineTool({
-      description: "Fork a Cowork thread. This returns unsupported until Phase 2 ships.",
+      description:
+        "Fork a Cowork thread into a new root thread, optionally backed by a managed git worktree from HEAD or an explicit ref. Defaults to the current thread when threadId is omitted.",
       inputSchema: z
         .object({
           threadId: threadIdSchema.optional(),
           hostId: hostIdSchema,
-          environment: z.unknown().optional(),
+          environment: threadEnvironmentSchema.optional(),
+          title: z.string().trim().min(1).max(200).optional(),
+          prompt: promptSchema.optional(),
+          model: modelSchema,
+          thinking: thinkingSchema,
         })
         .strict(),
-      execute: async (input: { threadId?: string; hostId?: string; environment?: unknown }) =>
-        await requireThreadControl(ctx).forkThread(input),
+      execute: async (input: {
+        threadId?: string;
+        hostId?: string;
+        environment?: z.infer<typeof threadEnvironmentSchema>;
+        title?: string;
+        prompt?: string;
+        model?: string;
+        thinking?: string;
+      }) => {
+        ctx.log(
+          `tool> fork_thread ${JSON.stringify({
+            threadId: input.threadId,
+            environment: input.environment,
+            model: input.model,
+            thinking: input.thinking,
+            hasPrompt: Boolean(input.prompt),
+          })}`,
+        );
+        await ctx.assertCanMutate?.("fork_thread");
+        const result = await requireThreadControl(ctx).forkThread(input);
+        ctx.log(
+          `tool< fork_thread ${JSON.stringify({
+            sourceThreadId: result.sourceThreadId,
+            threadId: result.thread.threadId,
+            queued: result.queued,
+            environment: result.environment.type,
+          })}`,
+        );
+        return result;
+      },
     }),
 
     handoff_thread: defineTool({

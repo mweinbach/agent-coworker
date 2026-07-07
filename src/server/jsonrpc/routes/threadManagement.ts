@@ -39,6 +39,48 @@ export function createThreadManagementRouteHandlers(
   context: JsonRpcRouteContext,
 ): JsonRpcRequestHandlerMap {
   return {
+    "thread/fork": async (ws, message) => {
+      const parsed = jsonRpcThreadManagementRequestSchemas["thread/fork"].safeParse(message.params);
+      if (!parsed.success) {
+        sendInvalidParams(context, ws, message.id, message.method, parsed.error.issues[0]?.message);
+        return;
+      }
+      if (!context.threadManagement) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.internalError,
+          message: "Thread management is unavailable",
+        });
+        return;
+      }
+      try {
+        const result = await context.threadManagement.forkThread(parsed.data);
+        const thread = toJsonRpcThread(result.thread);
+        context.threads.subscribe(ws, thread.id);
+        void context.journal
+          .enqueue({
+            threadId: thread.id,
+            ts: new Date().toISOString(),
+            eventType: "thread/started",
+            turnId: null,
+            itemId: null,
+            requestId: null,
+            payload: { thread },
+          })
+          .catch(() => {
+            // Best-effort journal persistence.
+          });
+        context.jsonrpc.sendResult(ws, message.id, {
+          ...result,
+          thread,
+        });
+        context.jsonrpc.send(ws, { method: "thread/started", params: { thread } });
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
     "thread/pinned/set": async (ws, message) => {
       const parsed = jsonRpcThreadManagementRequestSchemas["thread/pinned/set"].safeParse(
         message.params,

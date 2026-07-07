@@ -96,6 +96,44 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("thread fork JSON-RPC method creates a seeded local fork", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await rpc.request("thread/start", { cwd: tmpDir });
+      const sourceThreadId = created.result.thread.id as string;
+
+      const forked = await rpc.request("thread/fork", {
+        threadId: sourceThreadId,
+        environment: { type: "local" },
+        title: "Forked session",
+      });
+      expect(forked.result).toMatchObject({
+        sourceThreadId,
+        forked: true,
+        queued: false,
+        environment: { type: "local", cwd: forked.result.thread.cwd },
+      });
+      expect(forked.result.thread).toMatchObject({
+        title: "Forked session",
+        cwd: await fs.realpath(tmpDir),
+      });
+      expect(forked.result.thread.id).not.toBe(sourceThreadId);
+
+      const listed = await rpc.request("thread/list", { cwd: tmpDir });
+      expect(
+        listed.result.threads.find(
+          (thread: { id: string }) => thread.id === forked.result.thread.id,
+        ),
+      ).toMatchObject({ title: "Forked session" });
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("thread metadata JSON-RPC methods persist pinned and archived flags", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

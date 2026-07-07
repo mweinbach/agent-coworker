@@ -83,16 +83,24 @@ export type ReadThreadResult = {
   nextCursor?: string;
 };
 
+export type ThreadWorktreeStartingState = {
+  /** Git ref to create the managed worktree from. Defaults to HEAD. */
+  ref?: string;
+  /** Optional branch name for the new worktree. Defaults to a generated cowork/fork/* branch. */
+  branchName?: string;
+};
+
+export type ThreadEnvironment =
+  | { type: "local" }
+  | ({ type: "worktree" } & ThreadWorktreeStartingState & {
+        startingState?: ThreadWorktreeStartingState;
+      });
+
 export type CreateThreadTarget =
   | {
       type: "project";
       projectId: string;
-      environment?:
-        | { type: "local" }
-        | {
-            type: "worktree";
-            startingState?: unknown;
-          };
+      environment?: ThreadEnvironment;
     }
   | {
       type: "projectless";
@@ -157,13 +165,33 @@ export type UnsupportedThreadOperationResult = {
   reason: string;
 };
 
+export type ForkThreadEnvironment = ThreadEnvironment;
+
 export type ForkThreadInput = {
   threadId?: string;
   hostId?: ThreadHostId;
-  environment?: unknown;
+  environment?: ForkThreadEnvironment;
+  title?: string;
+  prompt?: string;
+  model?: string;
+  thinking?: string;
 };
 
-export type ForkThreadResult = UnsupportedThreadOperationResult;
+export type ForkThreadResult = {
+  sourceThreadId: string;
+  thread: ThreadSummary;
+  forked: true;
+  queued: boolean;
+  environment:
+    | { type: "local"; cwd: string }
+    | {
+        type: "worktree";
+        cwd: string;
+        branchName: string;
+        baseRef: string;
+        baseCommit: string;
+      };
+};
 
 export type HandoffThreadInput = {
   threadId: string;

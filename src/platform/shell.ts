@@ -49,11 +49,11 @@ export function quoteShellValue(value: string, dialect: ShellDialect): string {
   return quotePosixShellValue(value);
 }
 
-export function quotePosixShellValue(value: string): string {
+function quotePosixShellValue(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function quotePowerShellSingleQuotedValue(value: string): string {
+function quotePowerShellSingleQuotedValue(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 

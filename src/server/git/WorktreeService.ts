@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { home } from "../../platform/paths";
 import { type ExecFileCompatRunner, execFileCompat } from "../../utils/execFileCompat";
 import { isPathInside } from "../../utils/paths";
 
@@ -43,6 +43,8 @@ function slugify(value: string | undefined, fallback: string): string {
       ?.trim()
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^\.+/, "")
+      .replace(/\.\.+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 48) || fallback;
   return slug || fallback;
@@ -72,7 +74,7 @@ function formatGitFailure(args: string[], stderr: string, stdout: string): strin
   return detail ? `git ${args.join(" ")} failed: ${detail}` : `git ${args.join(" ")} failed`;
 }
 
-export function getManagedWorktreesRoot(homedir = os.homedir()): string {
+export function getManagedWorktreesRoot(homedir = home()): string {
   return path.join(homedir, ".cowork", "worktrees");
 }
 

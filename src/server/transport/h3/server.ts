@@ -275,9 +275,11 @@ function getRequiredH3Permission(
   if (ALWAYS_ALLOWED_H3_RPC_METHODS.has(method)) {
     return null;
   }
+  if (method === "thread/fork") {
+    return ["conversations", "turns"];
+  }
   if (
     method === "thread/start" ||
-    method === "thread/fork" ||
     method === "thread/pinned/set" ||
     method === "thread/archived/set" ||
     method.startsWith("turn/")

@@ -1,11 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { scratchRoots } from "../src/platform/sandbox";
 import type { SessionRegistry } from "../src/server/runtime/SessionRegistry";
 import { ThreadJournal } from "../src/server/runtime/ThreadJournal";
 import { SessionDb } from "../src/server/sessionDb";
 import { LocalThreadHost } from "../src/server/threads/localThreadHost";
+import type { WebDesktopServiceLike } from "../src/server/webDesktopService";
 import type { AgentConfig } from "../src/types";
 
 async function makeHarness(
@@ -13,9 +14,15 @@ async function makeHarness(
     isTaskThread?: (sessionId: string) => boolean;
     registry?: Partial<SessionRegistry>;
     worktreeService?: ConstructorParameters<typeof LocalThreadHost>[0]["worktreeService"];
+    desktopService?: WebDesktopServiceLike;
+    loadThreadSessionBootstrap?: ConstructorParameters<
+      typeof LocalThreadHost
+    >[0]["loadThreadSessionBootstrap"];
   } = {},
 ) {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-thread-management-"));
+  const workspace = await fs.mkdtemp(
+    path.join(scratchRoots()[0] ?? "/tmp", "cowork-thread-management-"),
+  );
   const rootDir = path.join(workspace, ".cowork");
   const sessionsDir = path.join(rootDir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
@@ -54,7 +61,9 @@ async function makeHarness(
     threadJournal,
     taskCoordinator: { isTaskThread: opts.isTaskThread ?? (() => false) },
     worktreeService: opts.worktreeService,
+    desktopService: opts.desktopService,
     getConfig: () => config,
+    loadThreadSessionBootstrap: opts.loadThreadSessionBootstrap,
     homedir: workspace,
   });
   return { workspace, sessionDb, threadJournal, host };
@@ -111,7 +120,11 @@ function makeRuntime(opts: {
   };
 }
 
-async function persistThread(sessionDb: SessionDb, workspace: string) {
+async function persistThread(
+  sessionDb: SessionDb,
+  workspace: string,
+  providerOptions?: AgentConfig["providerOptions"],
+) {
   await sessionDb.persistSessionMutation({
     sessionId: "thread-1",
     eventType: "session.created",
@@ -126,6 +139,7 @@ async function persistThread(sessionDb: SessionDb, workspace: string) {
       provider: "google",
       model: "gemini-3-flash-preview",
       workingDirectory: workspace,
+      providerOptions,
       enableMcp: true,
       backupsEnabledOverride: null,
       createdAt: "2026-07-01T00:00:00.000Z",
@@ -216,6 +230,76 @@ describe("LocalThreadHost", () => {
     }
   });
 
+  test("readThread retains seeded history after later journal turns", async () => {
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness({
+      registry: {
+        readThreadSnapshot: () => ({
+          feed: [
+            { kind: "message", role: "user", text: "seeded context" },
+            { kind: "message", role: "user", text: "follow-up" },
+          ],
+        }),
+      },
+    });
+    try {
+      await persistThread(sessionDb, workspace);
+      await sessionDb.appendThreadJournalEvents([
+        {
+          threadId: "thread-1",
+          ts: "2026-07-01T00:00:01.000Z",
+          eventType: "turn/started",
+          turnId: "turn-1",
+          itemId: null,
+          requestId: null,
+          payload: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+        },
+        {
+          threadId: "thread-1",
+          ts: "2026-07-01T00:00:02.000Z",
+          eventType: "item/completed",
+          turnId: "turn-1",
+          itemId: "user-1",
+          requestId: null,
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "user-1",
+              type: "userMessage",
+              content: [{ type: "input_text", text: "follow-up" }],
+            },
+          },
+        },
+        {
+          threadId: "thread-1",
+          ts: "2026-07-01T00:00:03.000Z",
+          eventType: "turn/completed",
+          turnId: "turn-1",
+          itemId: null,
+          requestId: null,
+          payload: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        },
+      ]);
+
+      const result = await host.readThread({ threadId: "thread-1" });
+      expect(result.turns).toEqual([
+        {
+          id: "snapshot",
+          status: "completed",
+          items: [{ type: "user", text: "seeded context" }],
+        },
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "user", text: "follow-up" }],
+        },
+      ]);
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
   test("rejects direct management of task-owned threads", async () => {
     const { workspace, sessionDb, threadJournal, host } = await makeHarness({
       isTaskThread: (sessionId) => sessionId === "thread-1",
@@ -259,7 +343,7 @@ describe("LocalThreadHost", () => {
       opts: { seedContext?: unknown; title?: string };
     }> = [];
     const sendUserMessage = mock(async () => undefined);
-    const worktreePath = path.join(os.tmpdir(), "cowork-fork-worktree");
+    const worktreePath = path.join(scratchRoots()[0] ?? "/tmp", "cowork-fork-worktree");
     const worktreeService = {
       createWorktree: mock(async () => ({
         path: worktreePath,
@@ -294,12 +378,19 @@ describe("LocalThreadHost", () => {
         return runtime;
       },
     };
+    const targetConfig = {
+      projectCoworkDir: path.join(worktreePath, ".cowork"),
+      providerOptions: { google: { thinkingConfig: { thinkingLevel: "high" } } },
+    } as AgentConfig;
     const { workspace, sessionDb, threadJournal, host } = await makeHarness({
       registry,
       worktreeService,
+      loadThreadSessionBootstrap: async () => ({ config: targetConfig, system: "target system" }),
     });
     try {
-      await persistThread(sessionDb, workspace);
+      await persistThread(sessionDb, workspace, {
+        google: { thinkingConfig: { thinkingLevel: "medium" } },
+      });
       sourceRuntime = makeRuntime({ id: "thread-1", cwd: workspace, title: "Thread One" });
 
       const result = await host.forkThread({
@@ -319,7 +410,14 @@ describe("LocalThreadHost", () => {
         cwd: worktreePath,
         provider: "google",
         model: "gemini-3-flash-preview",
-        opts: { title: "Fork of Thread One" },
+        opts: {
+          title: "Fork of Thread One",
+          system: "target system",
+          config: {
+            projectCoworkDir: path.join(worktreePath, ".cowork"),
+            providerOptions: { google: { thinkingConfig: { thinkingLevel: "medium" } } },
+          },
+        },
       });
       expect(created[0]?.opts.seedContext).toEqual({
         messages: [{ role: "user", content: "hello" }],
@@ -397,6 +495,41 @@ describe("LocalThreadHost", () => {
       const queried = await host.listThreads({ query: "archived" });
       expect(queried.threads.map((thread) => thread.threadId)).toEqual(["thread-2"]);
       expect(queried.threads[0]?.archived).toBe(true);
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
+  test("preserves desktop-only archive metadata when pinning a thread", async () => {
+    const state = {
+      workspaces: [],
+      threads: [
+        {
+          id: "thread-1",
+          sessionId: "thread-1",
+          archived: true,
+          archivedAt: "2026-07-01T00:00:00.000Z",
+        },
+      ],
+    } as unknown as Awaited<ReturnType<WebDesktopServiceLike["loadState"]>>;
+    const desktopService = {
+      loadState: async () => state,
+      saveState: async (next: unknown) => next as typeof state,
+      listWorkspaces: async () => [],
+      createOneOffChatWorkspace: async () => ({ name: "Chat", path: "/tmp/chat" }),
+      getWorkspaceRoots: async () => [],
+      resolveWorkspaceDirectory: async (workspacePath: string) => workspacePath,
+    } satisfies WebDesktopServiceLike;
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness({ desktopService });
+    try {
+      await persistThread(sessionDb, workspace);
+      await host.setPinned({ threadId: "thread-1", pinned: true });
+      expect(sessionDb.getThreadMetadata("thread-1")).toMatchObject({
+        pinned: true,
+        archived: true,
+        archivedAt: "2026-07-01T00:00:00.000Z",
+      });
     } finally {
       await threadJournal.close();
       sessionDb.close();

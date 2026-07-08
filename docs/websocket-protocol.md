@@ -35,8 +35,9 @@ device id, and desktop-side per-device permissions gate JSON-RPC methods such as
 auth, MCP auth, backups, workspace settings, and server-request responses. Reading thread history
 (`thread/list`, `thread/read`, `thread/hydrate`, and `thread/resume`, which streams a thread's live
 content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
-stays always-allowed. Thread mutations (`thread/fork`, `thread/pinned/set`, and
-`thread/archived/set`) require the `turns` permission because they change persisted thread state.
+stays always-allowed. Thread mutations (`thread/pinned/set` and `thread/archived/set`) require the
+`turns` permission because they change persisted thread state. `thread/fork` requires both `turns`
+and `conversations`: it creates persisted state and copies the source conversation history.
 Newly paired devices
 default to no `conversations` access until it is granted; devices paired before this permission
 existed are grandfathered to preserve their prior read access.
@@ -876,7 +877,7 @@ The remainder of this document describes the JSON-RPC method and notification pa
 ## Protocol v7 Notes
 
 Changes in `7.45`:
-- Added `thread/fork` for creating seeded thread forks, optionally in managed git worktrees under `~/.cowork/worktrees`. Forking requires the `turns` permission on the mobile H3 transport.
+- Added `thread/fork` for creating seeded thread forks, optionally in managed git worktrees under `~/.cowork/worktrees`. Forking requires both the `turns` and `conversations` permissions on the mobile H3 transport.
 
 Changes in `7.44`:
 - Added `thread/pinned/set` and `thread/archived/set` for server-persisted thread metadata. Metadata setters require the `turns` permission on the mobile H3 transport and return thread summaries with optional `pinned`, `pinnedAt`, `archived`, and `archivedAt` fields.

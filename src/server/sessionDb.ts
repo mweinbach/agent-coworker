@@ -204,7 +204,9 @@ export type PersistedThreadMetadata = {
 export type PersistedThreadMetadataPatch = {
   threadId: string;
   pinned?: boolean;
+  pinnedAt?: string | null;
   archived?: boolean;
+  archivedAt?: string | null;
   updatedAt?: string;
 };
 

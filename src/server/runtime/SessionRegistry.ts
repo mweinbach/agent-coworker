@@ -211,6 +211,8 @@ export class SessionRegistry {
       seedContext?: SeededSessionContext;
       title?: string;
       titleSource?: SessionInfoState["titleSource"];
+      config?: AgentConfig;
+      system?: string;
     } = {},
   ): SessionRuntime {
     const binding: SessionBinding = {
@@ -220,13 +222,14 @@ export class SessionRegistry {
       sinks: new Map(),
     };
     const threadConfig: AgentConfig = {
-      ...this.config,
+      ...(opts.config ?? this.config),
       workingDirectory: cwd,
       ...(provider ? { provider, runtime: defaultRuntimeNameForProvider(provider) } : {}),
       ...(model ? { model } : {}),
     };
     const built = this.buildSession(binding, undefined, {
       config: threadConfig,
+      ...(opts.system ? { system: opts.system } : {}),
       ...(opts.seedContext ? { seedContext: opts.seedContext } : {}),
       ...(opts.title
         ? {

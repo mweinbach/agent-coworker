@@ -76,6 +76,11 @@ type DesktopThreadPatch = {
   archivedAt?: string | null;
 };
 
+type ThreadSessionBootstrap = {
+  config: AgentConfig;
+  system: string;
+};
+
 type LocalThreadHostDeps = {
   sessionDb: SessionDb;
   registry: SessionRegistry;
@@ -84,6 +89,7 @@ type LocalThreadHostDeps = {
   desktopService?: WebDesktopServiceLike | null;
   worktreeService?: WorktreeService | null;
   getConfig: () => AgentConfig;
+  loadThreadSessionBootstrap?: (cwd: string) => Promise<ThreadSessionBootstrap>;
   homedir?: string;
   onThreadListChanged?: () => void;
 };
@@ -306,6 +312,41 @@ function compactSnapshotFeed(
   return items.length > 0 ? [{ id: "snapshot", status: "completed", items }] : [];
 }
 
+function compactItemsMatch(left: CompactThreadItem, right: CompactThreadItem): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function mergeSnapshotAndProjectedTurns(
+  snapshotTurns: CompactThreadTurn[],
+  projectedTurns: CompactThreadTurn[],
+): CompactThreadTurn[] {
+  if (snapshotTurns.length === 0) return projectedTurns;
+  if (projectedTurns.length === 0) return snapshotTurns;
+
+  const snapshotItems = snapshotTurns.flatMap((turn) => turn.items);
+  const projectedItems = projectedTurns.flatMap((turn) => turn.items);
+  let overlap = 0;
+  for (let size = Math.min(snapshotItems.length, projectedItems.length); size > 0; size -= 1) {
+    const snapshotTail = snapshotItems.slice(-size);
+    const projectedTail = projectedItems.slice(-size);
+    if (
+      snapshotTail.every((item, index) => {
+        const projectedItem = projectedTail[index];
+        return projectedItem !== undefined && compactItemsMatch(item, projectedItem);
+      })
+    ) {
+      overlap = size;
+      break;
+    }
+  }
+
+  const seedItems = snapshotItems.slice(0, snapshotItems.length - overlap);
+  return [
+    ...(seedItems.length > 0 ? [{ id: "snapshot", status: "completed", items: seedItems }] : []),
+    ...projectedTurns,
+  ];
+}
+
 export class LocalThreadHost implements ThreadHostAdapter {
   readonly hostId = LOCAL_HOST_ID;
   readonly displayName = "Local Cowork";
@@ -394,10 +435,10 @@ export class LocalThreadHost implements ThreadHostAdapter {
     const events = this.readAllJournalEvents(threadId);
     const projected = projectThreadTurnsFromJournal(events);
     const snapshot = this.deps.registry.readThreadSnapshot(threadId);
-    const compact =
-      projected.length > 0
-        ? compactProjectedTurns(projected, { includeOutputs, maxOutputChars })
-        : compactSnapshotFeed(snapshot?.feed, { includeOutputs, maxOutputChars });
+    const compact = mergeSnapshotAndProjectedTurns(
+      compactSnapshotFeed(snapshot?.feed, { includeOutputs, maxOutputChars }),
+      compactProjectedTurns(projected, { includeOutputs, maxOutputChars }),
+    );
     const turnLimit = clampPositiveInteger(input.turnLimit, DEFAULT_TURN_LIMIT, MAX_TURN_LIMIT);
     const cursor = decodeCursor(input.cursor, compact.length);
     const end = cursor.beforeTurnIndex;
@@ -414,7 +455,8 @@ export class LocalThreadHost implements ThreadHostAdapter {
     const prompt = input.prompt.trim();
     if (!prompt) throw new Error("create_thread requires a non-empty prompt");
     const { cwd, workspaceId } = await this.resolveCreateTarget(input);
-    const config = this.deps.getConfig();
+    const bootstrap = await this.loadThreadSessionBootstrap(cwd);
+    const config = bootstrap?.config ?? this.deps.getConfig();
     const modelSelection = parseThreadModelSelection(input.model, config.provider, {
       home: resolveAuthHomeDir(config, this.deps.homedir),
     });
@@ -422,6 +464,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
       cwd,
       modelSelection.provider,
       modelSelection.model,
+      bootstrap ? { config: bootstrap.config, system: bootstrap.system } : undefined,
     );
     if (input.thinking) {
       await this.applyThinking(runtime, input.thinking);
@@ -472,6 +515,8 @@ export class LocalThreadHost implements ThreadHostAdapter {
     const forkTitle = input.title?.trim() || `Fork of ${source.title}`;
     const target = await this.resolveForkTarget(source, environment, forkTitle);
     const selection = this.resolveForkModelSelection(source, input.model);
+    const bootstrap = await this.loadThreadSessionBootstrap(target.cwd);
+    const baseConfig = bootstrap?.config ?? this.deps.getConfig();
     const runtime = this.deps.registry.createJsonRpcThreadSession(
       target.cwd,
       selection.provider,
@@ -479,6 +524,11 @@ export class LocalThreadHost implements ThreadHostAdapter {
       {
         seedContext: this.buildSeedContext(source),
         title: forkTitle,
+        config: {
+          ...baseConfig,
+          providerOptions: source.providerOptions ?? baseConfig.providerOptions,
+        },
+        ...(bootstrap ? { system: bootstrap.system } : {}),
       },
     );
     if (input.thinking?.trim()) {
@@ -525,9 +575,13 @@ export class LocalThreadHost implements ThreadHostAdapter {
     this.assertThreadIsNotTaskOwned(threadId);
     this.assertKnownThread(threadId);
     const now = new Date().toISOString();
+    const metadata = await this.loadMetadataIndex();
+    const persisted = this.deps.sessionDb.getThreadMetadata(threadId);
+    const current = metadata.get(threadId) ?? this.defaultMetadata();
     await this.deps.sessionDb.setThreadMetadata({
       threadId,
       pinned: input.pinned,
+      ...(persisted ? {} : { archived: current.archived, archivedAt: current.archivedAt }),
       updatedAt: now,
     });
     await this.updateDesktopThread(threadId, {
@@ -542,9 +596,13 @@ export class LocalThreadHost implements ThreadHostAdapter {
     this.assertThreadIsNotTaskOwned(threadId);
     this.assertKnownThread(threadId);
     const now = new Date().toISOString();
+    const metadata = await this.loadMetadataIndex();
+    const persisted = this.deps.sessionDb.getThreadMetadata(threadId);
+    const current = metadata.get(threadId) ?? this.defaultMetadata();
     await this.deps.sessionDb.setThreadMetadata({
       threadId,
       archived: input.archived,
+      ...(persisted ? {} : { pinned: current.pinned, pinnedAt: current.pinnedAt }),
       updatedAt: now,
     });
     await this.updateDesktopThread(threadId, {
@@ -618,6 +676,10 @@ export class LocalThreadHost implements ThreadHostAdapter {
       throw new Error("Only root threads can be forked");
     }
     return record;
+  }
+
+  private async loadThreadSessionBootstrap(cwd: string): Promise<ThreadSessionBootstrap | null> {
+    return (await this.deps.loadThreadSessionBootstrap?.(cwd)) ?? null;
   }
 
   private buildSeedContext(record: PersistedSessionRecord): SeededSessionContext {

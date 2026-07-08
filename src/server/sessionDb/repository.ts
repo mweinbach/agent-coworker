@@ -936,9 +936,17 @@ export class SessionDbRepository {
     const pinned = input.pinned ?? existing?.pinned ?? false;
     const archived = input.archived ?? existing?.archived ?? false;
     const pinnedAt =
-      input.pinned === undefined ? (existing?.pinnedAt ?? null) : input.pinned ? now : null;
+      input.pinned === undefined
+        ? (existing?.pinnedAt ?? null)
+        : input.pinned
+          ? (input.pinnedAt ?? now)
+          : null;
     const archivedAt =
-      input.archived === undefined ? (existing?.archivedAt ?? null) : input.archived ? now : null;
+      input.archived === undefined
+        ? (existing?.archivedAt ?? null)
+        : input.archived
+          ? (input.archivedAt ?? now)
+          : null;
     this.db
       .query(
         sql([

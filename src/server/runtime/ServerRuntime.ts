@@ -384,6 +384,23 @@ export async function createAgentServerRuntime(
   });
   const threadJournal = new ThreadJournal(sessionDb);
   const worktreeService = new WorktreeService({ homedir: opts.homedir });
+  const loadThreadSessionBootstrap = async (cwd: string) => {
+    const threadConfig = await loadConfig({
+      cwd,
+      env: { ...env, AGENT_WORKING_DIR: cwd },
+      homedir: opts.homedir,
+      builtInDir,
+    });
+    const providerOptions = mergeRuntimeProviderOptions(
+      opts.providerOptions,
+      threadConfig.providerOptions,
+    );
+    if (providerOptions) threadConfig.providerOptions = providerOptions;
+    const loadSystemPromptWithSkills =
+      opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills;
+    const prompt = await loadSystemPromptWithSkills(threadConfig);
+    return { config: threadConfig, system: prompt.prompt };
+  };
   let workspaceControl: WorkspaceControl;
   let skillMutationBus: SkillMutationBus;
   let skillImprovement: SkillImprovementService;
@@ -441,6 +458,7 @@ export async function createAgentServerRuntime(
     desktopService: opts.desktopService ?? null,
     worktreeService,
     getConfig: () => config,
+    loadThreadSessionBootstrap,
     homedir: opts.homedir,
     onThreadListChanged: broadcastWorkspaceListChanged,
   });

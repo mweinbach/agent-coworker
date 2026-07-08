@@ -142,6 +142,7 @@ export class SessionTurnService {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    opts?: { allowThreadManagementTools?: boolean },
   ): Promise<void> {
     await this.session.sendUserMessage(
       text,
@@ -150,6 +151,7 @@ export class SessionTurnService {
       attachments,
       inputParts,
       references,
+      opts,
     );
   }
 

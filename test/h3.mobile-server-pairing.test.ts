@@ -603,6 +603,39 @@ describe("H3 mobile server pairing", () => {
         }
         expect(handled.at(-1)).toMatchObject(routeCase.expectedHandledMessage);
       }
+
+      await server.updateTrustedDevicePermissions("phone-1", {
+        conversations: false,
+        turns: false,
+      });
+      const forkPayload = {
+        jsonrpc: "2.0",
+        id: "fork-request",
+        method: "thread/fork",
+        params: { threadId: "thread-1" },
+      };
+      const deniedWithoutConversations = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify(forkPayload),
+      });
+      expect(deniedWithoutConversations.status).toBe(403);
+      await expect(deniedWithoutConversations.json()).resolves.toEqual({
+        error: "Mobile device permission required: conversations.",
+        permission: "conversations",
+      });
+
+      await server.updateTrustedDevicePermissions("phone-1", { conversations: true });
+      const deniedWithoutTurns = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify(forkPayload),
+      });
+      expect(deniedWithoutTurns.status).toBe(403);
+      await expect(deniedWithoutTurns.json()).resolves.toEqual({
+        error: "Mobile device permission required: turns.",
+        permission: "turns",
+      });
     } finally {
       await server.stop();
     }

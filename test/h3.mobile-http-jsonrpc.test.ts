@@ -788,6 +788,15 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     connection.close();
   });
 
+  test("requires conversation and turn permissions for thread metadata setters", async () => {
+    for (const method of ["thread/pinned/set", "thread/archived/set"]) {
+      expect(__internal.getRequiredH3Permission({ id: 1, method, params: {} })).toEqual([
+        "conversations",
+        "turns",
+      ]);
+    }
+  });
+
   test("allows thread history reads for devices granted conversations", async () => {
     const dispatchedMethods: string[] = [];
     const runtime = {

@@ -26,6 +26,10 @@ export const jsonRpcThreadSchema = z
         type: z.string(),
       })
       .strict(),
+    pinned: z.boolean().optional(),
+    pinnedAt: z.string().nullable().optional(),
+    archived: z.boolean().optional(),
+    archivedAt: z.string().nullable().optional(),
   })
   .strict();
 

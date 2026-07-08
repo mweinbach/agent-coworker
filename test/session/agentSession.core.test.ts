@@ -90,6 +90,21 @@ describe("AgentSession", () => {
       expect(call.messages[0]).toEqual({ role: "user", content: "hello" });
     });
 
+    test("passes per-turn thread-management permission to the runtime", async () => {
+      const { session } = makeSession();
+      await session.sendUserMessage(
+        "hello",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { allowThreadManagementTools: false },
+      );
+      const call = mockRunTurn.mock.calls[0][0] as { allowThreadManagementTools?: boolean };
+      expect(call.allowThreadManagementTools).toBe(false);
+    });
+
     test("initializes with empty todos (reset emits empty array)", () => {
       const { session, events } = makeSession();
       session.reset();

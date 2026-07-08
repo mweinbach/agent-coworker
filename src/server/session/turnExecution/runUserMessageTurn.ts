@@ -68,6 +68,7 @@ export type UserMessageTurnRunner = {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    opts?: { allowThreadManagementTools?: boolean },
   ) => Promise<void>;
 };
 
@@ -185,6 +186,7 @@ export function createUserMessageTurnRunner(
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    opts?: { allowThreadManagementTools?: boolean },
   ) => {
     if (context.state.running) {
       context.emitError("busy", "session", "Agent is busy");
@@ -262,6 +264,7 @@ export function createUserMessageTurnRunner(
       tracker,
       includeRawChunks,
       onAdvancedMemoryChanged,
+      allowThreadManagementTools: opts?.allowThreadManagementTools,
       setAcceptingSteers: (accepting) => {
         context.state.acceptingSteers = accepting;
       },

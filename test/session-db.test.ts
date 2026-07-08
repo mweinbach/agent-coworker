@@ -848,6 +848,58 @@ describe("sessionDb", () => {
     }
   });
 
+  test("persists thread metadata flags across database reopen", async () => {
+    const paths = await makeTmpCoworkHome();
+    const first = await SessionDb.create({ paths });
+    try {
+      await first.setThreadMetadata({
+        threadId: "thread-1",
+        pinned: true,
+        archived: true,
+        updatedAt: "2026-07-02T00:00:00.000Z",
+      });
+      await first.setThreadMetadata({
+        threadId: "thread-2",
+        pinned: false,
+        archived: true,
+        updatedAt: "2026-07-03T00:00:00.000Z",
+      });
+      expect(first.getThreadMetadata("thread-1")).toEqual({
+        threadId: "thread-1",
+        pinned: true,
+        pinnedAt: "2026-07-02T00:00:00.000Z",
+        archived: true,
+        archivedAt: "2026-07-02T00:00:00.000Z",
+        updatedAt: "2026-07-02T00:00:00.000Z",
+      });
+    } finally {
+      first.close();
+    }
+
+    const reopened = await SessionDb.create({ paths });
+    try {
+      expect(
+        reopened
+          .listThreadMetadata()
+          .map((entry) => entry.threadId)
+          .sort(),
+      ).toEqual(["thread-1", "thread-2"]);
+      await reopened.setThreadMetadata({
+        threadId: "thread-1",
+        archived: false,
+        updatedAt: "2026-07-04T00:00:00.000Z",
+      });
+      expect(reopened.getThreadMetadata("thread-1")).toMatchObject({
+        pinned: true,
+        pinnedAt: "2026-07-02T00:00:00.000Z",
+        archived: false,
+        archivedAt: null,
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
   test("filters listed sessions by working directory and persists materialized snapshots", async () => {
     const paths = await makeTmpCoworkHome();
     const db = await SessionDb.create({ paths });

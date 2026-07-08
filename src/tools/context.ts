@@ -1,6 +1,7 @@
 import type { SandboxPolicy } from "../platform/sandbox/policy";
 import type { AgentShellPolicy } from "../server/agents/commandPolicy";
 import type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
+import type { ThreadControl } from "../server/threads/types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
 import type { AgentProfileSnapshot } from "../shared/agentProfiles";
 import type {
@@ -117,6 +118,12 @@ export interface ToolContext {
 
   /** Session-backed persistent agent lifecycle callbacks. */
   agentControl?: AgentControl;
+
+  /** Session-backed root thread management callbacks. */
+  threadControl?: ThreadControl;
+
+  /** Whether this turn is authorized to access other conversation threads. */
+  allowThreadManagementTools?: boolean;
 
   /** Session-level cost tracker. Tools can query and set budget thresholds. */
   costTracker?: SessionCostTracker;

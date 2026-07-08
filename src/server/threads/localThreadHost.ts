@@ -11,6 +11,7 @@ import { projectThreadTurnsFromJournal } from "../jsonrpc/threadReadProjector";
 import { type JsonRpcWorkspaceSummary, listWorkspaceSummaries } from "../jsonrpc/workspaceCatalog";
 import type { SessionRegistry } from "../runtime/SessionRegistry";
 import type { ThreadJournal } from "../runtime/ThreadJournal";
+import { contentText } from "../session/AgentSessionHydration";
 import type { SeededSessionContext } from "../session/SessionContext";
 import type { SessionRuntime } from "../session/SessionRuntime";
 import { getSessionTaskLock } from "../session/taskLocks";
@@ -312,6 +313,24 @@ function compactSnapshotFeed(
   return items.length > 0 ? [{ id: "snapshot", status: "completed", items }] : [];
 }
 
+function compactPersistedMessages(
+  messages: PersistedSessionRecord["messages"] | undefined,
+): CompactThreadTurn[] {
+  if (!messages?.length) return [];
+  const items = messages.flatMap((message) => {
+    if (message.role !== "user" && message.role !== "assistant") return [];
+    const text = contentText(message.content);
+    if (!text) return [];
+    return [
+      {
+        type: message.role === "user" ? "user" : "assistant",
+        text: truncateText(text, TEXT_ITEM_CHARS).text,
+      } as CompactThreadItem,
+    ];
+  });
+  return items.length > 0 ? [{ id: "seed", status: "completed", items }] : [];
+}
+
 function compactItemsMatch(left: CompactThreadItem, right: CompactThreadItem): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -435,8 +454,16 @@ export class LocalThreadHost implements ThreadHostAdapter {
     const events = this.readAllJournalEvents(threadId);
     const projected = projectThreadTurnsFromJournal(events);
     const snapshot = this.deps.registry.readThreadSnapshot(threadId);
+    const persisted = this.deps.sessionDb.getSessionRecord(threadId);
+    const snapshotTurns = compactSnapshotFeed(snapshot?.feed, { includeOutputs, maxOutputChars });
+    const seed =
+      snapshotTurns.length > 0
+        ? snapshotTurns
+        : projected.length === 0
+          ? compactPersistedMessages(persisted?.messages)
+          : [];
     const compact = mergeSnapshotAndProjectedTurns(
-      compactSnapshotFeed(snapshot?.feed, { includeOutputs, maxOutputChars }),
+      seed,
       compactProjectedTurns(projected, { includeOutputs, maxOutputChars }),
     );
     const turnLimit = clampPositiveInteger(input.turnLimit, DEFAULT_TURN_LIMIT, MAX_TURN_LIMIT);

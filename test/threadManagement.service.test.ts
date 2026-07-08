@@ -300,6 +300,25 @@ describe("LocalThreadHost", () => {
     }
   });
 
+  test("readThread falls back to persisted seed messages before snapshot or journal activity", async () => {
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness();
+    try {
+      await persistThread(sessionDb, workspace);
+
+      const result = await host.readThread({ threadId: "thread-1" });
+      expect(result.turns).toEqual([
+        {
+          id: "seed",
+          status: "completed",
+          items: [{ type: "user", text: "hello" }],
+        },
+      ]);
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
   test("rejects direct management of task-owned threads", async () => {
     const { workspace, sessionDb, threadJournal, host } = await makeHarness({
       isTaskThread: (sessionId) => sessionId === "thread-1",

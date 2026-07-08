@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { MACOS_SEATBELT_EXECUTABLE } from "./seatbelt";
@@ -9,7 +8,13 @@ import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
+  windowsSandboxHome,
 } from "./windows";
+
+/** Injectable clock for the probe caches below (`Date.now` in production). */
+export interface ProbeClockOptions {
+  now?: () => number;
+}
 
 export type SandboxEnforcement = {
   filesystem: boolean;
@@ -94,13 +99,54 @@ function verifyConfiguredHash(
   }
 }
 
+/**
+ * How long a Windows bundle probe result stays fresh. Probing re-hashes three
+ * binaries and spawns `helper probe`; before memoization that ran on EVERY
+ * sandboxed bash call. 30s keeps the hot path cheap while a repaired/replaced
+ * bundle is still picked up quickly.
+ */
+export const WINDOWS_SANDBOX_PROBE_TTL_MS = 30_000;
+
+const windowsProbeCache = new Map<string, { at: number; value: WindowsSandboxProbe }>();
+
+/** Deep-enough copy so a caller mutating the result can't poison the cache. */
+function cloneWindowsProbe(probe: WindowsSandboxProbe): WindowsSandboxProbe {
+  return { ...probe, enforcement: { ...probe.enforcement } };
+}
+
+/**
+ * Probe the Windows sandbox bundle (integrity hashes + `helper probe`
+ * enforcement check). Memoized per `(helperPath, sandboxHome)` with a
+ * {@link WINDOWS_SANDBOX_PROBE_TTL_MS} TTL on ALL results (both ready and
+ * failed), so transient failures re-probe quickly and success does not pin a
+ * since-tampered bundle forever. The sandbox home is resolved via
+ * {@link windowsSandboxHome} — the same resolver the command builder uses.
+ * `opts.now` injects a fake clock for TTL tests. Runs on any host platform
+ * (spawning only happens when the integrity hashes verify).
+ */
 export function probeWindowsSandboxBundle(
   helperPath: string | null,
   env: NodeJS.ProcessEnv = process.env,
+  opts: ProbeClockOptions = {},
 ): WindowsSandboxProbe {
-  const sandboxHome = path.resolve(
-    env.COWORK_WIN_SANDBOX_HOME?.trim() || path.join(os.homedir(), ".cowork"),
-  );
+  const now = opts.now ?? Date.now;
+  const sandboxHome = windowsSandboxHome(env);
+  // NUL-separated: neither component can contain "\0", so keys cannot collide.
+  const cacheKey = `${helperPath ?? ""}\u0000${sandboxHome}`;
+  const cached = windowsProbeCache.get(cacheKey);
+  if (cached && now() - cached.at < WINDOWS_SANDBOX_PROBE_TTL_MS) {
+    return cloneWindowsProbe(cached.value);
+  }
+  const value = probeWindowsSandboxBundleUncached(helperPath, env, sandboxHome);
+  windowsProbeCache.set(cacheKey, { at: now(), value });
+  return cloneWindowsProbe(value);
+}
+
+function probeWindowsSandboxBundleUncached(
+  helperPath: string | null,
+  env: NodeJS.ProcessEnv,
+  sandboxHome: string,
+): WindowsSandboxProbe {
   if (!helperPath) {
     return {
       helperPath: null,
@@ -190,7 +236,8 @@ export function probeWindowsSandboxBundle(
       sandboxHome,
       enforcement: { ...NO_ENFORCEMENT, integrity: true },
       setupRequired: true,
-      warning: `Windows sandbox probe failed (exit ${probe.status ?? "unknown"}): ${probe.stderr.trim() || "invalid probe output"}`,
+      // probe.stderr is null (not "") when the spawn itself failed, so guard it.
+      warning: `Windows sandbox probe failed (exit ${probe.status ?? "unknown"}): ${probe.stderr?.trim() || "invalid probe output"}`,
     };
   }
 }
@@ -200,12 +247,17 @@ export function probeWindowsSandboxBundle(
  * from the {@link SandboxManager} so they can be injected/mocked in tests.
  */
 
-let macosSeatbeltTrusted: boolean | undefined;
+/**
+ * Cooldown before a NEGATIVE backend-availability probe is retried. A
+ * transient failure (e.g. a codesign timeout) must not disable the sandbox
+ * until process restart; positive results stay cached forever because host
+ * capability, once proven, is stable for the process lifetime.
+ */
+export const NEGATIVE_PROBE_COOLDOWN_MS = 60_000;
 
-/** Whether the fixed macOS Seatbelt executable is owned and signed by Apple. */
-export function hasSeatbelt(): boolean {
-  if (macosSeatbeltTrusted !== undefined) return macosSeatbeltTrusted;
-  let trusted = false;
+let seatbeltProbeCache: { value: boolean; at: number } | undefined;
+
+function probeSeatbeltTrusted(): boolean {
   try {
     const stat = fs.statSync(MACOS_SEATBELT_EXECUTABLE);
     const signature = spawnSync(
@@ -213,17 +265,34 @@ export function hasSeatbelt(): boolean {
       ["--verify", "--strict", "-R=anchor apple", MACOS_SEATBELT_EXECUTABLE],
       { stdio: "ignore", timeout: 15_000 },
     );
-    trusted =
+    return (
       stat.isFile() &&
       stat.uid === 0 &&
       (stat.mode & 0o022) === 0 &&
       fs.realpathSync(MACOS_SEATBELT_EXECUTABLE) === MACOS_SEATBELT_EXECUTABLE &&
-      signature.status === 0;
+      signature.status === 0
+    );
   } catch {
-    trusted = false;
+    return false;
   }
-  macosSeatbeltTrusted = trusted;
-  return trusted;
+}
+
+/**
+ * Whether the fixed macOS Seatbelt executable is owned and signed by Apple.
+ * `true` is cached for the process lifetime; `false` is re-probed after
+ * {@link NEGATIVE_PROBE_COOLDOWN_MS} so a transient codesign failure does not
+ * permanently disable the backend. `opts.now`/`opts.probe` are injectable for
+ * host-independent tests (the default probe is only meaningful on darwin).
+ */
+export function hasSeatbelt(opts: ProbeClockOptions & { probe?: () => boolean } = {}): boolean {
+  const now = opts.now ?? Date.now;
+  if (seatbeltProbeCache?.value === true) return true;
+  if (seatbeltProbeCache && now() - seatbeltProbeCache.at < NEGATIVE_PROBE_COOLDOWN_MS) {
+    return false;
+  }
+  const value = (opts.probe ?? probeSeatbeltTrusted)();
+  seatbeltProbeCache = { value, at: now() };
+  return value;
 }
 
 /**
@@ -251,7 +320,18 @@ const BWRAP_PROBE_COMMANDS = [
   "/run/current-system/sw/bin/env",
 ];
 
-const bwrapUsabilityCache = new Map<string, boolean>();
+const bwrapUsabilityCache = new Map<string, { value: boolean; at: number }>();
+
+/**
+ * Clear every detection cache (Windows bundle probe, Seatbelt trust, bwrap
+ * usability). Test-only escape hatch so suites with fake clocks or fabricated
+ * probe results cannot leak cached availability into later tests.
+ */
+export function resetSandboxProbeCachesForTests(): void {
+  windowsProbeCache.clear();
+  seatbeltProbeCache = undefined;
+  bwrapUsabilityCache.clear();
+}
 
 /** Find a tiny host command that should exit successfully inside `--ro-bind / /`. */
 export function findBwrapProbeCommand(
@@ -273,19 +353,31 @@ export function findBwrapProbeCommand(
  * namespaces are disabled, the binary exists yet every `--unshare-user`
  * invocation fails — so the backend is effectively unavailable and commands
  * would error during sandbox setup instead of taking the configured
- * fail-closed/fallback path. Probes a trivial namespace command once and caches
- * the result (host capability is stable for the process lifetime).
+ * fail-closed/fallback path.
+ *
+ * Caching: a usable result is cached per `program` for the process lifetime;
+ * an unusable result is re-probed after {@link NEGATIVE_PROBE_COOLDOWN_MS} so
+ * a transient probe failure (timeout, momentary resource exhaustion) does not
+ * disable the backend until restart. `opts.now`/`opts.probe` are injectable
+ * for host-independent tests (the default probe is only meaningful on linux).
  */
-export function isBwrapUsable(program: string): boolean {
+export function isBwrapUsable(
+  program: string,
+  opts: ProbeClockOptions & { probe?: (program: string) => boolean } = {},
+): boolean {
+  const now = opts.now ?? Date.now;
   const cached = bwrapUsabilityCache.get(program);
-  if (cached !== undefined) return cached;
-  let usable = false;
+  if (cached?.value === true) return true;
+  if (cached && now() - cached.at < NEGATIVE_PROBE_COOLDOWN_MS) return false;
+  const value = (opts.probe ?? probeBwrapUsable)(program);
+  bwrapUsabilityCache.set(program, { value, at: now() });
+  return value;
+}
+
+function probeBwrapUsable(program: string): boolean {
   try {
     const probeCommand = findBwrapProbeCommand();
-    if (!probeCommand) {
-      bwrapUsabilityCache.set(program, false);
-      return false;
-    }
+    if (!probeCommand) return false;
     const probe = spawnSync(
       program,
       [
@@ -306,12 +398,10 @@ export function isBwrapUsable(program: string): boolean {
       ],
       { timeout: 10_000, stdio: "ignore" },
     );
-    usable = probe.status === 0;
+    return probe.status === 0;
   } catch {
-    usable = false;
+    return false;
   }
-  bwrapUsabilityCache.set(program, usable);
-  return usable;
 }
 
 /** Locate the `bwrap` executable in a trusted system location, or `null`. */

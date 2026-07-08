@@ -1,0 +1,31 @@
+# Line-ending policy: repository bytes are LF for all text files, on every
+# platform. Biome enforces `lineEnding: "lf"`, build fingerprints hash file
+# bytes, and the test suite runs on Windows/macOS/Linux — checkout bytes must
+# be identical everywhere. (docs/platform-abstraction-plan.md, Phase 0.)
+* text=auto eol=lf
+
+# cmd.exe label parsing misbehaves with LF-only batch files.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — never normalized.
+*.png binary
+*.ico binary
+*.icns binary
+*.webp binary
+*.gif binary
+*.jpg binary
+*.jpeg binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.jar binary
+*.zip binary
+*.exe binary
+*.node binary
+*.dmg binary
+*.wasm binary
+*.pdf binary
+*.db binary
+*.sqlite binary

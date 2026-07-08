@@ -1,7 +1,11 @@
 import path from "node:path";
 import { z } from "zod";
+import { classifyExecutable, resolveSpawn, UnsafeShimArgumentError } from "../platform/exec";
+import { hostPlatform } from "../platform/host";
+import { normalizeGlobPattern, toPosixRelative } from "../platform/paths";
+import { run as runProcess } from "../platform/proc";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
-import { type ExecFileCompatRunner, execFileCompat } from "../utils/execFileCompat";
+import type { ExecFileCompatRunner } from "../utils/execFileCompat";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed, credentialReadDenyDirs } from "../utils/permissions";
 import { ensureRipgrep } from "../utils/ripgrep";
@@ -32,20 +36,27 @@ function credentialDenyGlobs(searchPath: string, ctx: ToolContext): string[] {
   const searchRoot = path.resolve(searchPath);
   const globs: string[] = [];
   for (const denyDir of credentialReadDenyDirs(ctx.config)) {
-    const relative = path.relative(searchRoot, path.resolve(denyDir));
+    // Always forward slashes: rg glob patterns treat "\" as an escape, never a separator.
+    const relative = toPosixRelative(searchRoot, path.resolve(denyDir));
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
-    const normalized = relative.replace(/\\/g, "/");
-    globs.push(`!${normalized}`, `!${normalized}/**`);
+    globs.push(`!${relative}`, `!${relative}/**`);
   }
   return globs;
 }
 
 export function createGrepTool(
   ctx: ToolContext,
-  opts: { execFileImpl?: ExecFileCompatRunner; ensureRipgrepImpl?: typeof ensureRipgrep } = {},
+  opts: {
+    execFileImpl?: ExecFileCompatRunner;
+    ensureRipgrepImpl?: typeof ensureRipgrep;
+    platform?: NodeJS.Platform;
+    runImpl?: typeof runProcess;
+  } = {},
 ) {
-  const execFileImpl = opts.execFileImpl ?? execFileCompat;
+  const execFileImpl = opts.execFileImpl;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
+  const platform = opts.platform ?? hostPlatform();
+  const runImpl = opts.runImpl ?? runProcess;
 
   return defineTool({
     description:
@@ -75,7 +86,9 @@ export function createGrepTool(
       const args: string[] = ["--line-number"]; // include file:line
       if (!caseSensitive) args.push("-i");
       if (typeof contextLines === "number") args.push("-C", String(contextLines));
-      if (fileGlob) args.push("--glob", fileGlob);
+      // On win32 hosts `src\**\*.ts` means separators; rg globs need "/" (POSIX
+      // escapes like `\*` are preserved on POSIX hosts).
+      if (fileGlob) args.push("--glob", normalizeGlobPattern(fileGlob));
 
       const validatedSearchPath = await assertReadPathAllowed(
         resolveMaybeRelative(
@@ -107,11 +120,45 @@ export function createGrepTool(
         return msg;
       }
 
-      const result = await execFileImpl(rgPath, args, {
+      // If the resolved rg is a cmd.exe batch shim (.cmd/.bat, e.g. an explicit
+      // COWORK_RIPGREP_PATH override pointing at an npm shim), a shell-less spawn
+      // would fail or silently mangle arguments. Route it through the shim-aware
+      // spawn planner, which either builds a safe cmd.exe wrapper or throws a
+      // typed UnsafeShimArgumentError for arguments cmd.exe cannot carry safely.
+      let spawnFile = rgPath;
+      let spawnArgs = args;
+      let windowsVerbatimArguments = false;
+      if (classifyExecutable(rgPath, platform) === "batch-shim") {
+        try {
+          const plan = resolveSpawn(rgPath, args, { platform });
+          spawnFile = plan.file;
+          spawnArgs = plan.args;
+          windowsVerbatimArguments = plan.windowsVerbatimArguments === true;
+        } catch (err) {
+          if (err instanceof UnsafeShimArgumentError) {
+            const msg =
+              `grep blocked: ripgrep at ${rgPath} is a cmd.exe batch shim and the search ` +
+              `arguments cannot be passed to it safely (${err.message}). ` +
+              `Point COWORK_RIPGREP_PATH at a native rg executable instead.`;
+            ctx.log(`tool< grep ${JSON.stringify({ error: msg })}`);
+            return msg;
+          }
+          throw err;
+        }
+      }
+
+      const processOptions = {
         maxBuffer: 1024 * 1024 * 10,
         ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
         timeoutMs,
-      });
+        windowsVerbatimArguments,
+      };
+      // Production uses the platform tree-aware runner so timeout/abort cannot
+      // strand descendants (notably rg.cmd/rg.bat -> cmd.exe -> rg.exe on
+      // Windows). execFileImpl remains only as the deterministic test seam.
+      const result = execFileImpl
+        ? await execFileImpl(spawnFile, spawnArgs, processOptions)
+        : await runImpl(spawnFile, spawnArgs, { ...processOptions, platform });
 
       const stderrText = result.stderr.trim();
       const output = (() => {

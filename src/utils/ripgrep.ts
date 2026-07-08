@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { getAiCoworkerPaths } from "../connect";
+import { binaryName, classifyExecutable, which } from "../platform/exec";
+import { hostPlatform } from "../platform/host";
+import { home } from "../platform/paths";
 import { execFileCompat } from "./execFileCompat";
 import { sha256FileHex } from "./hash";
 
@@ -43,12 +46,7 @@ async function isFile(p: string): Promise<boolean> {
 }
 
 function pathKeyFor(opts: EnsureRipgrepOptions): string {
-  const home = opts.homedir ?? os.homedir();
-  return home;
-}
-
-function which(cmd: string): string | null {
-  return Bun.which(cmd) ?? null;
+  return opts.homedir ?? home();
 }
 
 function resolveRipgrepAssets(): RipgrepAsset[] {
@@ -265,7 +263,7 @@ async function installRipgrepFromGitHub(
       opts.log?.(`[ripgrep] extracting...`);
       await extractArchive(asset.archiveKind, archivePath, extractDir);
 
-      const wanted = process.platform === "win32" ? "rg.exe" : "rg";
+      const wanted = binaryName("rg");
       const found = await findFileRecursive(extractDir, wanted);
       if (!found) throw new Error(`Failed to locate ${wanted} in extracted ripgrep archive`);
 
@@ -274,7 +272,7 @@ async function installRipgrepFromGitHub(
       const tmpInstall = `${installPath}.tmp`;
       await fs.rm(tmpInstall, { force: true }).catch(() => {});
       await fs.copyFile(found, tmpInstall);
-      if (process.platform !== "win32") {
+      if (hostPlatform() !== "win32") {
         // Ensure executable bit on Unix.
         await fs.chmod(tmpInstall, 0o755).catch(() => {});
       }
@@ -306,27 +304,28 @@ export async function ensureRipgrep(opts: EnsureRipgrepOptions = {}): Promise<st
       return envPathOverride;
     }
 
+    // A PATH-discovered rg that is a .cmd/.bat shim (npm wrappers etc.) cannot be
+    // spawned shell-less by the grep tool; prefer the managed native binary instead
+    // of handing callers a shim. `.ps1` is equally non-native and skipped too.
     const fromPath = which("rg");
-    if (fromPath) return fromPath;
+    if (fromPath) {
+      if (classifyExecutable(fromPath) === "native") return fromPath;
+      opts.log?.(`[ripgrep] ignoring non-native rg shim at ${fromPath}`);
+    }
 
-    const homedir = opts.homedir ?? os.homedir();
+    const homedir = opts.homedir ?? home();
     const coworkPaths = getAiCoworkerPaths({ homedir });
     const binDir = path.join(coworkPaths.rootDir, "bin");
 
-    const installedCandidates =
-      process.platform === "win32"
-        ? [path.join(binDir, "rg.exe"), path.join(binDir, "rg.cmd"), path.join(binDir, "rg.bat")]
-        : [path.join(binDir, "rg")];
-    for (const candidate of installedCandidates) {
-      if (await isFile(candidate)) return candidate;
-    }
+    // The managed install is always the native binary ("rg.exe" on win32, "rg"
+    // elsewhere) — .cmd/.bat shims are never installed, so never probed.
+    const installPath = path.join(binDir, binaryName("rg"));
+    if (await isFile(installPath)) return installPath;
 
     if (opts.disableDownload) {
       throw new Error("ripgrep (rg) not found and downloads are disabled");
     }
 
-    const installPath =
-      process.platform === "win32" ? path.join(binDir, "rg.exe") : path.join(binDir, "rg");
     await installRipgrepFromGitHub(opts, installPath);
     if (!(await pathExists(installPath)))
       throw new Error("ripgrep download completed but install path is missing");

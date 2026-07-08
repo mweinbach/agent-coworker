@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
+import { hostPlatform } from "../src/platform/host";
+
 import {
   isPathInside,
   pathCrossesProtectedMetadata,
@@ -237,6 +239,20 @@ describe("pathCrossesProtectedMetadata", () => {
     expect(pathCrossesProtectedMetadata("/project", "/..project/.git/hooks/post-checkout")).toBe(
       false,
     );
+  });
+
+  test("case-folds protected names on case-insensitive platforms (.GIT bypass)", () => {
+    // Deny-side check: folds on win32 AND darwin (over-blocking is safe);
+    // linux filesystems are case-sensitive, so .GIT there is a distinct dir.
+    const expectFolded = hostPlatform() !== "linux";
+    expect(pathCrossesProtectedMetadata("/project", "/project/.GIT/hooks/pre-commit")).toBe(
+      expectFolded,
+    );
+    expect(pathCrossesProtectedMetadata("/project", "/project/.CoWork/skills/x.md")).toBe(
+      expectFolded,
+    );
+    // Exact-case detection is unconditional on every platform.
+    expect(pathCrossesProtectedMetadata("/project", "/project/.git/hooks/pre-commit")).toBe(true);
   });
 });
 

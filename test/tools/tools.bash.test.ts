@@ -1,3 +1,4 @@
+import { hostPlatform } from "../../src/platform/host";
 import {
   afterEach,
   bashInternal,
@@ -40,12 +41,102 @@ describe("bash tool", () => {
     bashInternal.resetRunShellCommandForTests();
   });
 
-  test("advertises Windows PowerShell guidance in the tool description", async () => {
+  test("description carries only the HOST dialect, rendered from platform.shell", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    expect(t.description).toContain("preferring `pwsh` and falling back to `powershell.exe`");
-    expect(t.description).toContain("do not rely on `&&`, `export`, or `source`");
-    expect(t.description).toContain("prefer `py -3` or `python`");
+    if (hostPlatform() === "win32") {
+      expect(t.description).toContain("executes PowerShell on this machine");
+      expect(t.description).not.toContain("executes bash on this machine");
+    } else {
+      expect(t.description).toContain("executes bash on this machine");
+      expect(t.description).not.toContain("executes PowerShell on this machine");
+    }
+    expect(t.description).not.toContain("prefer `py -3`");
+    expect(t.description).not.toContain("On Windows,");
+  });
+
+  test("per-platform descriptions are single-dialect (parameterized)", () => {
+    const win = bashInternal.buildBashToolDescription("win32");
+    expect(win).toContain("executes PowerShell on this machine");
+    expect(win).toContain("Run Python as `python`");
+    expect(win).not.toContain("prefer `py -3`");
+    expect(win).not.toContain("executes bash on this machine");
+    const mac = bashInternal.buildBashToolDescription("darwin");
+    expect(mac).toContain("executes bash on this machine");
+    expect(mac).toContain("Run Python as `python3`");
+    expect(mac).not.toContain("PowerShell");
+  });
+
+  test("resolves shell candidates via platform which() in both lanes", async () => {
+    const seen: string[] = [];
+    await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      env: { Path: "C:\\tools" },
+      exists: (p: string) => p.toLowerCase() === "c:\\tools\\pwsh.exe",
+      execRunner: async (file: string) => {
+        seen.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+    expect(seen).toEqual(["C:\\tools\\pwsh.exe"]);
+  });
+
+  test("skips Windows batch-shim shells in favor of a native fallback", async () => {
+    const seen: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      env: { Path: "C:\\tools" },
+      exists: (candidate: string) => {
+        const lower = candidate.toLowerCase();
+        return lower === "c:\\tools\\pwsh.cmd" || lower === "c:\\tools\\powershell.exe";
+      },
+      execRunner: async (file: string) => {
+        seen.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(seen).toEqual(["C:\\tools\\powershell.exe"]);
+    expect(result.stdout.trim()).toBe("hi");
+  });
+
+  test("never embeds a Windows batch-shim shell inside the sandbox helper plan", async () => {
+    let helperArgs: string[] = [];
+    await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/work",
+      platform: "win32",
+      env: { Path: "C:\\tools" },
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: false },
+      requireBackend: true,
+      capabilities: {
+        seatbelt: false,
+        bwrapPath: null,
+        windowsHelperPath: "C:/helper.exe",
+        windowsSandboxHome: "C:/Users/test/.cowork",
+        windowsEnforcement: {
+          filesystem: true,
+          network: true,
+          process: true,
+          integrity: true,
+        },
+      },
+      exists: (candidate: string) => {
+        const lower = candidate.toLowerCase();
+        return lower === "c:\\tools\\pwsh.cmd" || lower === "c:\\tools\\powershell.exe";
+      },
+      execRunner: async (_file: string, args: string[]) => {
+        helperArgs = args;
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(helperArgs.join(" ").toLowerCase()).toContain("powershell.exe");
+    expect(helperArgs.join(" ").toLowerCase()).not.toContain("pwsh.cmd");
   });
 
   test("prefers pwsh before powershell.exe on Windows", async () => {
@@ -54,6 +145,8 @@ describe("bash tool", () => {
       command: "echo hi",
       cwd: "C:/tmp",
       platform: "win32",
+      // No candidate resolves: assert the bare-name fallback ORDER.
+      exists: () => false,
       execRunner: async (file: string) => {
         seen.push(file);
         if (file === "pwsh") {
@@ -73,6 +166,7 @@ describe("bash tool", () => {
       command: "echo hi",
       cwd: "C:/tmp",
       platform: "win32",
+      exists: () => false,
       execRunner: async (file: string) => {
         seen.push(file);
         if (file === "pwsh") {
@@ -87,7 +181,7 @@ describe("bash tool", () => {
   });
 
   test("falls back through POSIX shell candidates", async () => {
-    await withEnv("SHELL", "/missing/user-shell", async () => {
+    await withEnv("SHELL", "/missing/bash", async () => {
       const seen: string[] = [];
       const result = await bashInternal.runShellCommandWithExec({
         command: "echo hi",
@@ -102,7 +196,7 @@ describe("bash tool", () => {
         },
       });
 
-      expect(seen).toEqual(["/missing/user-shell", "/bin/bash", "/bin/sh"]);
+      expect(seen).toEqual(["/missing/bash", "/bin/bash", "/bin/sh"]);
       expect(result.stdout.trim()).toBe("hi");
     });
   });
@@ -155,11 +249,14 @@ describe("bash tool", () => {
       },
     });
 
-    const commandArg = seen[0]?.args.at(-1);
+    // The win32 transport is -EncodedCommand: decode the payload to assert on
+    // the script PowerShell actually parses (exactly one interpretation layer).
+    const encodedArg = seen[0]?.args.at(-1);
+    const commandArg = Buffer.from(encodedArg as string, "base64").toString("utf16le");
     expect(commandArg).toContain(
       "$env:PATH = 'C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\node\\bin;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\python\\Scripts;C:\\Users\\test\\.cowork\\runtime\\2026-06-21\\dependencies\\poppler\\Library\\bin' + ';' + $env:PATH",
     );
-    expect(commandArg?.endsWith("node --version; python --version")).toBe(true);
+    expect(commandArg).toContain("node --version; python --version");
     expect(result.stdout).toContain("Python 3.12.13");
   });
 
@@ -262,7 +359,7 @@ describe("bash tool", () => {
       OPENAI_API_KEY: "must-not-leak",
     };
 
-    const filtered = bashInternal.minimalSandboxEnv(source);
+    const filtered = bashInternal.minimalSandboxEnv(source, "win32");
 
     expect(filtered.Path).toBe(source.Path);
     expect(filtered.PATH).toBeUndefined();
@@ -383,6 +480,8 @@ describe("bash tool", () => {
       requireEnforcingBackend: false,
       capabilities: { seatbelt: false, bwrapPath: null, windowsHelperPath: "C:/h/helper.exe" },
       approveUnsandboxed: approve,
+      // Pin candidate resolution so the assertion is host-independent.
+      exists: () => false,
       execRunner: async (file: string) => {
         calls.push(file);
         return { stdout: "hi\n", stderr: "", exitCode: 0 };

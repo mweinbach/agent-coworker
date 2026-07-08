@@ -1,3 +1,5 @@
+import { hostPlatform } from "../../src/platform/host";
+import { normalizeGlobPattern, splitAbsoluteGlob } from "../../src/platform/paths";
 import {
   afterEach,
   bashInternal,
@@ -200,6 +202,99 @@ describe("glob tool", () => {
     expect(res).toContain("middle.txt");
     expect(res).not.toContain("oldest.txt");
     expect(res).toContain("truncated to 2 matches");
+  });
+
+  test("rejects negated absolute patterns", async () => {
+    const dir = await tmpDir();
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: `!${path.join(dir, "*.ts")}` })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects negated parent-relative patterns", async () => {
+    const dir = await tmpDir();
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "!../outside/*.ts" })).rejects.toThrow(/blocked/i);
+  });
+
+  test("negated relative patterns pass the safety guard", async () => {
+    const dir = await tmpDir();
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "!*.xyz" })).resolves.toBe("No files found.");
+  });
+
+  test.if(hostPlatform() === "win32")(
+    "resolves win32 backslash absolute patterns into root and rest",
+    async () => {
+      const dir = await tmpDir();
+      await fs.mkdir(path.join(dir, "src", "deep"), { recursive: true });
+      await fs.writeFile(path.join(dir, "src", "deep", "match.ts"), "", "utf-8");
+
+      const t: any = createGlobTool(makeCtx(dir));
+      const res: string = await t.execute({ pattern: `${dir}\\src\\**\\*.ts` });
+      expect(res).toContain("deep/match.ts");
+    },
+  );
+
+  test.if(hostPlatform() === "win32")(
+    "treats backslashes in relative patterns as separators on win32",
+    async () => {
+      const dir = await tmpDir();
+      await fs.mkdir(path.join(dir, "sub"), { recursive: true });
+      await fs.writeFile(path.join(dir, "sub", "inner.ts"), "", "utf-8");
+
+      const t: any = createGlobTool(makeCtx(dir));
+      const res: string = await t.execute({ pattern: "sub\\*.ts" });
+      expect(res).toContain("sub/inner.ts");
+    },
+  );
+});
+
+describe("glob pattern normalization (platform-parameterized)", () => {
+  const allPlatforms: NodeJS.Platform[] = ["linux", "darwin", "win32"];
+
+  test("preserves POSIX fast-glob escapes on posix platforms", () => {
+    expect(normalizeGlobPattern("\\*.ts", "linux")).toBe("\\*.ts");
+    expect(normalizeGlobPattern("src/\\*literal\\?/*.ts", "darwin")).toBe("src/\\*literal\\?/*.ts");
+  });
+
+  test("rewrites backslash separators on win32", () => {
+    expect(normalizeGlobPattern("src\\**\\*.ts", "win32")).toBe("src/**/*.ts");
+  });
+
+  test("rewrites win32-shaped patterns on every platform", () => {
+    for (const platform of allPlatforms) {
+      expect(normalizeGlobPattern("C:\\src\\**\\*.ts", platform)).toBe("C:/src/**/*.ts");
+    }
+  });
+
+  test("splits drive-qualified absolute globs into root and rest on every platform", () => {
+    for (const platform of allPlatforms) {
+      expect(splitAbsoluteGlob("C:\\src\\**\\*.ts", platform)).toEqual({
+        root: "C:/src",
+        rest: "**/*.ts",
+      });
+    }
+  });
+
+  test("drive-root split never yields a drive-relative root", () => {
+    // The old inline splitter fell back to "/" (or drive-relative "C:") here.
+    expect(splitAbsoluteGlob("C:\\*.ts", "win32")).toEqual({ root: "C:/", rest: "*.ts" });
+  });
+
+  test("splits posix absolute globs, including the filesystem root", () => {
+    expect(splitAbsoluteGlob("/var/log/*.log", "linux")).toEqual({
+      root: "/var/log",
+      rest: "*.log",
+    });
+    expect(splitAbsoluteGlob("/*.log", "linux")).toEqual({ root: "/", rest: "*.log" });
+  });
+
+  test("returns null for relative and negated patterns", () => {
+    for (const platform of allPlatforms) {
+      expect(splitAbsoluteGlob("src/**/*.ts", platform)).toBeNull();
+      expect(splitAbsoluteGlob("!C:/src/*.ts", platform)).toBeNull();
+      expect(splitAbsoluteGlob("!/abs/*.ts", platform)).toBeNull();
+    }
   });
 });
 

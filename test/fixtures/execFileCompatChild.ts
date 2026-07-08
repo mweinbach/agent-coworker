@@ -3,13 +3,22 @@ import os from "node:os";
 
 import { execFileCompat } from "../../src/utils/execFileCompat";
 
-const isWindows = process.platform === "win32";
-const sh = (script: string): [string, string[]] =>
-  isWindows ? ["cmd", ["/c", script]] : ["/bin/sh", ["-c", script]];
+/**
+ * Portable child-process fixtures for the execFileCompat behavioral suite.
+ *
+ * Every child is an inline `bun -e` script spawned via `process.execPath`
+ * (the Bun binary already running this test), so the semantics are identical
+ * on every platform — no shell dialect (`sh -c` vs `cmd /c`) is involved.
+ * This keeps the suite green on win32, darwin, and linux alike.
+ */
+const bunEval = (script: string): [string, string[]] => [process.execPath, ["-e", script]];
+
+/** Child that stays alive ~5s (well past every timeout/abort in this suite). */
+const SLEEP_5S = "setTimeout(() => {}, 5000);";
 
 describe("execFileCompat", () => {
   test("captures stdout, stderr and the exit code", async () => {
-    const [file, args] = sh("echo out; echo err 1>&2; exit 3");
+    const [file, args] = bunEval('console.log("out"); console.error("err"); process.exit(3);');
     const result = await execFileCompat(file, args);
     expect(result.stdout.trim()).toBe("out");
     expect(result.stderr.trim()).toBe("err");
@@ -18,7 +27,7 @@ describe("execFileCompat", () => {
   });
 
   test("exit code zero for successful commands", async () => {
-    const [file, args] = sh("echo ok");
+    const [file, args] = bunEval('console.log("ok");');
     const result = await execFileCompat(file, args);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("ok");
@@ -31,7 +40,11 @@ describe("execFileCompat", () => {
   });
 
   test("timeout terminates the child and maps to exit 124 / TIMEOUT", async () => {
-    const [file, args] = sh("echo before; sleep 5; echo after");
+    // Prints "before", then arms a 5s timer that would print "after" — the
+    // 250ms timeout must kill the child long before the timer fires.
+    const [file, args] = bunEval(
+      'console.log("before"); setTimeout(() => { console.log("after"); }, 5000);',
+    );
     const started = Date.now();
     const result = await execFileCompat(file, args, { timeoutMs: 250 });
     expect(Date.now() - started).toBeLessThan(4000);
@@ -42,7 +55,7 @@ describe("execFileCompat", () => {
   });
 
   test("abort maps to exit 130 / ABORT_ERR", async () => {
-    const [file, args] = sh("sleep 5");
+    const [file, args] = bunEval(SLEEP_5S);
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 100);
     const started = Date.now();
@@ -53,7 +66,7 @@ describe("execFileCompat", () => {
   });
 
   test("already-aborted signals resolve immediately", async () => {
-    const [file, args] = sh("sleep 5");
+    const [file, args] = bunEval(SLEEP_5S);
     const controller = new AbortController();
     controller.abort();
     const started = Date.now();
@@ -64,7 +77,8 @@ describe("execFileCompat", () => {
   });
 
   test("stdout larger than maxBuffer is truncated and flagged", async () => {
-    const [file, args] = sh('yes "0123456789abcdef" 2>/dev/null | head -c 300000');
+    // 300 000 bytes of stdout against a 64 KiB cap.
+    const [file, args] = bunEval('process.stdout.write("0123456789abcdef".repeat(18750));');
     const result = await execFileCompat(file, args, { maxBuffer: 64 * 1024 });
     expect(result.errorCode).toBe("ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
     expect(result.exitCode).toBe(1);
@@ -72,7 +86,9 @@ describe("execFileCompat", () => {
   });
 
   test("env replaces the child environment entirely", async () => {
-    const [file, args] = sh("echo $COMPAT_ONLY:$HOME_SENTINEL");
+    const [file, args] = bunEval(
+      'console.log((process.env.COMPAT_ONLY ?? "") + ":" + (process.env.HOME_SENTINEL ?? ""));',
+    );
     const result = await execFileCompat(file, args, {
       env: { COMPAT_ONLY: "yes", PATH: process.env.PATH ?? "" },
     });
@@ -80,14 +96,14 @@ describe("execFileCompat", () => {
   });
 
   test("cwd is honored", async () => {
-    const [file, args] = isWindows ? ["cmd", ["/c", "cd"]] : ["/bin/pwd", []];
+    const [file, args] = bunEval("console.log(process.cwd());");
     const result = await execFileCompat(file, args, { cwd: os.tmpdir() });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim().length).toBeGreaterThan(0);
   });
 
   test("timeout wins over a later abort for the error code", async () => {
-    const [file, args] = sh("sleep 5");
+    const [file, args] = bunEval(SLEEP_5S);
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 400);
     const result = await execFileCompat(file, args, {

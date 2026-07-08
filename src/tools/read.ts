@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { type Readable, Transform, type TransformCallback } from "node:stream";
 
 import { z } from "zod";
 import { modelSupportsImageInputSync } from "../models/metadata";
@@ -18,6 +19,64 @@ import { assertReadPathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
+type SniffedBom = "utf-8" | "utf-16le" | "utf-16be" | null;
+
+type ReadStreamFactory = (
+  filePath: string,
+  options?: { encoding?: BufferEncoding; start?: number },
+) => ReturnType<typeof createReadStream>;
+
+class Utf16BeToLeTransform extends Transform {
+  private pendingByte: number | undefined;
+
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
+    const input =
+      this.pendingByte === undefined
+        ? chunk
+        : Buffer.concat([Buffer.from([this.pendingByte]), chunk]);
+    const evenLength = input.length - (input.length % 2);
+    const swapped = Buffer.allocUnsafe(evenLength);
+    for (let i = 0; i < evenLength; i += 2) {
+      swapped[i] = input[i + 1] as number;
+      swapped[i + 1] = input[i] as number;
+    }
+    this.pendingByte = evenLength < input.length ? input[evenLength] : undefined;
+    if (swapped.length > 0) this.push(swapped);
+    callback();
+  }
+}
+
+function createUtf16DecodedStream(
+  abs: string,
+  encoding: "utf-16le" | "utf-16be",
+  createStream: ReadStreamFactory,
+): { source: ReturnType<typeof createReadStream>; input: Readable } {
+  const source = createStream(abs, { start: 2 });
+  if (encoding === "utf-16le") {
+    source.setEncoding("utf16le");
+    return { source, input: source };
+  }
+  const swapped = source.pipe(new Utf16BeToLeTransform());
+  swapped.setEncoding("utf16le");
+  return { source, input: swapped };
+}
+
+async function sniffBom(abs: string): Promise<SniffedBom> {
+  const fh = await fs.open(abs, "r");
+  try {
+    const buf = Buffer.alloc(3);
+    const { bytesRead } = await fh.read(buf, 0, 3, 0);
+    if (bytesRead >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return "utf-8";
+    if (bytesRead >= 2) {
+      if (buf[0] === 0xff && buf[1] === 0xfe) return "utf-16le";
+      if (buf[0] === 0xfe && buf[1] === 0xff) return "utf-16be";
+    }
+    return null;
+  } finally {
+    await fh.close();
+  }
+}
+
 function binaryMediaGuardMessage(filePath: string, mimeType: string): string {
   const basename = path.basename(filePath);
   return [
@@ -28,7 +87,12 @@ function binaryMediaGuardMessage(filePath: string, mimeType: string): string {
   ].join(" ");
 }
 
-export function createReadTool(ctx: ToolContext) {
+export function createReadTool(
+  ctx: ToolContext,
+  opts: { createReadStreamImpl?: ReadStreamFactory } = {},
+) {
+  const createStream: ReadStreamFactory =
+    opts.createReadStreamImpl ?? ((filePath, options) => createReadStream(filePath, options));
   return defineTool({
     description:
       "Read a file from the filesystem. Returns line-numbered text for text files. For images, returns visual content when the model supports image input. Audio, video, and PDF files are binary media and are not returned through read; use attached media or dedicated extraction/transcription workflows. Use offset/limit for large text files.",
@@ -115,20 +179,47 @@ export function createReadTool(ctx: ToolContext) {
       const end = start + limit;
       const numbered: string[] = [];
 
+      // The documented canonical view: LF-normalized lines regardless of the
+      // file's true EOL bytes; edit round-trips the real EOL (platform/text).
+      // BOMs are decoded, never leaked into line 1 where a model would copy
+      // them into an edit oldString. UTF-16 (a common PowerShell redirection
+      // artifact on Windows) is decoded instead of mojibaked.
       let lineNo = 0;
-      const stream = createReadStream(abs, { encoding: "utf-8" });
-      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-      try {
-        for await (const line of rl) {
-          lineNo += 1;
-          if (lineNo <= start) continue;
-          if (lineNo > end) break;
-          if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-          numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+      const bom = await sniffBom(abs);
+      if (bom === "utf-16le" || bom === "utf-16be") {
+        const { source, input } = createUtf16DecodedStream(abs, bom, createStream);
+        const rl = readline.createInterface({ input, crlfDelay: Infinity });
+        try {
+          for await (const line of rl) {
+            lineNo += 1;
+            if (lineNo <= start) continue;
+            if (lineNo > end) break;
+            if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
+            numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+          }
+        } finally {
+          rl.close();
+          input.destroy();
+          source.destroy();
         }
-      } finally {
-        rl.close();
-        stream.destroy();
+      } else {
+        const stream = createStream(abs, { encoding: "utf-8" });
+        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        try {
+          for await (let line of rl) {
+            lineNo += 1;
+            if (lineNo === 1 && bom === "utf-8" && line.charCodeAt(0) === 0xfeff) {
+              line = line.slice(1);
+            }
+            if (lineNo <= start) continue;
+            if (lineNo > end) break;
+            if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
+            numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+          }
+        } finally {
+          rl.close();
+          stream.destroy();
+        }
       }
 
       if (lineNo === 0 && start === 0) {

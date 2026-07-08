@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -443,6 +444,8 @@ export interface LockDirOwner {
   hostname: string;
   acquiredAt: string;
   heartbeatAt: string;
+  /** Per-acquisition identity used to detect a directory replaced during owner initialization. */
+  token?: string;
 }
 
 /** Handle returned by {@link acquireLockDir}. */
@@ -611,20 +614,37 @@ export async function acquireLockDir(
 
   const ownerPath = path.join(lockPath, OWNER_FILE_NAME);
   const acquiredAt = new Date(now()).toISOString();
+  const ownerToken = randomUUID();
+  const ownerRecord = (): LockDirOwner => ({
+    pid: process.pid,
+    hostname: os.hostname(),
+    acquiredAt,
+    heartbeatAt: new Date(now()).toISOString(),
+    token: ownerToken,
+  });
   const writeOwner = async (): Promise<void> => {
-    const record: LockDirOwner = {
-      pid: process.pid,
-      hostname: os.hostname(),
-      acquiredAt,
-      heartbeatAt: new Date(now()).toISOString(),
-    };
-    await writeFileAtomic(ownerPath, JSON.stringify(record), {}, deps);
+    await writeFileAtomic(ownerPath, JSON.stringify(ownerRecord()), {}, deps);
   };
+  // The directory can be judged stale and replaced while this process is
+  // between mkdir and owner initialization. Create owner.json exclusively so
+  // a delayed writer cannot overwrite the replacement acquirer's ownership.
+  // On failure, leave the directory alone: it may now belong to that winner.
+  await ctx.fsImpl.writeFile(ownerPath, JSON.stringify(ownerRecord()), {
+    encoding: "utf-8",
+    flag: "wx",
+  });
+  let initializedOwner: LockDirOwner | undefined;
   try {
-    await writeOwner();
-  } catch (error) {
-    await removeWithRetry(lockPath, { recursive: true, bestEffort: true }, deps);
-    throw error;
+    initializedOwner = JSON.parse(
+      String(await ctx.fsImpl.readFile(ownerPath, "utf-8")),
+    ) as LockDirOwner;
+  } catch {
+    // A concurrent stale-break may have replaced the directory mid-write.
+  }
+  if (initializedOwner?.token !== ownerToken) {
+    throw Object.assign(new Error(`Lock ownership changed while acquiring ${lockPath}`), {
+      code: "LOCK_OWNERSHIP_LOST",
+    });
   }
 
   let released = false;

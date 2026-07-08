@@ -687,6 +687,55 @@ describe("acquireLockDir", () => {
     await handle.release();
   });
 
+  test("a delayed owner writer cannot overwrite a replacement acquirer's owner.json", async () => {
+    const lockPath = path.join(tmpDir, "mid-acquire-replacement.lock");
+    const ownerPath = path.join(lockPath, "owner.json");
+    const startedAt = Date.now();
+    let firstWriteStarted!: () => void;
+    const firstWriteStartedPromise = new Promise<void>((resolve) => {
+      firstWriteStarted = resolve;
+    });
+    let allowFirstWrite!: () => void;
+    const firstWriteGate = new Promise<void>((resolve) => {
+      allowFirstWrite = resolve;
+    });
+    const firstFs = fsWith({
+      writeFile: (async (target, data, options) => {
+        if (String(target) === ownerPath) {
+          const handle = await fsp.open(target, "wx");
+          try {
+            firstWriteStarted();
+            await firstWriteGate;
+            await handle.writeFile(data);
+          } finally {
+            await handle.close();
+          }
+          return;
+        }
+        await fsp.writeFile(target, data, options);
+      }) as FsLike["writeFile"],
+    });
+
+    const firstAttempt = acquireLockDir(
+      lockPath,
+      { staleMs: 1 },
+      { fsImpl: firstFs, nowImpl: () => startedAt, pollIntervalMs: 1 },
+    );
+    await firstWriteStartedPromise;
+
+    const replacement = await acquireLockDir(
+      lockPath,
+      { staleMs: 1 },
+      { nowImpl: () => startedAt + 60_000, pollIntervalMs: 1 },
+    );
+    const replacementOwner = readOwner(lockPath);
+    allowFirstWrite();
+
+    await expect(firstAttempt).rejects.toMatchObject({ code: "LOCK_OWNERSHIP_LOST" });
+    expect(readOwner(lockPath)).toEqual(replacementOwner);
+    await replacement.release();
+  });
+
   test("heartbeat() rewrites owner.json with a fresh heartbeatAt and preserves acquiredAt", async () => {
     const lockPath = path.join(tmpDir, "heartbeat.lock");
     let clock = 1_000_000;

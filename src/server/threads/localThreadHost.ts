@@ -361,7 +361,9 @@ function mergeSnapshotAndProjectedTurns(
 
   const seedItems = snapshotItems.slice(0, snapshotItems.length - overlap);
   return [
-    ...(seedItems.length > 0 ? [{ id: "snapshot", status: "completed", items: seedItems }] : []),
+    ...(seedItems.length > 0
+      ? [{ id: snapshotTurns[0]?.id ?? "snapshot", status: "completed", items: seedItems }]
+      : []),
     ...projectedTurns,
   ];
 }
@@ -457,11 +459,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
     const persisted = this.deps.sessionDb.getSessionRecord(threadId);
     const snapshotTurns = compactSnapshotFeed(snapshot?.feed, { includeOutputs, maxOutputChars });
     const seed =
-      snapshotTurns.length > 0
-        ? snapshotTurns
-        : projected.length === 0
-          ? compactPersistedMessages(persisted?.messages)
-          : [];
+      snapshotTurns.length > 0 ? snapshotTurns : compactPersistedMessages(persisted?.messages);
     const compact = mergeSnapshotAndProjectedTurns(
       seed,
       compactProjectedTurns(projected, { includeOutputs, maxOutputChars }),
@@ -553,7 +551,13 @@ export class LocalThreadHost implements ThreadHostAdapter {
         title: forkTitle,
         config: {
           ...baseConfig,
-          providerOptions: source.providerOptions ?? baseConfig.providerOptions,
+          providerOptions:
+            source.providerOptions || baseConfig.providerOptions
+              ? {
+                  ...baseConfig.providerOptions,
+                  ...source.providerOptions,
+                }
+              : undefined,
         },
         ...(bootstrap ? { system: bootstrap.system } : {}),
       },

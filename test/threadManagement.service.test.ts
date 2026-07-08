@@ -124,6 +124,7 @@ async function persistThread(
   sessionDb: SessionDb,
   workspace: string,
   providerOptions?: AgentConfig["providerOptions"],
+  messages = [{ role: "user" as const, content: "hello" }],
 ) {
   await sessionDb.persistSessionMutation({
     sessionId: "thread-1",
@@ -148,7 +149,7 @@ async function persistThread(
       hasPendingAsk: false,
       hasPendingApproval: false,
       systemPrompt: "system",
-      messages: [{ role: "user", content: "hello" }],
+      messages,
       providerState: null,
       todos: [],
       harnessContext: null,
@@ -157,11 +158,51 @@ async function persistThread(
   });
 }
 
+async function appendCompletedUserTurn(sessionDb: SessionDb, text: string) {
+  await sessionDb.appendThreadJournalEvents([
+    {
+      threadId: "thread-1",
+      ts: "2026-07-01T00:00:02.000Z",
+      eventType: "turn/started",
+      turnId: "turn-1",
+      itemId: null,
+      requestId: null,
+      payload: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+    },
+    {
+      threadId: "thread-1",
+      ts: "2026-07-01T00:00:03.000Z",
+      eventType: "item/completed",
+      turnId: "turn-1",
+      itemId: "user-1",
+      requestId: null,
+      payload: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "user-1",
+          type: "userMessage",
+          content: [{ type: "input_text", text }],
+        },
+      },
+    },
+    {
+      threadId: "thread-1",
+      ts: "2026-07-01T00:00:04.000Z",
+      eventType: "turn/completed",
+      turnId: "turn-1",
+      itemId: null,
+      requestId: null,
+      payload: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+    },
+  ]);
+}
+
 describe("LocalThreadHost", () => {
   test("readThread omits tool outputs by default and truncates included outputs", async () => {
     const { workspace, sessionDb, threadJournal, host } = await makeHarness();
     try {
-      await persistThread(sessionDb, workspace);
+      await persistThread(sessionDb, workspace, undefined, []);
       await sessionDb.appendThreadJournalEvents([
         {
           threadId: "thread-1",
@@ -401,6 +442,31 @@ describe("LocalThreadHost", () => {
     }
   });
 
+  test("readThread retains persisted fork seed messages after journal activity", async () => {
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness();
+    try {
+      await persistThread(sessionDb, workspace);
+      await appendCompletedUserTurn(sessionDb, "follow-up");
+
+      const result = await host.readThread({ threadId: "thread-1" });
+      expect(result.turns).toEqual([
+        {
+          id: "seed",
+          status: "completed",
+          items: [{ type: "user", text: "hello" }],
+        },
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "user", text: "follow-up" }],
+        },
+      ]);
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
   test("rejects direct management of task-owned threads", async () => {
     const { workspace, sessionDb, threadJournal, host } = await makeHarness({
       isTaskThread: (sessionId) => sessionId === "thread-1",
@@ -481,7 +547,10 @@ describe("LocalThreadHost", () => {
     };
     const targetConfig = {
       projectCoworkDir: path.join(worktreePath, ".cowork"),
-      providerOptions: { google: { thinkingConfig: { thinkingLevel: "high" } } },
+      providerOptions: {
+        google: { thinkingConfig: { thinkingLevel: "high" } },
+        openai: { serviceTier: "priority" },
+      },
     } as AgentConfig;
     const { workspace, sessionDb, threadJournal, host } = await makeHarness({
       registry,
@@ -516,7 +585,10 @@ describe("LocalThreadHost", () => {
           system: "target system",
           config: {
             projectCoworkDir: path.join(worktreePath, ".cowork"),
-            providerOptions: { google: { thinkingConfig: { thinkingLevel: "medium" } } },
+            providerOptions: {
+              google: { thinkingConfig: { thinkingLevel: "medium" } },
+              openai: { serviceTier: "priority" },
+            },
           },
         },
       });

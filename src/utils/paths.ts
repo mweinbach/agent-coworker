@@ -87,7 +87,11 @@ export async function resolvePathInsideRootForBoundaryCheck(
 
 export function truncateText(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
-  return s.slice(0, maxChars);
+  // Count by code point so astral symbols (emoji, flags, CJK-ext) are never
+  // split mid-surrogate-pair into invalid UTF-16.
+  const chars = Array.from(s);
+  if (chars.length <= maxChars) return s;
+  return chars.slice(0, maxChars).join("");
 }
 
 export function truncateLine(s: string, maxChars: number): string {

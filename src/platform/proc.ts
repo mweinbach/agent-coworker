@@ -135,6 +135,19 @@ function killPosixGroup(pid: number, signal: NodeJS.Signals, kill: KillFn): void
 }
 
 /**
+ * Hard-kills only the detached process group. Unlike {@link killPosixGroup},
+ * this must never fall back to the root pid: delayed escalation can run after
+ * the root exits, when that pid may already belong to an unrelated process.
+ */
+function killDetachedPosixGroup(pid: number, signal: NodeJS.Signals, kill: KillFn): void {
+  try {
+    kill(-pid, signal);
+  } catch {
+    // The detached group has already exited.
+  }
+}
+
+/**
  * win32 tree kill: `taskkill /PID <pid> /T /F`. Waits for taskkill to finish
  * (child enumeration happens inside it). If taskkill itself cannot be spawned
  * (or on non-win32 hosts exercising this branch in tests), falls back to a
@@ -276,7 +289,15 @@ export async function run(file: string, args: string[], opts: RunOptions = {}): 
 
   let cause: KillCause | null = null;
   let escalationTimer: ReturnType<typeof setTimeout> | undefined;
+  let rootExited = false;
   const killSignal = opts.killSignal ?? "SIGTERM";
+  const hardKillDetachedGroup = () => {
+    if (escalationTimer) {
+      clearTimeout(escalationTimer);
+      escalationTimer = undefined;
+    }
+    killDetachedPosixGroup(proc.pid, "SIGKILL", defaultKill);
+  };
   const terminate = (nextCause: KillCause) => {
     if (cause) return;
     cause = nextCause;
@@ -286,13 +307,27 @@ export async function run(file: string, args: string[], opts: RunOptions = {}): 
     }
     killPosixGroup(proc.pid, killSignal, defaultKill);
     if (killSignal !== "SIGKILL") {
-      escalationTimer = setTimeout(
-        () => killPosixGroup(proc.pid, "SIGKILL", defaultKill),
-        POSIX_HARD_KILL_ESCALATION_MS,
-      );
+      if (rootExited) {
+        hardKillDetachedGroup();
+        return;
+      }
+      escalationTimer = setTimeout(() => {
+        escalationTimer = undefined;
+        killDetachedPosixGroup(proc.pid, "SIGKILL", defaultKill);
+      }, POSIX_HARD_KILL_ESCALATION_MS);
       escalationTimer.unref?.();
     }
   };
+
+  const onRootExited = () => {
+    rootExited = true;
+    if (platform !== "win32" && cause && killSignal !== "SIGKILL") {
+      // Once the root has exited, there is no useful graceful window left.
+      // Reap any surviving descendants immediately and disarm the stale timer.
+      hardKillDetachedGroup();
+    }
+  };
+  void proc.exited.then(onRootExited, onRootExited);
 
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   if (typeof opts.timeoutMs === "number" && opts.timeoutMs > 0) {
@@ -380,9 +415,7 @@ export async function run(file: string, args: string[], opts: RunOptions = {}): 
     return { stdout, stderr, exitCode: exit.exitCode };
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer);
-    // Do not clear an armed hard-kill escalation when the root exits first:
-    // SIGTERM-ignoring descendants can still own the detached process group.
-    // The unref'd timer must survive long enough to reap that remainder.
+    if (escalationTimer) clearTimeout(escalationTimer);
     opts.signal?.removeEventListener("abort", onAbort);
   }
 }
@@ -709,3 +742,7 @@ export function onShutdownRequest(
 ): () => void {
   return registerShutdownSignals(handler, opts);
 }
+
+export const __internal = {
+  killDetachedPosixGroup,
+};

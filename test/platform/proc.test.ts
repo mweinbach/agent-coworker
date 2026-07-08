@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { UnsafeShimArgumentError } from "../../src/platform/exec";
 import { hostPlatform } from "../../src/platform/host";
 import {
+  __internal,
   type ChildHandle,
   type CloseInfo,
   isAlive,
@@ -378,6 +379,15 @@ describe("proc.killTree — posix branch (unit, injected kill)", () => {
         },
       }),
     ).resolves.toBeUndefined();
+  });
+
+  test("delayed hard escalation never falls back to a stale root pid", () => {
+    const calls: Array<[number, string]> = [];
+    __internal.killDetachedPosixGroup(1234, "SIGKILL", (pid, signal) => {
+      calls.push([pid, signal]);
+      throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+    });
+    expect(calls).toEqual([[-1234, "SIGKILL"]]);
   });
 });
 

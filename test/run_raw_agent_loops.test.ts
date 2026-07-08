@@ -448,7 +448,7 @@ describe("raw loop scripted spawnAgent prompts", () => {
     expect(gctPrompt).toContain("Use bash to run command: (Get-Location).Path");
     expect(notesPrompt).toContain("Use bash to run: (Get-Location).Path");
     expect(notesPrompt).toContain("Use bash to run: Get-ChildItem -Force");
-    expect(workbookPrompt).toContain("Use bash to run: py -3 'build_amortization.py'");
+    expect(workbookPrompt).toContain("Use bash to run: python 'build_amortization.py'");
     expect(quickRefPrompt).toContain(
       "Use bash to run: (Get-Content 'ws_quickref.md' | Measure-Object -Line).Lines",
     );

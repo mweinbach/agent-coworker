@@ -1,3 +1,6 @@
+import { binaryName } from "../../src/platform/exec";
+import { hostPlatform } from "../../src/platform/host";
+import { ensureRipgrep } from "../../src/utils/ripgrep";
 import {
   afterEach,
   bashInternal,
@@ -553,6 +556,117 @@ describe("grep tool", () => {
     expect(capturedArgs[delimiterIdx + 1]).toBe("--files-with-matches");
   });
 
+  test("emits credential deny globs with forward slashes only", async () => {
+    const dir = await tmpDir();
+    await fs.mkdir(path.join(dir, ".cowork", "auth"), { recursive: true });
+    await fs.mkdir(path.join(dir, ".agent-user", "auth"), { recursive: true });
+    await fs.writeFile(path.join(dir, "file.txt"), "needle\n", "utf-8");
+
+    let capturedArgs: string[] = [];
+    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+      capturedArgs = [...args];
+      return { stdout: `${path.join(dir, "file.txt")}:1:needle\n`, stderr: "", exitCode: 0 };
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: argCaptureExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await t.execute({ pattern: "needle", path: dir, caseSensitive: true });
+
+    const globValues: string[] = [];
+    for (let i = 0; i < capturedArgs.length - 1; i++) {
+      if (capturedArgs[i] === "--glob") globValues.push(capturedArgs[i + 1] as string);
+    }
+    expect(globValues).toContain("!.cowork/auth");
+    expect(globValues).toContain("!.cowork/auth/**");
+    expect(globValues).toContain("!.agent-user/auth");
+    for (const value of globValues) {
+      expect(value).not.toContain("\\");
+    }
+  });
+
+  test("normalizes fileGlob separators per platform contract", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "file.txt"), "needle\n", "utf-8");
+
+    let capturedArgs: string[] = [];
+    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+      capturedArgs = [...args];
+      return { stdout: `${path.join(dir, "file.txt")}:1:needle\n`, stderr: "", exitCode: 0 };
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: argCaptureExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await t.execute({
+      pattern: "needle",
+      path: dir,
+      fileGlob: "src\\**\\*.ts",
+      caseSensitive: true,
+    });
+
+    const globIdx = capturedArgs.indexOf("--glob");
+    const expected = hostPlatform() === "win32" ? "src/**/*.ts" : "src\\**\\*.ts";
+    expect(capturedArgs[globIdx + 1]).toBe(expected);
+  });
+
+  test("wraps a .cmd ripgrep shim in a cmd.exe batch-shim spawn plan", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "file.txt"), "needle\n", "utf-8");
+    const shimPath = "C:\\fake-tools\\rg.cmd";
+
+    let capturedCmd = "";
+    let capturedArgs: string[] = [];
+    let capturedOptions: Record<string, unknown> = {};
+    const argCaptureRun: any = async (cmd: string, args: string[], options: any) => {
+      capturedCmd = cmd;
+      capturedArgs = [...args];
+      capturedOptions = options;
+      return { stdout: `${path.join(dir, "file.txt")}:1:needle\n`, stderr: "", exitCode: 0 };
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      ensureRipgrepImpl: async () => shimPath,
+      platform: "win32",
+      runImpl: argCaptureRun,
+    } as any);
+    const res: string = await t.execute({ pattern: "needle", path: dir, caseSensitive: true });
+
+    expect(res).toContain("needle");
+    expect(capturedCmd.toLowerCase()).toMatch(/cmd(\.exe)?$/);
+    expect(capturedArgs.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
+    expect(capturedArgs[4]).toContain("rg.cmd");
+    expect(capturedOptions.windowsVerbatimArguments).toBe(true);
+    expect(capturedOptions.platform).toBe("win32");
+  });
+
+  test("returns a typed shim error instead of mangling unsafe batch-shim args", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "file.txt"), 'say "hi"\n', "utf-8");
+    const shimPath = "C:\\fake-tools\\rg.cmd";
+
+    let spawned = false;
+    const t: any = createGrepTool(makeCtx(dir), {
+      ensureRipgrepImpl: async () => shimPath,
+      platform: "win32",
+      runImpl: (async () => {
+        spawned = true;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }) as any,
+    } as any);
+    const res: string = await t.execute({
+      pattern: 'say "hi"',
+      path: dir,
+      caseSensitive: true,
+    });
+
+    expect(spawned).toBe(false);
+    expect(res).toContain("batch shim");
+    expect(res).toContain("cannot be passed to it safely");
+  });
+
   test("searches in subdirectories", async () => {
     const dir = await tmpDir();
     await fs.mkdir(path.join(dir, "sub"), { recursive: true });
@@ -570,6 +684,91 @@ describe("grep tool", () => {
     expect(res).toContain("deep_match");
     expect(res).toContain("deep.txt");
   });
+});
+
+describe("ensureRipgrep resolution", () => {
+  async function withScrubbedRipgrepEnv<T>(pathValue: string, run: () => Promise<T>): Promise<T> {
+    return await withEnv("COWORK_RIPGREP_PATH", undefined, async () => {
+      return await withEnv("PATH", pathValue, run);
+    });
+  }
+
+  test("no longer probes .cmd/.bat managed-install candidates", async () => {
+    const homedir = await tmpDir();
+    const binDir = path.join(homedir, ".cowork", "bin");
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "rg.cmd"), "@echo off\r\n", "utf-8");
+    await fs.writeFile(path.join(binDir, "rg.bat"), "@echo off\r\n", "utf-8");
+    const emptyPathDir = await tmpDir();
+
+    await withScrubbedRipgrepEnv(emptyPathDir, async () => {
+      await expect(ensureRipgrep({ homedir, disableDownload: true })).rejects.toThrow(
+        /downloads are disabled/,
+      );
+    });
+  });
+
+  test("returns the managed native binary when installed", async () => {
+    const homedir = await tmpDir();
+    const binDir = path.join(homedir, ".cowork", "bin");
+    await fs.mkdir(binDir, { recursive: true });
+    const managed = path.join(binDir, binaryName("rg"));
+    await fs.writeFile(managed, "", "utf-8");
+    const emptyPathDir = await tmpDir();
+
+    await withScrubbedRipgrepEnv(emptyPathDir, async () => {
+      await expect(ensureRipgrep({ homedir, disableDownload: true })).resolves.toBe(managed);
+    });
+  });
+
+  test("returns a native rg discovered on PATH", async () => {
+    const homedir = await tmpDir();
+    const toolDir = await tmpDir();
+    const native = path.join(toolDir, binaryName("rg"));
+    await fs.writeFile(native, "", "utf-8");
+    if (hostPlatform() !== "win32") await fs.chmod(native, 0o755);
+
+    await withScrubbedRipgrepEnv(toolDir, async () => {
+      await expect(ensureRipgrep({ homedir, disableDownload: true })).resolves.toBe(native);
+    });
+  });
+
+  test.if(hostPlatform() === "win32")(
+    "skips a PATH rg.cmd shim in favor of the managed rg.exe",
+    async () => {
+      const homedir = await tmpDir();
+      const binDir = path.join(homedir, ".cowork", "bin");
+      await fs.mkdir(binDir, { recursive: true });
+      const managed = path.join(binDir, "rg.exe");
+      await fs.writeFile(managed, "", "utf-8");
+
+      const shimDir = await tmpDir();
+      await fs.writeFile(path.join(shimDir, "rg.cmd"), "@echo off\r\n", "utf-8");
+
+      const logs: string[] = [];
+      await withScrubbedRipgrepEnv(shimDir, async () => {
+        await expect(
+          ensureRipgrep({ homedir, disableDownload: true, log: (line) => logs.push(line) }),
+        ).resolves.toBe(managed);
+      });
+      expect(logs.some((line) => line.includes("non-native rg shim"))).toBe(true);
+    },
+  );
+
+  test.if(hostPlatform() === "win32")(
+    "throws instead of returning a PATH rg.cmd shim when no native rg exists",
+    async () => {
+      const homedir = await tmpDir();
+      const shimDir = await tmpDir();
+      await fs.writeFile(path.join(shimDir, "rg.cmd"), "@echo off\r\n", "utf-8");
+
+      await withScrubbedRipgrepEnv(shimDir, async () => {
+        await expect(ensureRipgrep({ homedir, disableDownload: true })).rejects.toThrow(
+          /downloads are disabled/,
+        );
+      });
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

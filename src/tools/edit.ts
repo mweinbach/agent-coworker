@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 
 import { z } from "zod";
+import {
+  decodeTextBuffer,
+  encodeTextBuffer,
+  normalizeLineEndings,
+  replaceRespectingEol,
+} from "../platform/text";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
@@ -54,10 +60,20 @@ export function createEditTool(ctx: ToolContext) {
           `edit blocked: ${abs} is ${Number(stat.size)} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
         );
       }
-      let content = await Bun.file(abs).text();
-      if (!content.includes(oldString)) throw new Error(`oldString not found in ${abs}`);
+      const decoded = decodeTextBuffer(await fs.readFile(abs));
+      const content = decoded.text;
 
-      const occurrences = content.split(oldString).length - 1;
+      // THE read/edit EOL contract (docs/platform-abstraction-plan.md row 5):
+      // read presents an LF-normalized view, so a multi-line oldString the
+      // model copies from read output carries bare \n. Match on LF-normalized
+      // haystack+needle and re-emit the file's dominant EOL — on a CRLF
+      // checkout the edit now succeeds AND the file stays CRLF instead of
+      // being spliced into mixed line endings.
+      const contentLf = normalizeLineEndings(content);
+      const oldLf = normalizeLineEndings(oldString);
+      if (!contentLf.includes(oldLf)) throw new Error(`oldString not found in ${abs}`);
+
+      const occurrences = contentLf.split(oldLf).length - 1;
       if (!replaceAll && occurrences > 1) {
         throw new Error(
           `oldString found ${occurrences} times in ${abs}. Provide more context or set replaceAll=true.`,
@@ -66,21 +82,37 @@ export function createEditTool(ctx: ToolContext) {
 
       // A replaceAll over many short matches can multiply the result far beyond
       // the input caps (e.g. 1M single-char matches × a 2MB replacement). Reject
-      // before building the string so the edit cannot exhaust the heap.
+      // before building the string so the edit cannot exhaust the heap. CRLF
+      // re-emission can add at most one byte per line; the cap is a soft heap
+      // guard, so the LF-normalized projection is close enough.
       const replacedCount = replaceAll ? occurrences : Math.min(occurrences, 1);
-      const projectedLength =
-        content.length + replacedCount * (newString.length - oldString.length);
+      const projectedLength = contentLf.length + replacedCount * (newString.length - oldLf.length);
       if (projectedLength > MAX_EDIT_FILE_BYTES) {
         throw new Error(
           `edit blocked: result would be ~${projectedLength} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
         );
       }
 
-      content = replaceAll
-        ? content.replaceAll(oldString, newString)
-        : content.replace(oldString, newString);
+      const result = replaceRespectingEol(content, oldString, newString, { replaceAll });
+      if (!result.ok) {
+        // Defensive: the pre-checks above mirror replaceRespectingEol's rules.
+        throw new Error(
+          result.reason === "not_found"
+            ? `oldString not found in ${abs}`
+            : `oldString is not unique in ${abs}. Provide more context or set replaceAll=true.`,
+        );
+      }
+      const encoded = encodeTextBuffer(result.content, {
+        encoding: decoded.encoding,
+        bom: decoded.hadBom,
+      });
+      if (encoded.byteLength > MAX_EDIT_FILE_BYTES) {
+        throw new Error(
+          `edit blocked: encoded result would be ${encoded.byteLength} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
+        );
+      }
       await ctx.assertCanMutate?.("edit");
-      await Bun.write(abs, content);
+      await Bun.write(abs, encoded);
 
       ctx.log(`tool< edit ${JSON.stringify({ ok: true })}`);
       return "Edit applied.";

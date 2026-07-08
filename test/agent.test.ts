@@ -371,9 +371,8 @@ describe("runTurn", () => {
     expect(runtimeParams.system).toContain(nodePath);
     expect(runtimeParams.system).toContain("versioned runtime");
     expect(runtimeParams.system).toContain("@oai/artifact-tool");
-    expect(runtimeParams.system).not.toContain(
-      process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",
-    );
+    expect(runtimeParams.system).not.toContain("cmd /c mklink /J");
+    expect(runtimeParams.system).not.toContain("ln -s");
   });
 
   test("buildTurnSystemPrompt appends harness context when present", () => {

@@ -1,7 +1,10 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-
+import { minimalSandboxEnv } from "../platform/env";
+import { classifyExecutable, which } from "../platform/exec";
+import { hostPlatform } from "../platform/host";
+import { run as procRun } from "../platform/proc";
 import {
   classifySandboxDenial,
   DEFAULT_SANDBOX_CONFIG,
@@ -17,60 +20,15 @@ import {
 import {
   buildPlatformShellCommandWithRuntimePrelude,
   buildPlatformShellExecutionPlan,
+  promptGuidance as shellPromptGuidance,
 } from "../platform/shell";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import { classifyCommandDetailed } from "../utils/approval";
-import { execFileCompat } from "../utils/execFileCompat";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
 const DEFAULT_TIMEOUT_SECONDS = 300; // 5 minutes
 const MAX_TIMEOUT_SECONDS = 600; // 10 minutes
-
-const SANDBOX_ENV_ALLOWLIST = new Set([
-  "CI",
-  "COLORTERM",
-  "COMSPEC",
-  "HOME",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "LOGNAME",
-  "PATH",
-  "PATHEXT",
-  "SHELL",
-  "SystemRoot",
-  "TEMP",
-  "TERM",
-  "TMP",
-  "TMPDIR",
-  "USER",
-  "USERNAME",
-  "WINDIR",
-  // Cowork runtime pointers (not secrets). The presentations/artifact helpers
-  // resolve the managed @oai/artifact-tool package via these:
-  // NODE_OPTIONS carries the `--import=<resolver>` hook and the two COWORK_* vars
-  // point at the managed node_modules / ESM resolver. They are NOT baked into the
-  // shell prelude, so they must survive the allowlist or sandboxed helper commands
-  // fail to find the runtime.
-  "COWORK_RUNTIME_DIR",
-  "COWORK_RUNTIME_VERSION",
-  "COWORK_RUNTIME_ASSET",
-  "COWORK_RUNTIME_BIN",
-  "COWORK_RUNTIME_NODE",
-  "COWORK_RUNTIME_PYTHON",
-  "COWORK_RUNTIME_GIT",
-  "COWORK_RUNTIME_NODE_MODULES",
-  "COWORK_RUNTIME_NODE_RESOLVER",
-  "COWORK_RUNTIME_POPPLER_BIN",
-  "COWORK_RUNTIME_SOFFICE",
-  "COWORK_RUNTIME_LIBREOFFICE_DIR",
-  "COWORK_RUNTIME_LIBREOFFICE_BINARY",
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "PYTHONDONTWRITEBYTECODE",
-  "SAL_DISABLE_SYNCHRONOUS_PRINTER_DETECTION",
-]);
 
 // Patterns that may indicate secrets in command output (redacted in logs only).
 const SECRET_PATTERNS = [
@@ -100,23 +58,6 @@ function redactSecrets(text: string): string {
   return result;
 }
 
-function minimalSandboxEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const env: Record<string, string> = {};
-  const sourceKeys = Object.keys(source);
-  for (const key of SANDBOX_ENV_ALLOWLIST) {
-    // Environment keys are case-insensitive on Windows, but Node preserves the
-    // spelling it inherited (normally `Path`, not `PATH`). Preserve that exact
-    // key so passing an explicit child env never drops the Windows search path.
-    const sourceKey =
-      (Object.hasOwn(source, key) ? key : undefined) ??
-      sourceKeys.find((candidate) => candidate.toLowerCase() === key.toLowerCase());
-    if (!sourceKey || Object.hasOwn(env, sourceKey)) continue;
-    const value = source[sourceKey];
-    if (typeof value === "string") env[sourceKey] = value;
-  }
-  return env;
-}
-
 type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
 type ExecRunner = (
   file: string,
@@ -141,7 +82,11 @@ async function execFileAsync(
     env?: Record<string, string | undefined>;
   },
 ): Promise<ExecResult> {
-  const result = await execFileCompat(file, args, {
+  // proc.run spawns POSIX children detached (own process group) and kills the
+  // whole TREE on timeout/abort/overflow — so a timed-out `pwsh -Command` /
+  // `bash -lc` wrapper no longer leaves its grandchildren (npm, dev servers,
+  // builds) running. Same errorCode contract as the old execFileCompat engine.
+  const result = await procRun(file, args, {
     cwd: opts.cwd,
     maxBuffer: opts.maxBuffer,
     ...(opts.env ? { env: opts.env } : {}),
@@ -217,53 +162,10 @@ let runShellCommandOverrideForTests:
   | ((opts: RunShellCommandOpts) => Promise<ShellRunResult>)
   | null = null;
 
-/** Read the search-path env var case-insensitively (Windows uses `Path`, not `PATH`). */
-function readPathVar(env: Record<string, string | undefined> | undefined): string {
-  const source = env ?? process.env;
-  for (const key of Object.keys(source)) {
-    if (key.toUpperCase() === "PATH") {
-      const value = source[key];
-      if (value) return value;
-    }
-  }
-  return process.env.PATH ?? "";
-}
-
-/**
- * Resolve the first shell candidate to a concrete program path. Absolute
- * candidates are checked with `exists`; bare names (e.g. `pwsh`,
- * `powershell.exe`) are searched on PATH (also trying common executable
- * extensions on Windows). Returns the candidate with its `file` rewritten to the
- * resolved path, or `null` when none resolve.
- */
-function resolveInnerCandidate(
-  plan: { file: string; args: string[] }[],
-  exists: (p: string) => boolean,
-  env: Record<string, string | undefined> | undefined,
-  platform: NodeJS.Platform,
-): { file: string; args: string[] } | null {
-  const pathDirs = readPathVar(env).split(path.delimiter).filter(Boolean);
-  const exts = platform === "win32" ? ["", ".exe", ".cmd", ".bat", ".com"] : [""];
-  for (const candidate of plan) {
-    if (path.isAbsolute(candidate.file)) {
-      if (exists(candidate.file)) return candidate;
-      continue;
-    }
-    for (const dir of pathDirs) {
-      for (const ext of exts) {
-        const resolved = path.join(dir, candidate.file + ext);
-        if (exists(resolved)) return { file: resolved, args: candidate.args };
-      }
-    }
-  }
-  return null;
-}
-
 async function runShellCommandWithExec(
   opts: RunShellCommandOpts & { platform: NodeJS.Platform; execRunner: ExecRunner },
 ): Promise<ShellRunResult> {
   const maxBuffer = 1024 * 1024 * 10;
-  const exists = opts.exists ?? ((p: string) => fsSync.existsSync(p));
 
   const command = buildPlatformShellCommandWithRuntimePrelude({
     command: opts.command,
@@ -273,152 +175,197 @@ async function runShellCommandWithExec(
   const plan = buildPlatformShellExecutionPlan(opts.platform, command);
   const policy = opts.policy;
 
-  const inner =
-    policy && plan.length > 0
-      ? (resolveInnerCandidate(plan, exists, opts.env, opts.platform) ?? plan[0])
-      : null;
-  const transformed =
-    policy && inner
-      ? sandboxManager.transform({
-          file: inner.file,
-          args: inner.args,
-          policy,
-          cwd: opts.cwd,
-          platform: opts.platform,
-          capabilities: opts.capabilities,
-        })
-      : null;
+  // Resolve every shell candidate through THE resolver (platform/exec.which)
+  // so the sandboxed and unsandboxed lanes bind the SAME binary — they used
+  // two different mechanisms (hand-rolled PATH walk vs spawn-layer lookup)
+  // and could bind different shells on one machine. Unresolved candidates
+  // keep their bare name: the spawn layer's ENOENT then advances the
+  // fallback chain exactly as before.
+  const resolvedPlan = plan.flatMap((step) => {
+    const file = which(step.file, {
+      env: opts.env,
+      platform: opts.platform,
+      ...(opts.exists ? { exists: opts.exists } : {}),
+    });
+    // A shell launcher found as .cmd/.bat requires a cmd.exe wrapper with
+    // windowsVerbatimArguments. The sandbox helper and legacy ExecRunner
+    // boundary cannot preserve that nested contract, so skip the shim and
+    // continue to the next native shell candidate (normally powershell.exe).
+    if (file && classifyExecutable(file, opts.platform) === "batch-shim") {
+      return [];
+    }
+    return [file ? { ...step, file, resolved: true } : { ...step, resolved: false }];
+  });
 
-  const requiresSandboxEnforcement =
-    policy !== undefined && (policy.kind !== "danger-full-access" || !policyAllowsNetwork(policy));
-  const backendDoesNotEnforcePolicy =
-    !transformed ||
-    transformed.sandbox === "none" ||
-    !transformed.enforcement.integrity ||
-    !transformed.enforcement.process ||
-    (policy?.kind !== "danger-full-access" && !transformed.enforcement.filesystem) ||
-    (policy !== undefined && !policyAllowsNetwork(policy) && !transformed.enforcement.network);
-
-  // Hard-floor contexts (read-only roles, scoped children) require every policy
-  // dimension to be enforced. A degraded or missing backend must fail closed —
-  // never run such a context unenforced, and never offer a fallback.
-  if (
-    policy &&
-    requiresSandboxEnforcement &&
-    opts.requireEnforcingBackend &&
-    backendDoesNotEnforcePolicy
-  ) {
-    return {
-      stdout: "",
-      stderr: `Refusing to run: this context requires an enforcing OS sandbox, which is unavailable (${transformed?.warning ?? "no backend"}).`,
-      exitCode: 1,
-      errorCode: "SANDBOX_REQUIRED",
-      sandbox: "none",
-      sandboxWarning: transformed?.warning,
-    };
+  // Oversized win32 commands ship as a -File temp script (see
+  // buildPlatformShellExecutionPlan). All steps of a plan share one script:
+  // materialize it before any spawn, remove it when the run settles.
+  const tempScript = plan.find((step) => step.tempScript)?.tempScript;
+  if (tempScript) {
+    fsSync.writeFileSync(tempScript.path, tempScript.content);
   }
+  try {
+    const inner =
+      policy && resolvedPlan.length > 0
+        ? (resolvedPlan.find((step) => step.resolved) ?? resolvedPlan[0])
+        : null;
+    const transformed =
+      policy && inner
+        ? sandboxManager.transform({
+            file: inner.file,
+            args: inner.args,
+            policy,
+            cwd: opts.cwd,
+            platform: opts.platform,
+            capabilities: opts.capabilities,
+          })
+        : null;
 
-  // Fail closed when configured to require an enforcing backend. A backend whose
-  // native probe cannot prove the requested dimensions is not enough to satisfy
-  // the default safety contract.
-  if (policy && requiresSandboxEnforcement && opts.requireBackend && backendDoesNotEnforcePolicy) {
-    const reason = transformed?.warning ?? "OS sandbox backend unavailable";
-    const stderr =
-      transformed && transformed.sandbox !== "none"
-        ? `Refusing to run: ${reason} (sandbox.requireBackend is enabled and requires filesystem/network enforcement).`
-        : `Refusing to run unsandboxed: ${reason} (sandbox.requireBackend is enabled).`;
-    return {
-      stdout: "",
-      stderr,
-      exitCode: 1,
-      errorCode: "SANDBOX_REQUIRED",
-      sandbox: "none",
-      sandboxWarning: transformed?.warning,
-    };
-  }
+    const requiresSandboxEnforcement =
+      policy !== undefined &&
+      (policy.kind !== "danger-full-access" || !policyAllowsNetwork(policy));
+    const backendDoesNotEnforcePolicy =
+      !transformed ||
+      transformed.sandbox === "none" ||
+      !transformed.enforcement.integrity ||
+      !transformed.enforcement.process ||
+      (policy?.kind !== "danger-full-access" && !transformed.enforcement.filesystem) ||
+      (policy !== undefined && !policyAllowsNetwork(policy) && !transformed.enforcement.network);
 
-  // A restrictive policy whose backend does NOT enforce filesystem/network scope
-  // is effectively unsandboxed for FS/network. This includes no backend at all
-  // (`sandbox === "none"`) and any backend that fails its native capability or
-  // integrity probe. Running it grants full filesystem/network access despite
-  // workspace-write / no-network expectations, so require explicit unsandboxed
-  // approval BEFORE executing — mirroring the escalate-on-failure prompt —
-  // rather than silently running under it and only warning afterwards. The
-  // requireEnforcingBackend / requireBackend gates above already fail closed for
-  // stricter contexts; danger-full-access with network allowed is not restrictive
-  // and never reaches here.
-  if (
-    policy &&
-    requiresSandboxEnforcement &&
-    backendDoesNotEnforcePolicy &&
-    opts.approveUnsandboxed
-  ) {
-    if (!(await opts.approveUnsandboxed())) {
+    // Hard-floor contexts (read-only roles, scoped children) require every policy
+    // dimension to be enforced. A degraded or missing backend must fail closed —
+    // never run such a context unenforced, and never offer a fallback.
+    if (
+      policy &&
+      requiresSandboxEnforcement &&
+      opts.requireEnforcingBackend &&
+      backendDoesNotEnforcePolicy
+    ) {
       return {
         stdout: "",
-        stderr: `Refusing to run: ${transformed?.warning ?? "OS sandbox backend does not enforce filesystem/network scope"} (declined).`,
+        stderr: `Refusing to run: this context requires an enforcing OS sandbox, which is unavailable (${transformed?.warning ?? "no backend"}).`,
         exitCode: 1,
         errorCode: "SANDBOX_REQUIRED",
         sandbox: "none",
         sandboxWarning: transformed?.warning,
       };
     }
-    await opts.assertCanMutate?.();
-  }
 
-  // A backend is present and either enforcing or the unsandboxed fallback was
-  // approved above. Run the possibly wrapped command.
-  if (policy && transformed && transformed.sandbox !== "none") {
-    const result = await opts.execRunner(transformed.file, transformed.args, {
-      cwd: opts.cwd,
-      maxBuffer,
-      signal: opts.abortSignal,
-      timeoutMs: opts.timeoutMs,
-      // Passing an `env` object replaces (not merges) the child environment.
-      // The OS sandbox confines filesystem writes, but NOT environment access:
-      // a sandboxed command can still read every variable it is handed and (with
-      // network allowed, the default) exfiltrate it. So the child must never see
-      // the server's full process env — which carries provider API keys and other
-      // secrets. Filter to the compatibility allowlist (PATH/HOME/locale plus the
-      // Cowork runtime pointers; see SANDBOX_ENV_ALLOWLIST).
-      // The versioned runtime PATH directories are injected into the command
-      // string by buildPlatformShellCommandWithRuntimePrelude. Sandbox marker vars
-      // overlay last.
-      env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
-    });
-    return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
-  }
+    // Fail closed when configured to require an enforcing backend. A backend whose
+    // native probe cannot prove the requested dimensions is not enough to satisfy
+    // the default safety contract.
+    if (
+      policy &&
+      requiresSandboxEnforcement &&
+      opts.requireBackend &&
+      backendDoesNotEnforcePolicy
+    ) {
+      const reason = transformed?.warning ?? "OS sandbox backend unavailable";
+      const stderr =
+        transformed && transformed.sandbox !== "none"
+          ? `Refusing to run: ${reason} (sandbox.requireBackend is enabled and requires filesystem/network enforcement).`
+          : `Refusing to run unsandboxed: ${reason} (sandbox.requireBackend is enabled).`;
+      return {
+        stdout: "",
+        stderr,
+        exitCode: 1,
+        errorCode: "SANDBOX_REQUIRED",
+        sandbox: "none",
+        sandboxWarning: transformed?.warning,
+      };
+    }
 
-  // Unsandboxed: try shell candidates until one is not missing (ENOENT).
-  for (const candidate of plan) {
-    const result = await opts.execRunner(candidate.file, candidate.args, {
-      cwd: opts.cwd,
-      maxBuffer,
-      signal: opts.abortSignal,
-      timeoutMs: opts.timeoutMs,
-      env: opts.env,
-    });
-    if (result.errorCode !== "ENOENT") {
-      return { ...result, sandbox: "none", sandboxWarning: transformed?.warning };
+    // A restrictive policy whose backend does NOT enforce filesystem/network scope
+    // is effectively unsandboxed for FS/network. This includes no backend at all
+    // (`sandbox === "none"`) and any backend that fails its native capability or
+    // integrity probe. Running it grants full filesystem/network access despite
+    // workspace-write / no-network expectations, so require explicit unsandboxed
+    // approval BEFORE executing — mirroring the escalate-on-failure prompt —
+    // rather than silently running under it and only warning afterwards. The
+    // requireEnforcingBackend / requireBackend gates above already fail closed for
+    // stricter contexts; danger-full-access with network allowed is not restrictive
+    // and never reaches here.
+    if (
+      policy &&
+      requiresSandboxEnforcement &&
+      backendDoesNotEnforcePolicy &&
+      opts.approveUnsandboxed
+    ) {
+      if (!(await opts.approveUnsandboxed())) {
+        return {
+          stdout: "",
+          stderr: `Refusing to run: ${transformed?.warning ?? "OS sandbox backend does not enforce filesystem/network scope"} (declined).`,
+          exitCode: 1,
+          errorCode: "SANDBOX_REQUIRED",
+          sandbox: "none",
+          sandboxWarning: transformed?.warning,
+        };
+      }
+      await opts.assertCanMutate?.();
+    }
+
+    // A backend is present and either enforcing or the unsandboxed fallback was
+    // approved above. Run the possibly wrapped command.
+    if (policy && transformed && transformed.sandbox !== "none") {
+      const result = await opts.execRunner(transformed.file, transformed.args, {
+        cwd: opts.cwd,
+        maxBuffer,
+        signal: opts.abortSignal,
+        timeoutMs: opts.timeoutMs,
+        // Passing an `env` object replaces (not merges) the child environment.
+        // The OS sandbox confines filesystem writes, but NOT environment access:
+        // a sandboxed command can still read every variable it is handed and (with
+        // network allowed, the default) exfiltrate it. So the child must never see
+        // the server's full process env — which carries provider API keys and other
+        // secrets. Filter to the compatibility allowlist (PATH/HOME/locale plus the
+        // Cowork runtime pointers; see SANDBOX_ENV_ALLOWLIST).
+        // The versioned runtime PATH directories are injected into the command
+        // string by buildPlatformShellCommandWithRuntimePrelude. Sandbox marker vars
+        // overlay last.
+        env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
+      });
+      return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
+    }
+
+    // Unsandboxed: try shell candidates until one is not missing (ENOENT).
+    for (const candidate of resolvedPlan) {
+      const result = await opts.execRunner(candidate.file, candidate.args, {
+        cwd: opts.cwd,
+        maxBuffer,
+        signal: opts.abortSignal,
+        timeoutMs: opts.timeoutMs,
+        env: opts.env,
+      });
+      if (result.errorCode !== "ENOENT") {
+        return { ...result, sandbox: "none", sandboxWarning: transformed?.warning };
+      }
+    }
+
+    return {
+      stdout: "",
+      stderr: `No compatible shell executable was found for platform ${opts.platform}.`,
+      exitCode: 1,
+      errorCode: "ENOENT",
+      sandbox: "none",
+      sandboxWarning: transformed?.warning,
+    };
+  } finally {
+    if (tempScript) {
+      try {
+        fsSync.unlinkSync(tempScript.path);
+      } catch {
+        // Best-effort cleanup; the OS temp dir is the backstop.
+      }
     }
   }
-
-  return {
-    stdout: "",
-    stderr: `No compatible shell executable was found for platform ${opts.platform}.`,
-    exitCode: 1,
-    errorCode: "ENOENT",
-    sandbox: "none",
-    sandboxWarning: transformed?.warning,
-  };
 }
 
-function buildBashToolDescription(): string {
+function buildBashToolDescription(platform: NodeJS.Platform = hostPlatform()): string {
+  // Single-dialect: the model sees only THIS host's shell rules, rendered from
+  // the same module that owns execution (src/platform/shell.ts).
   return `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
 
-Platform notes:
-- Windows: runs in PowerShell, preferring \`pwsh\` and falling back to \`powershell.exe\`
-- macOS/Linux: runs in bash (or sh fallback)
+${shellPromptGuidance({ platform })}
 
 IMPORTANT: Prefer dedicated tools over bash equivalents:
 - Reading files: use read (not cat/head/tail)
@@ -430,8 +377,6 @@ IMPORTANT: Prefer dedicated tools over bash equivalents:
 Rules:
 - Always quote file paths containing spaces with double quotes
 - Prefer absolute paths; avoid cd
-- On Windows, do not rely on \`&&\`, \`export\`, or \`source\`; use PowerShell syntax such as \`;\`, \`$env:NAME = "value"\`, and separate tool calls when that is clearer
-- On Windows, prefer \`py -3\` or \`python\` for Python commands
 - Large text output may be saved to the workspace scratchpad when overflow protection is enabled
 
 Timeout: commands default to a ${DEFAULT_TIMEOUT_SECONDS}s timeout and are killed if they exceed it. You may request up to ${MAX_TIMEOUT_SECONDS}s for explicitly long-running operations.`;

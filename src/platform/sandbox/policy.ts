@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -6,6 +8,7 @@ import {
   PROTECTED_METADATA_DIR_NAMES,
   pathCrossesProtectedMetadata,
 } from "../../utils/paths";
+import { hostPlatform } from "../host";
 
 /**
  * High-level sandbox policy, modeled on OpenAI Codex's `SandboxPolicy`
@@ -59,6 +62,95 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
  * via `src/utils/paths.ts` so the sandbox and write/edit enforce the same set.
  */
 export const PROTECTED_SUBPATH_NAMES = PROTECTED_METADATA_DIR_NAMES;
+
+/**
+ * THE single definition of the per-platform temp scratch directories that
+ * restricted sandbox modes may still write to. Consumed by every backend
+ * (`bwrap.ts`, `seatbelt.ts`, `windows.ts`) so scratch semantics cannot drift
+ * per OS again.
+ *
+ * Per-platform contract:
+ * - `darwin`: `["/tmp", "/private/tmp"]` — `/tmp` is a firmlink alias of
+ *   `/private/tmp`, so both spellings must be granted for Seatbelt path rules.
+ * - `linux`: `["/tmp"]`.
+ * - `win32`: `[os.tmpdir()]` — the host `%TEMP%` directory (raw `os.tmpdir()`
+ *   is sanctioned inside `src/platform/sandbox`).
+ * - any other platform: `["/tmp"]` (POSIX family default).
+ */
+export function scratchRoots(platform: NodeJS.Platform = hostPlatform()): string[] {
+  if (platform === "win32") return [os.tmpdir()];
+  if (platform === "darwin") return ["/tmp", "/private/tmp"];
+  return ["/tmp"];
+}
+
+/** Injectable filesystem predicates for {@link protectedMetadataPaths}. */
+export interface ProtectedMetadataScanOptions {
+  /** Existence predicate; injectable for deterministic tests. */
+  exists?: (p: string) => boolean;
+  /** Directory predicate; injectable for deterministic tests. */
+  isDirectory?: (p: string) => boolean;
+}
+
+/**
+ * Walk each root and return every EXISTING `.git`/`.cowork` path under it
+ * (submodules, nested worktrees, …) so a backend can re-protect them. Symlinks
+ * are never followed (see the loop), so a `vendor` -> `/` link can't make the
+ * scan traverse out of the tree or loop forever. Results are deduplicated
+ * across overlapping roots. Identical walk on every platform; shared by the
+ * bwrap, Seatbelt, and (via the orchestrator) Windows backends — promoted here
+ * from `bwrap.ts` so all backends track one implementation.
+ */
+export function protectedMetadataPaths(
+  roots: string[],
+  opts: ProtectedMetadataScanOptions = {},
+): string[] {
+  const exists = opts.exists ?? ((p: string) => fs.existsSync(p));
+  const isDirectory =
+    opts.isDirectory ??
+    ((p: string) => {
+      try {
+        return fs.statSync(p).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+  const found = new Set<string>();
+  for (const root of roots) {
+    if (!exists(root) || !isDirectory(root)) continue;
+    const pending = [root];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current) continue;
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(current);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const full = path.join(current, entry);
+        // Never follow symlinks while scanning: a symlinked directory (e.g.
+        // `vendor` -> `/`, or a self-referential link) would make the scan
+        // traverse outside the root or loop forever before the command even
+        // starts. lstat classifies the link itself, not its target.
+        let stats: fs.Stats;
+        try {
+          stats = fs.lstatSync(full);
+        } catch {
+          continue;
+        }
+        if (stats.isSymbolicLink()) continue;
+        if ((PROTECTED_SUBPATH_NAMES as readonly string[]).includes(entry)) {
+          found.add(full);
+          continue;
+        }
+        if (!stats.isDirectory()) continue;
+        pending.push(full);
+      }
+    }
+  }
+  return [...found];
+}
 
 export interface ResolveSandboxPolicyInput {
   config?: SandboxConfig;

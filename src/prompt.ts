@@ -10,6 +10,7 @@ import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/c
 import { parseChildModelRef } from "./models/childModelRouting";
 import { getResolvedModelMetadataSync, resolveModelMetadata } from "./models/metadata";
 import type { ResolvedModelMetadata } from "./models/metadataTypes";
+import { promptGuidance as shellPromptGuidance } from "./platform/shell";
 import { loadProjectInstructionsSection } from "./projectInstructions";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import {
@@ -557,14 +558,11 @@ function buildSkillPolicySection(
 }
 
 function buildShellExecutionPolicySection(): string {
-  return [
-    "## Shell Execution Policy",
-    "",
-    "- On Windows, the `bash` tool actually runs PowerShell. Prefer `pwsh` semantics when available and assume a fallback to `powershell.exe`.",
-    '- On Windows, do not rely on `&&`, `export`, or `source`. Use PowerShell-safe sequencing such as `;`, separate tool calls, and `$env:NAME = "value"`.',
-    "- On Windows, prefer `py -3` or `python` for Python commands.",
-    "- When commands depend on each other, use platform-appropriate sequencing instead of assuming Unix shell chaining works everywhere.",
-  ].join("\n");
+  // Host-specific, single-sourced from src/platform/shell.ts: the model is
+  // told only the dialect THIS machine runs, never the other platforms' rules.
+  // Codex sessions strip this section entirely (codexDeveloperInstructions) —
+  // Codex owns its own shell.
+  return ["## Shell Execution Policy", "", shellPromptGuidance()].join("\n");
 }
 
 async function _loadHotCache(config: AgentConfig): Promise<string> {

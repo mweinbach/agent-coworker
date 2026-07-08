@@ -4,7 +4,9 @@ import path from "node:path";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
+  protectedMetadataPaths,
   type SandboxPolicy,
+  scratchRoots,
   tmpScratchRoots,
   withTmpScratch,
 } from "./policy";
@@ -99,7 +101,7 @@ export function buildBwrapCommand(
     const policyWritableRoots =
       policy.kind === "workspace-write"
         ? policy.writableRoots
-        : tmpScratchRoots(policy.projectRoots ?? [], ["/tmp"]);
+        : tmpScratchRoots(policy.projectRoots ?? [], scratchRoots("linux"));
     const explicitRoots = new Set(
       policy.kind === "workspace-write" ? policy.writableRoots.map(canonicalizeRoot) : [],
     );
@@ -113,7 +115,7 @@ export function buildBwrapCommand(
     // ancestor/descendant pairs are still ordered deterministically.
     const withScratch =
       policy.kind === "workspace-write"
-        ? withTmpScratch(policyWritableRoots, ["/tmp"])
+        ? withTmpScratch(policyWritableRoots, scratchRoots("linux"))
         : policyWritableRoots;
     const canonicalByRoot = new Map(withScratch.map((r) => [r, canonicalizeRoot(r)]));
     const writableRoots = withScratch.sort((a, b) => {
@@ -150,7 +152,7 @@ export function buildBwrapCommand(
         if (exists(direct)) protectedDirs.add(direct);
       }
       if (explicitRoots.has(realRoot)) {
-        for (const dir of collectExistingProtectedMetadataPaths(realRoot, exists, isDirectory)) {
+        for (const dir of protectedMetadataPaths([realRoot], { exists, isDirectory })) {
           protectedDirs.add(dir);
         }
       }
@@ -180,50 +182,16 @@ export function buildBwrapCommand(
 }
 
 /**
- * Walk `root` and return every EXISTING `.git`/`.cowork` path under it
- * (submodules, nested worktrees, …) so a backend can re-protect them. Symlinks
- * are not followed (see the loop), so a `vendor` -> `/` link can't make it
- * traverse out of the tree. Shared by the bwrap and Seatbelt backends.
+ * Back-compat wrapper around {@link protectedMetadataPaths} (the walker was
+ * promoted from here into `policy.ts` so all three backends share it).
+ * @deprecated Import `protectedMetadataPaths` from `./policy` instead.
  */
 export function collectExistingProtectedMetadataPaths(
   root: string,
   exists: (p: string) => boolean,
   isDirectory: (p: string) => boolean,
 ): string[] {
-  if (!exists(root) || !isDirectory(root)) return [];
-  const found: string[] = [];
-  const pending = [root];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) continue;
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(current);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const full = path.join(current, entry);
-      // Never follow symlinks while scanning: a symlinked directory (e.g.
-      // `vendor` -> `/`, or a self-referential link) would make the scan traverse
-      // outside the root or loop forever before the command even starts. lstat
-      // classifies the link itself, not its target, so symlinks are skipped.
-      let stats: fs.Stats;
-      try {
-        stats = fs.lstatSync(full);
-      } catch {
-        continue;
-      }
-      if (stats.isSymbolicLink()) continue;
-      if ((PROTECTED_SUBPATH_NAMES as readonly string[]).includes(entry)) {
-        found.push(full);
-        continue;
-      }
-      if (!stats.isDirectory()) continue;
-      pending.push(full);
-    }
-  }
-  return found;
+  return protectedMetadataPaths([root], { exists, isDirectory });
 }
 
 export const collectExistingProtectedMetadataDirs = collectExistingProtectedMetadataPaths;

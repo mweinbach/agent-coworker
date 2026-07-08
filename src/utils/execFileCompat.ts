@@ -22,6 +22,8 @@ export type ExecFileCompatOptions = {
   /** Signal used for timeout/abort/overflow termination. Default SIGTERM. */
   killSignal?: NodeJS.Signals;
   signal?: AbortSignal;
+  /** Preserve a pre-quoted win32 command line, as required by cmd.exe batch-shim plans. */
+  windowsVerbatimArguments?: boolean;
 };
 
 export type ExecFileCompatResult = {
@@ -62,6 +64,7 @@ export async function execFileCompat(
       stdout: "pipe",
       stderr: "pipe",
       windowsHide: true,
+      ...(opts.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
   } catch (error) {
     return { stdout: "", stderr: "", exitCode: 1, errorCode: spawnErrorCode(error) };

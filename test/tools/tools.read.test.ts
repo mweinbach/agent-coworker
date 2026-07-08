@@ -1,3 +1,5 @@
+import { createReadStream } from "node:fs";
+
 import { MAX_ATTACHMENT_INLINE_BYTE_SIZE } from "../../src/shared/attachments";
 import {
   afterEach,
@@ -61,6 +63,31 @@ describe("read tool", () => {
     expect(lines[0]).toBe("2\tb");
     expect(lines[1]).toBe("3\tc");
     expect(lines.length).toBe(2);
+  });
+
+  test("streams only the requested prefix of a newline-dense UTF-16 file", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "dense-utf16.txt");
+    const payload = Buffer.from(`﻿${"\n".repeat(1_000_000)}`, "utf16le");
+    await fs.writeFile(p, payload);
+    let bytesRead = 0;
+
+    const t: any = createReadTool(makeCtx(dir), {
+      createReadStreamImpl: (
+        filePath: string,
+        options?: { encoding?: BufferEncoding; start?: number },
+      ) => {
+        const stream = createReadStream(filePath, options);
+        stream.on("data", (chunk) => {
+          bytesRead += Buffer.byteLength(chunk);
+        });
+        return stream;
+      },
+    });
+    const out: string = await t.execute({ filePath: p, limit: 1 });
+
+    expect(out).toBe("1\t");
+    expect(bytesRead).toBeLessThan(payload.byteLength / 4);
   });
 
   test("handles empty files", async () => {

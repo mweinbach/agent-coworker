@@ -97,9 +97,8 @@ describe("codex app-server runtime", () => {
     expect(startParams?.developerInstructions).toContain(nodePath);
     expect(startParams?.developerInstructions).toContain("Bare Node imports");
     expect(startParams?.developerInstructions).toContain("@oai/artifact-tool");
-    expect(startParams?.developerInstructions).not.toContain(
-      process.platform === "win32" ? "cmd /c mklink /J" : "ln -s",
-    );
+    expect(startParams?.developerInstructions).not.toContain("cmd /c mklink /J");
+    expect(startParams?.developerInstructions).not.toContain("ln -s");
   });
 
   test("includes Cowork runtime dependency paths in app-server pool fingerprints", () => {

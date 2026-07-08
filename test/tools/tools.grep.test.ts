@@ -620,7 +620,7 @@ describe("grep tool", () => {
     let capturedCmd = "";
     let capturedArgs: string[] = [];
     let capturedOptions: Record<string, unknown> = {};
-    const argCaptureExecFile: any = async (cmd: string, args: string[], options: any) => {
+    const argCaptureRun: any = async (cmd: string, args: string[], options: any) => {
       capturedCmd = cmd;
       capturedArgs = [...args];
       capturedOptions = options;
@@ -628,9 +628,9 @@ describe("grep tool", () => {
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: argCaptureExecFile,
       ensureRipgrepImpl: async () => shimPath,
       platform: "win32",
+      runImpl: argCaptureRun,
     } as any);
     const res: string = await t.execute({ pattern: "needle", path: dir, caseSensitive: true });
 
@@ -639,6 +639,7 @@ describe("grep tool", () => {
     expect(capturedArgs.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
     expect(capturedArgs[4]).toContain("rg.cmd");
     expect(capturedOptions.windowsVerbatimArguments).toBe(true);
+    expect(capturedOptions.platform).toBe("win32");
   });
 
   test("returns a typed shim error instead of mangling unsafe batch-shim args", async () => {
@@ -648,12 +649,12 @@ describe("grep tool", () => {
 
     let spawned = false;
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: (async () => {
+      ensureRipgrepImpl: async () => shimPath,
+      platform: "win32",
+      runImpl: (async () => {
         spawned = true;
         return { stdout: "", stderr: "", exitCode: 0 };
       }) as any,
-      ensureRipgrepImpl: async () => shimPath,
-      platform: "win32",
     } as any);
     const res: string = await t.execute({
       pattern: 'say "hi"',

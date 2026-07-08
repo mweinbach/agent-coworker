@@ -3,8 +3,9 @@ import { z } from "zod";
 import { classifyExecutable, resolveSpawn, UnsafeShimArgumentError } from "../platform/exec";
 import { hostPlatform } from "../platform/host";
 import { normalizeGlobPattern, toPosixRelative } from "../platform/paths";
+import { run as runProcess } from "../platform/proc";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
-import { type ExecFileCompatRunner, execFileCompat } from "../utils/execFileCompat";
+import type { ExecFileCompatRunner } from "../utils/execFileCompat";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed, credentialReadDenyDirs } from "../utils/permissions";
 import { ensureRipgrep } from "../utils/ripgrep";
@@ -49,11 +50,13 @@ export function createGrepTool(
     execFileImpl?: ExecFileCompatRunner;
     ensureRipgrepImpl?: typeof ensureRipgrep;
     platform?: NodeJS.Platform;
+    runImpl?: typeof runProcess;
   } = {},
 ) {
-  const execFileImpl = opts.execFileImpl ?? execFileCompat;
+  const execFileImpl = opts.execFileImpl;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
   const platform = opts.platform ?? hostPlatform();
+  const runImpl = opts.runImpl ?? runProcess;
 
   return defineTool({
     description:
@@ -144,12 +147,18 @@ export function createGrepTool(
         }
       }
 
-      const result = await execFileImpl(spawnFile, spawnArgs, {
+      const processOptions = {
         maxBuffer: 1024 * 1024 * 10,
         ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
         timeoutMs,
         windowsVerbatimArguments,
-      });
+      };
+      // Production uses the platform tree-aware runner so timeout/abort cannot
+      // strand descendants (notably rg.cmd/rg.bat -> cmd.exe -> rg.exe on
+      // Windows). execFileImpl remains only as the deterministic test seam.
+      const result = execFileImpl
+        ? await execFileImpl(spawnFile, spawnArgs, processOptions)
+        : await runImpl(spawnFile, spawnArgs, { ...processOptions, platform });
 
       const stderrText = result.stderr.trim();
       const output = (() => {

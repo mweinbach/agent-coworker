@@ -9,13 +9,15 @@ import {
   buildSafeModelMessages,
   claudeCodeConversationAdapter,
   codexConversationAdapter,
+  coworkConversationAdapter,
   createConversationImportService,
   type ExternalConversation,
   parseClaudeCodeJsonl,
   parseCodexRollout,
   persistImportedConversation,
 } from "../src/import/conversations";
-import { SessionDb } from "../src/server/sessionDb";
+import { type PersistedSessionMutation, SessionDb } from "../src/server/sessionDb";
+import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 import type { AgentConfig } from "../src/types";
 
 const tempDirs: string[] = [];
@@ -74,6 +76,120 @@ function conversationFixture(cwd: string): ExternalConversation {
       },
     ],
   };
+}
+
+type CoworkBackupSessionFixture = {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  sessionKind?: SessionSnapshot["sessionKind"];
+  createdAt?: string;
+  updatedAt?: string;
+  provider?: AgentConfig["provider"];
+  model?: string;
+  feed?: SessionSnapshot["feed"];
+  messages?: PersistedSessionMutation["snapshot"]["messages"];
+};
+
+function countSnapshotMessages(feed: SessionSnapshot["feed"]): number {
+  return feed.filter((item) => item.kind === "message").length;
+}
+
+function makeCoworkBackupSnapshot(session: CoworkBackupSessionFixture): SessionSnapshot {
+  const createdAt = session.createdAt ?? "2026-01-01T00:00:00.000Z";
+  const updatedAt = session.updatedAt ?? "2026-01-01T00:00:01.000Z";
+  const feed = session.feed ?? [];
+  return {
+    sessionId: session.sessionId,
+    title: session.title,
+    titleSource: "default",
+    titleModel: null,
+    provider: session.provider ?? "google",
+    model: session.model ?? "gemini-3-flash-preview",
+    sessionKind: session.sessionKind ?? "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: null,
+    nickname: null,
+    taskType: null,
+    targetPaths: null,
+    profile: null,
+    requestedModel: null,
+    effectiveModel: null,
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: null,
+    createdAt,
+    updatedAt,
+    messageCount: countSnapshotMessages(feed),
+    lastEventSeq: feed.length,
+    feed,
+    agents: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: null,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+  };
+}
+
+function makeCoworkBackupMutation(session: CoworkBackupSessionFixture): PersistedSessionMutation {
+  const snapshot = makeCoworkBackupSnapshot(session);
+  return {
+    sessionId: session.sessionId,
+    eventType: "session.created",
+    eventTs: snapshot.updatedAt,
+    snapshot: {
+      sessionKind: snapshot.sessionKind,
+      parentSessionId: snapshot.parentSessionId,
+      role: snapshot.role,
+      title: snapshot.title,
+      titleSource: snapshot.titleSource,
+      titleModel: snapshot.titleModel,
+      provider: snapshot.provider,
+      model: snapshot.model,
+      workingDirectory: session.cwd,
+      enableMcp: true,
+      backupsEnabledOverride: null,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      status: "active",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+      systemPrompt: "system",
+      messages: session.messages ?? [],
+      providerState: null,
+      todos: [],
+      harnessContext: null,
+      costTracker: null,
+    },
+  };
+}
+
+async function writeCoworkBackupDb(
+  rootDir: string,
+  sessions: CoworkBackupSessionFixture[],
+): Promise<string> {
+  const sessionsDir = path.join(rootDir, "sessions");
+  const dbPath = path.join(rootDir, "sessions.db");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const db = await SessionDb.create({
+    paths: { rootDir, sessionsDir },
+    dbPath,
+  });
+  try {
+    for (const session of sessions) {
+      await db.persistSessionMutation(makeCoworkBackupMutation(session));
+      if (session.feed) {
+        await db.persistSessionSnapshot(session.sessionId, makeCoworkBackupSnapshot(session));
+      }
+    }
+  } finally {
+    db.close();
+  }
+  return dbPath;
 }
 
 describe("conversation import parsers", () => {
@@ -427,6 +543,229 @@ describe("conversation import parsers", () => {
       limit: 10,
     });
     expect(conversations[0]).toMatchObject({ cwd: projectPath, sourceId: "claude-project" });
+  });
+
+  test("discovers Cowork backup directories and rejects the current sessions database", async () => {
+    const dir = await makeTempDir();
+    const workspace = path.join(dir, "workspace");
+    const backupRoot = path.join(dir, "backup", ".cowork");
+    await fs.mkdir(workspace, { recursive: true });
+    const dbPath = await writeCoworkBackupDb(backupRoot, [
+      { sessionId: "cowork-root", title: "Backup root", cwd: workspace },
+      {
+        sessionId: "cowork-agent",
+        title: "Nested agent",
+        cwd: workspace,
+        sessionKind: "agent",
+      },
+    ]);
+
+    const candidates = await coworkConversationAdapter.discover({
+      homedir: dir,
+      explicitPaths: [backupRoot],
+    });
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        source: "cowork",
+        id: `cowork:${dbPath}`,
+        path: dbPath,
+        available: true,
+        conversationCount: 1,
+      }),
+    ]);
+
+    const selfCandidates = await coworkConversationAdapter.discover({
+      homedir: dir,
+      explicitPaths: [backupRoot],
+      currentCoworkDbPath: dbPath,
+    });
+    expect(selfCandidates).toEqual([
+      expect.objectContaining({
+        source: "cowork",
+        path: dbPath,
+        available: false,
+        warning: "The current Cowork sessions database cannot be imported into itself.",
+      }),
+    ]);
+  });
+
+  test("previews Cowork session snapshots as external conversation items", async () => {
+    const dir = await makeTempDir();
+    const workspace = path.join(dir, "workspace");
+    const backupRoot = path.join(dir, "backup", ".cowork");
+    await fs.mkdir(workspace, { recursive: true });
+    const dbPath = await writeCoworkBackupDb(backupRoot, [
+      {
+        sessionId: "cowork-snapshot",
+        title: "Snapshot session",
+        cwd: workspace,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:05.000Z",
+        feed: [
+          {
+            id: "user-1",
+            kind: "message",
+            role: "user",
+            ts: "2026-01-01T00:00:00.000Z",
+            text: "Run the deploy check.",
+          },
+          {
+            id: "tool-1",
+            kind: "tool",
+            ts: "2026-01-01T00:00:01.000Z",
+            name: "bash",
+            state: "output-error",
+            args: { command: "deploy" },
+            result: { text: "permission denied" },
+          },
+          {
+            id: "reasoning-1",
+            kind: "reasoning",
+            mode: "summary",
+            ts: "2026-01-01T00:00:02.000Z",
+            text: "The deploy command needs credentials.",
+          },
+          {
+            id: "system-1",
+            kind: "system",
+            ts: "2026-01-01T00:00:03.000Z",
+            line: "Model switched.",
+          },
+          {
+            id: "log-1",
+            kind: "log",
+            ts: "2026-01-01T00:00:04.000Z",
+            line: "Command exited.",
+          },
+          {
+            id: "assistant-1",
+            kind: "message",
+            role: "assistant",
+            ts: "2026-01-01T00:00:05.000Z",
+            text: "Credentials are missing.",
+          },
+        ],
+      },
+    ]);
+
+    const conversations = await coworkConversationAdapter.preview(
+      {
+        source: "cowork",
+        id: `cowork:${dbPath}`,
+        path: dbPath,
+        available: true,
+      },
+      { limit: 10 },
+    );
+
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]).toEqual(
+      expect.objectContaining({
+        source: "cowork",
+        sourceId: "cowork-snapshot",
+        sourcePath: dbPath,
+        cwd: workspace,
+        title: "Snapshot session",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:05.000Z",
+        originalProvider: "google",
+        originalModel: "gemini-3-flash-preview",
+        warnings: [],
+      }),
+    );
+    expect(conversations[0]?.items.map((item) => item.kind)).toEqual([
+      "user",
+      "tool",
+      "reasoning",
+      "system",
+      "system",
+      "assistant",
+    ]);
+    expect(conversations[0]?.items[1]).toEqual(
+      expect.objectContaining({
+        kind: "tool",
+        name: "bash",
+        args: { command: "deploy" },
+        error: "permission denied",
+      }),
+    );
+    expect(conversations[0]?.items[2]).toEqual(
+      expect.objectContaining({
+        kind: "reasoning",
+        mode: "summary",
+        text: "The deploy command needs credentials.",
+      }),
+    );
+  });
+
+  test("falls back to Cowork messages_json when snapshots are absent", async () => {
+    const dir = await makeTempDir();
+    const backupRoot = path.join(dir, "backup", ".cowork");
+    const dbPath = await writeCoworkBackupDb(backupRoot, [
+      {
+        sessionId: "cowork-messages",
+        title: "Messages only",
+        cwd: "",
+        updatedAt: "2026-01-01T00:00:02.000Z",
+        messages: [
+          { role: "user", content: "fallback user" },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "fallback assistant" }],
+          },
+        ],
+      },
+    ]);
+
+    const conversations = await coworkConversationAdapter.preview(
+      {
+        source: "cowork",
+        id: `cowork:${dbPath}`,
+        path: dbPath,
+        available: true,
+      },
+      { limit: 10 },
+    );
+
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]).toEqual(
+      expect.objectContaining({
+        source: "cowork",
+        sourceId: "cowork-messages",
+        cwd: null,
+        title: "Messages only",
+        warnings: [
+          {
+            code: "missing_cwd",
+            message: "Cowork session did not include a working directory.",
+          },
+        ],
+      }),
+    );
+    expect(conversations[0]?.items).toEqual([
+      expect.objectContaining({
+        kind: "user",
+        ts: "2026-01-01T00:00:02.000Z",
+        text: "fallback user",
+      }),
+      expect.objectContaining({
+        kind: "assistant",
+        ts: "2026-01-01T00:00:02.000Z",
+        text: "fallback assistant",
+      }),
+    ]);
+
+    await expect(
+      coworkConversationAdapter.preview(
+        {
+          source: "cowork",
+          id: `cowork:${dbPath}`,
+          path: dbPath,
+          available: true,
+        },
+        { currentCoworkDbPath: dbPath, limit: 10 },
+      ),
+    ).resolves.toEqual([]);
   });
 
   test("safe handoff creates only plain model messages", () => {

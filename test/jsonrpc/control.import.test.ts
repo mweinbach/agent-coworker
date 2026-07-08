@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { type PersistedSessionMutation, SessionDb } from "../../src/server/sessionDb";
 import { startAgentServer } from "../../src/server/startServer";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import { connectJsonRpc } from "./control.harness";
@@ -82,6 +83,71 @@ async function writeCodexConversation(home: string, cwd: string): Promise<string
     db.close();
   }
   return statePath;
+}
+
+function makeCoworkConversationMutation(input: {
+  sessionId: string;
+  title: string;
+  cwd: string;
+}): PersistedSessionMutation {
+  return {
+    sessionId: input.sessionId,
+    eventType: "session.created",
+    eventTs: "2026-01-01T00:00:01.000Z",
+    snapshot: {
+      sessionKind: "root",
+      parentSessionId: null,
+      role: null,
+      title: input.title,
+      titleSource: "default",
+      titleModel: null,
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      workingDirectory: input.cwd,
+      enableMcp: true,
+      backupsEnabledOverride: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      status: "active",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+      systemPrompt: "system",
+      messages: [
+        { role: "user", content: "import this Cowork backup chat" },
+        { role: "assistant", content: "imported from Cowork backup" },
+      ],
+      providerState: null,
+      todos: [],
+      harnessContext: null,
+      costTracker: null,
+    },
+  };
+}
+
+async function writeCoworkConversationBackup(
+  home: string,
+  cwd: string,
+): Promise<{
+  rootDir: string;
+  dbPath: string;
+}> {
+  const rootDir = path.join(home, "cowork-backup", ".cowork");
+  const sessionsDir = path.join(rootDir, "sessions");
+  const dbPath = path.join(rootDir, "sessions.db");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const db = await SessionDb.create({ paths: { rootDir, sessionsDir }, dbPath });
+  try {
+    await db.persistSessionMutation(
+      makeCoworkConversationMutation({
+        sessionId: "cowork-backup-thread-1",
+        title: "Cowork backup import fixture",
+        cwd,
+      }),
+    );
+  } finally {
+    db.close();
+  }
+  return { rootDir, dbPath };
 }
 
 describe("server JSON-RPC import methods", () => {
@@ -276,6 +342,90 @@ describe("server JSON-RPC import methods", () => {
       expect(duplicate.result.skipped).toEqual([
         expect.objectContaining({
           source: "codex",
+          fingerprint: conversation.fingerprint,
+          existingThreadId: imported.result.imported[0].threadId,
+          reason: "already_imported",
+        }),
+      ]);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  }, 20_000);
+
+  test("previews, imports, and dedupes Cowork backup conversations", async () => {
+    const tmpDir = await makeTmpProject("agent-harness-cowork-conversation-import-");
+    const fakeHome = await makeTmpProject("agent-harness-cowork-conversation-import-home-");
+    const backup = await writeCoworkConversationBackup(fakeHome, tmpDir);
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { homedir: fakeHome }));
+    try {
+      const rpc = await connectJsonRpc(url);
+      const sources = await rpc.request(
+        "cowork/conversationImport/sources/list",
+        { includeCowork: true, explicitPaths: [backup.rootDir] },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(sources.result.sources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: "cowork",
+            path: backup.dbPath,
+            available: true,
+            conversationCount: 1,
+          }),
+        ]),
+      );
+
+      const sourceRequest = { source: "cowork" as const, path: backup.rootDir };
+      const preview = await rpc.request(
+        "cowork/conversationImport/preview",
+        { sources: [sourceRequest], limit: 10 },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(preview.result.conversations).toHaveLength(1);
+      const conversation = preview.result.conversations[0];
+      expect(conversation).toEqual(
+        expect.objectContaining({
+          source: "cowork",
+          sourceId: "cowork-backup-thread-1",
+          title: "Cowork backup import fixture",
+          mapping: expect.objectContaining({ status: "matched", workspacePath: tmpDir }),
+          alreadyImportedThreadId: null,
+        }),
+      );
+
+      const imported = await rpc.request(
+        "cowork/conversationImport/import",
+        {
+          sources: [sourceRequest],
+          selected: [{ source: "cowork", fingerprint: conversation.fingerprint }],
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.5",
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(imported.result.imported).toHaveLength(1);
+      expect(imported.result.imported[0]).toEqual(
+        expect.objectContaining({
+          source: "cowork",
+          fingerprint: conversation.fingerprint,
+          workspacePath: tmpDir,
+          title: "Cowork backup import fixture",
+        }),
+      );
+
+      const duplicate = await rpc.request(
+        "cowork/conversationImport/import",
+        {
+          sources: [sourceRequest],
+          selected: [{ source: "cowork", fingerprint: conversation.fingerprint }],
+        },
+        IMPORT_RPC_TIMEOUT_MS,
+      );
+      expect(duplicate.result.skipped).toEqual([
+        expect.objectContaining({
+          source: "cowork",
           fingerprint: conversation.fingerprint,
           existingThreadId: imported.result.imported[0].threadId,
           reason: "already_imported",

@@ -49,6 +49,10 @@ import {
   jsonRpcTaskResultSchemas,
 } from "./schema.tasks";
 import {
+  jsonRpcThreadManagementRequestSchemas,
+  jsonRpcThreadManagementResultSchemas,
+} from "./schema.threadManagement";
+import {
   jsonRpcThreadTurnNotificationSchemas,
   jsonRpcThreadTurnRequestSchemas,
   jsonRpcThreadTurnResultSchemas,
@@ -62,6 +66,7 @@ import {
 export const jsonRpcRequestSchemas = {
   ...jsonRpcCoreRequestSchemas,
   ...jsonRpcThreadTurnRequestSchemas,
+  ...jsonRpcThreadManagementRequestSchemas,
   ...jsonRpcSessionRequestSchemas,
   ...jsonRpcAgentRequestSchemas,
   ...jsonRpcAgentProfilesRequestSchemas,
@@ -99,6 +104,7 @@ export const jsonRpcServerRequestSchemas = {
 export const jsonRpcResultSchemas = {
   ...jsonRpcCoreResultSchemas,
   ...jsonRpcThreadTurnResultSchemas,
+  ...jsonRpcThreadManagementResultSchemas,
   ...jsonRpcSessionResultSchemas,
   ...jsonRpcAgentResultSchemas,
   ...jsonRpcAgentProfilesResultSchemas,

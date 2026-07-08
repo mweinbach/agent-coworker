@@ -27,6 +27,7 @@ import {
   mock,
   os,
   path,
+  type ToolContext,
   test,
   tmpDir,
   webFetchInternal,
@@ -470,6 +471,89 @@ describe("createTools", () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
     expect(Object.keys(tools).length).toBe(11);
+  });
+
+  test("exposes thread-management tools only for eligible root sessions", async () => {
+    const dir = await tmpDir();
+    const threadControl = {
+      listProjects: mock(async () => ({ projects: [] })),
+      listThreads: mock(async () => ({ threads: [], total: 0 })),
+      readThread: mock(async () => ({ thread: null, turns: [] })),
+      createThread: mock(async () => ({ thread: null, queued: true })),
+      sendMessage: mock(async () => ({ threadId: "thread-1", hostId: "local", queued: true })),
+      forkThread: mock(async () => ({ status: "unsupported", reason: "later" })),
+      handoffThread: mock(async () => ({ status: "unsupported", reason: "later" })),
+      getHandoffStatus: mock(async () => ({ status: "unsupported", reason: "later" })),
+      setTitle: mock(async (input: { threadId?: string }) => ({
+        threadId: input.threadId ?? "current",
+      })),
+      setPinned: mock(async (input: { threadId?: string }) => ({
+        threadId: input.threadId ?? "current",
+      })),
+      setArchived: mock(async (input: { threadId?: string }) => ({
+        threadId: input.threadId ?? "current",
+      })),
+    };
+
+    const typedThreadControl = threadControl as ToolContext["threadControl"];
+    const tools = createTools(makeCtx(dir, { threadControl: typedThreadControl }));
+    for (const name of [
+      "list_projects",
+      "list_threads",
+      "read_thread",
+      "create_thread",
+      "send_message_to_thread",
+      "fork_thread",
+      "handoff_thread",
+      "get_handoff_status",
+      "set_thread_title",
+      "set_thread_pinned",
+      "set_thread_archived",
+    ]) {
+      expect(tools).toHaveProperty(name);
+    }
+
+    const titleTool = tools.set_thread_title as {
+      execute(input: { title: string; threadId?: string }): Promise<unknown>;
+    };
+    await titleTool.execute({ title: "Renamed" });
+    expect(threadControl.setTitle).toHaveBeenCalledWith({ title: "Renamed" });
+
+    expect(
+      createTools(makeCtx(dir, { threadControl: typedThreadControl, agentRole: "worker" })),
+    ).not.toHaveProperty("list_threads");
+    expect(
+      createTools(
+        makeCtx(dir, {
+          threadControl: typedThreadControl,
+          allowThreadManagementTools: false,
+        }),
+      ),
+    ).not.toHaveProperty("list_threads");
+    expect(
+      createTools(makeCtx(dir, { threadControl: typedThreadControl, agentTargetPaths: ["src"] })),
+    ).not.toHaveProperty("list_threads");
+    expect(
+      createTools(
+        makeCtx(dir, {
+          threadControl: typedThreadControl,
+          taskContext: {
+            id: "task-1",
+            title: "Task",
+            objective: "Do the work",
+            status: "working",
+            revision: 1,
+            requirements: [],
+            workItems: [],
+            decisions: [],
+            questions: [],
+            blockers: [],
+            artifacts: [],
+            activeThreadId: "thread-1",
+          },
+        }),
+      ),
+    ).not.toHaveProperty("list_threads");
   });
 
   test("omits bash for targetPath-scoped child agents", async () => {

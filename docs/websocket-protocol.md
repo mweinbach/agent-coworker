@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.43`
+- Current protocol version: `7.45`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -35,8 +35,12 @@ device id, and desktop-side per-device permissions gate JSON-RPC methods such as
 auth, MCP auth, backups, workspace settings, and server-request responses. Reading thread history
 (`thread/list`, `thread/read`, `thread/hydrate`, and `thread/resume`, which streams a thread's live
 content) requires the `conversations` permission; only `thread/unsubscribe` (subscription teardown)
-stays always-allowed. Newly paired devices default to no `conversations` access until it is granted;
-devices paired before this permission existed are grandfathered to preserve their prior read access.
+stays always-allowed. Thread mutations (`thread/pinned/set` and `thread/archived/set`) require both
+the `turns` and `conversations` permissions because they expose and change persisted thread state. `thread/fork` requires both `turns`
+and `conversations`: it creates persisted state and copies the source conversation history.
+Newly paired devices
+default to no `conversations` access until it is granted; devices paired before this permission
+existed are grandfathered to preserve their prior read access.
 Task reads (`task/list`, `task/read`, `task/artifact/version/compare`, and
 `task/artifact/version/preview`) also require `conversations`. Task mutations, lifecycle operations,
 task thread creation, direct task creation, and artifact writes require both `conversations` and
@@ -129,6 +133,9 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `thread/read`
 - `thread/unsubscribe`
 - `thread/hydrate`
+- `thread/fork`
+- `thread/pinned/set`
+- `thread/archived/set`
 - `workspace/list`
 - `workspace/switch`
 - `turn/start`
@@ -151,6 +158,8 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/presentation/preview`
 
 `thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream, but turn sends are not retry-safe until the server persists and deduplicates that key.
+
+`thread/fork` takes `{ threadId, environment?, title?, prompt?, model?, thinking? }` and returns `{ sourceThreadId, thread, forked, queued, environment }`. The optional environment is `{ type: "local" }` or `{ type: "worktree", ref?, branchName?, startingState? }`; managed worktrees are created under `~/.cowork/worktrees` from `HEAD` unless a safe explicit ref is supplied. `prompt`, when present, is queued as the first follow-up turn in the forked thread. `thread/pinned/set` takes `{ threadId, pinned }` and returns `{ thread }` with `pinned` / `pinnedAt` metadata. `thread/archived/set` takes `{ threadId, archived }` and returns `{ thread }` with `archived` / `archivedAt` metadata. These flags are persisted server-side and mirrored into desktop state when available.
 
 `command/list` takes `{ threadId }` and returns the server-resolved slash command catalog, including enabled skills. `command/execute` takes `{ threadId, name, arguments?, clientMessageId? }`, expands the command or skill in the harness, and starts a normal projected turn. Clients should send `/task ...` through `command/execute` with `name: "task"` rather than treating it as ordinary message text.
 
@@ -866,6 +875,12 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.45`:
+- Added `thread/fork` for creating seeded thread forks, optionally in managed git worktrees under `~/.cowork/worktrees`. Forking requires both the `turns` and `conversations` permissions on the mobile H3 transport.
+
+Changes in `7.44`:
+- Added `thread/pinned/set` and `thread/archived/set` for server-persisted thread metadata. Metadata setters require both the `turns` and `conversations` permissions on the mobile H3 transport and return thread summaries with optional `pinned`, `pinnedAt`, `archived`, and `archivedAt` fields.
 
 Changes in `7.43`:
 

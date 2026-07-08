@@ -56,6 +56,7 @@ import type {
 import type { SessionDb, SessionPersistenceStatus } from "../sessionDb";
 import type { writePersistedSessionSnapshot } from "../sessionStore";
 import type { generateSessionTitle } from "../sessionTitleService";
+import type { ThreadControl } from "../threads/types";
 import type { McpServerLookup } from "./mcp/McpServerLookup";
 
 export type SessionBackupFactory = (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
@@ -219,6 +220,7 @@ export type SessionDependencies = {
     directive: TaskDirective,
   ) => Promise<TaskDirectiveResult>;
   createTaskImpl?: (sessionId: string, input: TaskCreationInput) => Promise<TaskCreationResult>;
+  getThreadControlImpl?: (sessionId: string) => ThreadControl | null;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
   createAgentSessionImpl?: (
     opts: AgentSpawnContextOptions & {

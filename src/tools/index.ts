@@ -30,6 +30,7 @@ import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
 import { createTaskReviewTool } from "./taskReview";
 import { createTaskUpdateTool } from "./taskUpdate";
+import { createThreadManagementTools } from "./threadManagement";
 import { createTodoWriteTool } from "./todoWrite";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
@@ -63,6 +64,7 @@ function usesGoogleNativeWebToolsConfig(
 
 type ListSessionToolNameOptions = {
   includeAgentControl?: boolean;
+  includeThreadControl?: boolean;
 };
 
 export function listSessionToolNames(
@@ -105,6 +107,21 @@ export function listSessionToolNames(
           "inspectAgent",
           "resumeAgent",
           "closeAgent",
+        ]
+      : []),
+    ...(opts.includeThreadControl
+      ? [
+          "list_projects",
+          "list_threads",
+          "read_thread",
+          "create_thread",
+          "send_message_to_thread",
+          "fork_thread",
+          "handoff_thread",
+          "get_handoff_status",
+          "set_thread_title",
+          "set_thread_pinned",
+          "set_thread_archived",
         ]
       : []),
   ];
@@ -156,9 +173,22 @@ export function createTools(ctx: ToolContext): Record<string, any> {
           : {}),
   };
 
+  const threadManagementTools =
+    ctx.threadControl &&
+    ctx.allowThreadManagementTools !== false &&
+    !ctx.agentRole &&
+    !ctx.taskContext &&
+    !scopedChild
+      ? createThreadManagementTools(ctx)
+      : {};
+  const toolsWithThreadManagement = {
+    ...baseTools,
+    ...threadManagementTools,
+  };
+
   const roleFilteredTools = ctx.agentRole
-    ? filterToolsForRole(baseTools, getAgentRoleDefinition(ctx.agentRole))
-    : baseTools;
+    ? filterToolsForRole(toolsWithThreadManagement, getAgentRoleDefinition(ctx.agentRole))
+    : toolsWithThreadManagement;
 
   if (!ctx.agentControl || ctx.agentRole) {
     return roleFilteredTools;

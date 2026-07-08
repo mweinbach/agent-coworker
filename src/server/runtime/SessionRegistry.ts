@@ -31,6 +31,7 @@ import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
 import { resolveTasksFeatureEnabled } from "../tasks/flags";
 import type { TaskCoordinator } from "../tasks/TaskCoordinator";
+import type { ThreadControl } from "../threads/types";
 import type { WorkspaceBackupService } from "../workspaceBackups";
 import {
   mergeConfigPatch,
@@ -82,6 +83,7 @@ export type SessionRegistryOptions = {
   recordSkillImprovementUsage?: (usage: CompletedTurnSkillUsage) => void | Promise<void>;
   onThreadListChanged?: () => void;
   onTaskCreatedFromChat?: (input: { sourceSessionId: string; workspacePath: string }) => void;
+  getThreadControl?: (sessionId: string) => ThreadControl | null;
   fileLog?: { appendSessionEvent: (event: SessionEvent) => void } | null;
 };
 
@@ -205,6 +207,13 @@ export class SessionRegistry {
     cwd: string,
     provider?: AgentConfig["provider"],
     model?: string,
+    opts: {
+      seedContext?: SeededSessionContext;
+      title?: string;
+      titleSource?: SessionInfoState["titleSource"];
+      config?: AgentConfig;
+      system?: string;
+    } = {},
   ): SessionRuntime {
     const binding: SessionBinding = {
       session: null,
@@ -213,16 +222,30 @@ export class SessionRegistry {
       sinks: new Map(),
     };
     const threadConfig: AgentConfig = {
-      ...this.config,
+      ...(opts.config ?? this.config),
       workingDirectory: cwd,
       ...(provider ? { provider, runtime: defaultRuntimeNameForProvider(provider) } : {}),
       ...(model ? { model } : {}),
     };
     const built = this.buildSession(binding, undefined, {
       config: threadConfig,
+      ...(opts.system ? { system: opts.system } : {}),
+      ...(opts.seedContext ? { seedContext: opts.seedContext } : {}),
+      ...(opts.title
+        ? {
+            sessionInfoPatch: {
+              title: opts.title,
+              titleSource: opts.titleSource ?? "manual",
+              titleModel: null,
+            },
+          }
+        : {}),
     });
     binding.session = built.session;
     binding.runtime = built.runtime;
+    if (opts.title) {
+      built.runtime.settings.setTitle(opts.title);
+    }
     this.options.threadJournal.ensureSink(binding, built.session.id, (sinkBinding, sinkId, sink) =>
       this.addBindingSink(sinkBinding, sinkId, sink),
     );
@@ -551,6 +574,7 @@ export class SessionRegistry {
       applyTaskDirectiveImpl: async (sessionId, directive) =>
         await this.options.taskCoordinator.applyDirective(sessionId, directive),
       createTaskImpl: async (sessionId, input) => await this.createTaskFromChat(sessionId, input),
+      getThreadControlImpl: this.options.getThreadControl,
       emit,
       createAgentSessionImpl: async (agentOpts) => await this.getAgentControl().spawn(agentOpts),
       listAgentSessionsImpl: async (parentSessionId) =>

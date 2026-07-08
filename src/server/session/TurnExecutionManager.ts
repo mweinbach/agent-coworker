@@ -145,6 +145,7 @@ export class TurnExecutionManager {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
+    opts?: { allowThreadManagementTools?: boolean },
   ) {
     const taskLock = this.getTaskLock();
     if (taskLock) {
@@ -158,6 +159,7 @@ export class TurnExecutionManager {
       attachments,
       inputParts,
       references,
+      opts,
     );
     let trackedSettlement!: Promise<void>;
     trackedSettlement = turnPromise

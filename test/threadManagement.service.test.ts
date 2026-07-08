@@ -509,7 +509,10 @@ describe("LocalThreadHost", () => {
       model: string | undefined;
       opts: { seedContext?: unknown; title?: string };
     }> = [];
-    const sendUserMessage = mock(async () => undefined);
+    let subscribedBeforePrompt = false;
+    const sendUserMessage = mock(async () => {
+      expect(subscribedBeforePrompt).toBe(true);
+    });
     const worktreePath = path.join(scratchRoots()[0] ?? "/tmp", "cowork-fork-worktree");
     const worktreeService = {
       createWorktree: mock(async () => ({
@@ -550,6 +553,7 @@ describe("LocalThreadHost", () => {
       providerOptions: {
         google: { thinkingConfig: { thinkingLevel: "high" } },
         openai: { serviceTier: "priority" },
+        lmstudio: { baseUrl: "http://target-lmstudio" },
       },
     } as AgentConfig;
     const { workspace, sessionDb, threadJournal, host } = await makeHarness({
@@ -560,14 +564,22 @@ describe("LocalThreadHost", () => {
     try {
       await persistThread(sessionDb, workspace, {
         google: { thinkingConfig: { thinkingLevel: "medium" } },
+        lmstudio: { baseUrl: "http://source-lmstudio" },
       });
       sourceRuntime = makeRuntime({ id: "thread-1", cwd: workspace, title: "Thread One" });
 
-      const result = await host.forkThread({
-        threadId: "thread-1",
-        environment: { type: "worktree", ref: "HEAD" },
-        prompt: "continue here",
-      });
+      const result = await host.forkThread(
+        {
+          threadId: "thread-1",
+          environment: { type: "worktree", ref: "HEAD" },
+          prompt: "continue here",
+        },
+        {
+          onCreated: () => {
+            subscribedBeforePrompt = true;
+          },
+        },
+      );
 
       expect(worktreeService.createWorktree).toHaveBeenCalledWith({
         sourceCwd: workspace,
@@ -588,6 +600,7 @@ describe("LocalThreadHost", () => {
             providerOptions: {
               google: { thinkingConfig: { thinkingLevel: "medium" } },
               openai: { serviceTier: "priority" },
+              lmstudio: { baseUrl: "http://source-lmstudio" },
             },
           },
         },
@@ -611,6 +624,26 @@ describe("LocalThreadHost", () => {
           baseCommit: "abc123",
         },
       });
+
+      await host.forkThread({ threadId: "thread-1", model: "lmstudio:local-model" });
+      expect(created[1]).toMatchObject({
+        provider: "lmstudio",
+        model: "local-model",
+        opts: {
+          config: {
+            providerOptions: {
+              google: { thinkingConfig: { thinkingLevel: "high" } },
+              lmstudio: { baseUrl: "http://target-lmstudio" },
+            },
+          },
+        },
+      });
+
+      await expect(
+        host.forkThread({ threadId: "thread-1", thinking: "unsupported" }),
+      ).rejects.toThrow("Unsupported Google thinking level");
+      expect(worktreeService.createWorktree).toHaveBeenCalledTimes(1);
+      expect(created).toHaveLength(2);
     } finally {
       await threadJournal.close();
       sessionDb.close();
@@ -702,6 +735,53 @@ describe("LocalThreadHost", () => {
         pinned: true,
         archived: true,
         archivedAt: "2026-07-01T00:00:00.000Z",
+      });
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
+  test("desktop archive state overrides pre-existing server metadata", async () => {
+    const state = {
+      workspaces: [],
+      threads: [
+        {
+          id: "thread-1",
+          sessionId: "thread-1",
+          archived: true,
+          archivedAt: "2026-07-01T00:00:00.000Z",
+        },
+      ],
+    } as unknown as Awaited<ReturnType<WebDesktopServiceLike["loadState"]>>;
+    const desktopService = {
+      loadState: async () => state,
+      saveState: async (next: unknown) => next as typeof state,
+      listWorkspaces: async () => [],
+      createOneOffChatWorkspace: async () => ({ name: "Chat", path: "/tmp/chat" }),
+      getWorkspaceRoots: async () => [],
+      resolveWorkspaceDirectory: async (workspacePath: string) => workspacePath,
+    } satisfies WebDesktopServiceLike;
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness({ desktopService });
+    try {
+      await persistThread(sessionDb, workspace);
+      await sessionDb.setThreadMetadata({
+        threadId: "thread-1",
+        pinned: true,
+        archived: false,
+        updatedAt: "2026-07-01T00:00:01.000Z",
+      });
+
+      expect((await host.listThreads({})).threads).toEqual([]);
+      await expect(host.listThreads({ query: "thread" })).resolves.toMatchObject({
+        threads: [
+          {
+            threadId: "thread-1",
+            pinned: true,
+            archived: true,
+            archivedAt: "2026-07-01T00:00:00.000Z",
+          },
+        ],
       });
     } finally {
       await threadJournal.close();

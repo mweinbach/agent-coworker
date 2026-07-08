@@ -29,6 +29,7 @@ export type RunTurnInvocationDeps = {
   includeRawChunks: boolean;
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   setAcceptingSteers: (accepting: boolean) => void;
+  allowThreadManagementTools?: boolean;
 };
 
 export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
@@ -44,6 +45,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     includeRawChunks,
     onAdvancedMemoryChanged,
     setAcceptingSteers,
+    allowThreadManagementTools,
   } = deps;
 
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
@@ -107,6 +109,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         };
       },
       threadControl: context.deps.getThreadControlImpl?.(context.id) ?? undefined,
+      allowThreadManagementTools,
       agentControl:
         context.state.sessionInfo.sessionKind === "agent" || !context.deps.createAgentSessionImpl
           ? undefined

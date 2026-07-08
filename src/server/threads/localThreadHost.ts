@@ -529,7 +529,10 @@ export class LocalThreadHost implements ThreadHostAdapter {
     };
   }
 
-  async forkThread(input: ForkThreadInput): Promise<ForkThreadResult> {
+  async forkThread(
+    input: ForkThreadInput,
+    opts?: { onCreated?: (threadId: string) => void | Promise<void> },
+  ): Promise<ForkThreadResult> {
     const threadId = this.requireThreadId(input.threadId, "fork_thread");
     const prompt = input.prompt?.trim();
     if (input.prompt !== undefined && !prompt) {
@@ -538,10 +541,20 @@ export class LocalThreadHost implements ThreadHostAdapter {
     const source = await this.loadForkSource(threadId);
     const environment = input.environment ?? { type: "local" };
     const forkTitle = input.title?.trim() || `Fork of ${source.title}`;
-    const target = await this.resolveForkTarget(source, environment, forkTitle);
     const selection = this.resolveForkModelSelection(source, input.model);
+    const thinking = input.thinking?.trim();
+    if (thinking) {
+      buildThreadReasoningOptionsPatch({
+        provider: selection.provider,
+        model: selection.model,
+        thinking,
+      });
+    }
+    const target = await this.resolveForkTarget(source, environment, forkTitle);
     const bootstrap = await this.loadThreadSessionBootstrap(target.cwd);
     const baseConfig = bootstrap?.config ?? this.deps.getConfig();
+    const sourceProviderOptions =
+      selection.provider === source.provider ? source.providerOptions : undefined;
     const runtime = this.deps.registry.createJsonRpcThreadSession(
       target.cwd,
       selection.provider,
@@ -552,21 +565,22 @@ export class LocalThreadHost implements ThreadHostAdapter {
         config: {
           ...baseConfig,
           providerOptions:
-            source.providerOptions || baseConfig.providerOptions
+            sourceProviderOptions || baseConfig.providerOptions
               ? {
                   ...baseConfig.providerOptions,
-                  ...source.providerOptions,
+                  ...sourceProviderOptions,
                 }
               : undefined,
         },
         ...(bootstrap ? { system: bootstrap.system } : {}),
       },
     );
-    if (input.thinking?.trim()) {
-      await this.applyThinking(runtime, input.thinking);
+    if (thinking) {
+      await this.applyThinking(runtime, thinking);
     }
     await runtime.lifecycle.waitForPersistenceIdle();
     await this.upsertDesktopThread(runtime, target.workspaceId);
+    await opts?.onCreated?.(runtime.id);
     if (prompt) {
       void runtime.turns.sendUserMessage(prompt).catch(() => undefined);
     }
@@ -1002,12 +1016,25 @@ export class LocalThreadHost implements ThreadHostAdapter {
     for (const item of state?.threads ?? []) {
       if (!isRecord(item)) continue;
       const threadId = asString(item.sessionId) ?? asString(item.id);
-      if (!threadId || metadata.has(threadId)) continue;
+      if (!threadId) continue;
+      const existing = metadata.get(threadId);
+      const desktopPinned = asBoolean(item.pinned);
+      const desktopArchived = asBoolean(item.archived);
       metadata.set(threadId, {
-        pinned: asBoolean(item.pinned) ?? false,
-        pinnedAt: asTimestamp(item.pinnedAt),
-        archived: asBoolean(item.archived) ?? false,
-        archivedAt: asTimestamp(item.archivedAt),
+        pinned: desktopPinned ?? existing?.pinned ?? false,
+        pinnedAt:
+          desktopPinned === undefined
+            ? (existing?.pinnedAt ?? null)
+            : desktopPinned
+              ? asTimestamp(item.pinnedAt)
+              : null,
+        archived: desktopArchived ?? existing?.archived ?? false,
+        archivedAt:
+          desktopArchived === undefined
+            ? (existing?.archivedAt ?? null)
+            : desktopArchived
+              ? asTimestamp(item.archivedAt)
+              : null,
       });
     }
     return metadata;

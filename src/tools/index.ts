@@ -174,7 +174,11 @@ export function createTools(ctx: ToolContext): Record<string, any> {
   };
 
   const threadManagementTools =
-    ctx.threadControl && !ctx.agentRole && !ctx.taskContext && !scopedChild
+    ctx.threadControl &&
+    ctx.allowThreadManagementTools !== false &&
+    !ctx.agentRole &&
+    !ctx.taskContext &&
+    !scopedChild
       ? createThreadManagementTools(ctx)
       : {};
   const toolsWithThreadManagement = {

@@ -113,7 +113,10 @@ export interface JsonRpcRouteContext {
   };
   desktopService?: WebDesktopServiceLike | null;
   threadManagement?: {
-    forkThread(input: ForkThreadInput): Promise<ForkThreadResult>;
+    forkThread(
+      input: ForkThreadInput,
+      opts?: { onCreated?: (threadId: string) => void | Promise<void> },
+    ): Promise<ForkThreadResult>;
     setPinned(input: { threadId: string; pinned: boolean }): Promise<ThreadSummary>;
     setArchived(input: { threadId: string; archived: boolean }): Promise<ThreadSummary>;
   };

@@ -122,6 +122,9 @@ export interface ToolContext {
   /** Session-backed root thread management callbacks. */
   threadControl?: ThreadControl;
 
+  /** Whether this turn is authorized to access other conversation threads. */
+  allowThreadManagementTools?: boolean;
+
   /** Session-level cost tracker. Tools can query and set budget thresholds. */
   costTracker?: SessionCostTracker;
 

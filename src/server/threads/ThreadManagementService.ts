@@ -1,6 +1,8 @@
 import type {
   CreateThreadInput,
   ForkThreadInput,
+  ForkThreadOptions,
+  ForkThreadResult,
   HandoffStatusInput,
   HandoffThreadInput,
   ListThreadsInput,
@@ -69,6 +71,10 @@ export class ThreadManagementService {
           threadId: resolveThreadId(input.threadId),
         }),
     };
+  }
+
+  async forkThread(input: ForkThreadInput, opts?: ForkThreadOptions): Promise<ForkThreadResult> {
+    return await this.host(input.hostId).forkThread(input, opts);
   }
 
   private defaultHost(): ThreadHostAdapter {

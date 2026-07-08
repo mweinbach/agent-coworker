@@ -53,9 +53,12 @@ export function createThreadManagementRouteHandlers(
         return;
       }
       try {
-        const result = await context.threadManagement.forkThread(parsed.data);
+        const result = await context.threadManagement.forkThread(parsed.data, {
+          onCreated: async (threadId) => {
+            context.threads.subscribe(ws, threadId);
+          },
+        });
         const thread = toJsonRpcThread(result.thread);
-        context.threads.subscribe(ws, thread.id);
         void context.journal
           .enqueue({
             threadId: thread.id,

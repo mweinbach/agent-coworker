@@ -100,6 +100,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
             references,
+            { allowThreadManagementTools: ws.data.taskReadAllowed !== false },
           );
         },
         (event): event is JsonRpcTurnStartOutcome =>

@@ -107,6 +107,7 @@ export interface RunTurnParams {
   referencedPlugins?: ReferencedPluginContext[];
   agentControl?: AgentControl;
   threadControl?: ThreadControl;
+  allowThreadManagementTools?: boolean;
   prepareStep?: RuntimePrepareStep;
   registerSteerHandler?: RuntimeRegisterSteerHandler;
 
@@ -481,6 +482,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       yolo: params.yolo,
       agentControl: params.agentControl,
       threadControl: params.threadControl,
+      allowThreadManagementTools: params.allowThreadManagementTools,
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,

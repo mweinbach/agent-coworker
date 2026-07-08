@@ -211,6 +211,10 @@ export type HandoffStatusInput = {
 
 export type HandoffStatusResult = UnsupportedThreadOperationResult;
 
+export type ForkThreadOptions = {
+  onCreated?: (threadId: string) => void | Promise<void>;
+};
+
 export interface ThreadHostAdapter {
   hostId: ThreadHostId;
   displayName: string;
@@ -221,7 +225,7 @@ export interface ThreadHostAdapter {
   createThread(input: CreateThreadInput): Promise<CreateThreadResult>;
   sendMessage(input: SendMessageToThreadInput): Promise<SendMessageResult>;
 
-  forkThread(input: ForkThreadInput): Promise<ForkThreadResult>;
+  forkThread(input: ForkThreadInput, opts?: ForkThreadOptions): Promise<ForkThreadResult>;
   handoffThread(input: HandoffThreadInput): Promise<HandoffStartResult>;
   getHandoffStatus(input: HandoffStatusInput): Promise<HandoffStatusResult>;
 

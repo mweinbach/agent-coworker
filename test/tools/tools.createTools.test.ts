@@ -523,6 +523,14 @@ describe("createTools", () => {
       createTools(makeCtx(dir, { threadControl: typedThreadControl, agentRole: "worker" })),
     ).not.toHaveProperty("list_threads");
     expect(
+      createTools(
+        makeCtx(dir, {
+          threadControl: typedThreadControl,
+          allowThreadManagementTools: false,
+        }),
+      ),
+    ).not.toHaveProperty("list_threads");
+    expect(
       createTools(makeCtx(dir, { threadControl: typedThreadControl, agentTargetPaths: ["src"] })),
     ).not.toHaveProperty("list_threads");
     expect(

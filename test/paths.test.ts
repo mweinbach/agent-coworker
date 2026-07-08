@@ -364,6 +364,13 @@ describe("truncateText", () => {
       expect(truncateText("😀😀😀😀", 2)).toBe("😀😀");
       expect(Array.from(truncateText("😀😀😀😀", 2))).toHaveLength(2);
     });
+
+    test("unpaired high surrogate does not consume the next code unit", () => {
+      const input = "\uD800X";
+      const result = truncateText(input, 1);
+      expect(result).toBe(Array.from(input).slice(0, 1).join(""));
+      expect(result).toBe("\uD800");
+    });
   });
 });
 

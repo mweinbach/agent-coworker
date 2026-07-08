@@ -95,7 +95,9 @@ export function truncateText(s: string, maxChars: number): string {
   let end = 0;
   while (end < s.length && count < maxChars) {
     const unit = s.charCodeAt(end);
-    end += unit >= 0xd800 && unit <= 0xdbff && end + 1 < s.length ? 2 : 1;
+    const next = end + 1 < s.length ? s.charCodeAt(end + 1) : -1;
+    const isSurrogatePair = unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
+    end += isSurrogatePair ? 2 : 1;
     count++;
   }
   return s.slice(0, end);

@@ -255,8 +255,12 @@ export function commands(
   const python = pythonInvocation(env, platform);
   const q = (value: string) => quoteShellValue(value, dialect);
   if (dialect === "powershell") {
-    // A quoted executable path needs PowerShell's call operator.
-    const invoke = /[\s'‘’‚‛]/.test(python.command) ? `& ${q(python.command)}` : python.command;
+    // Managed interpreter paths are data, never PowerShell syntax. Always
+    // quote and call-operate them so metacharacters (& ; ( ) ` etc.) remain
+    // literal path bytes. The bare fallback stays concise.
+    const invoke = envValue(env, "COWORK_RUNTIME_PYTHON")
+      ? `& ${q(python.command)}`
+      : python.command;
     return {
       runPythonScript: (scriptPath) => `${invoke} ${q(scriptPath)}`,
       printWorkingDirectory: () => "(Get-Location).Path",

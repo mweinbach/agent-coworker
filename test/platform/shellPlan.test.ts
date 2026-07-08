@@ -206,6 +206,18 @@ describe("commands — canned cross-platform command strings", () => {
     expect(c.runPythonScript("s.py")).toBe("& 'C:\\Program Files\\rt\\python.exe' 's.py'");
   });
 
+  test("PowerShell metacharacters in managed interpreter paths stay literal", () => {
+    for (const interpreter of [
+      "C:\\Tools&Co\\python.exe",
+      "C:\\Tools;Co\\python.exe",
+      "C:\\Tools(Co)\\python.exe",
+      "C:\\Tools`Co\\python.exe",
+    ]) {
+      const c = commands("win32", { COWORK_RUNTIME_PYTHON: interpreter });
+      expect(c.runPythonScript("s.py")).toBe(`& '${interpreter}' 's.py'`);
+    }
+  });
+
   test("posix shapes", () => {
     const c = commands("linux", {});
     expect(c.runPythonScript("it's.py")).toBe("'python3' 'it'\\''s.py'");
@@ -234,7 +246,7 @@ describe("runShellCommandWithExec temp-script lifecycle", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(sawPath).toBeTruthy();
-    expect(path.basename(sawPath as string)).toStartWith("cowork-shell-");
+    expect(path.win32.basename(sawPath as string)).toStartWith("cowork-shell-");
     expect(existedDuringRun).toBe(true);
     expect(contentDuringRun).toContain(big);
     expect(fs.existsSync(sawPath as string)).toBe(false);

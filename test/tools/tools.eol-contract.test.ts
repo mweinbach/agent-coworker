@@ -145,6 +145,53 @@ describe("read/edit EOL contract", () => {
     expect(out).toBe("1\théllo\n2\twörld");
   });
 
+  test("edit preserves UTF-16LE encoding, BOM, and CRLF line endings", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "utf16le.txt");
+    await fs.writeFile(p, Buffer.from("﻿alpha\r\nbeta\r\n", "utf16le"));
+
+    const edit: any = createEditTool(makeCtx(dir));
+    await edit.execute({
+      filePath: p,
+      oldString: "alpha\nbeta",
+      newString: "ALPHA\nBETA",
+      replaceAll: false,
+    });
+
+    const bytes = await fs.readFile(p);
+    expect([...bytes.subarray(0, 2)]).toEqual([0xff, 0xfe]);
+    expect(bytes.toString("utf16le")).toBe("﻿ALPHA\r\nBETA\r\n");
+  });
+
+  test("edit preserves UTF-16BE encoding and BOM", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "utf16be.txt");
+    const le = Buffer.from("﻿alpha\nbeta\n", "utf16le");
+    const be = Buffer.alloc(le.length);
+    for (let i = 0; i < le.length; i += 2) {
+      be[i] = le[i + 1] as number;
+      be[i + 1] = le[i] as number;
+    }
+    await fs.writeFile(p, be);
+
+    const edit: any = createEditTool(makeCtx(dir));
+    await edit.execute({
+      filePath: p,
+      oldString: "alpha\nbeta",
+      newString: "ALPHA\nBETA",
+      replaceAll: false,
+    });
+
+    const bytes = await fs.readFile(p);
+    expect([...bytes.subarray(0, 2)]).toEqual([0xfe, 0xff]);
+    const decodedLe = Buffer.alloc(bytes.length);
+    for (let i = 0; i < bytes.length; i += 2) {
+      decodedLe[i] = bytes[i + 1] as number;
+      decodedLe[i + 1] = bytes[i] as number;
+    }
+    expect(decodedLe.toString("utf16le")).toBe("﻿ALPHA\nBETA\n");
+  });
+
   test("read + edit round trip on a CRLF file: copy from read, edit, still CRLF", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "round.ts");

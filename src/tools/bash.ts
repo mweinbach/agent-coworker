@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { minimalSandboxEnv } from "../platform/env";
-import { which } from "../platform/exec";
+import { classifyExecutable, which } from "../platform/exec";
 import { hostPlatform } from "../platform/host";
 import { run as procRun } from "../platform/proc";
 import {
@@ -181,13 +181,20 @@ async function runShellCommandWithExec(
   // and could bind different shells on one machine. Unresolved candidates
   // keep their bare name: the spawn layer's ENOENT then advances the
   // fallback chain exactly as before.
-  const resolvedPlan = plan.map((step) => {
+  const resolvedPlan = plan.flatMap((step) => {
     const file = which(step.file, {
       env: opts.env,
       platform: opts.platform,
       ...(opts.exists ? { exists: opts.exists } : {}),
     });
-    return file ? { ...step, file, resolved: true } : { ...step, resolved: false };
+    // A shell launcher found as .cmd/.bat requires a cmd.exe wrapper with
+    // windowsVerbatimArguments. The sandbox helper and legacy ExecRunner
+    // boundary cannot preserve that nested contract, so skip the shim and
+    // continue to the next native shell candidate (normally powershell.exe).
+    if (file && classifyExecutable(file, opts.platform) === "batch-shim") {
+      return [];
+    }
+    return [file ? { ...step, file, resolved: true } : { ...step, resolved: false }];
   });
 
   // Oversized win32 commands ship as a -File temp script (see

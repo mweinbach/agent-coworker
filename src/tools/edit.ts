@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 
 import { z } from "zod";
-import { normalizeLineEndings, replaceRespectingEol } from "../platform/text";
+import {
+  decodeTextBuffer,
+  encodeTextBuffer,
+  normalizeLineEndings,
+  replaceRespectingEol,
+} from "../platform/text";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
@@ -55,7 +60,8 @@ export function createEditTool(ctx: ToolContext) {
           `edit blocked: ${abs} is ${Number(stat.size)} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
         );
       }
-      const content = await Bun.file(abs).text();
+      const decoded = decodeTextBuffer(await fs.readFile(abs));
+      const content = decoded.text;
 
       // THE read/edit EOL contract (docs/platform-abstraction-plan.md row 5):
       // read presents an LF-normalized view, so a multi-line oldString the
@@ -96,8 +102,17 @@ export function createEditTool(ctx: ToolContext) {
             : `oldString is not unique in ${abs}. Provide more context or set replaceAll=true.`,
         );
       }
+      const encoded = encodeTextBuffer(result.content, {
+        encoding: decoded.encoding,
+        bom: decoded.hadBom,
+      });
+      if (encoded.byteLength > MAX_EDIT_FILE_BYTES) {
+        throw new Error(
+          `edit blocked: encoded result would be ${encoded.byteLength} bytes (max ${MAX_EDIT_FILE_BYTES}).`,
+        );
+      }
       await ctx.assertCanMutate?.("edit");
-      await Bun.write(abs, result.content);
+      await Bun.write(abs, encoded);
 
       ctx.log(`tool< edit ${JSON.stringify({ ok: true })}`);
       return "Edit applied.";

@@ -87,6 +87,20 @@ function heartbeatTreeScript(heartbeatPath: string): string {
   `;
 }
 
+function termIgnoringHeartbeatTreeScript(heartbeatPath: string): string {
+  const grandchild = `
+    const fs = require("node:fs");
+    process.on("SIGTERM", () => {});
+    setInterval(() => { try { fs.appendFileSync(${JSON.stringify(heartbeatPath)}, "x"); } catch {} }, 40);
+  `;
+  return `
+    Bun.spawn([process.execPath, "-e", ${JSON.stringify(grandchild)}], {
+      stdin: "ignore", stdout: "ignore", stderr: "ignore",
+    });
+    setInterval(() => {}, 1000);
+  `;
+}
+
 /** Asserts the heartbeat file stops growing (the whole tree is dead). */
 async function expectHeartbeatStopped(heartbeatPath: string): Promise<void> {
   // Settle: let any already-issued kill finish and in-flight writes land.
@@ -205,6 +219,17 @@ describe("proc.run — tree kill (row-14 proof)", () => {
     expect(result.exitCode).toBe(124);
     // The grandchild must have actually run before the kill.
     expect(await waitFor(() => fileSize(heartbeat) > 0, 2000)).toBe(true);
+    await expectHeartbeatStopped(heartbeat);
+  }, 20000);
+
+  test("hard-kill escalation survives root exit and reaps a TERM-ignoring grandchild", async () => {
+    const heartbeat = scratchFile("run-timeout-term-ignoring-heartbeat.txt");
+    const result = await run(BUN, ["-e", termIgnoringHeartbeatTreeScript(heartbeat)], {
+      timeoutMs: 900,
+    });
+    expect(result.errorCode).toBe("TIMEOUT");
+    expect(await waitFor(() => fileSize(heartbeat) > 0, 2000)).toBe(true);
+    await sleep(3500);
     await expectHeartbeatStopped(heartbeat);
   }, 20000);
 });

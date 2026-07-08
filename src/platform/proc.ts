@@ -290,6 +290,7 @@ export async function run(file: string, args: string[], opts: RunOptions = {}): 
         () => killPosixGroup(proc.pid, "SIGKILL", defaultKill),
         POSIX_HARD_KILL_ESCALATION_MS,
       );
+      escalationTimer.unref?.();
     }
   };
 
@@ -379,7 +380,9 @@ export async function run(file: string, args: string[], opts: RunOptions = {}): 
     return { stdout, stderr, exitCode: exit.exitCode };
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer);
-    if (escalationTimer) clearTimeout(escalationTimer);
+    // Do not clear an armed hard-kill escalation when the root exits first:
+    // SIGTERM-ignoring descendants can still own the detached process group.
+    // The unref'd timer must survive long enough to reap that remainder.
     opts.signal?.removeEventListener("abort", onAbort);
   }
 }

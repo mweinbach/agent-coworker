@@ -712,6 +712,51 @@ describe("acquireLockDir", () => {
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 
+  test("release waits for an in-flight heartbeat before removing the lock", async () => {
+    const lockPath = path.join(tmpDir, "heartbeat-release-race.lock");
+    const ownerPath = path.join(lockPath, "owner.json");
+    let ownerParentMkdirCalls = 0;
+    let startHeartbeatMkdir!: () => void;
+    const heartbeatMkdirStarted = new Promise<void>((resolve) => {
+      startHeartbeatMkdir = resolve;
+    });
+    let allowHeartbeatMkdir!: () => void;
+    const heartbeatMkdirGate = new Promise<void>((resolve) => {
+      allowHeartbeatMkdir = resolve;
+    });
+    let finishHeartbeat!: () => void;
+    const heartbeatFinished = new Promise<void>((resolve) => {
+      finishHeartbeat = resolve;
+    });
+    const fsImpl = fsWith({
+      mkdir: async (target, options) => {
+        if (String(target) === lockPath && options?.recursive === true) {
+          ownerParentMkdirCalls += 1;
+          if (ownerParentMkdirCalls === 2) {
+            startHeartbeatMkdir();
+            await heartbeatMkdirGate;
+          }
+        }
+        return await fsp.mkdir(target, options);
+      },
+      rename: async (from, to) => {
+        await fsp.rename(from, to);
+        if (String(to) === ownerPath && ownerParentMkdirCalls >= 2) {
+          finishHeartbeat();
+        }
+      },
+    });
+
+    const handle = await acquireLockDir(lockPath, { heartbeatMs: 1 }, { fsImpl });
+    await heartbeatMkdirStarted;
+    const releasePromise = handle.release();
+    await Bun.sleep(10);
+    allowHeartbeatMkdir();
+    await Promise.all([releasePromise, heartbeatFinished]);
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
   test("heartbeat after release is a no-op", async () => {
     const lockPath = path.join(tmpDir, "hb-after-release.lock");
     const handle = await acquireLockDir(lockPath);

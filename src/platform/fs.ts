@@ -629,9 +629,16 @@ export async function acquireLockDir(
 
   let released = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  const inFlightHeartbeats = new Set<Promise<void>>();
   const heartbeat = async (): Promise<void> => {
     if (released) return;
-    await writeOwner();
+    const pending = writeOwner();
+    inFlightHeartbeats.add(pending);
+    try {
+      await pending;
+    } finally {
+      inFlightHeartbeats.delete(pending);
+    }
   };
   if (opts.heartbeatMs !== undefined && opts.heartbeatMs > 0) {
     timer = setInterval(() => {
@@ -641,16 +648,22 @@ export async function acquireLockDir(
     }, opts.heartbeatMs);
     timer.unref?.();
   }
+  let releasePromise: Promise<void> | undefined;
+  const release = (): Promise<void> => {
+    if (releasePromise !== undefined) return releasePromise;
+    released = true;
+    if (timer !== undefined) {
+      clearInterval(timer);
+    }
+    releasePromise = (async () => {
+      await Promise.allSettled([...inFlightHeartbeats]);
+      await removeWithRetry(lockPath, { recursive: true, bestEffort: true }, deps);
+    })();
+    return releasePromise;
+  };
   return {
     heartbeat,
-    release: async (): Promise<void> => {
-      if (released) return;
-      released = true;
-      if (timer !== undefined) {
-        clearInterval(timer);
-      }
-      await removeWithRetry(lockPath, { recursive: true, bestEffort: true }, deps);
-    },
+    release,
   };
 }
 

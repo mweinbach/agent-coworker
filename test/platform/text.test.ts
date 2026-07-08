@@ -4,6 +4,7 @@ import {
   decodeTextBuffer,
   detectEol,
   type Eol,
+  encodeTextBuffer,
   normalizeLineEndings,
   normalizeLineEndingsBytes,
   replaceRespectingEol,
@@ -322,6 +323,24 @@ describe("decodeTextBuffer", () => {
       text: "",
       encoding: "utf-16be",
       hadBom: true,
+    });
+  });
+});
+
+describe("encodeTextBuffer", () => {
+  test("round-trips every supported BOM-marked encoding", () => {
+    const text = "héllo 😀\r\nworld";
+    for (const encoding of ["utf-8", "utf-16le", "utf-16be"] as const) {
+      const encoded = encodeTextBuffer(text, { encoding, bom: true });
+      expect(decodeTextBuffer(encoded)).toEqual({ text, encoding, hadBom: true });
+    }
+  });
+
+  test("plain UTF-8 stays BOM-less", () => {
+    expect(decodeTextBuffer(encodeTextBuffer("hello", { encoding: "utf-8" }))).toEqual({
+      text: "hello",
+      encoding: "utf-8",
+      hadBom: false,
     });
   });
 });

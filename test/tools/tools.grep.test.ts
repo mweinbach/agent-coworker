@@ -612,60 +612,59 @@ describe("grep tool", () => {
     expect(capturedArgs[globIdx + 1]).toBe(expected);
   });
 
-  test.if(hostPlatform() === "win32")(
-    "wraps a .cmd ripgrep shim in a cmd.exe batch-shim spawn plan",
-    async () => {
-      const dir = await tmpDir();
-      await fs.writeFile(path.join(dir, "file.txt"), "needle\n", "utf-8");
-      const shimPath = "C:\\fake-tools\\rg.cmd";
+  test("wraps a .cmd ripgrep shim in a cmd.exe batch-shim spawn plan", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "file.txt"), "needle\n", "utf-8");
+    const shimPath = "C:\\fake-tools\\rg.cmd";
 
-      let capturedCmd = "";
-      let capturedArgs: string[] = [];
-      const argCaptureExecFile: any = async (cmd: string, args: string[], _opts: any) => {
-        capturedCmd = cmd;
-        capturedArgs = [...args];
-        return { stdout: `${path.join(dir, "file.txt")}:1:needle\n`, stderr: "", exitCode: 0 };
-      };
+    let capturedCmd = "";
+    let capturedArgs: string[] = [];
+    let capturedOptions: Record<string, unknown> = {};
+    const argCaptureExecFile: any = async (cmd: string, args: string[], options: any) => {
+      capturedCmd = cmd;
+      capturedArgs = [...args];
+      capturedOptions = options;
+      return { stdout: `${path.join(dir, "file.txt")}:1:needle\n`, stderr: "", exitCode: 0 };
+    };
 
-      const t: any = createGrepTool(makeCtx(dir), {
-        execFileImpl: argCaptureExecFile,
-        ensureRipgrepImpl: async () => shimPath,
-      });
-      const res: string = await t.execute({ pattern: "needle", path: dir, caseSensitive: true });
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: argCaptureExecFile,
+      ensureRipgrepImpl: async () => shimPath,
+      platform: "win32",
+    } as any);
+    const res: string = await t.execute({ pattern: "needle", path: dir, caseSensitive: true });
 
-      expect(res).toContain("needle");
-      expect(capturedCmd.toLowerCase()).toMatch(/cmd(\.exe)?$/);
-      expect(capturedArgs.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
-      expect(capturedArgs[4]).toContain("rg.cmd");
-    },
-  );
+    expect(res).toContain("needle");
+    expect(capturedCmd.toLowerCase()).toMatch(/cmd(\.exe)?$/);
+    expect(capturedArgs.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
+    expect(capturedArgs[4]).toContain("rg.cmd");
+    expect(capturedOptions.windowsVerbatimArguments).toBe(true);
+  });
 
-  test.if(hostPlatform() === "win32")(
-    "returns a typed shim error instead of mangling unsafe batch-shim args",
-    async () => {
-      const dir = await tmpDir();
-      await fs.writeFile(path.join(dir, "file.txt"), 'say "hi"\n', "utf-8");
-      const shimPath = "C:\\fake-tools\\rg.cmd";
+  test("returns a typed shim error instead of mangling unsafe batch-shim args", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "file.txt"), 'say "hi"\n', "utf-8");
+    const shimPath = "C:\\fake-tools\\rg.cmd";
 
-      let spawned = false;
-      const t: any = createGrepTool(makeCtx(dir), {
-        execFileImpl: (async () => {
-          spawned = true;
-          return { stdout: "", stderr: "", exitCode: 0 };
-        }) as any,
-        ensureRipgrepImpl: async () => shimPath,
-      });
-      const res: string = await t.execute({
-        pattern: 'say "hi"',
-        path: dir,
-        caseSensitive: true,
-      });
+    let spawned = false;
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: (async () => {
+        spawned = true;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }) as any,
+      ensureRipgrepImpl: async () => shimPath,
+      platform: "win32",
+    } as any);
+    const res: string = await t.execute({
+      pattern: 'say "hi"',
+      path: dir,
+      caseSensitive: true,
+    });
 
-      expect(spawned).toBe(false);
-      expect(res).toContain("batch shim");
-      expect(res).toContain("cannot be passed to it safely");
-    },
-  );
+    expect(spawned).toBe(false);
+    expect(res).toContain("batch shim");
+    expect(res).toContain("cannot be passed to it safely");
+  });
 
   test("searches in subdirectories", async () => {
     const dir = await tmpDir();

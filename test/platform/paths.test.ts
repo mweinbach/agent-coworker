@@ -449,7 +449,9 @@ describe("toPosixRelative / fromPosixRelative", () => {
 describe("home / coworkHome / coworkPaths", () => {
   test("defaults to os.homedir() when no override is present", () => {
     expect(home({})).toBe(os.homedir());
-    expect(home({ HOME: "/somewhere/else" })).toBe(os.homedir());
+    expect(home({ HOME: "/somewhere/else" }, "linux")).toBe("/somewhere/else");
+    expect(home({ HOME: "/somewhere/else" }, "darwin")).toBe("/somewhere/else");
+    expect(home({ HOME: "C:\\git-bash-home" }, "win32")).toBe(os.homedir());
   });
 
   test("COWORK_HOME_OVERRIDE is the only lever and is resolved", () => {
@@ -486,6 +488,8 @@ describe("expandHome", () => {
     expect(expandHome("~", { home: homeDir })).toBe(homeDir);
     expect(expandHome("~/a/b", { home: homeDir })).toBe(path.join(homeDir, "a", "b"));
     expect(expandHome("~\\a\\b", { home: homeDir })).toBe(path.join(homeDir, "a", "b"));
+    expect(expandHome("~/a\\b", { home: homeDir })).toBe(path.join(homeDir, "a", "b"));
+    expect(expandHome("~\\a/b", { home: homeDir })).toBe(path.join(homeDir, "a", "b"));
   });
 
   test("~user/x throws instead of silently mis-expanding", () => {

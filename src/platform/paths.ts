@@ -269,15 +269,22 @@ export function fromPosixRelative(
 
 /**
  * THE home-directory resolver: `os.homedir()`, overridable ONLY via the explicit
- * COWORK_HOME_OVERRIDE env lever (tests/embedders). Deliberately NOT HOME-first on
- * Windows: a Git-Bash-exported HOME once split auth (`~/.cowork/auth`) from config into
- * two different "homes" (CLAUDE.md scar tissue) — os.homedir() ignores HOME on win32 and
- * honors it on POSIX, which is exactly the contract we want on every platform.
+ * COWORK_HOME_OVERRIDE env lever (tests/embedders). POSIX honors the supplied env's
+ * HOME so embedded servers remain confined to their configured account. Windows
+ * deliberately ignores HOME: a Git-Bash-exported value once split auth
+ * (`~/.cowork/auth`) from config into two different homes (CLAUDE.md scar tissue).
  */
-export function home(env: NodeJS.ProcessEnv = process.env): string {
+export function home(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
   const override = env.COWORK_HOME_OVERRIDE?.trim();
   if (override) {
     return path.resolve(override);
+  }
+  const posixHome = env.HOME?.trim();
+  if (platform !== "win32" && posixHome) {
+    return path.resolve(posixHome);
   }
   return os.homedir();
 }
@@ -334,7 +341,7 @@ export function expandHome(p: string, opts: { home?: string } = {}): string {
   }
   const next = p[1];
   if (next === "/" || next === "\\") {
-    return path.join(homeDir, p.slice(2));
+    return path.join(homeDir, ...p.slice(2).split(/[\\/]+/));
   }
   throw new Error(`Unsupported home-relative path (only "~" and "~/..." expand): ${p}`);
 }

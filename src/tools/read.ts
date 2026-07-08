@@ -2,10 +2,10 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { type Readable, Transform, type TransformCallback } from "node:stream";
 
 import { z } from "zod";
 import { modelSupportsImageInputSync } from "../models/metadata";
-import { decodeTextBuffer, splitLines } from "../platform/text";
 import { getAttachmentByteLengthValidationMessage } from "../shared/attachments";
 import {
   googleMultimodalPartTypeForMime,
@@ -19,11 +19,47 @@ import { assertReadPathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
-/** UTF-16 files must be fully decoded (no streaming decoder for them here);
- * cap how much we are willing to buffer. UTF-8 files of any size still stream. */
-const MAX_UTF16_DECODE_BYTES = 100_000_000;
-
 type SniffedBom = "utf-8" | "utf-16le" | "utf-16be" | null;
+
+type ReadStreamFactory = (
+  filePath: string,
+  options?: { encoding?: BufferEncoding; start?: number },
+) => ReturnType<typeof createReadStream>;
+
+class Utf16BeToLeTransform extends Transform {
+  private pendingByte: number | undefined;
+
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
+    const input =
+      this.pendingByte === undefined
+        ? chunk
+        : Buffer.concat([Buffer.from([this.pendingByte]), chunk]);
+    const evenLength = input.length - (input.length % 2);
+    const swapped = Buffer.allocUnsafe(evenLength);
+    for (let i = 0; i < evenLength; i += 2) {
+      swapped[i] = input[i + 1] as number;
+      swapped[i + 1] = input[i] as number;
+    }
+    this.pendingByte = evenLength < input.length ? input[evenLength] : undefined;
+    if (swapped.length > 0) this.push(swapped);
+    callback();
+  }
+}
+
+function createUtf16DecodedStream(
+  abs: string,
+  encoding: "utf-16le" | "utf-16be",
+  createStream: ReadStreamFactory,
+): { source: ReturnType<typeof createReadStream>; input: Readable } {
+  const source = createStream(abs, { start: 2 });
+  if (encoding === "utf-16le") {
+    source.setEncoding("utf16le");
+    return { source, input: source };
+  }
+  const swapped = source.pipe(new Utf16BeToLeTransform());
+  swapped.setEncoding("utf16le");
+  return { source, input: swapped };
+}
 
 async function sniffBom(abs: string): Promise<SniffedBom> {
   const fh = await fs.open(abs, "r");
@@ -51,7 +87,12 @@ function binaryMediaGuardMessage(filePath: string, mimeType: string): string {
   ].join(" ");
 }
 
-export function createReadTool(ctx: ToolContext) {
+export function createReadTool(
+  ctx: ToolContext,
+  opts: { createReadStreamImpl?: ReadStreamFactory } = {},
+) {
+  const createStream: ReadStreamFactory =
+    opts.createReadStreamImpl ?? ((filePath, options) => createReadStream(filePath, options));
   return defineTool({
     description:
       "Read a file from the filesystem. Returns line-numbered text for text files. For images, returns visual content when the model supports image input. Audio, video, and PDF files are binary media and are not returned through read; use attached media or dedicated extraction/transcription workflows. Use offset/limit for large text files.",
@@ -146,25 +187,23 @@ export function createReadTool(ctx: ToolContext) {
       let lineNo = 0;
       const bom = await sniffBom(abs);
       if (bom === "utf-16le" || bom === "utf-16be") {
-        const stat = await fs.stat(abs);
-        if (Number(stat.size) > MAX_UTF16_DECODE_BYTES) {
-          throw new Error(
-            `read blocked: ${abs} is a ${bom} file of ${Number(stat.size)} bytes (max ${MAX_UTF16_DECODE_BYTES} for UTF-16 decoding).`,
-          );
-        }
-        const { text } = decodeTextBuffer(new Uint8Array(await Bun.file(abs).arrayBuffer()));
-        const lines = splitLines(text);
-        // Match readline semantics: a final newline does not open an empty line.
-        if (lines.length > 1 && lines.at(-1) === "") lines.pop();
-        for (const line of lines) {
-          lineNo += 1;
-          if (lineNo <= start) continue;
-          if (lineNo > end) break;
-          if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-          numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+        const { source, input } = createUtf16DecodedStream(abs, bom, createStream);
+        const rl = readline.createInterface({ input, crlfDelay: Infinity });
+        try {
+          for await (const line of rl) {
+            lineNo += 1;
+            if (lineNo <= start) continue;
+            if (lineNo > end) break;
+            if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
+            numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+          }
+        } finally {
+          rl.close();
+          input.destroy();
+          source.destroy();
         }
       } else {
-        const stream = createReadStream(abs, { encoding: "utf-8" });
+        const stream = createStream(abs, { encoding: "utf-8" });
         const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
         try {
           for await (let line of rl) {

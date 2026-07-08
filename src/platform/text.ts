@@ -158,6 +158,42 @@ function swapUtf16BytePairs(bytes: Uint8Array): Uint8Array {
 }
 
 /**
+ * Encodes text using the same explicit encoding vocabulary returned by
+ * {@link decodeTextBuffer}. Callers that are rewriting an existing file should
+ * pass through both `encoding` and `hadBom` so edits preserve the original byte
+ * contract instead of silently converting UTF-16 files to UTF-8.
+ */
+export function encodeTextBuffer(
+  text: string,
+  opts: { encoding: DecodedTextBuffer["encoding"]; bom?: boolean },
+): Uint8Array {
+  let body: Uint8Array;
+  if (opts.encoding === "utf-8") {
+    body = new TextEncoder().encode(text);
+  } else {
+    const littleEndian = new Uint8Array(text.length * 2);
+    for (let i = 0; i < text.length; i += 1) {
+      const codeUnit = text.charCodeAt(i);
+      littleEndian[i * 2] = codeUnit & 0xff;
+      littleEndian[i * 2 + 1] = codeUnit >> 8;
+    }
+    body = opts.encoding === "utf-16be" ? swapUtf16BytePairs(littleEndian) : littleEndian;
+  }
+
+  if (!opts.bom) return body;
+  const prefix =
+    opts.encoding === "utf-8"
+      ? new Uint8Array([0xef, 0xbb, 0xbf])
+      : opts.encoding === "utf-16le"
+        ? new Uint8Array([0xff, 0xfe])
+        : new Uint8Array([0xfe, 0xff]);
+  const encoded = new Uint8Array(prefix.length + body.length);
+  encoded.set(prefix);
+  encoded.set(body, prefix.length);
+  return encoded;
+}
+
+/**
  * Decodes a text file buffer identically on all platforms: sniffs a leading
  * BOM (`EF BB BF` → UTF-8, `FF FE` → UTF-16LE, `FE FF` → UTF-16BE), strips it,
  * and decodes accordingly; BOM-less buffers decode as UTF-8. With

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import { classifyExecutable, resolveSpawn, UnsafeShimArgumentError } from "../platform/exec";
+import { hostPlatform } from "../platform/host";
 import { normalizeGlobPattern, toPosixRelative } from "../platform/paths";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 import { type ExecFileCompatRunner, execFileCompat } from "../utils/execFileCompat";
@@ -44,10 +45,15 @@ function credentialDenyGlobs(searchPath: string, ctx: ToolContext): string[] {
 
 export function createGrepTool(
   ctx: ToolContext,
-  opts: { execFileImpl?: ExecFileCompatRunner; ensureRipgrepImpl?: typeof ensureRipgrep } = {},
+  opts: {
+    execFileImpl?: ExecFileCompatRunner;
+    ensureRipgrepImpl?: typeof ensureRipgrep;
+    platform?: NodeJS.Platform;
+  } = {},
 ) {
   const execFileImpl = opts.execFileImpl ?? execFileCompat;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
+  const platform = opts.platform ?? hostPlatform();
 
   return defineTool({
     description:
@@ -118,11 +124,13 @@ export function createGrepTool(
       // typed UnsafeShimArgumentError for arguments cmd.exe cannot carry safely.
       let spawnFile = rgPath;
       let spawnArgs = args;
-      if (classifyExecutable(rgPath) === "batch-shim") {
+      let windowsVerbatimArguments = false;
+      if (classifyExecutable(rgPath, platform) === "batch-shim") {
         try {
-          const plan = resolveSpawn(rgPath, args);
+          const plan = resolveSpawn(rgPath, args, { platform });
           spawnFile = plan.file;
           spawnArgs = plan.args;
+          windowsVerbatimArguments = plan.windowsVerbatimArguments === true;
         } catch (err) {
           if (err instanceof UnsafeShimArgumentError) {
             const msg =
@@ -140,6 +148,7 @@ export function createGrepTool(
         maxBuffer: 1024 * 1024 * 10,
         ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
         timeoutMs,
+        windowsVerbatimArguments,
       });
 
       const stderrText = result.stderr.trim();

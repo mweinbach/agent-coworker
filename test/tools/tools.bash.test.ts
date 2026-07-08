@@ -83,6 +83,62 @@ describe("bash tool", () => {
     expect(seen).toEqual(["C:\\tools\\pwsh.exe"]);
   });
 
+  test("skips Windows batch-shim shells in favor of a native fallback", async () => {
+    const seen: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      env: { Path: "C:\\tools" },
+      exists: (candidate: string) => {
+        const lower = candidate.toLowerCase();
+        return lower === "c:\\tools\\pwsh.cmd" || lower === "c:\\tools\\powershell.exe";
+      },
+      execRunner: async (file: string) => {
+        seen.push(file);
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(seen).toEqual(["C:\\tools\\powershell.exe"]);
+    expect(result.stdout.trim()).toBe("hi");
+  });
+
+  test("never embeds a Windows batch-shim shell inside the sandbox helper plan", async () => {
+    let helperArgs: string[] = [];
+    await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/work",
+      platform: "win32",
+      env: { Path: "C:\\tools" },
+      policy: { kind: "workspace-write", writableRoots: ["C:/work"], network: false },
+      requireBackend: true,
+      capabilities: {
+        seatbelt: false,
+        bwrapPath: null,
+        windowsHelperPath: "C:/helper.exe",
+        windowsSandboxHome: "C:/Users/test/.cowork",
+        windowsEnforcement: {
+          filesystem: true,
+          network: true,
+          process: true,
+          integrity: true,
+        },
+      },
+      exists: (candidate: string) => {
+        const lower = candidate.toLowerCase();
+        return lower === "c:\\tools\\pwsh.cmd" || lower === "c:\\tools\\powershell.exe";
+      },
+      execRunner: async (_file: string, args: string[]) => {
+        helperArgs = args;
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(helperArgs.join(" ").toLowerCase()).toContain("powershell.exe");
+    expect(helperArgs.join(" ").toLowerCase()).not.toContain("pwsh.cmd");
+  });
+
   test("prefers pwsh before powershell.exe on Windows", async () => {
     const seen: string[] = [];
     const result = await bashInternal.runShellCommandWithExec({

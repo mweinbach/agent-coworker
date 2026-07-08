@@ -1280,7 +1280,10 @@ describe("server JSON-RPC task terminal turn locks", () => {
         responseMessages: [],
       };
     }) as never;
-    const opts = serverOpts(tmpDir, { runTurnImpl, taskTerminalQuiesceTimeoutMs: 500 });
+    // This test deliberately holds the child across multiple RPC assertions before
+    // releasing it. Leave room for slower Windows CI scheduling while still proving
+    // that terminal completion waits for the child to settle.
+    const opts = serverOpts(tmpDir, { runTurnImpl, taskTerminalQuiesceTimeoutMs: 2_000 });
     const running = await startAgentServer(opts);
     const rpc = await connectJsonRpc(running.url);
 

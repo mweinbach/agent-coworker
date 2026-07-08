@@ -300,6 +300,88 @@ describe("LocalThreadHost", () => {
     }
   });
 
+  test("readThread does not duplicate a snapshot prefix already present in the journal", async () => {
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness({
+      registry: {
+        readThreadSnapshot: () => ({
+          feed: [{ kind: "message", role: "user", text: "seeded context" }],
+        }),
+      },
+    });
+    try {
+      await persistThread(sessionDb, workspace);
+      await sessionDb.appendThreadJournalEvents([
+        {
+          threadId: "thread-1",
+          ts: "2026-07-01T00:00:01.000Z",
+          eventType: "turn/started",
+          turnId: "turn-1",
+          itemId: null,
+          requestId: null,
+          payload: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+        },
+        {
+          threadId: "thread-1",
+          ts: "2026-07-01T00:00:02.000Z",
+          eventType: "item/completed",
+          turnId: "turn-1",
+          itemId: "user-1",
+          requestId: null,
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "user-1",
+              type: "userMessage",
+              content: [{ type: "input_text", text: "seeded context" }],
+            },
+          },
+        },
+        {
+          threadId: "thread-1",
+          ts: "2026-07-01T00:00:03.000Z",
+          eventType: "item/completed",
+          turnId: "turn-1",
+          itemId: "user-2",
+          requestId: null,
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "user-2",
+              type: "userMessage",
+              content: [{ type: "input_text", text: "later journal message" }],
+            },
+          },
+        },
+        {
+          threadId: "thread-1",
+          ts: "2026-07-01T00:00:04.000Z",
+          eventType: "turn/completed",
+          turnId: "turn-1",
+          itemId: null,
+          requestId: null,
+          payload: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        },
+      ]);
+
+      const result = await host.readThread({ threadId: "thread-1" });
+      expect(result.turns).toEqual([
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            { type: "user", text: "seeded context" },
+            { type: "user", text: "later journal message" },
+          ],
+        },
+      ]);
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
   test("readThread falls back to persisted seed messages before snapshot or journal activity", async () => {
     const { workspace, sessionDb, threadJournal, host } = await makeHarness();
     try {

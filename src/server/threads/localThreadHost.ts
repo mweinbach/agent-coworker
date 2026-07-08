@@ -347,10 +347,10 @@ function mergeSnapshotAndProjectedTurns(
   let overlap = 0;
   for (let size = Math.min(snapshotItems.length, projectedItems.length); size > 0; size -= 1) {
     const snapshotTail = snapshotItems.slice(-size);
-    const projectedTail = projectedItems.slice(-size);
+    const projectedHead = projectedItems.slice(0, size);
     if (
       snapshotTail.every((item, index) => {
-        const projectedItem = projectedTail[index];
+        const projectedItem = projectedHead[index];
         return projectedItem !== undefined && compactItemsMatch(item, projectedItem);
       })
     ) {

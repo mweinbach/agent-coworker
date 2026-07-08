@@ -1,8 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 
+import { runtimePathDirs } from "./env";
 import { hostPlatform } from "./host";
-import { pathImplForPlatform } from "./pathImpl";
 
 export type PlatformShellExecutionStep = {
   file: string;
@@ -55,19 +55,6 @@ function quotePosixShellValue(value: string): string {
 
 function quotePowerShellSingleQuotedValue(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-function dedupePathDirs(pathDirs: string[], platform: NodeJS.Platform): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const dir of pathDirs) {
-    if (!dir) continue;
-    const key = platform === "win32" ? dir.toLowerCase() : dir;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(dir);
-  }
-  return out;
 }
 
 function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
@@ -284,35 +271,16 @@ export function buildPlatformShellCommandWithRuntimePrelude(opts: {
 }): string {
   let command = opts.command;
   const env = opts.env || process.env;
-  const pathImpl = pathImplForPlatform(opts.platform);
-  const runtimeBin = envValue(env, "COWORK_RUNTIME_BIN");
-  const runtimePython = envValue(env, "COWORK_RUNTIME_PYTHON");
-  const runtimeNode = envValue(env, "COWORK_RUNTIME_NODE");
-  const runtimeGit = envValue(env, "COWORK_RUNTIME_GIT");
-  const runtimePopplerBin = envValue(env, "COWORK_RUNTIME_POPPLER_BIN");
-
-  const pathDirs: string[] = [];
-  if (runtimeBin) {
-    pathDirs.push(runtimeBin);
-  }
-  if (runtimeNode) {
-    pathDirs.push(pathImpl.dirname(runtimeNode));
-  }
-  if (runtimePython) {
-    const pythonDir = pathImpl.dirname(runtimePython);
-    pathDirs.push(pythonDir);
-    if (opts.platform === "win32") {
-      pathDirs.push(pathImpl.join(pythonDir, "Scripts"));
-    }
-  }
-  if (runtimeGit) {
-    pathDirs.push(pathImpl.dirname(runtimeGit));
-  }
-  if (runtimePopplerBin) {
-    pathDirs.push(runtimePopplerBin);
-  }
-
-  const uniquePathDirs = dedupePathDirs(pathDirs, opts.platform);
+  const uniquePathDirs = runtimePathDirs(
+    {
+      bin: envValue(env, "COWORK_RUNTIME_BIN"),
+      node: envValue(env, "COWORK_RUNTIME_NODE"),
+      python: envValue(env, "COWORK_RUNTIME_PYTHON"),
+      git: envValue(env, "COWORK_RUNTIME_GIT"),
+      popplerBin: envValue(env, "COWORK_RUNTIME_POPPLER_BIN"),
+    },
+    opts.platform,
+  );
   if (uniquePathDirs.length === 0) {
     return command;
   }

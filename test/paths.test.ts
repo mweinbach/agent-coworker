@@ -360,7 +360,7 @@ describe("truncateText", () => {
       expect(Array.from(result)).toEqual(Array.from(input).slice(0, 1));
     });
 
-    test("bmp emoji string still truncates at the code-point limit", () => {
+    test("astral emoji string still truncates at the code-point limit", () => {
       expect(truncateText("😀😀😀😀", 2)).toBe("😀😀");
       expect(Array.from(truncateText("😀😀😀😀", 2))).toHaveLength(2);
     });

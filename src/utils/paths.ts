@@ -88,10 +88,17 @@ export async function resolvePathInsideRootForBoundaryCheck(
 export function truncateText(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
   // Count by code point so astral symbols (emoji, flags, CJK-ext) are never
-  // split mid-surrogate-pair into invalid UTF-16.
-  const chars = Array.from(s);
-  if (chars.length <= maxChars) return s;
-  return chars.slice(0, maxChars).join("");
+  // split mid-surrogate-pair into invalid UTF-16. Walk code points to find the
+  // UTF-16 end index, then slice once — no full-string allocation, so the BMP
+  // hot path stays cheap.
+  let count = 0;
+  let end = 0;
+  while (end < s.length && count < maxChars) {
+    const unit = s.charCodeAt(end);
+    end += unit >= 0xd800 && unit <= 0xdbff && end + 1 < s.length ? 2 : 1;
+    count++;
+  }
+  return s.slice(0, end);
 }
 
 export function truncateLine(s: string, maxChars: number): string {

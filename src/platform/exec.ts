@@ -226,7 +226,7 @@ function quoteBatchShimValue(value: string): string {
  * quotes, %VAR%-expandable sequences, or line breaks throw a typed
  * UnsafeShimArgumentError instead of being silently mangled. The returned
  * `windowsVerbatimArguments: true` MUST be honored by the spawner. Native
- * binaries and .ps1 scripts pass through untouched.
+ * binaries and .ps1 scripts use the resolved path when PATH lookup succeeds.
  */
 export function resolveSpawn(
   fileOrName: string,
@@ -246,7 +246,7 @@ export function resolveSpawn(
   const resolved = which(fileOrName, { ...opts, platform }) ?? fileOrName;
   const kind = classifyExecutable(resolved, platform);
   if (kind !== "batch-shim") {
-    return { file: fileOrName, args: [...args], kind };
+    return { file: resolved, args: [...args], kind };
   }
   const env = opts.env ?? process.env;
   const comspec = getEnv(env, "COMSPEC", platform) ?? "cmd.exe";

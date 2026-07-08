@@ -359,11 +359,11 @@ describe("resolveSpawn — win32 pass-through", () => {
     expect(plan).toEqual({ file: "nonexistent", args: ["x"], kind: "native" });
   });
 
-  test("bare name resolving to a native .exe keeps the original name untouched", () => {
+  test("bare name resolving to a native .exe returns the resolved path", () => {
     const { exists } = existsFor(["C:\\bin\\node.exe"]);
     const env = { PATH: "C:\\bin" };
     const plan = resolveSpawn("node", ["-v"], { env, platform: "win32", exists });
-    expect(plan).toEqual({ file: "node", args: ["-v"], kind: "native" });
+    expect(plan).toEqual({ file: "C:\\bin\\node.exe", args: ["-v"], kind: "native" });
   });
 });
 
@@ -415,7 +415,7 @@ describe("resolveSpawn — win32 batch-shim wrapping", () => {
       exists,
       skipDirs: ["C:\\p\\node_modules\\.bin"],
     });
-    expect(plan).toEqual({ file: "rg", args: ["-n"], kind: "native" });
+    expect(plan).toEqual({ file: "C:\\bin\\rg.exe", args: ["-n"], kind: "native" });
   });
 
   test("unresolvable name with .cmd extension still wraps using the given name", () => {

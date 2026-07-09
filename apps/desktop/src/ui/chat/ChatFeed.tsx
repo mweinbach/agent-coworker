@@ -289,11 +289,10 @@ export const ChatFeed = memo(function ChatFeed(props: {
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
   const feedListEntries = useMemo(() => buildFeedListEntries(renderItems), [renderItems]);
-  const [showAllFeedEntries, setShowAllFeedEntries] = useState(false);
-
-  useEffect(() => {
-    setShowAllFeedEntries(false);
-  }, []);
+  const feedThreadKey = selectedThreadId ?? "no-thread";
+  // Track expansion per thread so switching chats resets the soft window.
+  const [expandedThreadKey, setExpandedThreadKey] = useState<string | null>(null);
+  const showAllFeedEntries = expandedThreadKey === feedThreadKey;
 
   const windowedFeedEntries = useMemo(() => {
     if (showAllFeedEntries || feedListEntries.length <= FEED_RENDER_WINDOW) {
@@ -385,7 +384,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setShowAllFeedEntries(true)}
+                        onClick={() => setExpandedThreadKey(feedThreadKey)}
                       >
                         Show {windowedFeedEntries.hiddenCount} older messages
                       </Button>

@@ -94,4 +94,30 @@
 :root[data-high-contrast="true"] {
   --border-base: currentColor;
   --accent-base: #1769e0;
+  --border: currentColor;
+  --input: currentColor;
+  --ring: currentColor;
+  --sidebar-blur: 0px;
+  --sidebar-titlebar-blur: 0px;
+  --titlebar-blur: 0px;
+  --window-bg: var(--app-bg);
+  --shell-bg: var(--app-bg);
+  --sidebar-surface: var(--sidebar-bg);
+  --sidebar-pane-surface: var(--sidebar-bg);
+  --content-surface: var(--app-bg);
+  --glass-fill: var(--panel-bg);
+  --glass-border: currentColor;
+  --surface-overlay: var(--panel-bg);
+  --surface-main-card: var(--panel-bg);
+  --main-card-shadow: none;
+  --muted-base: var(--text-base);
+  --shadow-surface-base: none;
+  --shadow-overlay-base: 0 0 0 1px currentColor;
+  --focus-ring-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-base) 70%, transparent);
+}
+
+/* High contrast: kill blur so borders and type stay sharp. */
+:root[data-high-contrast="true"] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }

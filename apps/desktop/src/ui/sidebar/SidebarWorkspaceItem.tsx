@@ -82,7 +82,14 @@ export type SidebarWorkspaceItemProps = {
   canGenerateMemoryForThread: (threadId: string) => boolean;
   onGenerateMemoryForThread: (threadId: string) => void;
   onDeleteHistoryForThread: (threadId: string, title: string) => void;
+  onArchiveThread: (threadId: string, title: string) => void;
 };
+
+function overflowTriggerVisibilityClassName(isActive: boolean): string {
+  return isActive
+    ? "opacity-100 pointer-events-auto scale-100"
+    : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100";
+}
 
 export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   active,
@@ -118,6 +125,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   canGenerateMemoryForThread,
   onGenerateMemoryForThread,
   onDeleteHistoryForThread,
+  onArchiveThread,
 }: SidebarWorkspaceItemProps) {
   const controls = useDragControls();
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -125,7 +133,6 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   const prevExpandedRef = useRef(expanded);
   const [renderThreadRegion, setRenderThreadRegion] = useState(expanded);
   const [threadRegionOpen, setThreadRegionOpen] = useState(expanded);
-  const archiveThread = useAppStore((s) => s.archiveThread);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags?.tasks === true);
   const visibleTasks = tasksEnabled ? tasks : EMPTY_TASK_SUMMARIES;
 
@@ -396,27 +403,32 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                                 aria-hidden="true"
                               />
                             ) : ageLabel ? (
-                              <span className="text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none">
+                              <span
+                                className={cn(
+                                  "text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
+                                  isActive && "opacity-0 pointer-events-none",
+                                )}
+                              >
                                 {ageLabel}
                               </span>
                             ) : null}
                           </span>
                         </Button>
-                        {!busy ? (
-                          <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
-                            <ThreadOverflowMenu
-                              canGenerateMemory={canGenerateMemoryForThread(thread.id)}
-                              ariaLabelSuffix={displayTitle}
-                              triggerVisibilityClassName="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100"
-                              onRename={() => onStartEditing(thread.id, displayTitle)}
-                              onArchive={() => void archiveThread(thread.id)}
-                              onGenerateMemory={() => onGenerateMemoryForThread(thread.id)}
-                              onDeleteHistory={() =>
-                                onDeleteHistoryForThread(thread.id, displayTitle)
-                              }
-                            />
-                          </div>
-                        ) : null}
+                        <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
+                          <ThreadOverflowMenu
+                            canGenerateMemory={canGenerateMemoryForThread(thread.id)}
+                            ariaLabelSuffix={displayTitle}
+                            triggerVisibilityClassName={overflowTriggerVisibilityClassName(
+                              isActive,
+                            )}
+                            onRename={() => onStartEditing(thread.id, displayTitle)}
+                            onArchive={() => onArchiveThread(thread.id, displayTitle)}
+                            onGenerateMemory={() => onGenerateMemoryForThread(thread.id)}
+                            onDeleteHistory={() =>
+                              onDeleteHistoryForThread(thread.id, displayTitle)
+                            }
+                          />
+                        </div>
                       </div>
                     );
                   })}

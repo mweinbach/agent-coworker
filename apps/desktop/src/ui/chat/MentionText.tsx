@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
-  MENTION_CHIP_CLASS,
+  MENTION_CHIP_PADDED_CLASS,
   type MentionCatalog,
   type MentionItem,
   type MentionKind,
@@ -15,7 +15,9 @@ function MentionChip(props: { kind: MentionKind; name: string; item: MentionItem
 
   // Unknown / stale reference (no longer in the catalog): styled, but not clickable.
   if (!item) {
-    return <span className={cn(MENTION_CHIP_CLASS, "inline px-1 py-0.5 opacity-80")}>{label}</span>;
+    return (
+      <span className={cn(MENTION_CHIP_PADDED_CLASS, "inline opacity-80")}>{label}</span>
+    );
   }
 
   return (
@@ -24,8 +26,8 @@ function MentionChip(props: { kind: MentionKind; name: string; item: MentionItem
         <button
           type="button"
           className={cn(
-            MENTION_CHIP_CLASS,
-            "inline cursor-pointer px-1 py-0.5 align-baseline transition-colors hover:bg-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+            MENTION_CHIP_PADDED_CLASS,
+            "inline cursor-pointer align-baseline transition-colors hover:bg-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
           )}
           title={`View ${kind} "${name}"`}
         >

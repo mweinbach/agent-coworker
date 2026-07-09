@@ -1,5 +1,4 @@
 import { type MouseEvent, memo, type RefObject } from "react";
-import { useAppStore } from "../../app/store";
 import type { ThreadRecord, ThreadRuntime } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -16,6 +15,7 @@ export type SidebarOneOffChatItemProps = {
   onEditingTitleChange: (title: string) => void;
   onStartEditing: (threadId: string, currentTitle: string) => void;
   onThreadContextMenu: (event: MouseEvent<HTMLElement>, threadId: string, title: string) => void;
+  onArchive: (threadId: string, title: string) => void;
   selectedThreadId: string | null;
   selectThread: (threadId: string) => void;
   thread: ThreadRecord;
@@ -24,6 +24,13 @@ export type SidebarOneOffChatItemProps = {
   onGenerateMemory: () => void;
   onDeleteHistory: () => void;
 };
+
+function overflowTriggerVisibilityClassName(isActive: boolean): string {
+  // Selected rows always show ⋯; inactive rows reveal on hover/focus-within.
+  return isActive
+    ? "opacity-100 pointer-events-auto scale-100"
+    : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100";
+}
 
 export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
   editInputRef,
@@ -34,6 +41,7 @@ export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
   onEditingTitleChange,
   onStartEditing,
   onThreadContextMenu,
+  onArchive,
   selectedThreadId,
   selectThread,
   thread,
@@ -42,7 +50,6 @@ export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
   onGenerateMemory,
   onDeleteHistory,
 }: SidebarOneOffChatItemProps) {
-  const archiveThread = useAppStore((s) => s.archiveThread);
   const runtime = threadRuntimeById[thread.id];
   const busy = runtime?.busy === true;
   const isActive = thread.id === selectedThreadId;
@@ -104,25 +111,28 @@ export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
               aria-hidden="true"
             />
           ) : ageLabel ? (
-            <span className="text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none">
+            <span
+              className={cn(
+                "text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
+                isActive && "opacity-0 pointer-events-none",
+              )}
+            >
               {ageLabel}
             </span>
           ) : null}
         </span>
       </Button>
-      {!busy ? (
-        <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
-          <ThreadOverflowMenu
-            canGenerateMemory={canGenerateMemory}
-            ariaLabelSuffix={displayTitle}
-            triggerVisibilityClassName="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100"
-            onRename={() => onStartEditing(thread.id, displayTitle)}
-            onArchive={() => void archiveThread(thread.id)}
-            onGenerateMemory={onGenerateMemory}
-            onDeleteHistory={onDeleteHistory}
-          />
-        </div>
-      ) : null}
+      <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
+        <ThreadOverflowMenu
+          canGenerateMemory={canGenerateMemory}
+          ariaLabelSuffix={displayTitle}
+          triggerVisibilityClassName={overflowTriggerVisibilityClassName(isActive)}
+          onRename={() => onStartEditing(thread.id, displayTitle)}
+          onArchive={() => onArchive(thread.id, displayTitle)}
+          onGenerateMemory={onGenerateMemory}
+          onDeleteHistory={onDeleteHistory}
+        />
+      </div>
     </div>
   );
 });

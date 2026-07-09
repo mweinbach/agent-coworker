@@ -4,7 +4,7 @@ import {
   MessageSquareIcon,
   RotateCcwIcon,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import type { SandboxApprovalPrompt } from "../../app/types";
 import { Button } from "../../components/ui/button";
@@ -66,6 +66,75 @@ function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string |
   return null;
 }
 
+function dayKeyFromIso(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatDaySeparatorLabel(dayKey: string, now: Date = new Date()): string {
+  const [y, m, d] = dayKey.split("-").map((part) => Number(part));
+  if (!y || !m || !d) return dayKey;
+  const date = new Date(y, m - 1, d);
+  const todayKey = dayKeyFromIso(now.toISOString());
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = dayKeyFromIso(yesterday.toISOString());
+  if (dayKey === todayKey) return "Today";
+  if (dayKey === yesterdayKey) return "Yesterday";
+  return date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+
+function itemTimestamp(item: ChatRenderItem): string | undefined {
+  if (item.kind === "activity-group") {
+    return item.items[0]?.ts;
+  }
+  return item.item.ts;
+}
+
+type FeedListEntry =
+  | { kind: "day-separator"; id: string; label: string }
+  | { kind: "render"; item: ChatRenderItem };
+
+function buildFeedListEntries(renderItems: ChatRenderItem[]): FeedListEntry[] {
+  const entries: FeedListEntry[] = [];
+  let previousDayKey: string | null = null;
+  let sawAnyTimestamp = false;
+
+  for (const item of renderItems) {
+    const dayKey = dayKeyFromIso(itemTimestamp(item));
+    if (dayKey) {
+      sawAnyTimestamp = true;
+      // Only insert between days — skip a leading separator for the first day.
+      if (previousDayKey !== null && dayKey !== previousDayKey) {
+        entries.push({
+          kind: "day-separator",
+          id: `day:${dayKey}`,
+          label: formatDaySeparatorLabel(dayKey),
+        });
+      }
+      previousDayKey = dayKey;
+    }
+    entries.push({ kind: "render", item });
+  }
+
+  // Only show separators when timestamps actually exist in the feed.
+  if (!sawAnyTimestamp) {
+    return renderItems.map((item) => ({ kind: "render" as const, item }));
+  }
+  return entries;
+}
+
 /**
  * Placeholder shown from the moment a turn is pending/running until the first
  * reasoning, tool, or assistant item lands, so the transcript never looks
@@ -74,8 +143,8 @@ function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string |
  */
 function WorkingPlaceholderRow() {
   return (
-    <div className="flex w-full max-w-3xl items-center" data-slot="working-placeholder">
-      <Marker variant="border" className="pb-2.5 pt-1.5">
+    <div className="flex w-full items-center gap-1.5" data-slot="working-placeholder">
+      <Marker variant="border" className="min-w-0 flex-1 pb-2.5 pt-1.5">
         <MarkerContent className="font-mono tracking-tight">
           <span
             role="status"
@@ -90,14 +159,50 @@ function WorkingPlaceholderRow() {
   );
 }
 
-function InitialTurnRestore({ messageId }: { messageId: string | null }) {
+function DaySeparatorRow(props: { label: string }) {
+  return (
+    <div
+      role="separator"
+      aria-label={props.label}
+      className="flex w-full items-center gap-3 py-1"
+      data-slot="day-separator"
+    >
+      <div className="h-px flex-1 bg-border/60" />
+      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {props.label}
+      </span>
+      <div className="h-px flex-1 bg-border/60" />
+    </div>
+  );
+}
+
+function InitialTurnRestore({
+  messageId,
+  threadId,
+  hydrating,
+}: {
+  messageId: string | null;
+  threadId?: string | null;
+  hydrating: boolean;
+}) {
   const { scrollToMessage } = useMessageScroller();
   const visibility = useMessageScrollerVisibility();
   const visibilityRef = useRef(visibility);
   visibilityRef.current = visibility;
+  // Only restore scroll once per thread open / hydrate cycle — not on every new user turn.
+  const restoredForKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!messageId) return;
+    if (!messageId || hydrating) return;
+    const restoreKey = `${threadId ?? "no-thread"}:${messageId}`;
+    if (restoredForKeyRef.current === restoreKey) return;
+    // First restore for this thread id, or first restore after hydrate completed.
+    const threadKey = threadId ?? "no-thread";
+    const alreadyRestoredThread = restoredForKeyRef.current?.startsWith(`${threadKey}:`);
+    if (alreadyRestoredThread && restoredForKeyRef.current !== null) {
+      // A later user turn while already open — let autoScroll own the viewport.
+      return;
+    }
     let cancelled = false;
 
     const nextFrame = () =>
@@ -117,6 +222,7 @@ function InitialTurnRestore({ messageId }: { messageId: string | null }) {
 
       const currentVisibility = visibilityRef.current;
       if (currentVisibility.currentAnchorId === messageId) {
+        restoredForKeyRef.current = restoreKey;
         return;
       }
       scrollToMessage(messageId, {
@@ -124,18 +230,24 @@ function InitialTurnRestore({ messageId }: { messageId: string | null }) {
         behavior: "auto",
         scrollMargin: 64,
       });
+      restoredForKeyRef.current = restoreKey;
     };
 
     void restoreAfterLayout();
     return () => {
       cancelled = true;
     };
-  }, [messageId, scrollToMessage]);
+  }, [hydrating, messageId, scrollToMessage, threadId]);
+
+  // Reset restore gate when the thread changes.
+  useEffect(() => {
+    restoredForKeyRef.current = null;
+  }, [threadId]);
 
   return null;
 }
 
-export function ChatFeed(props: {
+export const ChatFeed = memo(function ChatFeed(props: {
   transcriptOnly: boolean;
   disconnected: boolean;
   onReconnect: () => void;
@@ -145,6 +257,7 @@ export function ChatFeed(props: {
   liveActivityGroupId: string | null;
   liveStartedAt: string | null;
   showWorkingPlaceholder: boolean;
+  streamingAssistantMessageId?: string | null;
   citationUrlsByMessageId: Map<string, Map<number, string>>;
   citationSourcesByMessageId: Map<string, CitationSource[]>;
   desktopBasePath: string | null;
@@ -168,6 +281,7 @@ export function ChatFeed(props: {
     liveActivityGroupId,
     liveStartedAt,
     showWorkingPlaceholder,
+    streamingAssistantMessageId,
     citationUrlsByMessageId,
     citationSourcesByMessageId,
     desktopBasePath,
@@ -182,21 +296,26 @@ export function ChatFeed(props: {
   } = props;
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
+  const feedListEntries = useMemo(() => buildFeedListEntries(renderItems), [renderItems]);
 
   return (
     <MessageScrollerProvider
-      key={`${selectedThreadId ?? "no-thread"}:${hydrating ? "hydrating" : "ready"}`}
+      key={selectedThreadId ?? "no-thread"}
       autoScroll
       defaultScrollPosition="last-anchor"
       scrollPreviousItemPeek={64}
     >
-      <InitialTurnRestore messageId={lastUserTurnId} />
+      <InitialTurnRestore
+        messageId={lastUserTurnId}
+        threadId={selectedThreadId}
+        hydrating={hydrating}
+      />
       <MessageScroller className="min-h-0 flex-1">
         <MessageScrollerViewport aria-label="Conversation messages">
-          <MessageScrollerContent className="mx-auto w-full max-w-[56rem] gap-3.5 px-4 py-5 pt-6">
+          <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-3.5 px-4 py-5 pt-6">
             {transcriptOnly ? (
               <MessageScrollerItem messageId="status:transcript-only">
-                <Card className="max-w-3xl border-border/70 bg-muted/30">
+                <Card className="border-border/70 bg-muted/30">
                   <CardContent className="flex items-start gap-3 p-3">
                     <AlertTriangleIcon className="mt-0.5 size-4 text-primary" />
                     <div>
@@ -212,7 +331,7 @@ export function ChatFeed(props: {
 
             {disconnected ? (
               <MessageScrollerItem messageId="status:disconnected">
-                <Card className="max-w-3xl border-border/70 bg-muted/30">
+                <Card className="border-border/70 bg-muted/30">
                   <CardContent className="flex items-center justify-between gap-3 p-3">
                     <div>
                       <div className="font-semibold">Disconnected</div>
@@ -250,7 +369,16 @@ export function ChatFeed(props: {
                 </Empty>
               </MessageScrollerItem>
             ) : (
-              renderItems.map((item) => {
+              feedListEntries.map((entry) => {
+                if (entry.kind === "day-separator") {
+                  return (
+                    <MessageScrollerItem key={entry.id} messageId={entry.id}>
+                      <DaySeparatorRow label={entry.label} />
+                    </MessageScrollerItem>
+                  );
+                }
+
+                const item = entry.item;
                 const messageId = item.kind === "activity-group" ? item.id : item.item.id;
                 return (
                   <MessageScrollerItem
@@ -277,6 +405,11 @@ export function ChatFeed(props: {
                           citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
                           citationSources={citationSourcesByMessageId.get(item.item.id)}
                           desktopBasePath={desktopBasePath}
+                          isStreaming={
+                            item.item.kind === "message" &&
+                            item.item.role === "assistant" &&
+                            item.item.id === streamingAssistantMessageId
+                          }
                         />
                       </InlineErrorBoundary>
                     )}
@@ -324,4 +457,4 @@ export function ChatFeed(props: {
       </MessageScroller>
     </MessageScrollerProvider>
   );
-}
+});

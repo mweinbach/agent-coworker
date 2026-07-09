@@ -252,11 +252,10 @@ export function createFeedProjectionModule(
     itemId: string,
     delta: string,
   ) {
-    updateThreadFeed(
-      set,
-      threadId,
-      (feed) => applyProjectedAgentMessageDelta(feed, itemId, delta, ctx.deps.nowIso()),
-      { touchLastMessageAt: true },
+    // Do not touch threads[].lastMessageAt on intermediate token deltas —
+    // that forces sidebar re-renders at stream rate. Started/completed still update.
+    updateThreadFeed(set, threadId, (feed) =>
+      applyProjectedAgentMessageDelta(feed, itemId, delta, ctx.deps.nowIso()),
     );
   }
   function applyModelStreamUpdateToThreadFeed(

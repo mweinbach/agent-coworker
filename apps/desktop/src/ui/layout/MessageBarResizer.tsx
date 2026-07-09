@@ -7,8 +7,9 @@ import { cn } from "../../lib/utils";
 export function MessageBarResizer() {
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
   const setMessageBarHeight = useAppStore((s) => s.setMessageBarHeight);
+  const developerMode = useAppStore((s) => s.developerMode);
   const [dragging, setDragging] = useState(false);
-  const minimumHeightValueText = `Minimum height ${messageBarHeight} pixels`;
+  const maximumHeightValueText = `Maximum message height ${messageBarHeight} pixels`;
 
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
@@ -97,6 +98,10 @@ export function MessageBarResizer() {
     };
   }, [dragging, setMessageBarHeight]);
 
+  if (!developerMode) {
+    return null;
+  }
+
   return (
     <hr
       className={cn(
@@ -104,11 +109,11 @@ export function MessageBarResizer() {
         dragging && "bg-primary/20",
       )}
       aria-orientation="horizontal"
-      aria-label="Resize minimum message bar height"
+      aria-label="Resize maximum message height"
       aria-valuemin={80}
       aria-valuemax={500}
       aria-valuenow={messageBarHeight}
-      aria-valuetext={minimumHeightValueText}
+      aria-valuetext={maximumHeightValueText}
       tabIndex={0}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}

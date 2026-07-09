@@ -121,6 +121,8 @@ export function PendingRequestCard({
               <Pressable
                 key={option}
                 onPress={() => onAnswerOption(option)}
+                accessibilityRole="button"
+                accessibilityLabel={`Answer with ${option}`}
                 style={({ pressed }) => ({
                   borderRadius: 999,
                   borderCurve: "continuous",
@@ -136,6 +138,8 @@ export function PendingRequestCard({
             ))}
             <Pressable
               onPress={onAnswerText}
+              accessibilityRole="button"
+              accessibilityLabel="Send answer"
               style={({ pressed }) => ({
                 borderRadius: radius.md,
                 borderCurve: "continuous",
@@ -152,6 +156,8 @@ export function PendingRequestCard({
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Pressable
             onPress={onApprove}
+            accessibilityRole="button"
+            accessibilityLabel="Approve command"
             style={({ pressed }) => ({
               borderRadius: radius.md,
               borderCurve: "continuous",
@@ -164,6 +170,8 @@ export function PendingRequestCard({
           </Pressable>
           <Pressable
             onPress={onReject}
+            accessibilityRole="button"
+            accessibilityLabel="Decline command"
             style={({ pressed }) => ({
               borderRadius: radius.md,
               borderCurve: "continuous",

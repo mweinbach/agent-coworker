@@ -101,27 +101,19 @@ export const ContextSidebar = memo(function ContextSidebar() {
     );
   }
 
+  const showTodos = (todos?.length ?? 0) > 0;
+  const showAgents = agents.length > 0;
+
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-1 overflow-hidden p-1.5">
+      {showTodos ? (
       <section className={compactSectionClassName} data-sidebar-panel="tasks">
         <div className={compactSectionHeaderClassName}>
-          <span className={sectionLabelClassName}>Tasks</span>
+          <span className={sectionLabelClassName}>Plan</span>
         </div>
-        {!todos || todos.length === 0 ? (
-          <div
-            className={cn(
-              compactSectionBodyClassName,
-              compactMutedCopyClassName,
-              "flex flex-col items-center gap-1.5 py-3 text-center",
-            )}
-          >
-            <ClipboardListIcon className="size-4 text-muted-foreground/40" />
-            <span>No active tasks</span>
-          </div>
-        ) : (
           <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
             <div className="space-y-1.5">
-              {todos.map((todo) => (
+              {todos?.map((todo) => (
                 <div
                   key={`${todo.status}:${todo.content}`}
                   className="flex items-start gap-2 text-[11px]"
@@ -145,25 +137,15 @@ export const ContextSidebar = memo(function ContextSidebar() {
               ))}
             </div>
           </ScrollShadow>
-        )}
       </section>
+      ) : null}
 
+      {showAgents || threadRuntime?.sessionKind === "agent" ? (
       <section className={compactSectionClassName} data-sidebar-panel="subagents">
         <div className={compactSectionHeaderClassName}>
           <span className={sectionLabelClassName}>Subagents</span>
         </div>
-        {!selectedThreadId ? (
-          <div
-            className={cn(
-              compactSectionBodyClassName,
-              compactMutedCopyClassName,
-              "flex flex-col items-center gap-1.5 py-3 text-center",
-            )}
-          >
-            <BotIcon className="size-4 text-muted-foreground/40" />
-            <span>Select a thread to inspect subagents</span>
-          </div>
-        ) : threadRuntime?.sessionKind === "agent" ? (
+        {threadRuntime?.sessionKind === "agent" ? (
           <div className={compactSectionBodyClassName}>
             <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-[11px] text-muted-foreground">
               <div className="flex items-center gap-2 text-foreground">
@@ -177,17 +159,6 @@ export const ContextSidebar = memo(function ContextSidebar() {
                 <div className="mt-1 truncate">{threadRuntime.effectiveModel}</div>
               ) : null}
             </div>
-          </div>
-        ) : agents.length === 0 ? (
-          <div
-            className={cn(
-              compactSectionBodyClassName,
-              compactMutedCopyClassName,
-              "flex flex-col items-center gap-1.5 py-3 text-center",
-            )}
-          >
-            <BotIcon className="size-4 text-muted-foreground/40" />
-            <span>No subagents</span>
           </div>
         ) : (
           <ScrollShadow
@@ -233,6 +204,7 @@ export const ContextSidebar = memo(function ContextSidebar() {
           </ScrollShadow>
         )}
       </section>
+      ) : null}
 
       <section
         className={cn("min-h-0 flex-1 overflow-hidden", panelShellClassName)}

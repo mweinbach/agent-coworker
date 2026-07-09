@@ -88,13 +88,15 @@ export default function ThreadDetailScreen() {
   const thread = useThreadStore((state) => state.getThread(threadId));
   const pendingRequest = useThreadStore((state) => state.getPendingRequest(threadId));
   const snapshotAgents = useThreadStore(
-    (state) => state.snapshots[threadId]?.agents ?? EMPTY_AGENTS,
+    (state) => state.snapshots?.[threadId]?.agents ?? EMPTY_AGENTS,
   );
   const normalizedAgents = useMemo(() => normalizeAgents(snapshotAgents), [snapshotAgents]);
   const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
   const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
   const submitComposer = useThreadStore((state) => state.submitComposer);
+  const appendOptimisticUserMessage = useThreadStore((state) => state.appendOptimisticUserMessage);
+  const removeOptimisticUserMessage = useThreadStore((state) => state.removeOptimisticUserMessage);
   const interruptThread = useThreadStore((state) => state.interruptThread);
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
@@ -102,6 +104,7 @@ export default function ThreadDetailScreen() {
 
   const [stickToBottom, setStickToBottom] = useState(true);
   const listRef = useRef<FlatList<ThreadDetailListItem>>(null);
+  const loadRequestIdRef = useRef(0);
   const runtimeClient = getActiveCoworkJsonRpcClient();
 
   const isDraftThread = threadId.startsWith("draft-");
@@ -113,17 +116,21 @@ export default function ThreadDetailScreen() {
   const isOfflineReadOnly = !isConnected && !isDraftThread;
 
   const loadThreadFeed = useCallback(async () => {
+    const requestId = ++loadRequestIdRef.current;
     if (!threadId || isDraftThread || !isConnected || !runtimeClient) {
       return;
     }
     try {
       await runtimeClient.resumeThread(threadId);
+      if (requestId !== loadRequestIdRef.current) return;
       const reread = await runtimeClient.readThread(threadId);
+      if (requestId !== loadRequestIdRef.current) return;
       if (reread.coworkSnapshot) {
         useThreadStore.getState().hydrate(reread.coworkSnapshot);
       }
       setActionError((current) => (current?.kind === "load" ? null : current));
     } catch (error) {
+      if (requestId !== loadRequestIdRef.current) return;
       setActionError({
         kind: "load",
         message: describeError(error, "Failed to load this conversation."),
@@ -132,13 +139,9 @@ export default function ThreadDetailScreen() {
   }, [threadId, isConnected, runtimeClient, isDraftThread]);
 
   useEffect(() => {
-    let active = true;
-    void (async () => {
-      if (!active) return;
-      await loadThreadFeed();
-    })();
+    void loadThreadFeed();
     return () => {
-      active = false;
+      loadRequestIdRef.current += 1;
     };
   }, [loadThreadFeed]);
 
@@ -233,15 +236,14 @@ export default function ThreadDetailScreen() {
         ?.randomUUID
         ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
         : `local-${Date.now()}`;
-      useThreadStore
-        .getState()
-        .appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
+      appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
       setComposerDraft(activeThread.id, "");
       setActionError((current) => (current?.kind === "send" ? null : current));
       setStickToBottom(true);
       try {
         await runtimeClient.startTurn(activeThread.id, draft, clientMessageId);
       } catch (error) {
+        removeOptimisticUserMessage(activeThread.id, clientMessageId);
         setComposerDraft(activeThread.id, draft);
         setActionError({
           kind: "send",

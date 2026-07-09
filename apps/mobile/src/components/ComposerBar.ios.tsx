@@ -1,6 +1,9 @@
 import { Image as ExpoImage, Group, Host, HStack, RNHostView } from "@expo/ui/swift-ui";
 import {
+  accessibilityAddTraits,
+  accessibilityLabel as accessibilityLabelModifier,
   background,
+  disabled as disabledModifier,
   foregroundStyle,
   frame,
   glassEffect,
@@ -183,11 +186,11 @@ export function ComposerBar({
               systemName={asNativeSymbol("arrow.up")}
               size={16}
               color={sendIconColor}
-              accessibilityLabel={accessibilityLabel}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: !canSend }}
               onPress={canSend ? submitIfReady : undefined}
               modifiers={[
+                accessibilityLabelModifier(accessibilityLabel),
+                accessibilityAddTraits(["isButton"]),
+                disabledModifier(!canSend),
                 foregroundStyle(sendIconColor),
                 frame({ width: BUTTON_SIZE, height: BUTTON_SIZE }),
                 background(sendFillColor, shapes.circle()),

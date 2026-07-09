@@ -44,7 +44,7 @@ export function ArchivedChatsPage() {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return archivedThreads;
     return archivedThreads.filter((thread) => {
-      const title = (thread.title || "New thread").toLowerCase();
+      const title = (thread.title || "New chat").toLowerCase();
       const workspaceName = workspaceLabelForThread(
         workspaces,
         thread.workspaceId,
@@ -58,7 +58,7 @@ export function ArchivedChatsPage() {
   const handleDelete = async (threadId: string, title: string) => {
     const confirmed = await confirmAction({
       title: "Delete archived chat",
-      message: `Permanently delete "${title || "New thread"}"?`,
+      message: `Permanently delete "${title || "New chat"}"?`,
       detail: "This removes the chat history permanently. This action cannot be undone.",
       confirmLabel: "Delete",
       cancelLabel: "Cancel",
@@ -145,7 +145,7 @@ export function ArchivedChatsPage() {
               return (
                 <SettingsRow
                   key={thread.id}
-                  title={<span className="truncate">{thread.title || "New thread"}</span>}
+                  title={<span className="truncate">{thread.title || "New chat"}</span>}
                   description={
                     <span className="flex items-center gap-2.5">
                       <span>{wsName}</span>

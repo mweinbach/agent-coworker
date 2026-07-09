@@ -21,6 +21,7 @@ import {
   CommandGroup,
   CommandInput,
   CommandItem,
+  CommandKbd,
   CommandList,
   CommandSeparator,
 } from "../components/ui/command";
@@ -31,8 +32,21 @@ export type CommandPaletteProps = {
   onOpenChange: (open: boolean) => void;
 };
 
+const IS_APPLE =
+  typeof navigator !== "undefined" &&
+  (/Mac|iPhone|iPad|iPod/i.test(navigator.platform) ||
+    // navigator.platform is deprecated; userAgentData may be present in Chromium.
+    (typeof (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ===
+      "string" &&
+      /mac/i.test(
+        (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? "",
+      )));
+
+const MOD = IS_APPLE ? "⌘" : "Ctrl";
+const SHIFT = IS_APPLE ? "⇧" : "Shift";
+
 /**
- * Cmd/Ctrl+K command palette. Surfaces recent threads, workspaces, settings
+ * Cmd/Ctrl+K command palette. Surfaces recent chats, workspaces, settings
  * pages, and skills so power users can navigate without the mouse. All data
  * comes from the existing zustand store and selection reuses existing store
  * actions (selectThread / selectWorkspace / openSettings / openSkills).
@@ -175,7 +189,7 @@ export const CommandPalette = memo(function CommandPalette({
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Search threads, workspaces, settings, skills…" />
+      <CommandInput placeholder="Search chats, workspaces, settings, skills…" />
       <CommandList>
         <CommandEmpty>No results.</CommandEmpty>
 
@@ -183,6 +197,7 @@ export const CommandPalette = memo(function CommandPalette({
           <CommandItem onSelect={handleNewChatClick} value="new chat">
             <MessageSquareIcon />
             <span>New chat</span>
+            <CommandKbd keys={[MOD, "N"]} />
           </CommandItem>
           {tasksEnabled ? (
             <CommandItem onSelect={handleNewTaskClick} value="new task">
@@ -194,6 +209,7 @@ export const CommandPalette = memo(function CommandPalette({
             <CommandItem onSelect={handleResearchClick} value="research open">
               <BookOpenIcon />
               <span>Research</span>
+              <CommandKbd keys={[MOD, SHIFT, "R"]} />
             </CommandItem>
           ) : null}
           {selectedThreadBusy ? (
@@ -205,17 +221,19 @@ export const CommandPalette = memo(function CommandPalette({
           <CommandItem onSelect={handleToggleSidebarClick} value="toggle sidebar">
             <PanelLeftIcon />
             <span>{sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
+            <CommandKbd keys={[MOD, "B"]} />
           </CommandItem>
           <CommandItem onSelect={handleOpenSkills} value="browse skills">
             <SparklesIcon />
             <span>Browse skills</span>
+            <CommandKbd keys={[MOD, SHIFT, "K"]} />
           </CommandItem>
         </CommandGroup>
 
         {recentThreads.length > 0 ? (
           <>
             <CommandSeparator />
-            <CommandGroup heading="Recent threads">
+            <CommandGroup heading="Recent chats">
               {recentThreads.map((thread) => (
                 <ThreadCommandItem
                   key={thread.id}
@@ -244,7 +262,7 @@ export const CommandPalette = memo(function CommandPalette({
           <>
             <CommandSeparator />
             <CommandGroup heading="Settings">
-              {settingsPages.map((page) => (
+              {settingsPages.map((page, index) => (
                 <CommandItem
                   key={page.id}
                   value={`settings ${page.label}`}
@@ -252,6 +270,7 @@ export const CommandPalette = memo(function CommandPalette({
                 >
                   <Settings2Icon />
                   <span>{page.label}</span>
+                  {index === 0 ? <CommandKbd keys={[MOD, ","]} /> : null}
                 </CommandItem>
               ))}
             </CommandGroup>

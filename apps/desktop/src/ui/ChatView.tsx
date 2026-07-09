@@ -70,7 +70,6 @@ const ACTIVE_TASK_STATUSES = new Set([
   "awaiting_review",
 ]);
 
-export { ChatThreadHeader } from "./chat/ChatThreadHeader";
 export {
   canClearSessionHardCap,
   composerBusyHint,

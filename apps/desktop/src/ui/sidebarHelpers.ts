@@ -1,6 +1,6 @@
 import { isStandardChatThread } from "../app/threadFilters";
 
-const MAX_VISIBLE_THREADS = 10;
+export const MAX_VISIBLE_SIDEBAR_ITEMS = 5;
 
 export function groupStandardChatThreadsByWorkspace<
   T extends {
@@ -54,7 +54,7 @@ export function formatSidebarRelativeAge(iso: string): string {
 export function getVisibleSidebarThreads<T>(
   threads: T[],
   showAll: boolean,
-  limit = MAX_VISIBLE_THREADS,
+  limit = MAX_VISIBLE_SIDEBAR_ITEMS,
 ): {
   visibleThreads: T[];
   hiddenThreadCount: number;

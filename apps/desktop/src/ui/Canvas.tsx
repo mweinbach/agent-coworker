@@ -27,7 +27,7 @@ import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
-import { cleanMarkdown, markdownToHtml, nodeToMarkdown } from "../lib/canvasMarkdown";
+import { applyMarkdownFormat, type MarkdownFormatKind } from "../lib/canvasMarkdownFormat";
 import { buildCanvasDocumentPrompt } from "../lib/canvasRequest";
 import { openPath, readFileForPreview, revealPath, writeFile } from "../lib/desktopCommands";
 import { getDesktopPlatformInfo } from "../lib/desktopPlatform";
@@ -37,6 +37,7 @@ import { getDesktopWindowMode } from "../lib/windowMode";
 import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
 import { CanvasFilePreviewLayout } from "./canvas/CanvasFilePreviewLayout";
 import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
+import { DesktopMarkdown } from "./markdown";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
 
@@ -160,15 +161,12 @@ export function Canvas({ path }: { path: string }) {
       lastSavedContentRef.current = fileContent;
       setSaveStatus("saved");
       setError(null);
-      if (editorRef.current && isMarkdown) {
-        editorRef.current.innerHTML = markdownToHtml(fileContent);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [path, isMarkdown, isSpreadsheet, isPptx]);
+  }, [path, isSpreadsheet, isPptx]);
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
@@ -190,9 +188,6 @@ export function Canvas({ path }: { path: string }) {
           setContent(diskContent);
           contentRef.current = diskContent;
           lastSavedContentRef.current = diskContent;
-          if (editorRef.current && isMarkdown) {
-            editorRef.current.innerHTML = markdownToHtml(diskContent);
-          }
           setPreviewRefreshTrigger((t) => t + 1);
         }
       } catch {}
@@ -202,7 +197,7 @@ export function Canvas({ path }: { path: string }) {
       active = false;
       clearInterval(interval);
     };
-  }, [path, isMarkdown, isSpreadsheet, isPptx]);
+  }, [path, isSpreadsheet, isPptx]);
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
@@ -256,26 +251,32 @@ export function Canvas({ path }: { path: string }) {
     }
   }, [floatingCoords, isSpreadsheet, isPptx]);
 
-  const handleInput = () => {
-    if (!editorRef.current) return;
-    const _html = editorRef.current.innerHTML;
-    const md = cleanMarkdown(nodeToMarkdown(editorRef.current));
-    setContent(md);
-    contentRef.current = md;
-    isEditingRef.current = true;
-  };
+  const sourceTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "i")) {
-      setTimeout(handleInput, 0);
-    }
-  };
-
-  const executeCommand = (command: string, value: string = "") => {
-    document.execCommand(command, false, value);
-    handleInput();
-    if (editorRef.current) {
-      editorRef.current.focus();
+  /**
+   * Apply formatting against the markdown source (selection-aware). Prefer this
+   * over document.execCommand so WYSIWYG and source stay one representation.
+   */
+  const applyFormat = (kind: MarkdownFormatKind) => {
+    if (contentTruncated) return;
+    const textarea = sourceTextareaRef.current;
+    const hasTextareaSelection =
+      activeTab === "edit" &&
+      textarea !== null &&
+      typeof textarea.selectionStart === "number" &&
+      typeof textarea.selectionEnd === "number";
+    const start = hasTextareaSelection ? textarea.selectionStart : 0;
+    const end = hasTextareaSelection ? textarea.selectionEnd : content.length;
+    const result = applyMarkdownFormat(contentRef.current, start, end, kind);
+    handleContentChange(result.next);
+    if (hasTextareaSelection && textarea) {
+      requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
+      });
+    } else if (activeTab !== "edit") {
+      // Preview mode: jump to source so the user can see the markdown transform.
+      setActiveTab("edit");
     }
   };
 
@@ -283,9 +284,6 @@ export function Canvas({ path }: { path: string }) {
     setContent(val);
     contentRef.current = val;
     isEditingRef.current = true;
-    if (editorRef.current && isMarkdown) {
-      editorRef.current.innerHTML = markdownToHtml(val);
-    }
   };
 
   const handleBlur = () => {
@@ -638,14 +636,14 @@ export function Canvas({ path }: { path: string }) {
           />
         ) : null}
 
-        {showFormattingBar && isMarkdown && activeTab === "preview" && (
+        {showFormattingBar && isMarkdown && (
           <div className="flex items-center gap-0.5 px-2.5 py-1 border-b border-border/40 bg-muted/15 shrink-0 select-none">
             <Button
               type="button"
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("bold")}
+              onClick={() => applyFormat("bold")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Bold"
             >
@@ -656,7 +654,7 @@ export function Canvas({ path }: { path: string }) {
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("italic")}
+              onClick={() => applyFormat("italic")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Italic"
             >
@@ -667,7 +665,7 @@ export function Canvas({ path }: { path: string }) {
               type="button"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("formatBlock", "H1")}
+              onClick={() => applyFormat("h1")}
               className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 1"
             >
@@ -677,7 +675,7 @@ export function Canvas({ path }: { path: string }) {
               type="button"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("formatBlock", "H2")}
+              onClick={() => applyFormat("h2")}
               className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 2"
             >
@@ -687,7 +685,7 @@ export function Canvas({ path }: { path: string }) {
               type="button"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("formatBlock", "H3")}
+              onClick={() => applyFormat("h3")}
               className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 3"
             >
@@ -697,7 +695,7 @@ export function Canvas({ path }: { path: string }) {
               type="button"
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("formatBlock", "P")}
+              onClick={() => applyFormat("paragraph")}
               className="h-7 px-1.5 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Normal Text"
             >
@@ -709,7 +707,7 @@ export function Canvas({ path }: { path: string }) {
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("insertUnorderedList")}
+              onClick={() => applyFormat("ul")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Bullet List"
             >
@@ -720,7 +718,7 @@ export function Canvas({ path }: { path: string }) {
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
-              onClick={() => executeCommand("insertOrderedList")}
+              onClick={() => applyFormat("ol")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Numbered List"
             >
@@ -749,21 +747,11 @@ export function Canvas({ path }: { path: string }) {
                     <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
                       <ScrollArea className="h-full">
                         <div className="mx-auto w-full max-w-[840px] px-4 py-8">
-                          <div
-                            ref={(el) => {
-                              editorRef.current = el;
-                              if (el && !el.innerHTML) {
-                                el.innerHTML = markdownToHtml(content);
-                              }
-                            }}
-                            role="textbox"
-                            contentEditable={!contentTruncated}
-                            suppressContentEditableWarning
-                            onInput={handleInput}
-                            onKeyDown={handleKeyDown}
-                            onBlur={handleBlur}
-                            className="mx-auto w-full min-h-[1056px] p-12 md:p-16 focus:outline-none focus:ring-0 max-w-none text-left select-text leading-relaxed [&_p]:mb-4 [&_h1]:text-4xl [&_h1]:font-bold [&_h1]:mb-6 [&_h1]:mt-8 [&_h2]:text-3xl [&_h2]:font-bold [&_h2]:mb-4 [&_h2]:mt-8 [&_h3]:text-2xl [&_h3]:font-semibold [&_h3]:mb-4 [&_h3]:mt-6 [&_h4]:text-xl [&_h4]:font-semibold [&_h4]:mb-3 [&_h4]:mt-6 [&_h5]:text-lg [&_h5]:font-semibold [&_h5]:mb-2 [&_h5]:mt-4 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-4 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-4 [&_li]:mb-1 [&_blockquote]:border-l-4 [&_blockquote]:border-border/80 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:mb-4 [&_hr]:my-8 [&_hr]:border-border/60 [&_pre]:bg-muted/40 [&_pre]:p-4 [&_pre]:rounded-md [&_pre]:mb-4 [&_code]:bg-muted/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded-sm"
-                          />
+                          <div className="mx-auto w-full max-w-none p-12 md:p-16 text-left select-text">
+                            <DesktopMarkdown className="prose prose-neutral dark:prose-invert max-w-none">
+                              {content}
+                            </DesktopMarkdown>
+                          </div>
                         </div>
                       </ScrollArea>
                     </TabsContent>
@@ -797,6 +785,7 @@ export function Canvas({ path }: { path: string }) {
                           </span>
                         </div>
                         <Textarea
+                          ref={sourceTextareaRef}
                           value={content}
                           onChange={(e) => handleContentChange(e.target.value)}
                           onBlur={handleBlur}
@@ -950,7 +939,7 @@ export function Canvas({ path }: { path: string }) {
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px] font-bold"
-                  onClick={() => executeCommand("bold")}
+                  onClick={() => applyFormat("bold")}
                 >
                   <BoldIcon className="size-3" />
                 </Button>
@@ -960,7 +949,7 @@ export function Canvas({ path }: { path: string }) {
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px] italic"
-                  onClick={() => executeCommand("italic")}
+                  onClick={() => applyFormat("italic")}
                 >
                   <ItalicIcon className="size-3" />
                 </Button>
@@ -971,7 +960,7 @@ export function Canvas({ path }: { path: string }) {
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px] font-bold"
-                  onClick={() => executeCommand("formatBlock", "H1")}
+                  onClick={() => applyFormat("h1")}
                 >
                   H1
                 </Button>
@@ -981,7 +970,7 @@ export function Canvas({ path }: { path: string }) {
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px] font-bold"
-                  onClick={() => executeCommand("formatBlock", "H2")}
+                  onClick={() => applyFormat("h2")}
                 >
                   H2
                 </Button>
@@ -991,7 +980,7 @@ export function Canvas({ path }: { path: string }) {
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px]"
-                  onClick={() => executeCommand("insertUnorderedList")}
+                  onClick={() => applyFormat("ul")}
                 >
                   <ListIcon className="size-3" />
                 </Button>

@@ -214,6 +214,7 @@ export function createResearchActions(
   | "startResearch"
   | "cancelResearch"
   | "renameResearch"
+  | "deleteResearch"
   | "sendResearchFollowUp"
   | "setResearchDraftSettings"
   | "exportResearch"
@@ -458,6 +459,26 @@ export function createResearchActions(
               researchById,
               researchOrder: orderResearchIds(researchById),
               researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
+            };
+          });
+          return;
+        }
+
+        if (message.method === "research/deleted") {
+          set((s) => {
+            if (!(researchId in s.researchById) && !s.researchOrder.includes(researchId)) {
+              return {
+                researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
+              };
+            }
+            const researchById = { ...s.researchById };
+            delete researchById[researchId];
+            const researchOrder = s.researchOrder.filter((id) => id !== researchId);
+            return {
+              researchById,
+              researchOrder,
+              researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
+              selectedResearchId: s.selectedResearchId === researchId ? null : s.selectedResearchId,
             };
           });
         }
@@ -897,6 +918,44 @@ export function createResearchActions(
           "Unable to rename research",
           error instanceof Error ? error.message : String(error),
         );
+      }
+    },
+
+    deleteResearch: async (researchId) => {
+      const previous = get().researchById[researchId];
+      // Optimistic remove from list.
+      set((s) => {
+        const researchById = { ...s.researchById };
+        delete researchById[researchId];
+        const researchOrder = s.researchOrder.filter((id) => id !== researchId);
+        return {
+          researchById,
+          researchOrder,
+          selectedResearchId: s.selectedResearchId === researchId ? null : s.selectedResearchId,
+        };
+      });
+      try {
+        const workspaceId = await ensureResearchTransportWorkspace();
+        if (!workspaceId) {
+          if (previous) applyResearchRecord(previous);
+          return false;
+        }
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/delete", {
+          researchId,
+        });
+        if (!result.deleted && previous) {
+          applyResearchRecord(previous);
+          return false;
+        }
+        return result.deleted === true;
+      } catch (error) {
+        if (previous) applyResearchRecord(previous);
+        notify(
+          "error",
+          "Unable to delete research",
+          error instanceof Error ? error.message : String(error),
+        );
+        return false;
       }
     },
 

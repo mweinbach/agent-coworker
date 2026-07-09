@@ -1249,6 +1249,19 @@ export class SessionDbRepository {
     return mapped;
   }
 
+  deleteResearch(researchId: string, opts?: { workspacePath?: string | null }): boolean {
+    const id = researchId.trim();
+    if (!id) return false;
+    if (opts?.workspacePath !== undefined && opts.workspacePath !== null) {
+      const result = this.db
+        .query(sql(["DELETE FROM research WHERE id = ? AND workspace_path = ?"]))
+        .run(id, canonicalWorkspacePath(opts.workspacePath));
+      return Number(result.changes ?? 0) > 0;
+    }
+    const result = this.db.query(sql(["DELETE FROM research WHERE id = ?"])).run(id);
+    return Number(result.changes ?? 0) > 0;
+  }
+
   upsertResearch(record: PersistedResearchRecord): void {
     const parsed = researchRecordSchema.parse(record);
     this.db

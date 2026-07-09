@@ -161,6 +161,13 @@ export type TranscriptBatchInput = {
   payload: unknown;
 };
 
+export type TranscriptDeliveryFailure = {
+  batchId: string;
+  reason: "permanent" | "retries_exhausted" | "persistence";
+  pendingEvents: number;
+  message: string;
+};
+
 export type ContextMenuItem = {
   id: string;
   label: string;
@@ -531,6 +538,7 @@ export interface DesktopApi {
   hydrateTranscript(opts: ReadTranscriptInput): Promise<HydratedTranscriptSnapshot>;
   appendTranscriptEvent(opts: TranscriptBatchInput): Promise<void>;
   appendTranscriptBatch(events: TranscriptBatchInput[]): Promise<void>;
+  onTranscriptDeliveryFailure?(listener: (failure: TranscriptDeliveryFailure) => void): () => void;
   deleteTranscript(opts: DeleteTranscriptInput): Promise<void>;
   pickWorkspaceDirectory(): Promise<string | null>;
   pickDirectory(opts?: PickDirectoryInput): Promise<string | null>;

@@ -18,7 +18,9 @@ import type {
   UpdaterState,
 } from "./desktopApi";
 import { createDefaultUpdaterState } from "./desktopApi";
+import { createWebTranscriptDelivery, type WebTranscriptDelivery } from "./webTranscriptDelivery";
 import {
+  getCurrentWebWorkspaceScopeHash,
   getSavedServerUrl,
   getSavedWorkspacePath,
   savePersistedState,
@@ -29,6 +31,7 @@ import {
 
 let configuredServerUrl: string | null = null;
 let configuredWorkspacePath: string | null = null;
+let activeTranscriptDelivery: WebTranscriptDelivery | null = null;
 
 const menuListeners = new Set<(command: DesktopMenuCommand) => void>();
 const appearanceListeners = new Set<(appearance: SystemAppearance) => void>();
@@ -464,6 +467,16 @@ export function configureWebAdapter(serverUrl: string, workspacePath: string): v
 
 export function createWebAdapter(): DesktopApi {
   const fullDesktopMode = !getWorkspacePath().trim();
+  activeTranscriptDelivery?.dispose();
+  const transcriptDelivery = createWebTranscriptDelivery({
+    scope: getCurrentWebWorkspaceScopeHash() ?? "unscoped",
+    buildUrl: () => buildWebRouteUrl("/cowork/desktop/transcript/batch"),
+    accessHeaders: browserAccessHeaders,
+    fetch: async (input, init) => await globalThis.fetch(input, init),
+    storage: globalThis.localStorage,
+    lifecycleTarget: typeof window === "undefined" ? undefined : window,
+  });
+  activeTranscriptDelivery = transcriptDelivery;
   const resolveWebDesktopFeatureFlags = (
     overrides?: DesktopFeatureFlagOverrides,
   ): DesktopFeatureFlags => {
@@ -598,19 +611,10 @@ export function createWebAdapter(): DesktopApi {
       );
     },
     async appendTranscriptBatch(events): Promise<void> {
-      const response = await fetch(buildWebRouteUrl("/cowork/desktop/transcript/batch"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(events),
-      });
-      if (response.status === 404) {
-        return;
-      }
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Request failed (${response.status})`);
-      }
+      await transcriptDelivery.append(events);
+    },
+    onTranscriptDeliveryFailure(listener): () => void {
+      return transcriptDelivery.onFailure(listener);
     },
     async deleteTranscript(opts): Promise<void> {
       await maybeDeleteWeb("/cowork/desktop/transcript", { threadId: opts.threadId });

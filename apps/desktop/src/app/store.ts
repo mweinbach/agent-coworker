@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { onTranscriptDeliveryFailure } from "../lib/desktopCommands";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
 import { createAppActions } from "./store.actions";
@@ -7,6 +8,7 @@ import {
   type AppStoreDataState,
   type AppStoreState,
   createDefaultUpdaterState,
+  pushNotification,
 } from "./store.helpers";
 import {
   DEFAULT_RESEARCH_SETTINGS,
@@ -119,6 +121,22 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   ...cachedStateSeed,
   ...createAppActions((partial) => set(partial as Parameters<typeof set>[0]), get),
 }));
+
+onTranscriptDeliveryFailure((failure) => {
+  const notificationId = `transcript-delivery-${failure.batchId}`;
+  useAppStore.setState((state) => ({
+    notifications: pushNotification(
+      state.notifications.filter((notification) => notification.id !== notificationId),
+      {
+        id: notificationId,
+        ts: new Date().toISOString(),
+        kind: "error",
+        title: "Transcript sync needs attention",
+        detail: failure.message,
+      },
+    ),
+  }));
+});
 
 if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
   type AppStoreSubscribe = typeof useAppStore.subscribe;

@@ -27,6 +27,7 @@ import type {
   SystemAppearance,
   TelemetryStatusInput,
   TelemetryStatusSnapshot,
+  TranscriptDeliveryFailure,
   UpdaterState,
   UploadDiagnosticsBundleOutput,
   WorkspaceServerExitedEvent,
@@ -159,6 +160,12 @@ export async function appendTranscriptBatch(
   }[],
 ): Promise<void> {
   await requireDesktopApi().appendTranscriptBatch(events);
+}
+
+export function onTranscriptDeliveryFailure(
+  listener: (failure: TranscriptDeliveryFailure) => void,
+): () => void {
+  return getDesktopApi()?.onTranscriptDeliveryFailure?.(listener) ?? noopUnsubscribe;
 }
 
 export async function deleteTranscript(opts: { threadId: string }): Promise<void> {

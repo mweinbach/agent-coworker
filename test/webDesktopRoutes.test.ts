@@ -635,6 +635,125 @@ describe("web desktop routes", () => {
     expect(starts).toEqual([{ workspacePath: workspace, yolo: false }]);
   });
 
+  test("deduplicates ambiguous transcript batch retries by stable batch id", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-idempotency-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const events = [
+      {
+        ts: "2026-07-09T20:00:00.000Z",
+        threadId: "thread-idempotent",
+        direction: "client",
+        payload: { type: "user_message", text: "hello" },
+      },
+      {
+        ts: "2026-07-09T20:00:01.000Z",
+        threadId: "thread-idempotent",
+        direction: "server",
+        payload: { type: "agent_message", text: "hi" },
+      },
+    ] as const;
+    const makeRequest = () =>
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "transcript-batch-1",
+        },
+        body: JSON.stringify({
+          batchId: "transcript-batch-1",
+          events,
+        }),
+      });
+
+    const responses = await Promise.all([
+      handleWebDesktopRoute(makeRequest(), { cwd: workspace, desktopService: service }),
+      handleWebDesktopRoute(makeRequest(), { cwd: workspace, desktopService: service }),
+    ]);
+
+    expect(responses.map((response) => response?.status)).toEqual([204, 204]);
+    await expect(service.readTranscript("thread-idempotent")).resolves.toEqual([
+      { ...events[0], deliveryId: "transcript-batch-1:0" },
+      { ...events[1], deliveryId: "transcript-batch-1:1" },
+    ]);
+  });
+
+  test("rejects reuse of a transcript batch id with different data", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-collision-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const request = (text: string) =>
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchId: "transcript-batch-collision",
+          events: [
+            {
+              ts: "2026-07-09T20:00:00.000Z",
+              threadId: "thread-collision",
+              direction: "client",
+              payload: { type: "user_message", text },
+            },
+          ],
+        }),
+      });
+
+    const first = await handleWebDesktopRoute(request("first"), {
+      cwd: workspace,
+      desktopService: service,
+    });
+    const collision = await handleWebDesktopRoute(request("different"), {
+      cwd: workspace,
+      desktopService: service,
+    });
+
+    expect(first?.status).toBe(204);
+    expect(collision?.status).toBe(400);
+    await expect(service.readTranscript("thread-collision")).resolves.toHaveLength(1);
+  });
+
+  test("rejects a reused batch id when an event moves to another thread", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-cross-thread-collision-");
+    const userDataDir = path.join(workspace, "user-data");
+    const service = new WebDesktopService({
+      userDataDir,
+    });
+    const request = (threadId: string) =>
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchId: "transcript-batch-cross-thread-collision",
+          events: [
+            {
+              ts: "2026-07-09T20:00:00.000Z",
+              threadId,
+              direction: "client",
+              payload: { type: "user_message", text: "same payload" },
+            },
+          ],
+        }),
+      });
+
+    const first = await handleWebDesktopRoute(request("thread-original"), {
+      cwd: workspace,
+      desktopService: service,
+    });
+    const restartedService = new WebDesktopService({ userDataDir });
+    const collision = await handleWebDesktopRoute(request("thread-moved"), {
+      cwd: workspace,
+      desktopService: restartedService,
+    });
+
+    expect(first?.status).toBe(204);
+    expect(collision?.status).toBe(400);
+    await expect(restartedService.readTranscript("thread-original")).resolves.toHaveLength(1);
+    await expect(restartedService.readTranscript("thread-moved")).resolves.toEqual([]);
+  });
+
   test("serves active-content files as attachments while keeping plain text inline", async () => {
     const workspace = await makeTempDir("cowork-web-desktop-open-");
     const htmlPath = path.join(workspace, "preview.html");

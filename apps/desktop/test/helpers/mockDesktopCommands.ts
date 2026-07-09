@@ -153,6 +153,7 @@ export function createDesktopCommandsMock(
     }),
     appendTranscriptEvent: async () => {},
     appendTranscriptBatch: async () => {},
+    onTranscriptDeliveryFailure: () => () => {},
     deleteTranscript: async () => {},
     pickWorkspaceDirectory: async () => null,
     pickDirectory: async () => null,

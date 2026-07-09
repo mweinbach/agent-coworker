@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-import type { WebDesktopServiceLike } from "./webDesktopService";
+import { TRANSCRIPT_BATCH_ID_PATTERN, type WebDesktopServiceLike } from "./webDesktopService";
 
 type ExplorerEntryPayload = {
   name: string;
@@ -508,11 +508,30 @@ export async function handleWebDesktopRoute(
       }
 
       if (url.pathname === "/cowork/desktop/transcript/batch" && req.method === "POST") {
-        const body = await req.json();
-        if (!Array.isArray(body)) {
-          throw new Error("Expected a JSON array body");
+        const rawBody = (await req.json()) as unknown;
+        let rawEvents: unknown;
+        let bodyBatchId: string | null = null;
+        if (Array.isArray(rawBody)) {
+          rawEvents = rawBody;
+        } else if (rawBody && typeof rawBody === "object") {
+          const record = rawBody as Record<string, unknown>;
+          rawEvents = record.events;
+          bodyBatchId = readRequiredStringField(record, "batchId");
+        } else {
+          throw new Error("Expected a transcript batch object or legacy JSON array body");
         }
-        const events = body.map((item) => {
+        if (!Array.isArray(rawEvents)) {
+          throw new Error("events must be a JSON array");
+        }
+        const headerBatchId = req.headers.get("Idempotency-Key")?.trim() || null;
+        if (headerBatchId && bodyBatchId && headerBatchId !== bodyBatchId) {
+          throw new Error("Idempotency-Key must match batchId");
+        }
+        const batchId = bodyBatchId ?? headerBatchId;
+        if (batchId && !TRANSCRIPT_BATCH_ID_PATTERN.test(batchId)) {
+          throw new Error("batchId contains invalid characters");
+        }
+        const events = rawEvents.map((item) => {
           if (!item || typeof item !== "object" || Array.isArray(item)) {
             throw new Error("Transcript batch entries must be objects");
           }
@@ -530,7 +549,7 @@ export async function handleWebDesktopRoute(
             payload: record.payload,
           } as const;
         });
-        await opts.desktopService.appendTranscriptBatch(events);
+        await opts.desktopService.appendTranscriptBatch(events, batchId ? { batchId } : undefined);
         return new Response(null, { status: 204 });
       }
 

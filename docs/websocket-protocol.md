@@ -17,6 +17,39 @@ address, require the startup `browserAccessToken` for `/ws` and `/cowork/*` even
 does not send an `Origin` header. Send the token to `/ws` as `?coworkBrowserToken=<token>`; send it
 to `/cowork/*` HTTP routes as `X-Cowork-Browser-Token`.
 
+### Web transcript batch delivery
+
+The browser desktop compatibility cache appends transcript events through
+`POST /cowork/desktop/transcript/batch`. Authenticated clients must send
+`X-Cowork-Browser-Token` on every request. Retry-safe clients send the same stable batch id in both
+the `Idempotency-Key` header and this JSON body:
+
+```json
+{
+  "batchId": "transcript-550e8400-e29b-41d4-a716-446655440000",
+  "events": [
+    {
+      "ts": "2026-07-09T20:00:00.000Z",
+      "threadId": "thread-123",
+      "direction": "server",
+      "payload": { "type": "agent_message", "text": "Hello" }
+    }
+  ]
+}
+```
+
+The server returns `204` after the full batch is appended. Replaying an acknowledged or
+ambiguously completed batch with the same id and identical events also returns `204` without
+duplicating transcript lines. Reusing an id with different event data is rejected. The legacy
+array-only request body remains accepted for older clients but has no idempotency guarantee.
+
+The web client persists unacknowledged batches before sending, retries transient network,
+timeout, `408`, `425`, `429`, and `5xx` failures in order with a bounded backoff, and stops at the
+first permanent or retry-exhausted failure. Pending data remains in browser storage and the
+operation feedback surface reports the failure. `pagehide`/`beforeunload` performs one best-effort
+authenticated `keepalive` send for only the ordered head batch; retained data is rehydrated with
+the same idempotency key after refresh.
+
 ## Mobile direct HTTP/3 transport
 
 Cowork Mobile uses the same JSON-RPC schema through a direct local HTTPS/HTTP/3 listener

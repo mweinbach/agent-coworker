@@ -4,11 +4,7 @@ import { useAppTheme } from "@/theme/use-app-theme";
 
 /**
  * Compact horizontal chip strip for active subagents in a thread.
- *
- * Intentionally not mounted yet: mobile thread chrome does not currently
- * surface agent lists from the snapshot reducer with enough fidelity.
- * Keep this component for when thread detail gains a dedicated agents strip;
- * do not delete it as dead code until that surface ships or is cancelled.
+ * Mounted from the thread detail header when snapshot.agents is non-empty.
  */
 
 type AgentEntry = {

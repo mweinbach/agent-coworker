@@ -1,8 +1,12 @@
 import { useAppStore } from "../../app/store";
 import { Spinner } from "../../components/ui/spinner";
 import { NewTaskLanding } from "./NewTaskLanding";
-import { TaskContextSidebar } from "./TaskContextSidebar";
+import { TaskConversationSidebar } from "./TaskConversationSidebar";
 
+/**
+ * Task center pane mirrors chat: conversation is primary.
+ * Brief/plan/artifacts live in the right rail (TaskContextSidebar via App).
+ */
 export function TaskView() {
   const selectedTaskId = useAppStore((state) => state.selectedTaskId);
   const task = useAppStore((state) =>
@@ -48,5 +52,5 @@ export function TaskView() {
     );
   }
 
-  return <TaskContextSidebar variant="workspace" />;
+  return <TaskConversationSidebar />;
 }

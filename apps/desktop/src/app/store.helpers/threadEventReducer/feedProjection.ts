@@ -318,6 +318,37 @@ export function createFeedProjectionModule(
     }
     scheduleAssistantDeltaFlush();
   }
+  /** Last-wins per itemId; flushed once per animation frame (model-stream path). */
+  const pendingModelStreamUpdates = new Map<
+    string,
+    { set: StoreSet; threadId: string; itemId: string; update: (item: FeedItem) => FeedItem }
+  >();
+  let modelStreamFlushScheduled = false;
+
+  function flushPendingModelStreamUpdates() {
+    modelStreamFlushScheduled = false;
+    const batches = [...pendingModelStreamUpdates.values()];
+    pendingModelStreamUpdates.clear();
+    for (const batch of batches) {
+      updateFeedItem(batch.set, batch.threadId, batch.itemId, batch.update);
+    }
+  }
+
+  function scheduleModelStreamFlush() {
+    if (modelStreamFlushScheduled) return;
+    modelStreamFlushScheduled = true;
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => flushPendingModelStreamUpdates());
+    } else {
+      setTimeout(() => flushPendingModelStreamUpdates(), 0);
+    }
+  }
+
+  function flushModelStreamBeforeStructuralChange() {
+    if (pendingModelStreamUpdates.size === 0) return;
+    flushPendingModelStreamUpdates();
+  }
+
   function applyModelStreamUpdateToThreadFeed(
     get: StoreGet,
     set: StoreSet,
@@ -329,15 +360,21 @@ export function createFeedProjectionModule(
       makeId: ctx.deps.makeId,
       nowIso: ctx.deps.nowIso,
       pushFeedItem: (item) => {
+        flushModelStreamBeforeStructuralChange();
         pushFeedItem(set, threadId, item);
       },
       insertFeedItemBefore: (beforeItemId, item) => {
+        flushModelStreamBeforeStructuralChange();
         insertFeedItemBefore(set, threadId, beforeItemId, item);
       },
       updateFeedItem: (itemId, updateItem) => {
-        updateFeedItem(set, threadId, itemId, updateItem);
+        // Text/tool patches often re-apply full state; last write per frame wins.
+        const key = `${threadId}:${itemId}`;
+        pendingModelStreamUpdates.set(key, { set, threadId, itemId, update: updateItem });
+        scheduleModelStreamFlush();
       },
       onToolTerminal: () => {
+        flushModelStreamBeforeStructuralChange();
         const thread = get().threads.find((t) => t.id === threadId);
         if (thread) {
           set((state) => ({

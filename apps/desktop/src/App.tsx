@@ -47,7 +47,7 @@ import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
-import { TaskConversationSidebar } from "./ui/tasks/TaskConversationSidebar";
+import { TaskContextSidebar } from "./ui/tasks/TaskContextSidebar";
 
 const EMPTY_AGENTS: never[] = [];
 
@@ -82,7 +82,7 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
     showCanvas && !canvasMaximized
       ? canvasSidebarWidth
       : view === "task"
-        ? Math.max(contextSidebarWidth, 420)
+        ? Math.max(contextSidebarWidth, 360)
         : contextSidebarWidth;
   const canvasContainerStyle: CSSProperties = canvasMaximized
     ? {
@@ -114,7 +114,7 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
             <Canvas path={filePreview.path} />
           </InlineErrorBoundary>
         ) : view === "task" ? (
-          <TaskConversationSidebar />
+          <TaskContextSidebar variant="sidebar" />
         ) : (
           <ContextSidebar />
         )}

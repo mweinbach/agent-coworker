@@ -333,6 +333,45 @@ describe("truncateText", () => {
       expect(truncateText("hi", 1_000_000)).toBe("hi");
     });
   });
+
+  describe("does not split surrogate pairs", () => {
+    // Old implementation sliced at a UTF-16 code-unit index, which could cut an
+    // astral character (emoji, flags, CJK-ext) between its two code units and
+    // emit a lone surrogate — invalid UTF-16 that renders as U+FFFD mojibake.
+    const legacyTruncate = (s: string, max: number): string =>
+      s.length <= max ? s : s.slice(0, max);
+
+    test("astral string truncated at a code-unit boundary is valid UTF-16", () => {
+      // "a🇮🇸b" is 4 code points / 6 UTF-16 code units.
+      const input = "a🇮🇸b";
+      const result = truncateText(input, 2);
+      // legacy split at unit index 2 produced a lone high surrogate:
+      expect(legacyTruncate(input, 2)).toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      // fixed version keeps only whole code points:
+      expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      expect(Array.from(result)).toEqual(Array.from(input).slice(0, 2));
+    });
+
+    test("truncation between two astral characters stays valid", () => {
+      const input = "🇮🇸🇫🇷";
+      const result = truncateText(input, 1);
+      expect(legacyTruncate(input, 1)).toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      expect(Array.from(result)).toEqual(Array.from(input).slice(0, 1));
+    });
+
+    test("astral emoji string still truncates at the code-point limit", () => {
+      expect(truncateText("😀😀😀😀", 2)).toBe("😀😀");
+      expect(Array.from(truncateText("😀😀😀😀", 2))).toHaveLength(2);
+    });
+
+    test("unpaired high surrogate does not consume the next code unit", () => {
+      const input = "\uD800X";
+      const result = truncateText(input, 1);
+      expect(result).toBe(Array.from(input).slice(0, 1).join(""));
+      expect(result).toBe("\uD800");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

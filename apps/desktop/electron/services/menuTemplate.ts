@@ -64,7 +64,7 @@ export function buildDesktopMenuTemplate(
       label: labels.file,
       submenu: [
         commandItem(
-          "New Thread",
+          "New Chat",
           "newThread",
           options.sendCommand,
           "CmdOrCtrl+N",
@@ -89,6 +89,13 @@ export function buildDesktopMenuTemplate(
           options.sendCommand,
           "CmdOrCtrl+Shift+K",
           sfSymbol("wand.and.stars"),
+        ),
+        commandItem(
+          "Command Palette",
+          "openCommandPalette",
+          options.sendCommand,
+          "CmdOrCtrl+K",
+          sfSymbol("command"),
         ),
         { type: "separator" },
         commandItem(
@@ -192,7 +199,7 @@ export function buildDesktopMenuTemplate(
         label: "File",
         submenu: [
           commandItem(
-            "New Thread",
+            "New Chat",
             "newThread",
             options.sendCommand,
             "CmdOrCtrl+N",
@@ -217,6 +224,13 @@ export function buildDesktopMenuTemplate(
             options.sendCommand,
             "CmdOrCtrl+Shift+K",
             sfSymbol("wand.and.stars"),
+          ),
+          commandItem(
+            "Command Palette",
+            "openCommandPalette",
+            options.sendCommand,
+            "CmdOrCtrl+K",
+            sfSymbol("command"),
           ),
           { type: "separator" },
           commandItem(

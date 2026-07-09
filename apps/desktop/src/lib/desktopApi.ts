@@ -293,7 +293,8 @@ export type DesktopMenuCommand =
   | "openWorkspacesSettings"
   | "openResearch"
   | "openSkills"
-  | "openUpdates";
+  | "openUpdates"
+  | "openCommandPalette";
 
 type ThemeSource = "system" | "light" | "dark";
 

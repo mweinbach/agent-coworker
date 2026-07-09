@@ -196,4 +196,48 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain("group-hover/message:opacity-100");
     expect(html).toContain("group-focus-within/message:opacity-100");
   });
+
+
+  test("streams plain text instead of full markdown while isStreaming", () => {
+    const html = renderToStaticMarkup(
+      renderFeedRow(
+        {
+          id: "assistant-streaming",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-06-18T10:00:00.000Z",
+          text: "Hello **world**",
+        },
+        {},
+      ),
+    );
+    // Without isStreaming, full markdown path is used (no streaming-markdown slot).
+    expect(html).not.toContain('data-slot="streaming-markdown"');
+
+    const streamingHtml = renderToStaticMarkup(
+      createElement(
+        ChatViewContext.Provider,
+        {
+          value: {
+            developerMode: false,
+            mentionCatalog: EMPTY_MENTION_CATALOG,
+          },
+        },
+        createElement(FeedRow, {
+          item: {
+            id: "assistant-streaming",
+            kind: "message",
+            role: "assistant",
+            ts: "2026-06-18T10:00:00.000Z",
+            text: "Hello **world**",
+          },
+          isStreaming: true,
+        }),
+      ),
+    );
+    expect(streamingHtml).toContain('data-slot="streaming-markdown"');
+    expect(streamingHtml).toContain("Hello **world**");
+    expect(streamingHtml).toContain('data-slot="streaming-caret"');
+  });
+
 });

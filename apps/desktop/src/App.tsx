@@ -228,7 +228,7 @@ const ChatShell = memo(function ChatShell({
       ? "Research"
       : effectiveView === "task"
         ? (selectedTask?.title ?? "New task")
-        : activeThread?.title?.trim() || "New thread";
+        : activeThread?.title?.trim() || "New chat";
   const topBarSubtitle: string | null =
     effectiveView === "research"
       ? null
@@ -622,6 +622,10 @@ export default function App() {
       }
       if (command === "openSkills") {
         void state.openSkills();
+        return;
+      }
+      if (command === "openCommandPalette") {
+        setCommandPaletteOpen(true);
       }
     }
 

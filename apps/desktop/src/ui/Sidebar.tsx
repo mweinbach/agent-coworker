@@ -43,7 +43,6 @@ import { cn } from "../lib/utils";
 import { SidebarOneOffChatItem } from "./sidebar/SidebarOneOffChatItem";
 import { SidebarSectionFrame } from "./sidebar/SidebarSectionFrame";
 import {
-  MAX_VISIBLE_THREADS,
   SidebarWorkspaceItem,
   type WorkspaceMoveDirection,
 } from "./sidebar/SidebarWorkspaceItem";
@@ -51,6 +50,7 @@ import { useSidebarPersistence } from "./sidebar/useSidebarPersistence";
 import {
   getVisibleSidebarThreads,
   groupStandardChatThreadsByWorkspace,
+  MAX_VISIBLE_SIDEBAR_ITEMS,
   shouldEmphasizeWorkspaceRow,
   swapSidebarItemsById,
 } from "./sidebarHelpers";
@@ -509,7 +509,7 @@ export const Sidebar = memo(function Sidebar() {
     const { visibleThreads, hiddenThreadCount } = getVisibleSidebarThreads(
       workspaceThreads,
       showAllThreads,
-      MAX_VISIBLE_THREADS,
+      MAX_VISIBLE_SIDEBAR_ITEMS,
     );
 
     return (
@@ -604,7 +604,7 @@ export const Sidebar = memo(function Sidebar() {
             >
               {(showAllChats || threadSearchQuery
                 ? oneOffChatThreads
-                : oneOffChatThreads.slice(0, 5)
+                : oneOffChatThreads.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS)
               ).map((thread) => (
                 <SidebarOneOffChatItem
                   key={thread.id}
@@ -629,14 +629,14 @@ export const Sidebar = memo(function Sidebar() {
                 />
               ))}
             </div>
-            {!threadSearchQuery && oneOffChatThreads.length > 5 ? (
+            {!threadSearchQuery && oneOffChatThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
               <Button
                 className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
                 onClick={() => setShowAllChats((prev) => !prev)}
                 type="button"
                 variant="ghost"
               >
-                {showAllChats ? "Show less" : `Show ${oneOffChatThreads.length - 5} more`}
+                {showAllChats ? "Show less" : `Show ${oneOffChatThreads.length - MAX_VISIBLE_SIDEBAR_ITEMS} more`}
               </Button>
             ) : null}
           </div>

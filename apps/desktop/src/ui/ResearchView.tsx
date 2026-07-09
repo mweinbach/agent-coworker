@@ -76,11 +76,22 @@ export function ResearchView() {
               onSelectResearch={(researchId) => void selectResearch(researchId)}
             />
           ) : (
-            <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-3 py-6 text-center">
-              <p className="text-sm font-medium text-foreground">No research yet</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Start a new research run from the composer on the right.
+            <div className="rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-10 text-center">
+              <p className="text-sm font-semibold text-foreground">Start your first research</p>
+              <p className="mx-auto mt-2 max-w-[16rem] text-xs leading-5 text-muted-foreground">
+                Investigate a market, compare vendors, or draft a cited brief. Use the composer on
+                the right — completed runs will show up here.
               </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="mt-4 h-8 gap-1.5 rounded-md px-3 text-xs"
+                onClick={() => selectResearch(null)}
+              >
+                <PlusIcon className="h-3.5 w-3.5" />
+                New research
+              </Button>
             </div>
           )}
         </div>

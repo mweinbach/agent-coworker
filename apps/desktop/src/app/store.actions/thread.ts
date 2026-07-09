@@ -978,7 +978,7 @@ export function createThreadActions(
 
       const threadId = makeId();
       const createdAt = nowIso();
-      const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New thread";
+      const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New chat";
 
       const thread: ThreadRecord = {
         id: threadId,

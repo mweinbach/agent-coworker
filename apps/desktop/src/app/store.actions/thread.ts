@@ -176,14 +176,22 @@ function swapComposerDraft(
 }
 
 function clearComposerDraftForThread(
-  state: { composerText: string; composerTextByThreadId?: Record<string, string> },
+  state: {
+    composerText: string;
+    composerTextByThreadId?: Record<string, string>;
+    selectedThreadId?: string | null;
+  },
   threadId: string | null | undefined,
 ): { composerText: string; composerTextByThreadId: Record<string, string> } {
   const base = state.composerTextByThreadId ?? {};
   if (!threadId) return { composerText: "", composerTextByThreadId: base };
   const nextById = { ...base };
   delete nextById[threadId];
-  return { composerText: "", composerTextByThreadId: nextById };
+  // Only blank the live composer when it still belongs to the sent thread.
+  // If the user switched chats while send awaited network work, keep the new
+  // thread's draft in `composerText` and only drop the sender's stored draft.
+  const composerText = state.selectedThreadId === threadId ? "" : (state.composerText ?? "");
+  return { composerText, composerTextByThreadId: nextById };
 }
 
 export async function hydrateThreadSelection(
@@ -1212,10 +1220,7 @@ export function createThreadActions(
             arguments: taskCommand[1]?.trim() ?? "",
             clientMessageId: makeId(),
           });
-          set((state) => {
-            const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
-            return cleared;
-          });
+          set((state) => clearComposerDraftForThread(state, activeThreadId));
           return true;
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -1245,10 +1250,7 @@ export function createThreadActions(
           references,
         });
         if (!started) return false;
-        set((state) => {
-          const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
-          return cleared;
-        });
+        set((state) => clearComposerDraftForThread(state, activeThreadId));
         return true;
       }
 
@@ -1260,10 +1262,7 @@ export function createThreadActions(
           references,
         });
         if (!reconnected) return false;
-        set((state) => {
-          const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
-          return cleared;
-        });
+        set((state) => clearComposerDraftForThread(state, activeThreadId));
         return true;
       }
 
@@ -1279,10 +1278,7 @@ export function createThreadActions(
       if (!accepted) return false;
       if (busyPolicy === "steer" && rt?.busy) return true;
 
-      set((state) => {
-        const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
-        return cleared;
-      });
+      set((state) => clearComposerDraftForThread(state, activeThreadId));
       return true;
     },
 

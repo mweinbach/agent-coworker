@@ -181,7 +181,7 @@ The bones are closer to Cursor/Claude than most AI wrappers — workspace shell,
 
 ### Chat & composer
 
-- Soft virtualization for long threads (true windowing)
+- Soft virtualization for long threads (true windowing) — progressive trailing window + near-top expand
 - Reasoning section stable keys (no remount flicker)
 - Clipboard failure feedback
 - Clear copy timeouts on unmount

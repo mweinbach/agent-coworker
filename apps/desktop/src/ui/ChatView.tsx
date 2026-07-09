@@ -852,7 +852,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         <ChatFeed
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
-          onReconnect={() => void reconnectThread(selectedThreadId)}
           visibleFeedLength={visibleFeed.length}
           hydrating={hydrating}
           renderItems={renderItems}

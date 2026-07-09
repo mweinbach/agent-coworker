@@ -262,6 +262,18 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Repo-Specific Contracts
 
+- **Platform boundary ratchet**: new code and tests must not introduce raw
+  `process.platform`, `os.homedir()`, `os.tmpdir()`, `Bun.which`, or equivalent
+  platform branching outside `src/platform/` and its sanctioned test helpers.
+  Use the helpers in `src/platform/`, run `bun test test/platform-boundary.test.ts`,
+  and only regenerate `test/platform-boundary.baseline.json` when counts shrink;
+  never expand the baseline to admit a new offender.
+- **Thread-tool and H3 permissions**: enforce H3 permissions before dispatch and
+  keep the permission table plus `test/h3.mobile-http-jsonrpc.test.ts` aligned.
+  Thread-management tools are root-session capabilities by default; do not
+  expose them to worker, scoped-path, child-agent, or task sessions. Preserve
+  the required `conversations` and `turns` gates and cover eligibility changes in
+  `test/tools/tools.createTools.test.ts`.
 - **Runtime and skill ownership**: marketplace-installed project/user skills are the authoritative skill content. The unified runtime is a separately downloaded executable/library layer and must never be registered as a plugin or skill discovery root; the application updates both layers independently.
 - **Productivity skill parity**: retiring bundled productivity skills requires migrating the complete documents, PDF, presentations, and spreadsheets set into the authoritative marketplace plugin; never drop PDF as an incidental part of a runtime cutover.
 - **Unified runtime completeness**: before deleting a legacy runtime manager, inventory and migrate every executable it owns—especially LibreOffice/`soffice` and companion files—and prove the installed unified runtime can execute the real workflow. Do not silently leave a second lazy-download cache behind.

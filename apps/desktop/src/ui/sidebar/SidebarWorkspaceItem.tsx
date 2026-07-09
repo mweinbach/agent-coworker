@@ -23,10 +23,12 @@ import { Collapsible, CollapsibleTrigger } from "../../components/ui/collapsible
 import { Input } from "../../components/ui/input";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
-import { formatSidebarRelativeAge } from "../sidebarHelpers";
+import { formatSidebarRelativeAge, MAX_VISIBLE_SIDEBAR_ITEMS } from "../sidebarHelpers";
 import { ThreadOverflowMenu } from "./ThreadOverflowMenu";
 
-export const MAX_VISIBLE_THREADS = 5;
+/** @deprecated Prefer MAX_VISIBLE_SIDEBAR_ITEMS */
+export const MAX_VISIBLE_THREADS = MAX_VISIBLE_SIDEBAR_ITEMS;
+
 const EMPTY_TASK_SUMMARIES: TaskSummary[] = [];
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item min-w-0 [&:not(:last-child)]:mb-3";
 /** Matches `.sidebar-thread-region` transition duration in styles.css (fallback when transitionend does not fire). */
@@ -340,12 +342,19 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       Chats
                     </div>
                   ) : null}
+                  <div
+                    className={
+                      showAllThreads && workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS
+                        ? "sidebar-chats-scroll-container pr-1"
+                        : undefined
+                    }
+                  >
                   {visibleThreads.map((thread) => {
                     const runtime = threadRuntimeById[thread.id];
                     const busy = runtime?.busy === true;
                     const isActive = thread.id === selectedThreadId;
                     const isEditing = editingThreadId === thread.id;
-                    const displayTitle = thread.title || "New thread";
+                    const displayTitle = thread.title || "New chat";
                     const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
 
                     return isEditing ? (
@@ -432,8 +441,9 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       </div>
                     );
                   })}
+                  </div>
 
-                  {workspaceThreads.length > MAX_VISIBLE_THREADS ? (
+                  {workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
                     <Button
                       className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
                       onClick={() => onToggleThreadList(workspace.id)}
@@ -450,7 +460,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
                         Tasks
                       </div>
-                      {visibleTasks.slice(0, MAX_VISIBLE_THREADS).map((task) => (
+                      {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (
                         <Button
                           key={task.id}
                           type="button"

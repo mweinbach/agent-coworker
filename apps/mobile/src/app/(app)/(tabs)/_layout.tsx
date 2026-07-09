@@ -1,6 +1,7 @@
 import { Tabs } from "expo-router";
 import { Platform } from "react-native";
 
+import { SFSymbol } from "@/components/ui/sf-symbol";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export const unstable_settings = {
@@ -47,6 +48,10 @@ export default function AppTabsLayout() {
           title: "Chats",
           tabBarLabel: "Chats",
           headerTitle: "Cowork",
+          tabBarIcon: ({ color, size }) => (
+            <SFSymbol name="bubble.left.and.bubble.right.fill" color={color} size={size ?? 22} />
+          ),
+          tabBarAccessibilityLabel: "Chats",
         }}
       />
       <Tabs.Screen
@@ -54,6 +59,10 @@ export default function AppTabsLayout() {
         options={{
           title: "Workspace",
           tabBarLabel: "Workspace",
+          tabBarIcon: ({ color, size }) => (
+            <SFSymbol name="folder.fill" color={color} size={size ?? 22} />
+          ),
+          tabBarAccessibilityLabel: "Workspace",
         }}
       />
       <Tabs.Screen
@@ -61,6 +70,10 @@ export default function AppTabsLayout() {
         options={{
           title: "Skills",
           tabBarLabel: "Skills",
+          tabBarIcon: ({ color, size }) => (
+            <SFSymbol name="sparkles" color={color} size={size ?? 22} />
+          ),
+          tabBarAccessibilityLabel: "Skills",
         }}
       />
     </Tabs>

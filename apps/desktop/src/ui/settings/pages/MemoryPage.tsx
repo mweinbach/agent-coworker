@@ -23,6 +23,11 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../../components/ui/collapsible";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -246,6 +251,7 @@ export function MemoryPage() {
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
   const providerUiState = useAppStore((s) => s.providerUiState);
+  const [skillImprovementOpen, setSkillImprovementOpen] = useState(false);
 
   const { targets: memoryTargets, activeTarget } = useMemo(
     () => resolveMemoryTargets(workspaces, selectedWorkspaceId),
@@ -599,8 +605,29 @@ export function MemoryPage() {
 
       <SettingsSection
         title="Skill Improvement (Beta)"
-        description="Uses recent skill usage to keep local skill instructions sharper over time."
+        description="Optional maintenance agent that sharpens local skills from recent usage."
       >
+        <Collapsible open={skillImprovementOpen} onOpenChange={setSkillImprovementOpen}>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-foreground">Advanced skill maintenance</div>
+                <div className="text-xs text-muted-foreground">
+                  {skillImprovementEnabled ? "Enabled" : "Off"} · model, scope, queue, and history
+                </div>
+              </div>
+              <CollapsibleTrigger asChild>
+                <Button type="button" variant="outline" size="sm" className="shrink-0">
+                  {skillImprovementOpen ? (
+                    <ChevronDownIcon data-icon="inline-start" />
+                  ) : (
+                    <ChevronRightIcon data-icon="inline-start" />
+                  )}
+                  {skillImprovementOpen ? "Hide" : "Configure"}
+                </Button>
+              </CollapsibleTrigger>
+            </div>
+            <CollapsibleContent className="flex flex-col gap-3">
         <SettingsRow
           title="Enable skill improvement"
           description="Queues improvement runs after skill usage and keeps a restore backup for each changed skill."
@@ -860,6 +887,9 @@ export function MemoryPage() {
             )}
           </SettingsRow>
         ) : null}
+            </CollapsibleContent>
+          </div>
+        </Collapsible>
       </SettingsSection>
 
       {advancedMemoryEnabled && activeTarget ? (

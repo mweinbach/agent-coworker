@@ -3,7 +3,6 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
-  ChatThreadHeader,
   canClearSessionHardCap,
   composerBusyHint,
   filterFeedForDeveloperMode,
@@ -18,6 +17,7 @@ import {
   sessionUsageTone,
   shouldToggleReasoningExpanded,
 } from "../src/ui/ChatView";
+import { ChatThreadHeader } from "../src/ui/chat/ChatThreadHeader";
 
 describe("desktop reasoning UI helpers", () => {
   test("maps reasoning mode to labels", () => {

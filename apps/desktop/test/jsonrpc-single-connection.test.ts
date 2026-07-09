@@ -595,7 +595,7 @@ describe("desktop JSON-RPC single connection path", () => {
     });
     expect(state.threads[0]).toMatchObject({
       workspaceId: state.workspaces[0]?.id,
-      title: "New thread",
+      title: "New chat",
       draft: true,
     });
     expect(state.selectedWorkspaceId).toBe(state.workspaces[0]?.id);

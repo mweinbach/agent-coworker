@@ -158,6 +158,13 @@ function findLatestSandboxApprovalPrompt(
   return latest;
 }
 
+/** Draft map key for New Chat landing (`selectedThreadId === null`). */
+const LANDING_COMPOSER_DRAFT_KEY = "__landing__";
+
+function composerDraftKey(threadId: string | null | undefined): string {
+  return threadId ?? LANDING_COMPOSER_DRAFT_KEY;
+}
+
 /** Save active composer draft for fromThreadId and restore toThreadId's draft. */
 function swapComposerDraft(
   state: { composerText: string; composerTextByThreadId?: Record<string, string> },
@@ -165,13 +172,14 @@ function swapComposerDraft(
   toThreadId: string | null | undefined,
 ): { composerText: string; composerTextByThreadId: Record<string, string> } {
   const nextById = { ...(state.composerTextByThreadId ?? {}) };
-  if (fromThreadId && fromThreadId !== toThreadId) {
+  const fromKey = composerDraftKey(fromThreadId);
+  const toKey = composerDraftKey(toThreadId);
+  if (fromKey !== toKey) {
     const trimmed = state.composerText ?? "";
-    if (trimmed.length > 0) nextById[fromThreadId] = trimmed;
-    else delete nextById[fromThreadId];
+    if (trimmed.length > 0) nextById[fromKey] = trimmed;
+    else delete nextById[fromKey];
   }
-  const restored =
-    toThreadId && typeof nextById[toThreadId] === "string" ? nextById[toThreadId] : "";
+  const restored = typeof nextById[toKey] === "string" ? nextById[toKey] : "";
   return { composerText: restored, composerTextByThreadId: nextById };
 }
 
@@ -1442,11 +1450,10 @@ export function createThreadActions(
 
     setComposerText: (text) =>
       set((state) => {
-        const threadId = state.selectedThreadId;
-        if (!threadId) return { composerText: text };
+        const draftKey = composerDraftKey(state.selectedThreadId);
         const nextById = { ...(state.composerTextByThreadId ?? {}) };
-        if (text.length > 0) nextById[threadId] = text;
-        else delete nextById[threadId];
+        if (text.length > 0) nextById[draftKey] = text;
+        else delete nextById[draftKey];
         return { composerText: text, composerTextByThreadId: nextById };
       }),
 

@@ -112,5 +112,4 @@ describe("desktop application menu", () => {
     palette?.click?.();
     expect(commands).toContain("openCommandPalette");
   });
-
 });

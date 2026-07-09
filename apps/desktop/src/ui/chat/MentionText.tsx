@@ -15,9 +15,7 @@ function MentionChip(props: { kind: MentionKind; name: string; item: MentionItem
 
   // Unknown / stale reference (no longer in the catalog): styled, but not clickable.
   if (!item) {
-    return (
-      <span className={cn(MENTION_CHIP_PADDED_CLASS, "inline opacity-80")}>{label}</span>
-    );
+    return <span className={cn(MENTION_CHIP_PADDED_CLASS, "inline opacity-80")}>{label}</span>;
   }
 
   return (

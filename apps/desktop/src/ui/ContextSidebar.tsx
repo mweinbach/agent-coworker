@@ -4,7 +4,6 @@ import {
   CheckCircle2Icon,
   CircleDashedIcon,
   CircleIcon,
-  ClipboardListIcon,
   FolderOpenIcon,
   MinusCircleIcon,
   SparklesIcon,
@@ -107,10 +106,10 @@ export const ContextSidebar = memo(function ContextSidebar() {
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-1 overflow-hidden p-1.5">
       {showTodos ? (
-      <section className={compactSectionClassName} data-sidebar-panel="tasks">
-        <div className={compactSectionHeaderClassName}>
-          <span className={sectionLabelClassName}>Plan</span>
-        </div>
+        <section className={compactSectionClassName} data-sidebar-panel="tasks">
+          <div className={compactSectionHeaderClassName}>
+            <span className={sectionLabelClassName}>Plan</span>
+          </div>
           <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
             <div className="space-y-1.5">
               {todos?.map((todo) => (
@@ -137,73 +136,73 @@ export const ContextSidebar = memo(function ContextSidebar() {
               ))}
             </div>
           </ScrollShadow>
-      </section>
+        </section>
       ) : null}
 
       {showAgents || threadRuntime?.sessionKind === "agent" ? (
-      <section className={compactSectionClassName} data-sidebar-panel="subagents">
-        <div className={compactSectionHeaderClassName}>
-          <span className={sectionLabelClassName}>Subagents</span>
-        </div>
-        {threadRuntime?.sessionKind === "agent" ? (
-          <div className={compactSectionBodyClassName}>
-            <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-[11px] text-muted-foreground">
-              <div className="flex items-center gap-2 text-foreground">
-                <BotIcon className="h-3.5 w-3.5" />
-                <span className="font-medium">This thread is a subagent</span>
-              </div>
-              <div className="mt-1">
-                {threadRuntime.role ?? "default"} · depth {threadRuntime.depth}
-              </div>
-              {threadRuntime.effectiveModel ? (
-                <div className="mt-1 truncate">{threadRuntime.effectiveModel}</div>
-              ) : null}
-            </div>
+        <section className={compactSectionClassName} data-sidebar-panel="subagents">
+          <div className={compactSectionHeaderClassName}>
+            <span className={sectionLabelClassName}>Subagents</span>
           </div>
-        ) : (
-          <ScrollShadow
-            className={compactSectionScrollerClassName}
-            data-sidebar-section="subagents"
-          >
-            <div className="space-y-1.5">
-              {agents.map((agent) => {
-                const usageLabel = agentUsageLabel(agent);
-                return (
-                  <div
-                    key={agent.agentId}
-                    className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-[11px] font-medium text-foreground">
-                          {agent.nickname || agent.title}
-                        </div>
-                        <div className="truncate text-[10px] text-muted-foreground">
-                          {agent.role} · depth {agent.depth} · {agent.effectiveModel}
-                        </div>
-                        {usageLabel ? (
-                          <div className="mt-0.5 truncate text-[10px] tabular-nums text-muted-foreground/88">
-                            {usageLabel}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                        {agentStatusIcon(agent)}
-                        <span>{agentStatusLabel(agent)}</span>
-                      </div>
-                    </div>
-                    {agent.lastMessagePreview ? (
-                      <DesktopMarkdown className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
-                        {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
-                      </DesktopMarkdown>
-                    ) : null}
-                  </div>
-                );
-              })}
+          {threadRuntime?.sessionKind === "agent" ? (
+            <div className={compactSectionBodyClassName}>
+              <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-[11px] text-muted-foreground">
+                <div className="flex items-center gap-2 text-foreground">
+                  <BotIcon className="h-3.5 w-3.5" />
+                  <span className="font-medium">This thread is a subagent</span>
+                </div>
+                <div className="mt-1">
+                  {threadRuntime.role ?? "default"} · depth {threadRuntime.depth}
+                </div>
+                {threadRuntime.effectiveModel ? (
+                  <div className="mt-1 truncate">{threadRuntime.effectiveModel}</div>
+                ) : null}
+              </div>
             </div>
-          </ScrollShadow>
-        )}
-      </section>
+          ) : (
+            <ScrollShadow
+              className={compactSectionScrollerClassName}
+              data-sidebar-section="subagents"
+            >
+              <div className="space-y-1.5">
+                {agents.map((agent) => {
+                  const usageLabel = agentUsageLabel(agent);
+                  return (
+                    <div
+                      key={agent.agentId}
+                      className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-[11px] font-medium text-foreground">
+                            {agent.nickname || agent.title}
+                          </div>
+                          <div className="truncate text-[10px] text-muted-foreground">
+                            {agent.role} · depth {agent.depth} · {agent.effectiveModel}
+                          </div>
+                          {usageLabel ? (
+                            <div className="mt-0.5 truncate text-[10px] tabular-nums text-muted-foreground/88">
+                              {usageLabel}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                          {agentStatusIcon(agent)}
+                          <span>{agentStatusLabel(agent)}</span>
+                        </div>
+                      </div>
+                      {agent.lastMessagePreview ? (
+                        <DesktopMarkdown className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
+                          {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
+                        </DesktopMarkdown>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </ScrollShadow>
+          )}
+        </section>
       ) : null}
 
       <section

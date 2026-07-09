@@ -42,10 +42,7 @@ import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
 import { SidebarOneOffChatItem } from "./sidebar/SidebarOneOffChatItem";
 import { SidebarSectionFrame } from "./sidebar/SidebarSectionFrame";
-import {
-  SidebarWorkspaceItem,
-  type WorkspaceMoveDirection,
-} from "./sidebar/SidebarWorkspaceItem";
+import { SidebarWorkspaceItem, type WorkspaceMoveDirection } from "./sidebar/SidebarWorkspaceItem";
 import { useSidebarPersistence } from "./sidebar/useSidebarPersistence";
 import {
   getVisibleSidebarThreads,
@@ -636,7 +633,9 @@ export const Sidebar = memo(function Sidebar() {
                 type="button"
                 variant="ghost"
               >
-                {showAllChats ? "Show less" : `Show ${oneOffChatThreads.length - MAX_VISIBLE_SIDEBAR_ITEMS} more`}
+                {showAllChats
+                  ? "Show less"
+                  : `Show ${oneOffChatThreads.length - MAX_VISIBLE_SIDEBAR_ITEMS} more`}
               </Button>
             ) : null}
           </div>

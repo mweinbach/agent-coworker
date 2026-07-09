@@ -3,7 +3,7 @@ import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } fr
 import { useAppStore } from "../../app/store";
 import type { ResearchCard } from "../../app/types";
 import { Input } from "../../components/ui/input";
-import { showContextMenu } from "../../lib/desktopCommands";
+import { confirmAction, showContextMenu } from "../../lib/desktopCommands";
 import { formatRelativeAge } from "../../lib/time";
 import { cn } from "../../lib/utils";
 
@@ -304,6 +304,7 @@ export function ResearchCardGrid({
   onSelectResearch: (researchId: string) => void;
 }) {
   const renameResearch = useAppStore((s) => s.renameResearch);
+  const deleteResearch = useAppStore((s) => s.deleteResearch);
   const selectResearch = useAppStore((s) => s.selectResearch);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -378,6 +379,7 @@ export function ResearchCardGrid({
         { id: "open", label: "Open" },
         { id: "rename", label: "Rename" },
         { id: "hide", label: "Hide from list" },
+        { id: "delete", label: "Delete permanently" },
       ]);
       if (result === "open") {
         onSelectResearch(entry.id);
@@ -385,9 +387,21 @@ export function ResearchCardGrid({
         startEditing(entry);
       } else if (result === "hide") {
         hideResearch(entry.id);
+      } else if (result === "delete") {
+        const confirmed = await confirmAction({
+          title: "Delete research?",
+          message: `Permanently delete “${entry.title || entry.prompt || "this research"}”?`,
+          detail: "The report, exports, and local files for this run will be removed.",
+          kind: "warning",
+          confirmLabel: "Delete",
+          cancelLabel: "Cancel",
+          defaultAction: "cancel",
+        });
+        if (!confirmed) return;
+        await deleteResearch(entry.id);
       }
     },
-    [hideResearch, onSelectResearch, startEditing],
+    [deleteResearch, hideResearch, onSelectResearch, startEditing],
   );
 
   if (visibleResearch.length === 0) {

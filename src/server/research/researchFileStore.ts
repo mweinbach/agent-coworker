@@ -62,6 +62,11 @@ export class ResearchFileStore {
     return path.join(this.researchDir(researchId), filename);
   }
 
+  async deleteResearchDir(researchId: string): Promise<void> {
+    const dir = this.researchDir(researchId);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+
   async savePendingUpload(opts: {
     filename: string;
     contentBase64: string;

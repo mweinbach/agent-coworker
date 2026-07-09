@@ -439,6 +439,49 @@ export class ResearchService {
     return state.record;
   }
 
+  async delete(id: string): Promise<{ researchId: string; deleted: boolean }> {
+    await this.init();
+    const activeState = this.states.get(id);
+    const existing =
+      activeState?.record ?? this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
+    if (!existing || !this.recordBelongsToWorkspace(existing)) {
+      return { researchId: id, deleted: false };
+    }
+
+    // Stop in-flight work first so remote interactions are cancelled when possible.
+    if (!isTerminalResearchStatus(existing.status) || existing.planPending) {
+      await this.cancel(id);
+    }
+
+    const state = this.states.get(id) ?? this.getOrCreateState(existing);
+    const subscribers = [...state.subscribers.values()];
+    await this.clearTerminalFileSearchStore(state);
+    if (state.persistTimer) {
+      clearTimeout(state.persistTimer);
+      state.persistTimer = null;
+    }
+    state.subscribers.clear();
+    state.ringBuffer = [];
+    this.states.delete(id);
+
+    try {
+      await this.fileStore.deleteResearchDir(id);
+    } catch {
+      // Disk cleanup is best effort; DB delete is authoritative for list visibility.
+    }
+
+    const deleted = await this.sessionDb.deleteResearch(id, { workspacePath: this.workspacePath });
+    if (deleted) {
+      for (const socket of subscribers) {
+        this.sendJsonRpc(socket, {
+          method: "research/deleted",
+          params: { researchId: id },
+        });
+      }
+    }
+    return { researchId: id, deleted };
+  }
+
   async cancel(id: string): Promise<ResearchRecord | null> {
     const activeState = this.states.get(id);
     const existing =

@@ -647,6 +647,11 @@ Requests:
   - params: `{ researchId, title }`
   - result: `{ research: ResearchRecord | null }`
   - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
+- `research/delete`
+  - permanently removes a research row, local artifacts under `~/.cowork/research/<id>/`, and best-effort remote file-search stores
+  - cancels in-flight work first when the run is still active
+  - result: `{ researchId, deleted }`
+  - broadcasts `research/deleted` to sockets subscribed to that research id
 - `research/followup`
   - params: `{ parentResearchId, input, title?, settings?, attachedFileIds? }`
   - result: `{ research }`
@@ -731,6 +736,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `research/completed`
   - params: `{ researchId, research }`
 - `research/failed`
+- `research/deleted`
   - params: `{ researchId, status: "failed" | "cancelled", error }`
 
 ### Core JSON-RPC notifications currently available

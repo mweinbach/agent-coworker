@@ -238,8 +238,9 @@ describe("Canvas hooks stability across file-type switches", () => {
       expect(text).toContain(
         "Editing is disabled to avoid overwriting the full file with partial content.",
       );
-      const previewEditor = harness.dom.window.document.querySelector('[role="textbox"]');
-      expect(previewEditor?.getAttribute("contenteditable")).toBe("false");
+      // Preview is read-only rendered markdown; source edit is a Textarea that
+      // must be read-only when the preview is truncated.
+      expect(harness.dom.window.document.querySelector("[contenteditable]")).toBeNull();
 
       await act(async () => {
         root!.unmount();

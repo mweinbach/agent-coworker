@@ -647,6 +647,14 @@ Requests:
   - params: `{ researchId, title }`
   - result: `{ research: ResearchRecord | null }`
   - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
+- `research/archive`
+  - params: `{ researchId, archived }`
+  - result: `{ research: ResearchRecord | null }`
+  - archives or restores a terminal research row and broadcasts `research/updated`
+- `research/delete`
+  - params: `{ researchId }`
+  - result: `{ deleted: boolean }`
+  - permanently deletes a terminal research row and its local report artifacts
 - `research/followup`
   - params: `{ parentResearchId, input, title?, settings?, attachedFileIds? }`
   - result: `{ research }`
@@ -699,6 +707,7 @@ Requests:
 - `outputsMarkdown`
 - `thoughtSummaries`
 - `sources`
+- `archivedAt`
 - `createdAt`
 - `updatedAt`
 - `error`

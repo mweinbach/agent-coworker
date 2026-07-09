@@ -214,6 +214,8 @@ export function createResearchActions(
   | "startResearch"
   | "cancelResearch"
   | "renameResearch"
+  | "archiveResearch"
+  | "deleteResearch"
   | "sendResearchFollowUp"
   | "setResearchDraftSettings"
   | "exportResearch"
@@ -895,6 +897,75 @@ export function createResearchActions(
         notify(
           "error",
           "Unable to rename research",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    },
+
+    archiveResearch: async (researchId, archived) => {
+      try {
+        const workspaceId = await ensureResearchTransportWorkspace();
+        if (!workspaceId) {
+          return;
+        }
+        const result = await requestResearchResult(
+          deps,
+          get,
+          set,
+          workspaceId,
+          "research/archive",
+          { researchId, archived },
+        );
+        if (result.research) {
+          applyResearchRecord(result.research);
+        }
+      } catch (error) {
+        notify(
+          "error",
+          archived ? "Unable to archive research" : "Unable to restore research",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    },
+
+    deleteResearch: async (researchId) => {
+      try {
+        const workspaceId = await ensureResearchTransportWorkspace();
+        if (!workspaceId) {
+          return;
+        }
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/delete", {
+          researchId,
+        });
+        if (!result.deleted) {
+          return;
+        }
+        set((state) => {
+          const researchById = Object.fromEntries(
+            Object.entries(state.researchById)
+              .filter(([id]) => id !== researchId)
+              .map(([id, record]) => [
+                id,
+                record.parentResearchId === researchId
+                  ? { ...record, parentResearchId: null }
+                  : record,
+              ]),
+          );
+          const researchOrder = orderResearchIds(researchById);
+          return {
+            researchById,
+            researchOrder,
+            researchSubscribedIds: state.researchSubscribedIds.filter((id) => id !== researchId),
+            selectedResearchId: normalizeSelectedResearchId(
+              state.selectedResearchId === researchId ? null : state.selectedResearchId,
+              researchOrder,
+            ),
+          };
+        });
+      } catch (error) {
+        notify(
+          "error",
+          "Unable to delete research",
           error instanceof Error ? error.message : String(error),
         );
       }

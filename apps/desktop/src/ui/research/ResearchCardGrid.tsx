@@ -3,7 +3,7 @@ import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } fr
 import { useAppStore } from "../../app/store";
 import type { ResearchCard } from "../../app/types";
 import { Input } from "../../components/ui/input";
-import { showContextMenu } from "../../lib/desktopCommands";
+import { confirmAction, showContextMenu } from "../../lib/desktopCommands";
 import { formatRelativeAge } from "../../lib/time";
 import { cn } from "../../lib/utils";
 
@@ -173,6 +173,11 @@ function ResearchListItem({
               Follow-up
             </span>
           ) : null}
+          {research.archivedAt ? (
+            <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Archived
+            </span>
+          ) : null}
           {displayTitle}
         </span>
         {snippet ? (
@@ -281,6 +286,8 @@ export function ResearchCardGrid({
   selectedResearchId: string | null;
   onSelectResearch: (researchId: string) => void;
 }) {
+  const archiveResearch = useAppStore((s) => s.archiveResearch);
+  const deleteResearch = useAppStore((s) => s.deleteResearch);
   const renameResearch = useAppStore((s) => s.renameResearch);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -330,17 +337,42 @@ export function ResearchCardGrid({
     async (event: MouseEvent<HTMLElement>, entry: ResearchCard) => {
       event.preventDefault();
       event.stopPropagation();
+      const canChangeLifecycle =
+        entry.status !== "pending" && entry.status !== "running" && !entry.planPending;
       const result = await showContextMenu([
         { id: "open", label: "Open" },
         { id: "rename", label: "Rename" },
+        {
+          id: entry.archivedAt ? "restore" : "archive",
+          label: entry.archivedAt ? "Restore" : "Archive",
+          enabled: canChangeLifecycle,
+        },
+        { id: "delete", label: "Delete", enabled: canChangeLifecycle },
       ]);
       if (result === "open") {
         onSelectResearch(entry.id);
       } else if (result === "rename") {
         startEditing(entry);
+      } else if (result === "archive") {
+        await archiveResearch(entry.id, true);
+      } else if (result === "restore") {
+        await archiveResearch(entry.id, false);
+      } else if (result === "delete") {
+        const confirmed = await confirmAction({
+          title: `Delete ${entry.title || "research"}?`,
+          message: "This permanently removes the research report and its local artifacts.",
+          detail: "This action cannot be undone.",
+          confirmLabel: "Delete research",
+          cancelLabel: "Keep research",
+          kind: "warning",
+          defaultAction: "cancel",
+        });
+        if (confirmed) {
+          await deleteResearch(entry.id);
+        }
       }
     },
-    [onSelectResearch, startEditing],
+    [archiveResearch, deleteResearch, onSelectResearch, startEditing],
   );
 
   return (

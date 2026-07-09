@@ -1141,6 +1141,7 @@ export class SessionDbRepository {
           "             thought_summaries_json,",
           "             sources_json,",
           "             plan_pending,",
+          "             archived_at,",
           "             created_at,",
           "             updated_at,",
           "             error",
@@ -1180,6 +1181,7 @@ export class SessionDbRepository {
           "             thought_summaries_json,",
           "             sources_json,",
           "             plan_pending,",
+          "             archived_at,",
           "             created_at,",
           "             updated_at,",
           "             error",
@@ -1223,6 +1225,7 @@ export class SessionDbRepository {
           "             thought_summaries_json,",
           "             sources_json,",
           "             plan_pending,",
+          "             archived_at,",
           "             created_at,",
           "             updated_at,",
           "             error",
@@ -1269,10 +1272,11 @@ export class SessionDbRepository {
           "           thought_summaries_json,",
           "           sources_json,",
           "           plan_pending,",
+          "           archived_at,",
           "           created_at,",
           "           updated_at,",
           "           error",
-          "         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           "         ON CONFLICT(id) DO UPDATE SET",
           "           workspace_path = excluded.workspace_path,",
           "           parent_research_id = excluded.parent_research_id,",
@@ -1287,6 +1291,7 @@ export class SessionDbRepository {
           "           thought_summaries_json = excluded.thought_summaries_json,",
           "           sources_json = excluded.sources_json,",
           "           plan_pending = excluded.plan_pending,",
+          "           archived_at = excluded.archived_at,",
           "           updated_at = excluded.updated_at,",
           "           error = excluded.error",
         ]),
@@ -1306,10 +1311,16 @@ export class SessionDbRepository {
         toJsonString(parsed.thoughtSummaries),
         toJsonString(parsed.sources),
         parsed.planPending ? 1 : 0,
+        parsed.archivedAt,
         parseRequiredIsoTimestamp(parsed.createdAt, "research.createdAt"),
         parseRequiredIsoTimestamp(parsed.updatedAt, "research.updatedAt"),
         parsed.error,
       );
+  }
+
+  deleteResearch(researchId: string): boolean {
+    const result = this.db.query("DELETE FROM research WHERE id = ?").run(researchId);
+    return result.changes > 0;
   }
 
   createBaseSchema(): void {
@@ -1451,6 +1462,7 @@ export class SessionDbRepository {
         "         thought_summaries_json TEXT NOT NULL,",
         "         sources_json TEXT NOT NULL,",
         "         plan_pending INTEGER NOT NULL DEFAULT 0,",
+        "         archived_at TEXT NULL,",
         "         created_at TEXT NOT NULL,",
         "         updated_at TEXT NOT NULL,",
         "         error TEXT NULL",
@@ -1779,6 +1791,7 @@ export class SessionDbRepository {
         "         thought_summaries_json TEXT NOT NULL,",
         "         sources_json TEXT NOT NULL,",
         "         plan_pending INTEGER NOT NULL DEFAULT 0,",
+        "         archived_at TEXT NULL,",
         "         created_at TEXT NOT NULL,",
         "         updated_at TEXT NOT NULL,",
         "         error TEXT NULL",
@@ -1817,6 +1830,16 @@ export class SessionDbRepository {
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)",
     );
+  }
+
+  addResearchArchivedAtColumn(): void {
+    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<
+      Record<string, unknown>
+    >;
+    const hasArchivedAt = rows.some((row) => row.name === "archived_at");
+    if (!hasArchivedAt) {
+      this.db.exec("ALTER TABLE research ADD COLUMN archived_at TEXT NULL");
+    }
   }
 
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {
@@ -2114,6 +2137,10 @@ export class SessionDbRepository {
         "research.sources_json",
       ),
       planPending: row.plan_pending === 1 || row.plan_pending === true,
+      archivedAt:
+        typeof row.archived_at === "string"
+          ? parseRequiredIsoTimestamp(row.archived_at, "research.archived_at")
+          : null,
       createdAt: parseRequiredIsoTimestamp(row.created_at, "research.created_at"),
       updatedAt: parseRequiredIsoTimestamp(row.updated_at, "research.updated_at"),
       error: typeof row.error === "string" ? row.error : null,

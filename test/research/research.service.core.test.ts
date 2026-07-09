@@ -434,6 +434,79 @@ describe("research service", () => {
     }
   });
 
+  test("archives, restores, and permanently deletes terminal research", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const researchId = "research-lifecycle";
+    const artifactDir = path.join(paths.rootDir, "research", researchId);
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: researchId,
+        status: "completed",
+        interactionId: "interaction-lifecycle",
+      }),
+    );
+    await fs.mkdir(artifactDir, { recursive: true });
+    await fs.writeFile(path.join(artifactDir, "report.md"), "# Report\n", "utf8");
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const archived = await service.archive(researchId, true);
+      expect(archived?.archivedAt).toBeString();
+      expect(sessionDb.getResearch(researchId)?.archivedAt).toBe(archived?.archivedAt);
+
+      const restored = await service.archive(researchId, false);
+      expect(restored?.archivedAt).toBeNull();
+
+      expect(await service.delete(researchId)).toBe(true);
+      expect(sessionDb.getResearch(researchId)).toBeNull();
+      await expect(fs.stat(artifactDir)).rejects.toThrow();
+      expect(await service.delete(researchId)).toBe(false);
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects archive and delete while research is active", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const researchId = "research-active-lifecycle";
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: researchId,
+        status: "running",
+        interactionId: "interaction-active-lifecycle",
+      }),
+    );
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await expect(service.archive(researchId, true)).rejects.toThrow(
+        "Running research cannot be archived.",
+      );
+      await expect(service.delete(researchId)).rejects.toThrow(
+        "Running research cannot be deleted.",
+      );
+      expect(sessionDb.getResearch(researchId)).not.toBeNull();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("ignores cancellation for terminal research records", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });

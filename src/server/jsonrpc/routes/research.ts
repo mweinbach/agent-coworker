@@ -71,6 +71,12 @@ export function createResearchRouteHandlers(
     "research/rename": createResearchHandler(context, "research/rename", async (params) => ({
       research: await context.research.rename(params.researchId, params.title),
     })),
+    "research/archive": createResearchHandler(context, "research/archive", async (params) => ({
+      research: await context.research.archive(params.researchId, params.archived),
+    })),
+    "research/delete": createResearchHandler(context, "research/delete", async (params) => ({
+      deleted: await context.research.delete(params.researchId),
+    })),
     "research/followup": createResearchHandler(context, "research/followup", async (params) => ({
       research: await context.research.followUp(params.parentResearchId, {
         input: params.input,

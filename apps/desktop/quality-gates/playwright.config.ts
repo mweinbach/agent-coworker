@@ -16,7 +16,7 @@ export default defineConfig({
   snapshotPathTemplate: "{testDir}/../snapshots/{arg}-{platform}{ext}",
   fullyParallel: false,
   workers: 1,
-  retries: process.env.CI ? 1 : 0,
+  retries: 0,
   forbidOnly: true,
   timeout: 45_000,
   expect: {

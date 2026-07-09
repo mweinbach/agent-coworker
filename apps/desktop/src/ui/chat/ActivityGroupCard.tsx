@@ -214,6 +214,7 @@ function ReasoningTimelineNode({
   isMostRecent: boolean;
 }) {
   const reasoningText = text.trim();
+  const sections = useMemo(() => parseReasoningSections(reasoningText), [reasoningText]);
 
   if (!reasoningText) {
     return (
@@ -227,8 +228,6 @@ function ReasoningTimelineNode({
       </TimelineNode>
     );
   }
-
-  const sections = useMemo(() => parseReasoningSections(reasoningText), [reasoningText]);
 
   return (
     <TimelineNode icon={<ClockIcon className="size-3 text-muted-foreground/38" />} isLast={isLast}>

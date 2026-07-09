@@ -8,6 +8,7 @@ import type {
   RefObject,
 } from "react";
 import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
+import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
@@ -22,7 +23,6 @@ import {
   MessageComposerSubmit,
   MessageComposerTools,
 } from "../composer/MessageComposer";
-import { useAppStore } from "../../app/store";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
 import { ComposerReasoningSelector } from "./ComposerReasoningToggle";

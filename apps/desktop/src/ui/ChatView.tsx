@@ -835,10 +835,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           >
             <div className="min-w-0">
               <span className="font-medium text-foreground">Disconnected</span>
-              <span className="text-muted-foreground">
-                {" "}
-                — reconnect to continue this chat.
-              </span>
+              <span className="text-muted-foreground"> — reconnect to continue this chat.</span>
             </div>
             <Button
               type="button"

@@ -307,8 +307,8 @@ export function NewTaskLanding() {
                   <div className="min-w-0">
                     <CardTitle>Work graph</CardTitle>
                     <CardDescription>
-                      Optional multi-step plan. Collapse this unless you need explicit
-                      dependencies and outputs.
+                      Optional multi-step plan. Collapse this unless you need explicit dependencies
+                      and outputs.
                     </CardDescription>
                   </div>
                   <Button

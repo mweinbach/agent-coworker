@@ -452,8 +452,7 @@ export function RemoteAccessPage() {
                       const confirmed = await confirmAction({
                         title: "Forget all trusted devices?",
                         message: "Remove remote access for every paired phone?",
-                        detail:
-                          "Every device will need to scan the QR code again to reconnect.",
+                        detail: "Every device will need to scan the QR code again to reconnect.",
                         confirmLabel: "Forget all",
                         cancelLabel: "Cancel",
                         kind: "warning",

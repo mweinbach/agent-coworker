@@ -7,17 +7,18 @@
     <title>Cowork Desktop</title>
     <script>
       // Apply theme before first paint to avoid light FOUC on dark systems.
-      (function () {
+      (() => {
         try {
-          var dark =
-            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-          var root = document.documentElement;
+          const dark = window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
+          const root = document.documentElement;
           root.dataset.systemTheme = dark ? "dark" : "light";
           root.dataset.theme = dark ? "dark" : "light";
           if (dark) root.classList.add("dark");
           else root.classList.remove("dark");
-          document.documentElement.style.colorScheme = dark ? "dark" : "light";
-        } catch (_) {}
+          root.style.colorScheme = dark ? "dark" : "light";
+        } catch {
+          /* ignore pre-paint theme probe failures */
+        }
       })();
     </script>
   </head>

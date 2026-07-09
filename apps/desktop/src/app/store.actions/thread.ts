@@ -158,16 +158,15 @@ function findLatestSandboxApprovalPrompt(
   return latest;
 }
 
-
 /** Save active composer draft for fromThreadId and restore toThreadId's draft. */
 function swapComposerDraft(
-  state: { composerText: string; composerTextByThreadId: Record<string, string> },
+  state: { composerText: string; composerTextByThreadId?: Record<string, string> },
   fromThreadId: string | null | undefined,
   toThreadId: string | null | undefined,
 ): { composerText: string; composerTextByThreadId: Record<string, string> } {
-  const nextById = { ...state.composerTextByThreadId };
+  const nextById = { ...(state.composerTextByThreadId ?? {}) };
   if (fromThreadId && fromThreadId !== toThreadId) {
-    const trimmed = state.composerText;
+    const trimmed = state.composerText ?? "";
     if (trimmed.length > 0) nextById[fromThreadId] = trimmed;
     else delete nextById[fromThreadId];
   }
@@ -177,11 +176,12 @@ function swapComposerDraft(
 }
 
 function clearComposerDraftForThread(
-  state: { composerText: string; composerTextByThreadId: Record<string, string> },
+  state: { composerText: string; composerTextByThreadId?: Record<string, string> },
   threadId: string | null | undefined,
 ): { composerText: string; composerTextByThreadId: Record<string, string> } {
-  if (!threadId) return { composerText: "", composerTextByThreadId: state.composerTextByThreadId };
-  const nextById = { ...state.composerTextByThreadId };
+  const base = state.composerTextByThreadId ?? {};
+  if (!threadId) return { composerText: "", composerTextByThreadId: base };
+  const nextById = { ...base };
   delete nextById[threadId];
   return { composerText: "", composerTextByThreadId: nextById };
 }
@@ -1213,9 +1213,9 @@ export function createThreadActions(
             clientMessageId: makeId(),
           });
           set((state) => {
-        const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
-        return cleared;
-      });
+            const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
+            return cleared;
+          });
           return true;
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -1246,9 +1246,9 @@ export function createThreadActions(
         });
         if (!started) return false;
         set((state) => {
-        const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
-        return cleared;
-      });
+          const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
+          return cleared;
+        });
         return true;
       }
 
@@ -1261,9 +1261,9 @@ export function createThreadActions(
         });
         if (!reconnected) return false;
         set((state) => {
-        const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
-        return cleared;
-      });
+          const cleared = clearComposerDraftForThread(state, state.selectedThreadId);
+          return cleared;
+        });
         return true;
       }
 
@@ -1448,7 +1448,7 @@ export function createThreadActions(
       set((state) => {
         const threadId = state.selectedThreadId;
         if (!threadId) return { composerText: text };
-        const nextById = { ...state.composerTextByThreadId };
+        const nextById = { ...(state.composerTextByThreadId ?? {}) };
         if (text.length > 0) nextById[threadId] = text;
         else delete nextById[threadId];
         return { composerText: text, composerTextByThreadId: nextById };

@@ -161,12 +161,7 @@ function WorkingPlaceholderRow() {
 
 function DaySeparatorRow(props: { label: string }) {
   return (
-    <div
-      role="separator"
-      aria-label={props.label}
-      className="flex w-full items-center gap-3 py-1"
-      data-slot="day-separator"
-    >
+    <div className="flex w-full items-center gap-3 py-1" data-slot="day-separator">
       <div className="h-px flex-1 bg-border/60" />
       <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         {props.label}
@@ -238,11 +233,6 @@ function InitialTurnRestore({
       cancelled = true;
     };
   }, [hydrating, messageId, scrollToMessage, threadId]);
-
-  // Reset restore gate when the thread changes.
-  useEffect(() => {
-    restoredForKeyRef.current = null;
-  }, [threadId]);
 
   return null;
 }
@@ -321,7 +311,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
                     <div>
                       <div className="font-semibold">Transcript view</div>
                       <div className="text-sm text-muted-foreground">
-                        Sending a message will continue in a new thread.
+                        Sending a message will continue in a new chat.
                       </div>
                     </div>
                   </CardContent>
@@ -336,7 +326,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
                     <div>
                       <div className="font-semibold">Disconnected</div>
                       <div className="text-sm text-muted-foreground">
-                        Reconnect to continue this thread.
+                        Reconnect to continue this chat.
                       </div>
                     </div>
                     <Button type="button" variant="outline" size="sm" onClick={onReconnect}>
@@ -359,7 +349,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
                         <MessageSquareIcon />
                       )}
                     </EmptyMedia>
-                    <EmptyTitle>{hydrating ? "Loading thread" : "No messages yet"}</EmptyTitle>
+                    <EmptyTitle>{hydrating ? "Loading chat" : "No messages yet"}</EmptyTitle>
                     <EmptyDescription>
                       {hydrating
                         ? "Restoring messages and reconnecting the session."

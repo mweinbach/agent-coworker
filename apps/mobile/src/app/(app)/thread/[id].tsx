@@ -2,9 +2,9 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
+  KeyboardAvoidingView,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
-  KeyboardAvoidingView,
   Pressable,
   Text,
   View,
@@ -68,7 +68,7 @@ export default function ThreadDetailScreen() {
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
   const [actionError, setActionError] = useState<ThreadActionError | null>(null);
-  const [loadAttempt, setLoadAttempt] = useState(0);
+
   const [stickToBottom, setStickToBottom] = useState(true);
   const listRef = useRef<FlatList<ThreadDetailListItem>>(null);
   const runtimeClient = getActiveCoworkJsonRpcClient();
@@ -109,7 +109,7 @@ export default function ThreadDetailScreen() {
     return () => {
       active = false;
     };
-  }, [loadThreadFeed, loadAttempt]);
+  }, [loadThreadFeed]);
 
   const renderItems = useMemo(
     () => buildChatRenderItems(filterFeedForDisplay(thread?.feed ?? [], showDebugMessages)),
@@ -202,7 +202,9 @@ export default function ThreadDetailScreen() {
         ?.randomUUID
         ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
         : `local-${Date.now()}`;
-      useThreadStore.getState().appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
+      useThreadStore
+        .getState()
+        .appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
       setComposerDraft(activeThread.id, "");
       setActionError((current) => (current?.kind === "send" ? null : current));
       setStickToBottom(true);
@@ -313,7 +315,7 @@ export default function ThreadDetailScreen() {
                           }
                           onPress={() => {
                             if (actionError.kind === "load") {
-                              setLoadAttempt((value) => value + 1);
+                              void loadThreadFeed();
                               return;
                             }
                             void handleSubmitComposer();

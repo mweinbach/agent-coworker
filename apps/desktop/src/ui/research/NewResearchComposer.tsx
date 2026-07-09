@@ -52,8 +52,8 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
       <div className="mb-4 space-y-1">
         <h2 className="text-base font-semibold tracking-tight text-foreground">New research</h2>
         <p className="text-sm text-muted-foreground">
-          Describe what you want investigated. Cowork will plan sources, gather evidence, and draft a
-          cited report you can export.
+          Describe what you want investigated. Cowork will plan sources, gather evidence, and draft
+          a cited report you can export.
         </p>
       </div>
       <MessageComposerRoot

@@ -87,6 +87,7 @@ export function NewTaskLanding() {
   const [decisions, setDecisions] = useState("");
   const [reviewRequired, setReviewRequired] = useState(true);
   const [workItems, setWorkItems] = useState<DraftWorkItem[]>([newWorkItem("step-1")]);
+  const [showAdvancedWorkGraph, setShowAdvancedWorkGraph] = useState(false);
   const nextWorkItemNumber = useRef(2);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -112,14 +113,38 @@ export function NewTaskLanding() {
   }, [refreshTasks, workspaceId]);
 
   const recentTasks = taskSummariesByWorkspaceId[workspaceId] ?? [];
-  const hasExpectedOutput = workItems.some((item) => lines(item.expectedOutputs).length > 0);
+  const effectiveWorkItems = useMemo(() => {
+    if (showAdvancedWorkGraph) return workItems;
+    // Collapsed advanced: seed one deliverable step from the brief so submit stays valid.
+    const seedTitle = title.trim() || "Execute brief";
+    const seedOutputs =
+      lines(acceptanceCriteria).length > 0
+        ? acceptanceCriteria
+        : objective.trim()
+          ? objective.trim()
+          : "Completed task outcome";
+    return [
+      {
+        ...workItems[0],
+        id: workItems[0]?.id ?? "default-step",
+        key: workItems[0]?.key ?? "step-1",
+        title: seedTitle,
+        description: objective.trim(),
+        dependencies: "",
+        expectedOutputs: seedOutputs,
+      },
+    ];
+  }, [acceptanceCriteria, objective, showAdvancedWorkGraph, title, workItems]);
+  const hasExpectedOutput = effectiveWorkItems.some(
+    (item) => lines(item.expectedOutputs).length > 0,
+  );
   const canSubmit =
     workspaceId.length > 0 &&
     title.trim().length > 0 &&
     objective.trim().length > 0 &&
     context.trim().length > 0 &&
     lines(acceptanceCriteria).length > 0 &&
-    workItems.every((item) => item.title.trim().length > 0) &&
+    effectiveWorkItems.every((item) => item.title.trim().length > 0) &&
     hasExpectedOutput &&
     !submitting;
 
@@ -145,7 +170,7 @@ export function NewTaskLanding() {
           text,
         })),
       ],
-      workItems: workItems.map((item) => ({
+      workItems: effectiveWorkItems.map((item) => ({
         key: item.key,
         title: item.title.trim(),
         description: item.description.trim(),
@@ -175,6 +200,25 @@ export function NewTaskLanding() {
     }
   };
 
+  if (projects.length === 0) {
+    return (
+      <div className="h-full overflow-y-auto bg-panel px-6 py-8">
+        <div className="mx-auto flex w-full max-w-2xl flex-col items-center gap-4 py-16 text-center">
+          <div className="flex size-12 items-center justify-center rounded-xl border border-border bg-background">
+            <ClipboardListIcon className="size-6 text-muted-foreground" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold tracking-tight">Add a project first</h1>
+            <p className="mx-auto max-w-md text-sm text-muted-foreground">
+              Tasks run inside a project workspace so plans, files, and chat stay together. Create
+              or open a project, then come back to start a durable task.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto bg-panel px-6 py-8">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
@@ -185,7 +229,7 @@ export function NewTaskLanding() {
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">New task</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Define the durable brief and complete initial work graph before execution starts.
+              Start with the brief. Expand the work graph only when you need multi-step control.
             </p>
           </div>
         </div>
@@ -259,107 +303,129 @@ export function NewTaskLanding() {
 
             <Card className="gap-5 py-5 shadow-none">
               <CardHeader className="gap-1 px-5">
-                <CardTitle>Work graph</CardTitle>
-                <CardDescription>
-                  Use the shown step keys for dependencies. At least one expected output is
-                  required.
-                </CardDescription>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <CardTitle>Work graph</CardTitle>
+                    <CardDescription>
+                      Optional multi-step plan. Collapse this unless you need explicit
+                      dependencies and outputs.
+                    </CardDescription>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-expanded={showAdvancedWorkGraph}
+                    onClick={() => setShowAdvancedWorkGraph((open) => !open)}
+                  >
+                    {showAdvancedWorkGraph ? "Hide advanced" : "Show advanced"}
+                  </Button>
+                </div>
               </CardHeader>
-              <CardContent className="flex flex-col gap-4 px-5">
-                {workItems.map((item, index) => (
-                  <div key={item.id} className="rounded-lg border border-border p-4">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-medium">Step {index + 1}</p>
-                        <p className="font-mono text-[11px] text-muted-foreground">{item.key}</p>
+              {showAdvancedWorkGraph ? (
+                <CardContent className="flex flex-col gap-4 px-5">
+                  {workItems.map((item, index) => (
+                    <div key={item.id} className="rounded-lg border border-border p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium">Step {index + 1}</p>
+                          <p className="font-mono text-[11px] text-muted-foreground">{item.key}</p>
+                        </div>
+                        {workItems.length > 1 ? (
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={`Remove step ${index + 1}`}
+                            onClick={() =>
+                              setWorkItems((current) =>
+                                current.filter((entry) => entry.id !== item.id),
+                              )
+                            }
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        ) : null}
                       </div>
-                      {workItems.length > 1 ? (
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          aria-label={`Remove step ${index + 1}`}
-                          onClick={() =>
-                            setWorkItems((current) =>
-                              current.filter((entry) => entry.id !== item.id),
-                            )
-                          }
-                        >
-                          <Trash2Icon />
-                        </Button>
-                      ) : null}
-                    </div>
-                    <FieldGroup className="gap-3">
-                      <Field>
-                        <FieldLabel htmlFor={`work-item-title-${item.id}`}>Title</FieldLabel>
-                        <Input
-                          id={`work-item-title-${item.id}`}
-                          placeholder="Implement the coordinator"
-                          value={item.title}
-                          onChange={(event) =>
-                            updateWorkItem(item.id, { title: event.target.value })
-                          }
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor={`work-item-description-${item.id}`}>
-                          Description
-                        </FieldLabel>
-                        <Textarea
-                          id={`work-item-description-${item.id}`}
-                          className="min-h-20 resize-y"
-                          value={item.description}
-                          onChange={(event) =>
-                            updateWorkItem(item.id, { description: event.target.value })
-                          }
-                        />
-                      </Field>
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      <FieldGroup className="gap-3">
                         <Field>
-                          <FieldLabel htmlFor={`work-item-dependencies-${item.id}`}>
-                            Depends on
-                          </FieldLabel>
+                          <FieldLabel htmlFor={`work-item-title-${item.id}`}>Title</FieldLabel>
                           <Input
-                            id={`work-item-dependencies-${item.id}`}
-                            placeholder="step-1, step-2"
-                            value={item.dependencies}
+                            id={`work-item-title-${item.id}`}
+                            placeholder="Implement the coordinator"
+                            value={item.title}
                             onChange={(event) =>
-                              updateWorkItem(item.id, { dependencies: event.target.value })
+                              updateWorkItem(item.id, { title: event.target.value })
                             }
                           />
                         </Field>
                         <Field>
-                          <FieldLabel htmlFor={`work-item-outputs-${item.id}`}>
-                            Expected outputs
+                          <FieldLabel htmlFor={`work-item-description-${item.id}`}>
+                            Description
                           </FieldLabel>
                           <Textarea
-                            id={`work-item-outputs-${item.id}`}
+                            id={`work-item-description-${item.id}`}
                             className="min-h-20 resize-y"
-                            placeholder="One output per line"
-                            value={item.expectedOutputs}
+                            value={item.description}
                             onChange={(event) =>
-                              updateWorkItem(item.id, { expectedOutputs: event.target.value })
+                              updateWorkItem(item.id, { description: event.target.value })
                             }
                           />
                         </Field>
-                      </div>
-                    </FieldGroup>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="self-start"
-                  onClick={() => {
-                    const key = `step-${nextWorkItemNumber.current}`;
-                    nextWorkItemNumber.current += 1;
-                    setWorkItems((current) => [...current, newWorkItem(key)]);
-                  }}
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  Add step
-                </Button>
-              </CardContent>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Field>
+                            <FieldLabel htmlFor={`work-item-dependencies-${item.id}`}>
+                              Depends on
+                            </FieldLabel>
+                            <Input
+                              id={`work-item-dependencies-${item.id}`}
+                              placeholder="step-1, step-2"
+                              value={item.dependencies}
+                              onChange={(event) =>
+                                updateWorkItem(item.id, { dependencies: event.target.value })
+                              }
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor={`work-item-outputs-${item.id}`}>
+                              Expected outputs
+                            </FieldLabel>
+                            <Textarea
+                              id={`work-item-outputs-${item.id}`}
+                              className="min-h-20 resize-y"
+                              placeholder="One output per line"
+                              value={item.expectedOutputs}
+                              onChange={(event) =>
+                                updateWorkItem(item.id, { expectedOutputs: event.target.value })
+                              }
+                            />
+                          </Field>
+                        </div>
+                      </FieldGroup>
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="self-start"
+                    onClick={() => {
+                      const key = `step-${nextWorkItemNumber.current}`;
+                      nextWorkItemNumber.current += 1;
+                      setWorkItems((current) => [...current, newWorkItem(key)]);
+                    }}
+                  >
+                    <PlusIcon data-icon="inline-start" />
+                    Add step
+                  </Button>
+                </CardContent>
+              ) : (
+                <CardContent className="px-5">
+                  <p className="text-sm text-muted-foreground">
+                    A single default step is included. Expand advanced only if you need a multi-step
+                    work graph with dependencies.
+                  </p>
+                </CardContent>
+              )}
             </Card>
           </div>
 

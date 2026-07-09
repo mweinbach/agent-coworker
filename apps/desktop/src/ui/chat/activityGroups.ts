@@ -282,14 +282,32 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
   return visibleEntries;
 }
 
+function recoveredToolErrorKey(item: Extract<FeedItem, { kind: "tool" }>): string {
+  const name = item.name.toLowerCase();
+  const mergeKey = toolMergeKey(item.name, item.args);
+  // Same tool + same merge key when available; otherwise same tool name only.
+  return mergeKey ? `${name}::${mergeKey}` : name;
+}
+
+function isSuccessfulToolRecoveryState(state: ToolFeedState): boolean {
+  return state === "output-available" || state === "input-available" || state === "input-streaming";
+}
+
+/**
+ * Suppress a tool error only when a later attempt of the *same* tool (and
+ * merge-key when known) succeeds. Unrelated later tools must not hide earlier
+ * failures.
+ */
 function filterRecoveredToolErrors(entries: ActivityTraceEntry[]): ActivityTraceEntry[] {
   return entries.filter((entry, index) => {
     if (entry.kind !== "tool") return true;
     if (effectiveToolState(entry.item) !== "output-error") return true;
 
+    const errorKey = recoveredToolErrorKey(entry.item);
     return !entries.slice(index + 1).some((next) => {
       if (next.kind !== "tool") return false;
-      return effectiveToolState(next.item) !== "output-error";
+      if (recoveredToolErrorKey(next.item) !== errorKey) return false;
+      return isSuccessfulToolRecoveryState(effectiveToolState(next.item));
     });
   });
 }
@@ -364,7 +382,10 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   for (let i = 0; i < feed.length; i++) {
     const item = feed[i];
     if (!item) continue;
+    // Keep the latest todos snapshot as a standalone in-feed card (not folded into activity).
     if (item.kind === "todos") {
+      flushGroup();
+      items.push({ kind: "feed-item", item });
       continue;
     }
     if (item.kind === "reasoning") {

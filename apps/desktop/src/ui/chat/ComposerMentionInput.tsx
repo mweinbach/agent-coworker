@@ -1,7 +1,9 @@
 import {
+  type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
   useCallback,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -33,6 +35,8 @@ export function ComposerMentionInput(props: {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   catalog: MentionCatalog;
   ariaLabel?: string;
+  /** When clipboard paste includes files, invoke instead of inserting text. */
+  onPasteFiles?: (files: File[]) => void;
   /**
    * Extra classes applied to BOTH the textarea and the highlight overlay so
    * their typography/padding stay identical (and the boxes line up). Use this
@@ -56,10 +60,12 @@ export function ComposerMentionInput(props: {
     textareaRef,
     catalog,
     ariaLabel,
+    onPasteFiles,
     textareaClassName,
     textareaScrollClassName,
   } = props;
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const listboxId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
   const [items, setItems] = useState<MentionItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -136,6 +142,11 @@ export function ComposerMentionInput(props: {
           setMenuOpen(false);
           return;
         }
+        if (event.key === "Tab") {
+          // Close without selecting so Tab can move focus normally.
+          setMenuOpen(false);
+          return;
+        }
         if (items.length > 0) {
           switch (event.key) {
             case "ArrowDown":
@@ -147,7 +158,6 @@ export function ComposerMentionInput(props: {
               setActiveIndex((index) => (index - 1 + items.length) % items.length);
               return;
             case "Enter":
-            case "Tab":
               event.preventDefault();
               handleSelect(items[activeIndex] ?? items[0]);
               return;
@@ -160,6 +170,20 @@ export function ComposerMentionInput(props: {
     },
     [activeIndex, handleSelect, items, menuOpen, onKeyDown],
   );
+
+  const handlePaste = useCallback(
+    (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+      if (!onPasteFiles || disabled) return;
+      const files = event.clipboardData?.files;
+      if (!files || files.length === 0) return;
+      event.preventDefault();
+      onPasteFiles(Array.from(files));
+    },
+    [disabled, onPasteFiles],
+  );
+
+  const activeOptionId =
+    menuOpen && items.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -174,7 +198,13 @@ export function ComposerMentionInput(props: {
         value={value}
         disabled={disabled}
         placeholder={placeholder}
+        role="combobox"
         aria-label={ariaLabel}
+        aria-expanded={menuOpen}
+        aria-controls={menuOpen ? listboxId : undefined}
+        aria-activedescendant={activeOptionId}
+        aria-autocomplete="list"
+        aria-haspopup="listbox"
         className={cn(
           "relative z-[1] break-words text-transparent caret-foreground",
           textareaClassName,
@@ -191,10 +221,13 @@ export function ComposerMentionInput(props: {
         onKeyUp={refreshFromCaret}
         onClick={refreshFromCaret}
         onScroll={syncScroll}
+        onPaste={handlePaste}
         onBlur={() => setMenuOpen(false)}
       />
       {menuOpen ? (
         <ComposerMentionMenu
+          id={listboxId}
+          activeOptionIdPrefix={listboxId}
           items={items}
           activeIndex={activeIndex}
           query={query}

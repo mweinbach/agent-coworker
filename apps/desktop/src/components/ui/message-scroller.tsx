@@ -70,7 +70,10 @@ function MessageScrollerItem({
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
       className={cn(
-        "min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]",
+        // Avoid content-visibility + fixed intrinsic size: variable-height chat
+        // rows (markdown, activity timelines) jump the scroll position when the
+        // browser swaps estimate → real height. Real windowing can revisit this.
+        "min-w-0 shrink-0",
         className,
       )}
       {...props}

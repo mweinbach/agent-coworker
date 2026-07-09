@@ -177,13 +177,13 @@ export function composerBusyHint(
     return "Sending message. Waiting for the run to start.";
   }
   if (submitState.status === "streaming") {
-    return "Type to steer, or use stop to cancel.";
+    return "Type guidance to add, or stop to cancel.";
   }
   if (submitState.mode === "steer-pending") {
-    return "Steer sent. Waiting for the running turn to accept it.";
+    return "Guidance sent. Waiting for the current run to accept it.";
   }
   if (submitState.mode === "steer-ready") {
-    return "Steer ready. Press Enter to inject it into the current run.";
+    return "Add guidance to the current reply (Enter).";
   }
   return null;
 }

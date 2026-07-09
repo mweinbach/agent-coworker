@@ -13,8 +13,9 @@ interface SettingsContentProps {
 export function SettingsContent({ init, ready, startupError }: SettingsContentProps) {
   if (!ready) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-lg font-semibold text-foreground">Starting...</div>
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+        <div className="text-lg font-semibold text-foreground">Starting Cowork…</div>
+        <p className="text-sm text-muted-foreground">Loading settings and workspace state.</p>
       </div>
     );
   }

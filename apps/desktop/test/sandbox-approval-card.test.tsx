@@ -62,12 +62,20 @@ describe("SandboxApprovalCard", () => {
     expect(text).toContain("blocked network access");
 
     clickButton("Run with full access");
+    // Second click must not double-submit after the first answer.
     clickButton("Keep blocked");
 
-    expect(calls).toEqual([
-      ["thread-1", "req-1", true],
-      ["thread-1", "req-1", false],
-    ]);
+    expect(calls).toEqual([["thread-1", "req-1", true]]);
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    for (const button of buttons) {
+      if ((button.textContent ?? "").includes("Keep blocked")) {
+        expect((button as HTMLButtonElement).disabled).toBe(true);
+      }
+      if ((button.textContent ?? "").includes("Run with full access")) {
+        expect((button as HTMLButtonElement).disabled).toBe(true);
+      }
+    }
   });
 
   test("falls back to a filesystem message when no detail is provided", () => {

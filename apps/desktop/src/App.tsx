@@ -6,8 +6,10 @@ import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility"
 import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
+import { Button } from "./components/ui/button";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
+  confirmAction,
   getPlatformChrome,
   getSystemAppearance,
   getUpdateState,
@@ -40,6 +42,7 @@ import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
+import { InAppToasts } from "./ui/InAppToasts";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
@@ -142,7 +145,33 @@ const ChatShell = memo(function ChatShell({
   const selectedTask = useAppStore((s) =>
     s.selectedTaskId ? s.tasksById[s.selectedTaskId] : null,
   );
-  const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
+  const selectedThreadBusy = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.busy === true : false,
+  );
+  const selectedSessionUsage = useAppStore((s) =>
+    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.sessionUsage ?? null) : null,
+  );
+  const selectedLastTurnUsage = useAppStore((s) =>
+    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.lastTurnUsage ?? null) : null,
+  );
+  const selectedAgents = useAppStore((s) =>
+    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.agents ?? []) : [],
+  );
+  const selectedSessionUsageStop = useAppStore(
+    (s) =>
+      s.selectedThreadId
+        ? s.threadRuntimeById[s.selectedThreadId]?.sessionUsage?.budgetStatus.stopTriggered === true
+        : false,
+  );
+  const selectedTranscriptOnly = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.transcriptOnly === true : false,
+  );
+  const selectedConnected = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.connected === true : false,
+  );
+  const selectedSessionId = useAppStore((s) =>
+    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.sessionId ?? null) : null,
+  );
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -174,8 +203,7 @@ const ChatShell = memo(function ChatShell({
     const workspaceId = activeThread?.workspaceId ?? selectedWorkspaceId;
     return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
   }, [activeThread, selectedWorkspaceId, workspaces]);
-  const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
-  const busy = runtime?.busy === true;
+  const busy = selectedThreadBusy;
   const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
   const isConversationView = effectiveView === "chat" || effectiveView === "task";
   const showContextSidebar =
@@ -208,10 +236,10 @@ const ChatShell = memo(function ChatShell({
         ? null
         : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
-    runtime?.sessionUsage?.budgetStatus.stopTriggered === true &&
-    runtime?.transcriptOnly !== true &&
-    runtime?.connected === true &&
-    Boolean(runtime?.sessionId) &&
+    selectedSessionUsageStop &&
+    !selectedTranscriptOnly &&
+    selectedConnected &&
+    Boolean(selectedSessionId) &&
     activeThread?.status === "active";
   const quickChatPopOutThreadId =
     effectiveView === "chat" && activeThread && canPopOutQuickChatThread(activeThread)
@@ -279,9 +307,9 @@ const ChatShell = memo(function ChatShell({
         subtitle={topBarSubtitle}
         suppressThreadDetails={effectiveView === "research"}
         hideThreadShell={isConversationView && activeThread === null}
-        sessionUsage={isConversationView ? (runtime?.sessionUsage ?? null) : null}
-        lastTurnUsage={isConversationView ? (runtime?.lastTurnUsage ?? null) : null}
-        agents={isConversationView ? (runtime?.agents ?? []) : []}
+        sessionUsage={isConversationView ? selectedSessionUsage : null}
+        lastTurnUsage={isConversationView ? selectedLastTurnUsage : null}
+        agents={isConversationView ? selectedAgents : []}
         canClearHardCap={canClearHardCap}
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
@@ -308,6 +336,30 @@ const ChatShell = memo(function ChatShell({
         }
         onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
+      {isConversationView &&
+      selectedThreadId &&
+      activeThread?.status === "active" &&
+      !selectedConnected &&
+      !workspaceStartupProgress ? (
+        <div
+          role="status"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-warning/15 px-4 py-2 text-sm text-foreground"
+        >
+          <span className="min-w-0 truncate">
+            Disconnected from this chat. Reconnect to continue.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (selectedThreadId) void useAppStore.getState().reconnectThread(selectedThreadId);
+            }}
+          >
+            Reconnect
+          </Button>
+        </div>
+      ) : null}
       <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
         <main
@@ -433,6 +485,32 @@ export default function App() {
       if (event.key === "Escape") {
         const state = useAppStore.getState();
         if (state.onboardingVisible) {
+          // Onboarding owns Escape; do not also cancel a busy turn.
+          event.preventDefault();
+          // Incomplete first-run setup: do not fully dismiss without confirmation.
+          const hasConnectedProvider =
+            state.providerConnected.length > 0 ||
+            Object.values(state.providerStatusByName).some(
+              (status) => status?.authorized === true || status?.verified === true,
+            );
+          const incompleteSetup = state.workspaces.length === 0 || !hasConnectedProvider;
+          if (incompleteSetup) {
+            void confirmAction({
+              title: "Skip setup?",
+              message: "You have not finished connecting a provider or adding a workspace yet.",
+              detail:
+                "You can reopen setup later from Settings, but Cowork may feel incomplete until then.",
+              confirmLabel: "Skip for now",
+              cancelLabel: "Continue setup",
+              kind: "warning",
+              defaultAction: "cancel",
+            }).then((confirmed) => {
+              if (confirmed) {
+                state.dismissOnboarding();
+              }
+            });
+            return;
+          }
           state.dismissOnboarding();
           return;
         }
@@ -467,9 +545,24 @@ export default function App() {
           state.closeSettings();
           return;
         }
+        // Layers own Escape before turn cancel (popover/dialog/menu/palette).
+        if (event.defaultPrevented) return;
+        if (
+          document.querySelector(
+            '[role="dialog"][data-state="open"], [data-radix-menu-content], [data-slot="command-dialog"][data-state="open"]',
+          )
+        ) {
+          return;
+        }
+        if (commandPaletteOpen) {
+          setCommandPaletteOpen(false);
+          event.preventDefault();
+          return;
+        }
         if (state.selectedThreadId) {
           const runtime = state.threadRuntimeById[state.selectedThreadId];
           if (runtime?.busy) {
+            event.preventDefault();
             state.cancelThread(state.selectedThreadId);
           }
         }
@@ -478,7 +571,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [commandPaletteOpen]);
 
   // Cmd/Ctrl+K opens the command palette. Scoped to the main window so the
   // popout quick-chat / menu-bar / canvas windows keep their minimal shells.
@@ -643,6 +736,7 @@ export default function App() {
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       ) : null}
       {windowMode === "main" ? <DesktopOnboarding /> : null}
+      {windowMode === "main" ? <InAppToasts /> : null}
     </>
   );
 }

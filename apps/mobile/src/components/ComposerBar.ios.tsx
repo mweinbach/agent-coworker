@@ -35,16 +35,47 @@ function asNativeSymbol(icon: string): NativeSFSymbol {
   return icon as NativeSFSymbol;
 }
 
+function sendAccessibilityLabel({
+  canSend,
+  disabled,
+  hasText,
+  submitLabel,
+}: {
+  canSend: boolean;
+  disabled: boolean;
+  hasText: boolean;
+  submitLabel: string;
+}): string {
+  if (disabled) {
+    return "Send unavailable while offline";
+  }
+  if (!hasText) {
+    return `${submitLabel}, enter a message first`;
+  }
+  if (!canSend) {
+    return submitLabel;
+  }
+  return submitLabel;
+}
+
 export function ComposerBar({
   value,
   onChangeText,
   onSubmit,
+  submitLabel = "Send",
   helperText = null,
   disabled = false,
 }: ComposerBarProps) {
   const theme = useAppTheme();
   const [inputHeight, setInputHeight] = useState(MIN_INPUT_HEIGHT);
-  const canSend = !disabled && value.trim().length > 0;
+  const hasText = value.trim().length > 0;
+  const canSend = !disabled && hasText;
+  const accessibilityLabel = sendAccessibilityLabel({
+    canSend,
+    disabled,
+    hasText,
+    submitLabel,
+  });
   const barHeight = clamp(inputHeight, MIN_INPUT_HEIGHT, MAX_INPUT_HEIGHT) + VERTICAL_CHROME;
   const sendFillColor = canSend ? theme.primary : theme.surfaceMuted;
   const sendIconColor = canSend ? theme.primaryText : theme.textTertiary;
@@ -118,8 +149,10 @@ export function ComposerBar({
                 <TextInput
                   value={value}
                   onChangeText={onChangeText}
+                  editable={!disabled}
                   placeholder="Message…"
                   placeholderTextColor={theme.textTertiary}
+                  accessibilityLabel="Message"
                   multiline
                   onContentSizeChange={(event) => {
                     setInputHeight(
@@ -150,6 +183,9 @@ export function ComposerBar({
               systemName={asNativeSymbol("arrow.up")}
               size={16}
               color={sendIconColor}
+              accessibilityLabel={accessibilityLabel}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canSend }}
               onPress={canSend ? submitIfReady : undefined}
               modifiers={[
                 foregroundStyle(sendIconColor),

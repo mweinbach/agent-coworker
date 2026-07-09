@@ -358,7 +358,13 @@ describe("desktop sidebar", () => {
         await Promise.resolve();
       });
 
-      expect(lastContextMenuItems[0]).toEqual({
+      expect(lastContextMenuItems.map((item) => item.id)).toEqual([
+        "rename",
+        "archive",
+        "generate_memory",
+        "delete_history",
+      ]);
+      expect(lastContextMenuItems[2]).toEqual({
         id: "generate_memory",
         label: "Generate memory from conversation",
         enabled: true,
@@ -408,7 +414,11 @@ describe("desktop sidebar", () => {
         await Promise.resolve();
       });
 
-      expect(lastContextMenuItems.map((item) => item.id)).toEqual(["delete_history"]);
+      expect(lastContextMenuItems.map((item) => item.id)).toEqual([
+        "rename",
+        "archive",
+        "delete_history",
+      ]);
     } finally {
       if (root) {
         await act(async () => {
@@ -713,7 +723,9 @@ describe("desktop sidebar", () => {
           );
         });
 
-        const renameInput = container.querySelector("input");
+        const renameInput = container.querySelector(
+          ".sidebar-thread-item input",
+        ) as HTMLInputElement | null;
         if (!(renameInput instanceof harness.dom.window.HTMLInputElement)) {
           throw new Error("missing rename input");
         }

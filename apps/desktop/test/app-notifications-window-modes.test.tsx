@@ -30,7 +30,7 @@ function seedReadyState() {
   useAppStore.setState({
     ...useAppStore.getState(),
     ready: true,
-    bootstrapPending: false,
+    bootstrapPhase: "ready",
     startupError: null,
     workspaces: [],
     threads: [],
@@ -51,7 +51,7 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
   useAppStore.setState({
     ...useAppStore.getState(),
     ready: true,
-    bootstrapPending: false,
+    bootstrapPhase: "ready",
     startupError: null,
     view: "task",
     workspaces: [

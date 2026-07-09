@@ -10,7 +10,6 @@ import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
   getPlatformChrome,
   getSystemAppearance,
-  getUpdateState,
   onMenuCommand,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
@@ -353,7 +352,7 @@ const ChatShell = memo(function ChatShell({
 export default function App() {
   const windowMode = getDesktopWindowMode();
   const ready = useAppStore((s) => s.ready);
-  const bootstrapPending = useAppStore((s) => s.bootstrapPending);
+  const bootstrapPhase = useAppStore((s) => s.bootstrapPhase);
   const startupError = useAppStore((s) => s.startupError);
   const init = useAppStore((s) => s.init);
   const view = useAppStore((s) => s.view);
@@ -406,11 +405,11 @@ export default function App() {
   }, [windowMode]);
 
   useEffect(() => {
-    if (ready && !bootstrapPending) return;
+    if (bootstrapPhase !== "idle") return;
     void init().catch((err) => {
       console.error(err);
     });
-  }, [bootstrapPending, init, ready]);
+  }, [bootstrapPhase, init]);
 
   useEffect(() => {
     let disposed = false;
@@ -537,13 +536,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onUpdateStateChanged(setUpdateState);
-    void getUpdateState()
-      .then(setUpdateState)
-      .catch(() => {
-        // Keep the default disabled/idle state if the updater bridge is unavailable.
-      });
-    return unsubscribe;
+    return onUpdateStateChanged(setUpdateState);
   }, [setUpdateState]);
 
   useEffect(() => {

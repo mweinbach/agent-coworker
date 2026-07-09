@@ -47,7 +47,7 @@ function resetAppStore() {
   useAppStore.setState({
     ...state,
     ready: true,
-    bootstrapPending: false,
+    bootstrapPhase: "ready",
     workspaces: [
       {
         id: workspaceId,

@@ -200,9 +200,11 @@ export type TaskLifecycleRequest = {
   requestId: string;
 };
 
+export type BootstrapPhase = "idle" | "loading" | "ready" | "error";
+
 export type AppStoreState = {
   ready: boolean;
-  bootstrapPending: boolean;
+  bootstrapPhase: BootstrapPhase;
   startupError: string | null;
   view: ViewId;
 

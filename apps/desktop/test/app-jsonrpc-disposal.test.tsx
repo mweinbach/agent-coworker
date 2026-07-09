@@ -34,17 +34,29 @@ const MOCK_UPDATE_STATE = {
 };
 
 let workspaceServerExitedSubscriptions = 0;
+let bootstrapLoadStateCalls = 0;
+let bootstrapUpdateStateCalls = 0;
+let bootstrapSaveStateCalls = 0;
+let bootstrapDeleteTranscriptCalls = 0;
+let bootstrapLoadedState: unknown = { version: 2, workspaces: [], threads: [] };
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
     appendTranscriptBatch: async () => {},
     appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {},
+    deleteTranscript: async () => {
+      bootstrapDeleteTranscriptCalls += 1;
+    },
     listDirectory: async () => [],
-    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+    loadState: async () => {
+      bootstrapLoadStateCalls += 1;
+      return bootstrapLoadedState;
+    },
     pickWorkspaceDirectory: async () => null,
     readTranscript: async () => [],
-    saveState: async () => {},
+    saveState: async () => {
+      bootstrapSaveStateCalls += 1;
+    },
     startWorkspaceServer: async () => ({ url: "ws://mock" }),
     stopWorkspaceServer: async () => {},
     showContextMenu: async () => null,
@@ -65,7 +77,10 @@ mock.module("../src/lib/desktopCommands", () =>
     showNotification: async () => true,
     getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
     setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => MOCK_UPDATE_STATE,
+    getUpdateState: async () => {
+      bootstrapUpdateStateCalls += 1;
+      return MOCK_UPDATE_STATE;
+    },
     checkForUpdates: async () => {},
     quitAndInstallUpdate: async () => {},
     onSystemAppearanceChanged: () => () => {},
@@ -162,7 +177,7 @@ function seedWorkspaceState() {
   const threadId = "thread-app-shutdown";
   useAppStore.setState({
     ready: true,
-    bootstrapPending: false,
+    bootstrapPhase: "ready",
     startupError: null,
     view: "chat",
     workspaces: [
@@ -269,6 +284,11 @@ describe("App JSON-RPC shutdown disposal", () => {
     RUNTIME.sessionSnapshots.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
     workspaceServerExitedSubscriptions = 0;
+    bootstrapLoadStateCalls = 0;
+    bootstrapUpdateStateCalls = 0;
+    bootstrapSaveStateCalls = 0;
+    bootstrapDeleteTranscriptCalls = 0;
+    bootstrapLoadedState = { version: 2, workspaces: [], threads: [] };
     useAppStore.setState(defaultStoreState);
   });
 
@@ -348,6 +368,90 @@ describe("App JSON-RPC shutdown disposal", () => {
       });
       expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(true);
       expect(RUNTIME.workspaceJsonRpcSocketGenerations.has(workspaceId)).toBe(true);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("Strict Mode mount runs one authoritative bootstrap side-effect pass", async () => {
+    const harness = setupAppJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      bootstrapLoadedState = {
+        version: 2,
+        workspaces: [
+          {
+            id: "ws-bootstrap",
+            name: "Bootstrap workspace",
+            path: "/tmp/bootstrap",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            lastOpenedAt: "2026-01-01T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        threads: [
+          {
+            id: "thread-current",
+            workspaceId: "ws-bootstrap",
+            title: "Current thread",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            lastMessageAt: "2026-01-02T00:00:00.000Z",
+            status: "active",
+            sessionId: null,
+            messageCount: 0,
+            lastEventSeq: 0,
+          },
+          {
+            id: "thread-archived",
+            workspaceId: "ws-bootstrap",
+            title: "Archived thread",
+            createdAt: "2025-01-01T00:00:00.000Z",
+            lastMessageAt: "2025-01-02T00:00:00.000Z",
+            status: "disconnected",
+            sessionId: "thread-archived",
+            messageCount: 0,
+            lastEventSeq: 0,
+            archived: true,
+            archivedAt: "2025-01-02T00:00:00.000Z",
+          },
+        ],
+        desktopSettings: { archivedChatsAutoDeleteDays: 1 },
+      };
+      useAppStore.setState({
+        ...defaultStoreState,
+        ready: false,
+        bootstrapPhase: "idle",
+        startupError: null,
+        view: "chat",
+        lastNonSettingsView: "chat",
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(App)));
+        await flushAsyncWork();
+        await flushAsyncWork();
+      });
+
+      expect(bootstrapLoadStateCalls).toBe(1);
+      expect(bootstrapUpdateStateCalls).toBe(1);
+      expect(bootstrapDeleteTranscriptCalls).toBe(1);
+      expect(bootstrapSaveStateCalls).toBe(1);
+      expect(useAppStore.getState().selectedThreadId).toBe("thread-current");
+      expect(useAppStore.getState().view).toBe("chat");
+      expect(useAppStore.getState().threadRuntimeById["thread-current"]?.hydrating).toBe(true);
     } finally {
       if (root) {
         await act(async () => {

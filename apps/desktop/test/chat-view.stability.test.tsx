@@ -1143,7 +1143,7 @@ describe("desktop chat view stability", () => {
   test("shows a loading state while the selected startup thread is still hydrating", async () => {
     useAppStore.setState({
       ready: true,
-      bootstrapPending: false,
+      bootstrapPhase: "ready",
       startupError: null,
       view: "chat",
       selectedWorkspaceId: "ws-1",

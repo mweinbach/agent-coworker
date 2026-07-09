@@ -649,21 +649,28 @@ describe("desktop task mode UI", () => {
     }
   });
 
-  test.serial("uses the work panel as the primary task view", async () => {
+  test.serial("uses the conversation as the primary task view", async () => {
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const { TaskView } = await import("../src/ui/tasks/TaskView");
+      const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
       const root = createRoot(container);
       resetStore(taskRecord());
 
+      // Center pane: conversation (chat shell for the task thread).
       await act(async () => root.render(createElement(TaskView)));
+      expect(container.textContent).toMatch(
+        /Conversation|Message|No messages yet|What should we work on/,
+      );
+      expect(container.textContent).not.toContain("Work plan");
 
+      // Right rail: brief / work plan / controls.
+      await act(async () => root.render(createElement(TaskContextSidebar, { variant: "sidebar" })));
       expect(container.textContent).toContain("Work plan");
       expect(container.textContent).toContain("Review and control");
       expect(container.querySelector(".app-context-sidebar")).not.toBeNull();
-      expect(container.textContent).not.toContain("Add task thread");
 
       await act(async () => root.unmount());
     } finally {

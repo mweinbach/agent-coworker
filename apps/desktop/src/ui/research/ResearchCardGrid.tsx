@@ -272,6 +272,28 @@ function renderResearchTree({
   });
 }
 
+const HIDDEN_RESEARCH_KEY = "cowork.research.hiddenIds";
+
+function loadHiddenResearchIds(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_RESEARCH_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((id): id is string => typeof id === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistHiddenResearchIds(ids: Set<string>) {
+  try {
+    window.localStorage.setItem(HIDDEN_RESEARCH_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Ignore quota / private mode failures.
+  }
+}
+
 export function ResearchCardGrid({
   research,
   selectedResearchId,
@@ -282,12 +304,19 @@ export function ResearchCardGrid({
   onSelectResearch: (researchId: string) => void;
 }) {
   const renameResearch = useAppStore((s) => s.renameResearch);
+  const selectResearch = useAppStore((s) => s.selectResearch);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenResearchIds());
+
+  const visibleResearch = useMemo(
+    () => research.filter((entry) => !hiddenIds.has(entry.id)),
+    [hiddenIds, research],
+  );
 
   const childrenByParent = useMemo(() => {
     const map = new Map<string | null, ResearchCard[]>();
-    for (const entry of research) {
+    for (const entry of visibleResearch) {
       const key = entry.parentResearchId ?? null;
       const current = map.get(key) ?? [];
       current.push(entry);
@@ -300,7 +329,22 @@ export function ResearchCardGrid({
       );
     }
     return map;
-  }, [research]);
+  }, [visibleResearch]);
+
+  const hideResearch = useCallback(
+    (researchId: string) => {
+      setHiddenIds((current) => {
+        const next = new Set(current);
+        next.add(researchId);
+        persistHiddenResearchIds(next);
+        return next;
+      });
+      if (selectedResearchId === researchId) {
+        void selectResearch(null);
+      }
+    },
+    [selectResearch, selectedResearchId],
+  );
 
   const startEditing = useCallback((entry: ResearchCard) => {
     setEditingId(entry.id);
@@ -333,15 +377,26 @@ export function ResearchCardGrid({
       const result = await showContextMenu([
         { id: "open", label: "Open" },
         { id: "rename", label: "Rename" },
+        { id: "hide", label: "Hide from list" },
       ]);
       if (result === "open") {
         onSelectResearch(entry.id);
       } else if (result === "rename") {
         startEditing(entry);
+      } else if (result === "hide") {
+        hideResearch(entry.id);
       }
     },
-    [onSelectResearch, startEditing],
+    [hideResearch, onSelectResearch, startEditing],
   );
+
+  if (visibleResearch.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-8 text-center text-xs text-muted-foreground">
+        No visible research runs. Hidden runs stay on disk; start a new one from the composer.
+      </div>
+    );
+  }
 
   return (
     <div role="listbox" aria-label="Research history" className="flex flex-col gap-1">

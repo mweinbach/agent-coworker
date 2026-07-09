@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ComposerBar } from "@/components/ComposerBar";
 import { PendingRequestCard } from "@/components/thread/pending-request-card";
+import { SubagentBar } from "@/components/thread/subagent-bar";
 import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -41,6 +42,32 @@ type ThreadActionError = {
 };
 
 const NEAR_BOTTOM_THRESHOLD_PX = 96;
+const EMPTY_AGENTS: unknown[] = [];
+
+function normalizeAgents(agents: unknown[]): Array<{
+  sessionId?: string;
+  nickname?: string | null;
+  role?: string | null;
+  executionState?: string | null;
+}> {
+  return agents
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const record = entry as Record<string, unknown>;
+      return {
+        sessionId:
+          typeof record.sessionId === "string"
+            ? record.sessionId
+            : typeof record.agentId === "string"
+              ? record.agentId
+              : undefined,
+        nickname: typeof record.nickname === "string" ? record.nickname : null,
+        role: typeof record.role === "string" ? record.role : null,
+        executionState: typeof record.executionState === "string" ? record.executionState : null,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+}
 
 function renderItemKey(item: ChatRenderItem): string {
   return item.kind === "activity-group" ? item.id : item.item.id;
@@ -60,6 +87,10 @@ export default function ThreadDetailScreen() {
   const insets = useSafeAreaInsets();
   const thread = useThreadStore((state) => state.getThread(threadId));
   const pendingRequest = useThreadStore((state) => state.getPendingRequest(threadId));
+  const snapshotAgents = useThreadStore(
+    (state) => state.snapshots[threadId]?.agents ?? EMPTY_AGENTS,
+  );
+  const normalizedAgents = useMemo(() => normalizeAgents(snapshotAgents), [snapshotAgents]);
   const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
   const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
@@ -272,9 +303,10 @@ export default function ThreadDetailScreen() {
           scrollEventThrottle={16}
           onContentSizeChange={handleContentSizeChange}
           ListHeaderComponent={
-            showSessionBadge || actionError
+            showSessionBadge || actionError || normalizedAgents.length > 0
               ? () => (
                   <View style={{ gap: 10, paddingBottom: 4 }}>
+                    {normalizedAgents.length > 0 ? <SubagentBar agents={normalizedAgents} /> : null}
                     {showSessionBadge ? (
                       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                         {isDraftThread ? <StatusPill label="local draft" tone="primary" /> : null}

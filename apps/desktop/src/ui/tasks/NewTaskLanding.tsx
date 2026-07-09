@@ -138,12 +138,12 @@ export function NewTaskLanding() {
   const hasExpectedOutput = effectiveWorkItems.some(
     (item) => lines(item.expectedOutputs).length > 0,
   );
+  // Minimal path: project + title + objective. Context/acceptance/work-graph
+  // seed with sensible defaults when left empty (advanced expands full form).
   const canSubmit =
     workspaceId.length > 0 &&
     title.trim().length > 0 &&
     objective.trim().length > 0 &&
-    context.trim().length > 0 &&
-    lines(acceptanceCriteria).length > 0 &&
     effectiveWorkItems.every((item) => item.title.trim().length > 0) &&
     hasExpectedOutput &&
     !submitting;
@@ -157,15 +157,20 @@ export function NewTaskLanding() {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canSubmit) return;
+    const resolvedContext = context.trim() || "No additional context provided.";
+    const resolvedAcceptance =
+      lines(acceptanceCriteria).length > 0
+        ? lines(acceptanceCriteria)
+        : [`Task objective completed: ${objective.trim()}`];
     const task: TaskCreationInput = {
       idempotencyKey,
       title: title.trim(),
       objective: objective.trim(),
-      context: context.trim(),
+      context: resolvedContext,
       requirements: [
         ...lines(requirements).map((text) => ({ kind: "requirement" as const, text })),
         ...lines(constraints).map((text) => ({ kind: "constraint" as const, text })),
-        ...lines(acceptanceCriteria).map((text) => ({
+        ...resolvedAcceptance.map((text) => ({
           kind: "acceptance_criterion" as const,
           text,
         })),
@@ -243,7 +248,7 @@ export function NewTaskLanding() {
               <CardHeader className="gap-1 px-5">
                 <CardTitle>Brief</CardTitle>
                 <CardDescription>
-                  The task starts only after this handoff is complete.
+                  Project, title, and objective are enough to start. Other fields are optional.
                 </CardDescription>
               </CardHeader>
               <CardContent className="px-5">
@@ -288,7 +293,10 @@ export function NewTaskLanding() {
                     />
                   </Field>
                   <Field>
-                    <FieldLabel htmlFor="new-task-context">Context handoff</FieldLabel>
+                    <FieldLabel htmlFor="new-task-context">
+                      Context handoff{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </FieldLabel>
                     <Textarea
                       id="new-task-context"
                       className="min-h-32 resize-y"
@@ -296,6 +304,9 @@ export function NewTaskLanding() {
                       value={context}
                       onChange={(event) => setContext(event.target.value)}
                     />
+                    <FieldDescription>
+                      Leave blank to start with a minimal handoff.
+                    </FieldDescription>
                   </Field>
                 </FieldGroup>
               </CardContent>
@@ -458,7 +469,10 @@ export function NewTaskLanding() {
                     />
                   </Field>
                   <Field>
-                    <FieldLabel htmlFor="new-task-acceptance">Acceptance criteria</FieldLabel>
+                    <FieldLabel htmlFor="new-task-acceptance">
+                      Acceptance criteria{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </FieldLabel>
                     <Textarea
                       id="new-task-acceptance"
                       className="min-h-28 resize-y"
@@ -466,7 +480,7 @@ export function NewTaskLanding() {
                       value={acceptanceCriteria}
                       onChange={(event) => setAcceptanceCriteria(event.target.value)}
                     />
-                    <FieldDescription>At least one criterion is required.</FieldDescription>
+                    <FieldDescription>Defaults to the objective when empty.</FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="new-task-decisions">Initial assumptions</FieldLabel>

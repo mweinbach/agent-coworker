@@ -662,6 +662,13 @@ export default function App() {
       root.style.colorScheme = theme;
       root.classList.toggle("dark", theme === "dark");
       root.classList.toggle("light", theme !== "dark");
+      try {
+        // Survives reload so the pre-paint script in index.html can match the
+        // last resolved theme (including forced light/dark) before React boots.
+        localStorage.setItem("cowork.resolvedTheme", theme);
+      } catch {
+        // Private mode / storage quota — media-query FOUC fallback still works.
+      }
     }
 
     const unsubscribe = onSystemAppearanceChanged(applySystemAppearance);

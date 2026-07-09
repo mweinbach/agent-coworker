@@ -1488,7 +1488,7 @@ export function createThreadActions(
         approved,
       }));
       if (!sent) {
-        return;
+        return false;
       }
       appendThreadTranscript(threadId, "client", {
         type: "approval_response",
@@ -1513,6 +1513,7 @@ export function createThreadActions(
         else delete nextSandbox[threadId];
         return { promptModal, sandboxApprovalsByThread: nextSandbox };
       });
+      return true;
     },
 
     dismissPrompt: () => {

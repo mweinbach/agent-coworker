@@ -34,6 +34,7 @@ import { Canvas } from "./ui/Canvas";
 import { CommandPalette } from "./ui/CommandPalette";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { InlineErrorBoundary } from "./ui/CrashReportingErrorBoundary";
+import { shouldShowReconnectBanner } from "./ui/chat/chatLogic";
 import { LmStudioStartDialog } from "./ui/chat/LmStudioStartDialog";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { InAppToasts } from "./ui/InAppToasts";
@@ -257,6 +258,15 @@ const ChatShell = memo(function ChatShell({
   const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
   const canvasIsMarkdown = canvasKind === "markdown";
   const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
+  const showReconnectBanner = shouldShowReconnectBanner({
+    conversationVisible: isConversationView,
+    threadId: selectedThreadId,
+    threadStatus: activeThread?.status ?? null,
+    transcriptOnly: selectedTranscriptOnly,
+    connected: selectedConnected,
+    sessionId: selectedSessionId,
+    workspaceStarting: workspaceStartupProgress !== null,
+  });
   useEffect(() => {
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
@@ -338,11 +348,7 @@ const ChatShell = memo(function ChatShell({
         }
         onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
-      {isConversationView &&
-      selectedThreadId &&
-      activeThread?.status === "active" &&
-      !selectedConnected &&
-      !workspaceStartupProgress ? (
+      {showReconnectBanner ? (
         <div
           role="status"
           className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-warning/15 px-4 py-2 text-sm text-foreground"

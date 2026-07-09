@@ -1,9 +1,14 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { buildAttachmentSignature } from "../src/app/attachmentInputs";
-import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import {
+  clearJsonRpcSocketOverride,
+  NoopJsonRpcSocket,
+  setJsonRpcSocketOverride,
+} from "./helpers/jsonRpcSocketMock";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
@@ -38,48 +43,42 @@ const requestAnimationFrameMock = (callback: FrameRequestCallback) =>
 
 const cancelAnimationFrameMock = (id: number) => clearTimeout(id);
 
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    appendTranscriptBatch: async () => {},
-    appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {},
-    listDirectory: async () => [],
-    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-    pickWorkspaceDirectory: async () => null,
-    readTranscript: async () => [],
-    saveState: async () => {},
-    startWorkspaceServer: async () => ({ url: "ws://mock" }),
-    stopWorkspaceServer: async () => {},
-    showContextMenu: async () => null,
-    windowMinimize: async () => {},
-    windowMaximize: async () => {},
-    windowClose: async () => {},
-    getPlatform: async () => "linux",
-    readFile: async () => "",
-    previewOSFile: async () => {},
-    openPath: async () => {},
-    openExternalUrl: async () => {},
-    revealPath: async () => {},
-    copyPath: async () => {},
-    createDirectory: async () => {},
-    renamePath: async () => {},
-    trashPath: async () => {},
-    confirmAction: async () => true,
-    showNotification: async () => true,
-    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => MOCK_UPDATE_STATE,
-    checkForUpdates: async () => {},
-    quitAndInstallUpdate: async () => {},
-    onSystemAppearanceChanged: () => () => {},
-    onMenuCommand: () => () => {},
-    onUpdateStateChanged: () => () => {},
-  }),
-);
-
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: NoopJsonRpcSocket,
-}));
+const desktopApiMock = createDesktopApiMock({
+  appendTranscriptBatch: async () => {},
+  appendTranscriptEvent: async () => {},
+  deleteTranscript: async () => {},
+  listDirectory: async () => [],
+  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+  pickWorkspaceDirectory: async () => null,
+  readTranscript: async () => [],
+  saveState: async () => {},
+  startWorkspaceServer: async () => ({ url: "ws://mock" }),
+  stopWorkspaceServer: async () => {},
+  showContextMenu: async () => null,
+  windowMinimize: async () => {},
+  windowMaximize: async () => {},
+  windowClose: async () => {},
+  getPlatform: async () => "linux",
+  readFile: async () => "",
+  previewOSFile: async () => {},
+  openPath: async () => {},
+  openExternalUrl: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
+  confirmAction: async () => true,
+  showNotification: async () => true,
+  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getUpdateState: async () => MOCK_UPDATE_STATE,
+  checkForUpdates: async () => {},
+  quitAndInstallUpdate: async () => {},
+  onSystemAppearanceChanged: () => () => {},
+  onMenuCommand: () => () => {},
+  onUpdateStateChanged: () => () => {},
+});
 
 function setupChatViewJsdom() {
   return setupJsdom({
@@ -114,6 +113,23 @@ const { useAppStore } = await import("../src/app/store");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 
 describe("desktop chat view stability", () => {
+  beforeEach(() => {
+    Object.assign(globalThis, { [DESKTOP_API_OVERRIDE_KEY]: desktopApiMock });
+    setJsonRpcSocketOverride(NoopJsonRpcSocket);
+    useAppStore.setState({
+      filePreview: null,
+      promptModal: null,
+      selectedTaskId: null,
+      tasksById: {},
+      taskSummariesByWorkspaceId: {},
+    });
+  });
+
+  afterEach(() => {
+    clearJsonRpcSocketOverride();
+    Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
+  });
+
   test("shows the universal new chat landing when no thread is selected", async () => {
     useAppStore.setState({
       ready: true,

@@ -259,25 +259,21 @@ export function Canvas({ path }: { path: string }) {
    */
   const applyFormat = (kind: MarkdownFormatKind) => {
     if (contentTruncated) return;
+    if (activeTab !== "edit") {
+      setActiveTab("edit");
+      requestAnimationFrame(() => sourceTextareaRef.current?.focus());
+      return;
+    }
     const textarea = sourceTextareaRef.current;
-    const hasTextareaSelection =
-      activeTab === "edit" &&
-      textarea !== null &&
-      typeof textarea.selectionStart === "number" &&
-      typeof textarea.selectionEnd === "number";
-    const start = hasTextareaSelection ? textarea.selectionStart : 0;
-    const end = hasTextareaSelection ? textarea.selectionEnd : content.length;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
     const result = applyMarkdownFormat(contentRef.current, start, end, kind);
     handleContentChange(result.next);
-    if (hasTextareaSelection && textarea) {
-      requestAnimationFrame(() => {
-        textarea.focus();
-        textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
-      });
-    } else if (activeTab !== "edit") {
-      // Preview mode: jump to source so the user can see the markdown transform.
-      setActiveTab("edit");
-    }
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
+    });
   };
 
   const handleContentChange = (val: string) => {
@@ -744,7 +740,10 @@ export function Canvas({ path }: { path: string }) {
               <div className="min-h-0 flex-1">
                 {isMarkdown ? (
                   <>
-                    <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
+                    <TabsContent
+                      value="preview"
+                      className="h-full m-0 p-0 outline-none data-[state=inactive]:hidden"
+                    >
                       <ScrollArea className="h-full">
                         <div className="mx-auto w-full max-w-[840px] px-4 py-8">
                           <div className="mx-auto w-full max-w-none p-12 md:p-16 text-left select-text">
@@ -756,7 +755,11 @@ export function Canvas({ path }: { path: string }) {
                       </ScrollArea>
                     </TabsContent>
 
-                    <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
+                    <TabsContent
+                      forceMount
+                      value="edit"
+                      className="h-full m-0 p-0 outline-none bg-background data-[state=inactive]:hidden"
+                    >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span className="flex items-center gap-2">
@@ -798,11 +801,18 @@ export function Canvas({ path }: { path: string }) {
                   </>
                 ) : isSlide ? (
                   <>
-                    <TabsContent value="preview" className="h-full m-0 p-0 outline-none">
+                    <TabsContent
+                      value="preview"
+                      className="h-full m-0 p-0 outline-none data-[state=inactive]:hidden"
+                    >
                       <SlidePreview path={path} refreshTrigger={previewRefreshTrigger} />
                     </TabsContent>
 
-                    <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
+                    <TabsContent
+                      forceMount
+                      value="edit"
+                      className="h-full m-0 p-0 outline-none bg-background data-[state=inactive]:hidden"
+                    >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span>Slide Source Code</span>

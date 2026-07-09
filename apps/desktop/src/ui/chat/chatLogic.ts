@@ -111,6 +111,26 @@ export function canClearSessionHardCap(opts: {
   );
 }
 
+export function shouldShowReconnectBanner(opts: {
+  conversationVisible: boolean;
+  threadId: string | null;
+  threadStatus: ThreadStatus | null;
+  transcriptOnly: boolean;
+  connected: boolean;
+  sessionId: string | null;
+  workspaceStarting: boolean;
+}): boolean {
+  return (
+    opts.conversationVisible &&
+    Boolean(opts.threadId) &&
+    opts.threadStatus === "active" &&
+    !opts.transcriptOnly &&
+    !opts.connected &&
+    Boolean(opts.sessionId) &&
+    !opts.workspaceStarting
+  );
+}
+
 export function getComposerSubmitState(opts: {
   busy: boolean;
   hasPromptModal: boolean;

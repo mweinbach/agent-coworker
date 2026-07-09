@@ -21,6 +21,13 @@ import type { WorkspaceStateHelpers } from "./workspaceState";
 
 export type FeedProjectionModule = ReturnType<typeof createFeedProjectionModule>;
 
+export function composeFeedItemUpdates(
+  first: (item: FeedItem) => FeedItem,
+  second: (item: FeedItem) => FeedItem,
+): (item: FeedItem) => FeedItem {
+  return (item) => second(first(item));
+}
+
 export function createFeedProjectionModule(
   ctx: ThreadEventReducerContext,
   workspace: Pick<WorkspaceStateHelpers, "resetLiveModelStreamRuntime">,
@@ -318,7 +325,7 @@ export function createFeedProjectionModule(
     }
     scheduleAssistantDeltaFlush();
   }
-  /** Last-wins per itemId; flushed once per animation frame (model-stream path). */
+  /** Ordered per-item updates, flushed once per animation frame (model-stream path). */
   const pendingModelStreamUpdates = new Map<
     string,
     { set: StoreSet; threadId: string; itemId: string; update: (item: FeedItem) => FeedItem }
@@ -368,9 +375,14 @@ export function createFeedProjectionModule(
         insertFeedItemBefore(set, threadId, beforeItemId, item);
       },
       updateFeedItem: (itemId, updateItem) => {
-        // Text/tool patches often re-apply full state; last write per frame wins.
         const key = `${threadId}:${itemId}`;
-        pendingModelStreamUpdates.set(key, { set, threadId, itemId, update: updateItem });
+        const pending = pendingModelStreamUpdates.get(key);
+        pendingModelStreamUpdates.set(key, {
+          set,
+          threadId,
+          itemId,
+          update: pending ? composeFeedItemUpdates(pending.update, updateItem) : updateItem,
+        });
         scheduleModelStreamFlush();
       },
       onToolTerminal: () => {

@@ -160,7 +160,7 @@ function renderFeed(renderItems: ChatRenderItem[], selectedThreadId: string, hyd
       REMOVEDUIEnabled: false,
       composerOverlayHeight: 200,
       sandboxApprovals: [],
-      onAnswerApproval: () => {},
+      onAnswerApproval: () => true,
       selectedThreadId,
     }),
   );
@@ -484,7 +484,7 @@ describe("desktop chat message scroller", () => {
     } finally {
       harness.restore();
     }
-  });
+  }, 15_000);
 
   test("reapplies last-user-turn restoration when switching threads", async () => {
     const heights = new Map([

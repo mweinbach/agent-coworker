@@ -75,6 +75,34 @@ const { ActivityGroupCard } = await import("../src/ui/chat/ActivityGroupCard");
 const { ChatFeed } = await import("../src/ui/chat/ChatFeed");
 const { CrashReportingErrorBoundary } = await import("../src/ui/CrashReportingErrorBoundary");
 
+type ReactFiber = {
+  child: ReactFiber | null;
+  elementType?: unknown;
+  memoizedState: unknown;
+  sibling: ReactFiber | null;
+};
+
+function findComponentFiber(fiber: ReactFiber | null, componentName: string): ReactFiber | null {
+  if (!fiber) return null;
+  if (typeof fiber.elementType === "function" && fiber.elementType.name === componentName) {
+    return fiber;
+  }
+  return (
+    findComponentFiber(fiber.child, componentName) ??
+    findComponentFiber(fiber.sibling, componentName)
+  );
+}
+
+function getCurrentRootFiber(root: ReturnType<typeof createRoot>): ReactFiber {
+  const internalRoot = (
+    root as unknown as {
+      _internalRoot?: { current?: ReactFiber };
+    }
+  )._internalRoot;
+  if (!internalRoot?.current) throw new Error("missing React root fiber");
+  return internalRoot.current;
+}
+
 describe("desktop activity group card", () => {
   test("renders mixed reasoning and tool entries in chronological order", () => {
     const html = renderToStaticMarkup(
@@ -487,6 +515,12 @@ describe("desktop activity group card", () => {
       expect(container.textContent).toContain("Thinking");
       const reasoningRow = container.querySelector('[data-activity-entry-kind="reasoning"]');
       expect(reasoningRow).not.toBeNull();
+      // React 19 does not warn for a zero-hook → one-hook update. Assert that
+      // the memo hook exists even in the empty state so this regression fails
+      // before the first streamed delta arrives.
+      const reasoningFiber = findComponentFiber(getCurrentRootFiber(root), "ReasoningTimelineNode");
+      expect(reasoningFiber).not.toBeNull();
+      expect(reasoningFiber?.memoizedState).not.toBeNull();
 
       await renderReasoning("first delta");
       expect(container.textContent).toContain("first delta");

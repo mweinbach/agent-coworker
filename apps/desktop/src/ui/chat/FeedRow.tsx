@@ -289,7 +289,10 @@ function FeedTodosCard(props: { todos: Extract<FeedItem, { kind: "todos" }>["tod
         </div>
         <div className="flex flex-col gap-1.5">
           {todos.map((todo) => (
-            <div key={`${todo.status}:${todo.content}`} className="flex items-start gap-2 text-[12.5px]">
+            <div
+              key={`${todo.status}:${todo.content}`}
+              className="flex items-start gap-2 text-[12.5px]"
+            >
               {todo.status === "completed" ? (
                 <CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0 text-success" />
               ) : todo.status === "in_progress" ? (

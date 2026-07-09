@@ -349,98 +349,98 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                         : undefined
                     }
                   >
-                  {visibleThreads.map((thread) => {
-                    const runtime = threadRuntimeById[thread.id];
-                    const busy = runtime?.busy === true;
-                    const isActive = thread.id === selectedThreadId;
-                    const isEditing = editingThreadId === thread.id;
-                    const displayTitle = thread.title || "New chat";
-                    const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
+                    {visibleThreads.map((thread) => {
+                      const runtime = threadRuntimeById[thread.id];
+                      const busy = runtime?.busy === true;
+                      const isActive = thread.id === selectedThreadId;
+                      const isEditing = editingThreadId === thread.id;
+                      const displayTitle = thread.title || "New chat";
+                      const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
 
-                    return isEditing ? (
-                      <div
-                        key={thread.id}
-                        className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground"
-                      >
-                        <Input
-                          ref={editInputRef}
-                          className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
-                          value={editingTitle}
-                          onBlur={() => onCommitRename(thread.id, editingTitle)}
-                          onChange={(event) => onEditingTitleChange(event.target.value)}
-                          onClick={(event) => event.stopPropagation()}
-                          onDoubleClick={(event) => event.stopPropagation()}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              onCommitRename(thread.id, editingTitle);
-                            } else if (event.key === "Escape") {
-                              event.preventDefault();
-                              onCancelRename();
-                            }
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div key={thread.id} className="relative group min-w-0">
-                        <Button
-                          className={cn(
-                            "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
-                            isActive
-                              ? "border-border/45 bg-foreground/[0.05] text-foreground"
-                              : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
-                          )}
-                          onClick={() => selectThread(thread.id)}
-                          onContextMenu={(event) =>
-                            onThreadContextMenu(event, thread.id, displayTitle)
-                          }
-                          onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
-                          title={displayTitle}
-                          type="button"
-                          variant="ghost"
+                      return isEditing ? (
+                        <div
+                          key={thread.id}
+                          className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground"
                         >
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
-                              {displayTitle}
-                            </span>
-                          </span>
-
-                          <span className="relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end">
-                            {busy ? (
-                              <span
-                                className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
-                                aria-hidden="true"
-                              />
-                            ) : ageLabel ? (
-                              <span
-                                className={cn(
-                                  "text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
-                                  isActive && "opacity-0 pointer-events-none",
-                                )}
-                              >
-                                {ageLabel}
-                              </span>
-                            ) : null}
-                          </span>
-                        </Button>
-                        <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
-                          <ThreadOverflowMenu
-                            canGenerateMemory={canGenerateMemoryForThread(thread.id)}
-                            ariaLabelSuffix={displayTitle}
-                            triggerVisibilityClassName={overflowTriggerVisibilityClassName(
-                              isActive,
-                            )}
-                            onRename={() => onStartEditing(thread.id, displayTitle)}
-                            onArchive={() => onArchiveThread(thread.id, displayTitle)}
-                            onGenerateMemory={() => onGenerateMemoryForThread(thread.id)}
-                            onDeleteHistory={() =>
-                              onDeleteHistoryForThread(thread.id, displayTitle)
-                            }
+                          <Input
+                            ref={editInputRef}
+                            className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
+                            value={editingTitle}
+                            onBlur={() => onCommitRename(thread.id, editingTitle)}
+                            onChange={(event) => onEditingTitleChange(event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onDoubleClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                onCommitRename(thread.id, editingTitle);
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                onCancelRename();
+                              }
+                            }}
                           />
                         </div>
-                      </div>
-                    );
-                  })}
+                      ) : (
+                        <div key={thread.id} className="relative group min-w-0">
+                          <Button
+                            className={cn(
+                              "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
+                              isActive
+                                ? "border-border/45 bg-foreground/[0.05] text-foreground"
+                                : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+                            )}
+                            onClick={() => selectThread(thread.id)}
+                            onContextMenu={(event) =>
+                              onThreadContextMenu(event, thread.id, displayTitle)
+                            }
+                            onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
+                            title={displayTitle}
+                            type="button"
+                            variant="ghost"
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+                                {displayTitle}
+                              </span>
+                            </span>
+
+                            <span className="relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end">
+                              {busy ? (
+                                <span
+                                  className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+                                  aria-hidden="true"
+                                />
+                              ) : ageLabel ? (
+                                <span
+                                  className={cn(
+                                    "text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
+                                    isActive && "opacity-0 pointer-events-none",
+                                  )}
+                                >
+                                  {ageLabel}
+                                </span>
+                              ) : null}
+                            </span>
+                          </Button>
+                          <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
+                            <ThreadOverflowMenu
+                              canGenerateMemory={canGenerateMemoryForThread(thread.id)}
+                              ariaLabelSuffix={displayTitle}
+                              triggerVisibilityClassName={overflowTriggerVisibilityClassName(
+                                isActive,
+                              )}
+                              onRename={() => onStartEditing(thread.id, displayTitle)}
+                              onArchive={() => onArchiveThread(thread.id, displayTitle)}
+                              onGenerateMemory={() => onGenerateMemoryForThread(thread.id)}
+                              onDeleteHistory={() =>
+                                onDeleteHistoryForThread(thread.id, displayTitle)
+                              }
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (

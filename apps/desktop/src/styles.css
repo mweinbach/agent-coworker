@@ -548,17 +548,17 @@ samp {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
   }
 
   .animate-pulse.animate-pulse,
   .animate-spin.animate-spin,
   .animate-bounce.animate-bounce,
   .animate-ping.animate-ping {
-    animation: none !important;
+    animation: none;
   }
 
   .animate-in,
@@ -571,8 +571,8 @@ samp {
   .slide-in-from-bottom-2,
   .slide-in-from-left-2,
   .slide-in-from-right-2 {
-    animation: none !important;
-    transition: none !important;
+    animation: none;
+    transition: none;
   }
 
   body.app-animating-sidebars .app-left-sidebar-pane,
@@ -581,18 +581,18 @@ samp {
   body.app-animating-sidebars .app-topbar__content-fill,
   body.app-animating-sidebars .app-topbar__thread-shell,
   body.app-animating-sidebars .app-topbar__thread-anchor {
-    transition: none !important;
+    transition: none;
   }
 
   .settings-page {
-    animation: none !important;
+    animation: none;
   }
 
   .activity-thinking-shimmer {
-    animation: none !important;
-    background-image: none !important;
-    -webkit-text-fill-color: var(--text-muted) !important;
-    color: var(--text-muted) !important;
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: var(--text-muted);
+    color: var(--text-muted);
   }
 }
 

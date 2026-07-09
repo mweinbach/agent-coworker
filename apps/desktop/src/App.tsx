@@ -36,18 +36,20 @@ import { ContextSidebar } from "./ui/ContextSidebar";
 import { InlineErrorBoundary } from "./ui/CrashReportingErrorBoundary";
 import { LmStudioStartDialog } from "./ui/chat/LmStudioStartDialog";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
+import { InAppToasts } from "./ui/InAppToasts";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
-import { InAppToasts } from "./ui/InAppToasts";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
 import { TaskConversationSidebar } from "./ui/tasks/TaskConversationSidebar";
+
+const EMPTY_AGENTS: never[] = [];
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -154,14 +156,14 @@ const ChatShell = memo(function ChatShell({
   const selectedLastTurnUsage = useAppStore((s) =>
     s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.lastTurnUsage ?? null) : null,
   );
-  const selectedAgents = useAppStore((s) =>
-    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.agents ?? []) : [],
-  );
-  const selectedSessionUsageStop = useAppStore(
-    (s) =>
-      s.selectedThreadId
-        ? s.threadRuntimeById[s.selectedThreadId]?.sessionUsage?.budgetStatus.stopTriggered === true
-        : false,
+  const selectedAgents = useAppStore((s) => {
+    if (!s.selectedThreadId) return EMPTY_AGENTS;
+    return s.threadRuntimeById[s.selectedThreadId]?.agents ?? EMPTY_AGENTS;
+  });
+  const selectedSessionUsageStop = useAppStore((s) =>
+    s.selectedThreadId
+      ? s.threadRuntimeById[s.selectedThreadId]?.sessionUsage?.budgetStatus.stopTriggered === true
+      : false,
   );
   const selectedTranscriptOnly = useAppStore((s) =>
     s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.transcriptOnly === true : false,

@@ -9,9 +9,7 @@ export function TaskView() {
     state.selectedTaskId ? state.tasksById[state.selectedTaskId] : null,
   );
   const taskSummariesByWorkspaceId = useAppStore((state) => state.taskSummariesByWorkspaceId);
-  const taskListLoadingByWorkspaceId = useAppStore(
-    (state) => state.taskListLoadingByWorkspaceId,
-  );
+  const taskListLoadingByWorkspaceId = useAppStore((state) => state.taskListLoadingByWorkspaceId);
 
   if (!selectedTaskId) return <NewTaskLanding />;
 
@@ -39,6 +37,7 @@ export function TaskView() {
 
     return (
       <div
+        role="status"
         className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground"
         aria-busy="true"
         aria-label="Loading task"

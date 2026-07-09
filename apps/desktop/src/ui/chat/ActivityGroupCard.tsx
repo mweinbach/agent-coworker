@@ -505,8 +505,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
     (summary.reasoningCount > 0 && summary.toolCount === 0 && !showStateBadge);
   // Keep one structural shell for live turns (including mid-turn approval) and
   // terminal compact rows so chrome does not jump between Marker and Card.
-  const useCompactElapsedHeader =
-    isComplete || hasUnrecoveredIssue || props.live === true;
+  const useCompactElapsedHeader = isComplete || hasUnrecoveredIssue || props.live === true;
 
   if (useCompactElapsedHeader) {
     return (

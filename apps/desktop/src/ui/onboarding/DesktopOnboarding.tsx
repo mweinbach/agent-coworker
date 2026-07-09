@@ -1,7 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
-import { confirmAction } from "../../lib/desktopCommands";
 import type { OnboardingStep } from "../../app/types";
 import {
   resolveWorkspaceDisplayTargets,
@@ -24,6 +23,7 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
+import { confirmAction } from "../../lib/desktopCommands";
 import {
   availableProvidersFromCatalog,
   type CatalogVisibilityOptions,

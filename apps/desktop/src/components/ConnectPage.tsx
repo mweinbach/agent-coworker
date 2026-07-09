@@ -196,9 +196,7 @@ export function ConnectPage({
     <div className="flex h-screen items-center justify-center bg-background text-foreground">
       <div className="w-[420px] rounded-xl border border-border bg-card p-8 shadow-sm">
         <h1 className="m-0 mb-1 text-xl font-semibold tracking-tight">Cowork</h1>
-        <p className="mb-5 text-[13px] text-muted-foreground">
-          Connect to a running Cowork server
-        </p>
+        <p className="mb-5 text-[13px] text-muted-foreground">Connect to a running Cowork server</p>
 
         {discovered.length > 1 ? (
           <>
@@ -230,9 +228,7 @@ export function ConnectPage({
           {busy ? (status ?? "Connecting…") : "Connect"}
         </Button>
 
-        {status && !error ? (
-          <p className="mb-3 text-xs text-muted-foreground">{status}</p>
-        ) : null}
+        {status && !error ? <p className="mb-3 text-xs text-muted-foreground">{status}</p> : null}
 
         {error ? <p className="mb-3 text-xs text-destructive">{error}</p> : null}
 
@@ -248,7 +244,10 @@ export function ConnectPage({
 
         {showAdvanced ? (
           <div className="flex flex-col gap-2">
-            <label htmlFor="connect-server-url" className="text-xs font-medium text-muted-foreground">
+            <label
+              htmlFor="connect-server-url"
+              className="text-xs font-medium text-muted-foreground"
+            >
               Server URL
             </label>
             <Input

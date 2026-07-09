@@ -338,7 +338,8 @@ export function NewChatLanding() {
         {
           id: "summarize-repo",
           label: "Summarize this repo",
-          prompt: "Summarize this repository: structure, main technologies, and how to get started.",
+          prompt:
+            "Summarize this repository: structure, main technologies, and how to get started.",
         },
         {
           id: "explain-folder",
@@ -439,7 +440,11 @@ export function NewChatLanding() {
                     event.preventDefault();
                     if (!canSubmitNewChat || submitting) return;
                     void submitNewChat();
-                  } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !isComposing) {
+                  } else if (
+                    event.key === "Enter" &&
+                    (event.metaKey || event.ctrlKey) &&
+                    !isComposing
+                  ) {
                     event.preventDefault();
                     const textarea = event.currentTarget;
                     const start = textarea.selectionStart;

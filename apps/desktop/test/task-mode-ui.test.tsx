@@ -492,6 +492,14 @@ describe("desktop task mode UI", () => {
         expect(projectSelect?.value).toBe("ws-2");
 
         await act(async () => {
+          const showAdvanced = container.querySelector(
+            'button[aria-expanded="false"]',
+          ) as HTMLButtonElement | null;
+          showAdvanced?.click();
+          await Promise.resolve();
+        });
+
+        await act(async () => {
           changeValue(
             harness,
             container.querySelector("#new-task-title") as HTMLInputElement | null,

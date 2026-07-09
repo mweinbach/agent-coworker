@@ -64,7 +64,12 @@ export function ResearchView() {
             </div>
           ) : null}
           {researchListLoading && research.length === 0 ? (
-            <div className="flex flex-col gap-2 px-1 py-1" aria-busy="true" aria-label="Loading research">
+            <div
+              role="status"
+              className="flex flex-col gap-2 px-1 py-1"
+              aria-busy="true"
+              aria-label="Loading research"
+            >
               <Skeleton className="h-16 w-full rounded-xl" />
               <Skeleton className="h-16 w-full rounded-xl" />
               <Skeleton className="h-16 w-full rounded-xl" />

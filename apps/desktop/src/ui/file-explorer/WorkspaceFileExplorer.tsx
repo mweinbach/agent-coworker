@@ -880,7 +880,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             </Button>
           ) : (
             <>
-              <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/80 shrink-0 uppercase">
+              <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground shrink-0 uppercase">
                 Files
               </div>
               <div className="text-muted-foreground/35 text-[11px] shrink-0 font-light">/</div>

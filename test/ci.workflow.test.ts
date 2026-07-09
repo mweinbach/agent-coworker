@@ -95,6 +95,19 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("apps/desktop/test/server-manager.test.ts");
   });
 
+  test("runs deterministic real-Electron visual, Axe, performance, and failure-proof gates", () => {
+    const qualityJob = workflow.match(/electron-quality:[\s\S]*?\n {2}windows-smoke:/)?.[0] ?? "";
+    expect(qualityJob).toContain("name: Electron UI quality gates");
+    expect(qualityJob).toContain("xvfb-run");
+    expect(qualityJob).toContain("bun run desktop:quality");
+    expect(qualityJob).toContain("bun run desktop:quality:proof");
+    expect(qualityJob).toContain('OPENAI_API_KEY: ""');
+    expect(qualityJob).toContain("if: failure()");
+    expect(qualityJob).toContain("actions/upload-artifact@v4");
+    expect(qualityJob).toContain("apps/desktop/quality-gates/artifacts");
+    expect(qualityJob).toContain("apps/desktop/quality-gates/proof-artifacts");
+  });
+
   test("runs the mobile install, typecheck, autolinking, and export lane", () => {
     expect(workflow).toContain("mobile:");
     expect(workflow).toContain("name: Mobile");

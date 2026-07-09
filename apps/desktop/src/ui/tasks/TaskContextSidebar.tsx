@@ -48,7 +48,7 @@ function WorkItemIcon({ item }: { item: WorkItem }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2.5 px-3 py-3">
-      <h2 className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
+      <h2 className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
         {title}
       </h2>
       {children}

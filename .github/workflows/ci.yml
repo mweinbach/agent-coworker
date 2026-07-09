@@ -71,6 +71,48 @@ jobs:
       - name: Unit tests
         run: bun test --max-concurrency 1
 
+  electron-quality:
+    name: Electron UI quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ""
+      GEMINI_API_KEY: ""
+      GOOGLE_API_KEY: ""
+      OPENAI_API_KEY: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Deterministic Electron matrix
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1400x1000x24" bun run desktop:quality
+
+      - name: Prove renderer, visual, and Axe failures
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1400x1000x24" bun run desktop:quality:proof
+
+      - name: Upload Electron failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-quality-failure-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            apps/desktop/quality-gates/artifacts
+            apps/desktop/quality-gates/report
+
+      - name: Upload intentional failure proofs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-quality-failure-proofs-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: apps/desktop/quality-gates/proof-artifacts
+
   windows-smoke:
     name: Windows smoke (${{ matrix.arch }})
     strategy:

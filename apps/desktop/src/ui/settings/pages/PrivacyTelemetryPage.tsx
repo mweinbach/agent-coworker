@@ -5,7 +5,7 @@ import type { PrivacyTelemetrySettings } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Switch } from "../../../components/ui/switch";
 import type { TelemetryStatusEntry, TelemetryStatusSnapshot } from "../../../lib/desktopApi";
-import { getTelemetryStatus } from "../../../lib/desktopCommands";
+import { confirmAction, getTelemetryStatus } from "../../../lib/desktopCommands";
 import { SettingsPage, SettingsRow, SettingsSection } from "../SettingsPrimitives";
 
 function badgeVariantForStatus(status: TelemetryStatusEntry["status"]) {
@@ -93,6 +93,25 @@ export function PrivacyTelemetryPage() {
   }, [settings]);
 
   const status = telemetryStatus ?? fallbackTelemetryStatus(settings);
+  const setAiTracePayloadsWithConfirmation = async (enabled: boolean): Promise<void> => {
+    if (!enabled) {
+      setAiTracePayloadsEnabled(false);
+      return;
+    }
+    const confirmed = await confirmAction({
+      title: "Include full AI trace payloads?",
+      message:
+        "AI trace diagnostics may include prompts, responses, commands, logs, file paths or names, and other content.",
+      detail: "Only enable this while actively diagnosing a problem, then turn it off.",
+      confirmLabel: "Include full payloads",
+      cancelLabel: "Keep metadata only",
+      kind: "warning",
+      defaultAction: "cancel",
+    });
+    if (confirmed) {
+      setAiTracePayloadsEnabled(true);
+    }
+  };
 
   return (
     <SettingsPage>
@@ -157,7 +176,7 @@ export function PrivacyTelemetryPage() {
               checked={settings.aiTracePayloadsEnabled}
               disabled={!settings.aiTraceTelemetryEnabled}
               aria-label="Include prompts and responses in AI traces"
-              onCheckedChange={setAiTracePayloadsEnabled}
+              onCheckedChange={setAiTracePayloadsWithConfirmation}
             />
           }
         />

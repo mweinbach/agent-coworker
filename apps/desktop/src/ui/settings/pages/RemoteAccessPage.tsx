@@ -21,6 +21,7 @@ import type {
   MobileRelayTrustedPhoneDevice,
 } from "../../../lib/desktopApi";
 import {
+  confirmAction,
   copyText,
   forgetMobileRelayTrustedPhone,
   getMobileRelayState,
@@ -227,6 +228,39 @@ export function RemoteAccessPage() {
     }, 2000);
   }
 
+  async function forgetTrustedDevice(device: MobileRelayTrustedPhoneDevice): Promise<void> {
+    const deviceName = describeTrustedDevice(device);
+    const confirmed = await confirmAction({
+      title: `Forget ${deviceName}?`,
+      message: "This device will lose access to Cowork until it is paired again.",
+      detail: `Remove trust for ${device.fingerprint}.`,
+      confirmLabel: "Forget device",
+      cancelLabel: "Keep device",
+      kind: "warning",
+      defaultAction: "cancel",
+    });
+    if (!confirmed) {
+      return;
+    }
+    await forgetMobileRelayTrustedPhone({ deviceId: device.deviceId });
+  }
+
+  async function forgetAllTrustedDevices(): Promise<void> {
+    const confirmed = await confirmAction({
+      title: "Forget all trusted devices?",
+      message: "Every paired device will lose access to Cowork until it is paired again.",
+      detail: "This does not stop the workspace bridge.",
+      confirmLabel: "Forget all devices",
+      cancelLabel: "Keep devices",
+      kind: "warning",
+      defaultAction: "cancel",
+    });
+    if (!confirmed) {
+      return;
+    }
+    await forgetMobileRelayTrustedPhone();
+  }
+
   return (
     <div className="space-y-5" data-remote-access-page="true">
       <SettingsSection
@@ -380,7 +414,7 @@ export function RemoteAccessPage() {
                         aria-label={`Forget ${describeTrustedDevice(device)}`}
                         onClick={() =>
                           runAction(`forget:${device.deviceId}`, async () => {
-                            await forgetMobileRelayTrustedPhone({ deviceId: device.deviceId });
+                            await forgetTrustedDevice(device);
                           })
                         }
                         disabled={busyAction !== null}
@@ -436,7 +470,7 @@ export function RemoteAccessPage() {
                   variant="outline"
                   onClick={() =>
                     runAction("forget-all", async () => {
-                      await forgetMobileRelayTrustedPhone();
+                      await forgetAllTrustedDevices();
                     })
                   }
                   disabled={busyAction !== null}

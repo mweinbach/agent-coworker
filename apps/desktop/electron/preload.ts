@@ -420,6 +420,7 @@ const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
   isPackaged: getPreloadEnv().COWORK_IS_PACKAGED === "true",
   demoMode: getPreloadEnv().COWORK_DEMO_MODE === "1",
+  qualityGateMode: getPreloadEnv().COWORK_DESKTOP_QUALITY_GATE === "1",
   crashReporting,
   productAnalytics,
   telemetryStatus,

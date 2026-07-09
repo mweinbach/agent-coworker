@@ -44,7 +44,10 @@ export default defineConfig({
       reportCompressedSize: false,
       outDir: "out/main",
       rollupOptions: {
-        input: path.resolve(appRoot, "electron/main.ts"),
+        input: {
+          main: path.resolve(appRoot, "electron/main.ts"),
+          qualityGateMain: path.resolve(appRoot, "electron/qualityGateMain.ts"),
+        },
       },
     },
   },

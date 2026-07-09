@@ -503,6 +503,12 @@ export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
   readonly demoMode?: boolean;
+  /**
+   * Present only in the isolated Electron quality-gate entrypoint. The flag lets
+   * the renderer install deterministic counters without exposing test controls
+   * in normal desktop sessions.
+   */
+  readonly qualityGateMode?: boolean;
   readonly crashReporting?: DesktopCrashReportingConfig;
   readonly productAnalytics?: DesktopProductAnalyticsConfig;
   readonly telemetryStatus?: TelemetryStatusSnapshot;

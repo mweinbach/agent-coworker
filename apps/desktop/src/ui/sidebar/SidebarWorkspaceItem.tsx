@@ -19,7 +19,6 @@ import {
 import { useAppStore } from "../../app/store";
 import type { TaskSummary, ThreadRecord, ThreadRuntime, WorkspaceRecord } from "../../app/types";
 import { Button } from "../../components/ui/button";
-import { Collapsible, CollapsibleTrigger } from "../../components/ui/collapsible";
 import { Input } from "../../components/ui/input";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
@@ -128,6 +127,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   const archiveThread = useAppStore((s) => s.archiveThread);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags?.tasks === true);
   const visibleTasks = tasksEnabled ? tasks : EMPTY_TASK_SUMMARIES;
+  const threadRegionId = `workspace-${workspace.id}-threads`;
 
   useLayoutEffect(() => {
     const wasExpanded = prevExpandedRef.current;
@@ -199,11 +199,10 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   }, [expanded, prefersReducedMotion]);
 
   const content = (
-    <Collapsible
-      className="flex min-w-0 flex-col"
+    <fieldset
+      aria-label={`${workspace.name} workspace`}
+      className="m-0 flex min-w-0 flex-col border-0 p-0"
       onContextMenu={(event) => onWorkspaceContextMenu(event, workspace.id, workspace.name)}
-      onOpenChange={(nextOpen) => onWorkspaceOpenChange(workspace.id, nextOpen)}
-      open={expanded}
       title={workspace.path}
     >
       <div
@@ -231,27 +230,28 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
             : undefined
         }
       >
-        <CollapsibleTrigger asChild>
-          <Button
-            aria-label={expanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
-            className="sidebar-symbol-slot group h-6 w-6 shrink-0 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent"
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          >
-            {expanded ? (
-              <FolderOpenIcon className="sidebar-symbol-default h-4 w-4" />
-            ) : (
-              <FolderIcon className="sidebar-symbol-default h-4 w-4" />
+        <Button
+          aria-controls={renderThreadRegion ? threadRegionId : undefined}
+          aria-expanded={expanded}
+          aria-label={expanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
+          className="sidebar-symbol-slot group h-6 w-6 shrink-0 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent"
+          onClick={() => onWorkspaceOpenChange(workspace.id, !expanded)}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          {expanded ? (
+            <FolderOpenIcon className="sidebar-symbol-default h-4 w-4" />
+          ) : (
+            <FolderIcon className="sidebar-symbol-default h-4 w-4" />
+          )}
+          <ChevronRightIcon
+            className={cn(
+              "sidebar-symbol-hover sidebar-chevron absolute h-4 w-4",
+              expanded ? "rotate-90 text-foreground" : "rotate-0",
             )}
-            <ChevronRightIcon
-              className={cn(
-                "sidebar-symbol-hover sidebar-chevron absolute h-4 w-4",
-                expanded ? "rotate-90 text-foreground" : "rotate-0",
-              )}
-            />
-          </Button>
-        </CollapsibleTrigger>
+          />
+        </Button>
         <Button
           aria-keyshortcuts={
             reorderEnabled ? "Alt+ArrowUp Alt+ArrowDown Meta+ArrowUp Meta+ArrowDown" : undefined
@@ -316,6 +316,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
 
       {renderThreadRegion ? (
         <div
+          id={threadRegionId}
           ref={threadRegionRef}
           className="sidebar-thread-region"
           data-state={threadRegionOpen ? "open" : "closed"}
@@ -329,7 +330,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
               ) : (
                 <>
                   {workspaceThreads.length > 0 && visibleTasks.length > 0 ? (
-                    <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                    <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                       Chats
                     </div>
                   ) : null}
@@ -435,7 +436,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                     <div
                       className={cn("flex flex-col gap-1", workspaceThreads.length > 0 && "mt-2")}
                     >
-                      <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                      <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                         Tasks
                       </div>
                       {visibleTasks.slice(0, MAX_VISIBLE_THREADS).map((task) => (
@@ -473,7 +474,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           </div>
         </div>
       ) : null}
-    </Collapsible>
+    </fieldset>
   );
 
   if (!reorderEnabled) {

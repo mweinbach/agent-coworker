@@ -775,7 +775,7 @@ export type AppStoreState = {
   loadAllThreadUsage: () => Promise<void>;
 
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
-  answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
+  answerApproval: (threadId: string, requestId: string, approved: boolean) => boolean;
   dismissPrompt: () => void;
 
   startOnboarding: () => void;

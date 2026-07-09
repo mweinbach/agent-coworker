@@ -1,64 +1,6 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-
-const MOCK_SYSTEM_APPEARANCE = {
-  platform: "linux",
-  themeSource: "system",
-  shouldUseDarkColors: false,
-  shouldUseHighContrastColors: false,
-  shouldUseInvertedColorScheme: false,
-  prefersReducedTransparency: false,
-  inForcedColorsMode: false,
-};
-const MOCK_UPDATE_STATE = {
-  phase: "idle",
-  currentVersion: "0.1.0",
-  packaged: false,
-  lastCheckedAt: null,
-  release: null,
-  progress: null,
-  error: null,
-};
-
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    appendTranscriptBatch: async () => {},
-    appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {},
-    listDirectory: async () => [],
-    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-    pickWorkspaceDirectory: async () => null,
-    readTranscript: async () => [],
-    saveState: async () => {},
-    startWorkspaceServer: async () => ({ url: "ws://mock" }),
-    stopWorkspaceServer: async () => {},
-    showContextMenu: async () => null,
-    windowMinimize: async () => {},
-    windowMaximize: async () => {},
-    windowClose: async () => {},
-    getPlatform: async () => "linux",
-    readFile: async () => "",
-    previewOSFile: async () => {},
-    openPath: async () => {},
-    openExternalUrl: async () => {},
-    revealPath: async () => {},
-    copyPath: async () => {},
-    createDirectory: async () => {},
-    renamePath: async () => {},
-    trashPath: async () => {},
-    confirmAction: async () => true,
-    showNotification: async () => true,
-    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => MOCK_UPDATE_STATE,
-    checkForUpdates: async () => {},
-    quitAndInstallUpdate: async () => {},
-    onSystemAppearanceChanged: () => () => {},
-    onMenuCommand: () => () => {},
-    onUpdateStateChanged: () => () => {},
-  }),
-);
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultThreadRuntime, defaultWorkspaceRuntime } = await import(
@@ -69,6 +11,9 @@ describe("composer draft clear after send", () => {
   let snapshot: ReturnType<typeof useAppStore.getState>;
 
   beforeEach(() => {
+    Object.assign(globalThis, {
+      [DESKTOP_API_OVERRIDE_KEY]: createDesktopApiMock(),
+    });
     snapshot = useAppStore.getState();
     useAppStore.setState({
       selectedWorkspaceId: "ws-1",
@@ -140,6 +85,7 @@ describe("composer draft clear after send", () => {
 
   afterEach(() => {
     useAppStore.setState(snapshot, true);
+    Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
   });
 
   test("preserves New Chat landing draft when selecting a chat and returning", async () => {

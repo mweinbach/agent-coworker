@@ -51,6 +51,7 @@ describe("SandboxApprovalCard", () => {
           },
           onAnswer: (threadId, requestId, approved) => {
             calls.push([threadId, requestId, approved]);
+            return true;
           },
         }),
       );
@@ -78,13 +79,43 @@ describe("SandboxApprovalCard", () => {
     }
   });
 
+  test("keeps actions enabled when the approval response is not accepted", () => {
+    const calls: Array<[string, string, boolean]> = [];
+    act(() => {
+      root?.render(
+        createElement(SandboxApprovalCard, {
+          threadId: "thread-1",
+          prompt: { requestId: "req-retry", command: "curl https://example.com" },
+          onAnswer: (threadId, requestId, approved) => {
+            calls.push([threadId, requestId, approved]);
+            return false;
+          },
+        }),
+      );
+    });
+
+    clickButton("Run with full access");
+    clickButton("Run with full access");
+
+    expect(calls).toEqual([
+      ["thread-1", "req-retry", true],
+      ["thread-1", "req-retry", true],
+    ]);
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(
+      buttons
+        .filter((button) => /Keep blocked|Run with full access/.test(button.textContent ?? ""))
+        .every((button) => !(button as HTMLButtonElement).disabled),
+    ).toBe(true);
+  });
+
   test("falls back to a filesystem message when no detail is provided", () => {
     act(() => {
       root?.render(
         createElement(SandboxApprovalCard, {
           threadId: "thread-1",
           prompt: { requestId: "req-2", command: "touch /etc/x" },
-          onAnswer: () => {},
+          onAnswer: () => true,
         }),
       );
     });

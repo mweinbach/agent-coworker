@@ -12,7 +12,7 @@ import { Button } from "../../components/ui/button";
 export function SandboxApprovalCard(props: {
   threadId: string;
   prompt: SandboxApprovalPrompt;
-  onAnswer: (threadId: string, requestId: string, approved: boolean) => void;
+  onAnswer: (threadId: string, requestId: string, approved: boolean) => boolean;
   selectedThreadId?: string | null;
   threadTitle?: string | null;
   onSelectThread?: (threadId: string) => void;
@@ -32,8 +32,10 @@ export function SandboxApprovalCard(props: {
 
   const answer = (approved: boolean) => {
     if (answered) return;
-    setPending(approved ? "approve" : "deny");
-    onAnswer(threadId, prompt.requestId, approved);
+    const accepted = onAnswer(threadId, prompt.requestId, approved);
+    if (accepted) {
+      setPending(approved ? "approve" : "deny");
+    }
   };
 
   return (

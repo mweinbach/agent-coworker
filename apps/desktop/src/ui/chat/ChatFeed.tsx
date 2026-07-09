@@ -259,7 +259,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
 
   composerOverlayHeight: number;
   sandboxApprovals: VisibleSandboxApproval[];
-  onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => void;
+  onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => boolean;
   selectedThreadId?: string | null;
   threadTitleById?: ReadonlyMap<string, string>;
   onSelectThread?: (threadId: string) => void;

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import type * as Electron from "electron";
 import type * as Ws from "ws";
+import { hostPlatform } from "../../../src/platform/host";
 import type { ResearchRecord } from "../../../src/server/research/types";
 import type { PersistedState } from "../src/app/types";
 import {
@@ -26,6 +27,7 @@ const PROJECT_WORKSPACE_ID = "quality-project";
 const PROJECT_THREAD_ID = "quality-thread";
 const QUICK_WORKSPACE_ID = "quality-quick";
 const QUICK_THREAD_ID = "quality-quick-thread";
+const qualityPlatform = hostPlatform();
 
 type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
 type QualityScenario = "first-launch" | "product";
@@ -247,7 +249,7 @@ function createAppearance(): SystemAppearance {
   const dark = qualityMode === "dark";
   const forcedColors = qualityMode === "forced-colors";
   return {
-    platform: process.platform,
+    platform: qualityPlatform,
     themeSource: dark ? "dark" : "light",
     shouldUseDarkColors: dark,
     shouldUseDarkColorsForSystemIntegratedUI: dark,
@@ -259,7 +261,7 @@ function createAppearance(): SystemAppearance {
 }
 
 function createPlatformChrome(): PlatformChromeInfo {
-  const chrome = getPlatformChrome(process.platform);
+  const chrome = getPlatformChrome(qualityPlatform);
   return {
     platform: chrome.platform,
     titlebarHeight: chrome.titlebarHeight,
@@ -731,7 +733,7 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
     case DESKTOP_IPC_CHANNELS.setWindowAppearance:
       return createAppearance();
     case DESKTOP_IPC_CHANNELS.getPlatform:
-      return process.platform;
+      return qualityPlatform;
     case DESKTOP_IPC_CHANNELS.getPlatformChrome:
       return createPlatformChrome();
     case DESKTOP_IPC_CHANNELS.hydrateTranscript:

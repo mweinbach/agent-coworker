@@ -761,6 +761,7 @@ describe("desktop chat view stability", () => {
       });
 
       await act(async () => {
+        feed.dispatchEvent(new harness.dom.window.Event("wheel", { bubbles: true }));
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
         await new Promise((resolve) => setTimeout(resolve, 10));
       });

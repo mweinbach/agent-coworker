@@ -1,10 +1,5 @@
-import {
-  AlertTriangleIcon,
-  LoaderCircleIcon,
-  MessageSquareIcon,
-  RotateCcwIcon,
-} from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon } from "lucide-react";
+import { memo, type UIEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import type { SandboxApprovalPrompt } from "../../app/types";
 import { Button } from "../../components/ui/button";
@@ -34,8 +29,17 @@ import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 9;
-/** Soft window: keep the last N list entries mounted; older ones expand on demand. */
+/**
+ * Progressive feed window: mount the newest N entries, then expand upward as the
+ * user scrolls near the top. MessageScroller preserveScrollOnPrepend keeps the
+ * viewport stable when older rows are prepended.
+ */
 const FEED_RENDER_WINDOW = 80;
+const FEED_EXPAND_BATCH = 40;
+/** Expand when within this many px of the top of the scrollable content. */
+const FEED_NEAR_TOP_PX = 160;
+/** Estimated height for unmounted older rows (scrollbar proportion only). */
+const FEED_ESTIMATED_ROW_HEIGHT_PX = 120;
 
 export type VisibleSandboxApproval = {
   threadId: string;
@@ -242,7 +246,6 @@ function InitialTurnRestore({
 export const ChatFeed = memo(function ChatFeed(props: {
   transcriptOnly: boolean;
   disconnected: boolean;
-  onReconnect: () => void;
   visibleFeedLength: number;
   hydrating: boolean;
   renderItems: ChatRenderItem[];
@@ -266,7 +269,6 @@ export const ChatFeed = memo(function ChatFeed(props: {
   const {
     transcriptOnly,
     disconnected,
-    onReconnect,
     visibleFeedLength,
     hydrating,
     renderItems,
@@ -290,20 +292,54 @@ export const ChatFeed = memo(function ChatFeed(props: {
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
   const feedListEntries = useMemo(() => buildFeedListEntries(renderItems), [renderItems]);
   const feedThreadKey = selectedThreadId ?? "no-thread";
-  // Track expansion per thread so switching chats resets the soft window.
-  const [expandedThreadKey, setExpandedThreadKey] = useState<string | null>(null);
-  const showAllFeedEntries = expandedThreadKey === feedThreadKey;
+  // How many newest entries are mounted for this chat. Grows as the user
+  // scrolls toward older history; derived reset when the chat id changes.
+  const [feedWindow, setFeedWindow] = useState({
+    threadKey: feedThreadKey,
+    visibleCount: FEED_RENDER_WINDOW,
+  });
+  const visibleCount =
+    feedWindow.threadKey === feedThreadKey ? feedWindow.visibleCount : FEED_RENDER_WINDOW;
 
   const windowedFeedEntries = useMemo(() => {
-    if (showAllFeedEntries || feedListEntries.length <= FEED_RENDER_WINDOW) {
+    if (feedListEntries.length <= visibleCount) {
       return { entries: feedListEntries, hiddenCount: 0 };
     }
-    const hiddenCount = feedListEntries.length - FEED_RENDER_WINDOW;
+    const hiddenCount = feedListEntries.length - visibleCount;
     return {
       entries: feedListEntries.slice(hiddenCount),
       hiddenCount,
     };
-  }, [feedListEntries, showAllFeedEntries]);
+  }, [feedListEntries, visibleCount]);
+
+  const expandOlderMessages = useCallback(() => {
+    setFeedWindow((current) => {
+      const baseCount =
+        current.threadKey === feedThreadKey ? current.visibleCount : FEED_RENDER_WINDOW;
+      if (baseCount >= feedListEntries.length) {
+        return { threadKey: feedThreadKey, visibleCount: feedListEntries.length };
+      }
+      return {
+        threadKey: feedThreadKey,
+        visibleCount: Math.min(feedListEntries.length, baseCount + FEED_EXPAND_BATCH),
+      };
+    });
+  }, [feedListEntries.length, feedThreadKey]);
+
+  const showAllOlderMessages = useCallback(() => {
+    setFeedWindow({ threadKey: feedThreadKey, visibleCount: feedListEntries.length });
+  }, [feedListEntries.length, feedThreadKey]);
+
+  const handleViewportScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      if (windowedFeedEntries.hiddenCount <= 0) return;
+      const viewport = event.currentTarget;
+      if (viewport.scrollTop <= FEED_NEAR_TOP_PX) {
+        expandOlderMessages();
+      }
+    },
+    [expandOlderMessages, windowedFeedEntries.hiddenCount],
+  );
 
   return (
     <MessageScrollerProvider
@@ -318,7 +354,11 @@ export const ChatFeed = memo(function ChatFeed(props: {
         hydrating={hydrating}
       />
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport aria-label="Conversation messages">
+        <MessageScrollerViewport
+          aria-label="Conversation messages"
+          preserveScrollOnPrepend
+          onScroll={handleViewportScroll}
+        >
           <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-3.5 px-4 py-5 pt-6">
             {transcriptOnly ? (
               <MessageScrollerItem messageId="status:transcript-only">
@@ -336,26 +376,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
               </MessageScrollerItem>
             ) : null}
 
-            {disconnected ? (
-              <MessageScrollerItem messageId="status:disconnected">
-                <Card className="border-border/70 bg-muted/30">
-                  <CardContent className="flex items-center justify-between gap-3 p-3">
-                    <div>
-                      <div className="font-semibold">Disconnected</div>
-                      <div className="text-sm text-muted-foreground">
-                        Reconnect to continue this chat.
-                      </div>
-                    </div>
-                    <Button type="button" variant="outline" size="sm" onClick={onReconnect}>
-                      <RotateCcwIcon data-icon="inline-start" />
-                      Reconnect
-                    </Button>
-                  </CardContent>
-                </Card>
-              </MessageScrollerItem>
-            ) : null}
-
-            {visibleFeedLength === 0 && !disconnected ? (
+            {visibleFeedLength === 0 ? (
               <MessageScrollerItem messageId={hydrating ? "status:hydrating" : "status:empty"}>
                 <Empty className="min-h-72 border border-border/55 bg-background/24">
                   <EmptyHeader>
@@ -366,11 +387,19 @@ export const ChatFeed = memo(function ChatFeed(props: {
                         <MessageSquareIcon />
                       )}
                     </EmptyMedia>
-                    <EmptyTitle>{hydrating ? "Loading chat" : "No messages yet"}</EmptyTitle>
+                    <EmptyTitle>
+                      {hydrating
+                        ? "Loading chat"
+                        : disconnected
+                          ? "Disconnected"
+                          : "No messages yet"}
+                    </EmptyTitle>
                     <EmptyDescription>
                       {hydrating
                         ? "Restoring messages and reconnecting the session."
-                        : "Send a message to start."}
+                        : disconnected
+                          ? "Reconnect from the banner above to continue."
+                          : "Send a message to start."}
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
@@ -379,12 +408,22 @@ export const ChatFeed = memo(function ChatFeed(props: {
               <>
                 {windowedFeedEntries.hiddenCount > 0 ? (
                   <MessageScrollerItem messageId="status:show-older">
-                    <div className="flex justify-center py-1">
+                    <div
+                      aria-hidden="true"
+                      className="flex flex-col items-center gap-2 py-1"
+                      data-slot="feed-window-spacer"
+                      style={{
+                        minHeight: Math.min(
+                          windowedFeedEntries.hiddenCount * FEED_ESTIMATED_ROW_HEIGHT_PX,
+                          2_400,
+                        ),
+                      }}
+                    >
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setExpandedThreadKey(feedThreadKey)}
+                        onClick={showAllOlderMessages}
                       >
                         Show {windowedFeedEntries.hiddenCount} older messages
                       </Button>

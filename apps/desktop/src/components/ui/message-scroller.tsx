@@ -72,7 +72,8 @@ function MessageScrollerItem({
       className={cn(
         // Avoid content-visibility + fixed intrinsic size: variable-height chat
         // rows (markdown, activity timelines) jump the scroll position when the
-        // browser swaps estimate → real height. Real windowing can revisit this.
+        // browser swaps estimate → real height. ChatFeed progressive windowing
+        // keeps only a trailing slice mounted instead.
         "min-w-0 shrink-0",
         className,
       )}

@@ -500,94 +500,92 @@ export function SearchSettingsCard({
       title="Search"
       description="Choose provider-native search or a local search tool for models that need one."
     >
-      <div className="space-y-4 px-4 py-4">
-        <div className="rounded-lg border border-border/60 px-4 py-4">
-          <div className="space-y-3">
-            <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-              <div className="space-y-1">
-                <div className="text-sm font-medium text-foreground">Search provider</div>
-                <div className="text-xs text-muted-foreground">
-                  {hasLegacyGeminiSearchOverride
-                    ? `Google models still use local ${formatWebSearchBackendLabel(selectedLocalProvider)} search from an older Google-specific override. Changing Search provider here will sync Google and ChatGPT settings.`
-                    : searchProviderUsesNative
-                      ? "Use provider-native search when the active model supports it. Codex uses Codex app-server native web search in this mode."
-                      : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)} for non-Codex models.`}
-                </div>
+      <div className="space-y-5 px-4 py-4">
+        <div className="space-y-3">
+          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+            <div className="space-y-1">
+              <div className="text-sm font-medium text-foreground">Search provider</div>
+              <div className="text-xs text-muted-foreground">
+                {hasLegacyGeminiSearchOverride
+                  ? `Google models still use local ${formatWebSearchBackendLabel(selectedLocalProvider)} search from an older Google-specific override. Changing Search provider here will sync Google and ChatGPT settings.`
+                  : searchProviderUsesNative
+                    ? "Use provider-native search when the active model supports it. Codex uses Codex app-server native web search in this mode."
+                    : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(effectiveSearchProvider)} for non-Codex models.`}
               </div>
-              <div className="w-full max-w-52">
+            </div>
+            <div className="w-full max-w-52">
+              <Select
+                value={effectiveSearchProvider}
+                onValueChange={(value) => applySearchProvider(value as WebSearchBackendValue)}
+              >
+                <SelectTrigger
+                  aria-label="Workspace search provider"
+                  className={MODEL_CARD_SELECT_CLASS}
+                  size="sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {WEB_SEARCH_BACKEND_VALUES.map((entry) => (
+                    <SelectItem key={entry} value={entry}>
+                      {formatWebSearchBackendLabel(entry)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {searchProviderUsesNative ? (
+            <div className="grid gap-3 pt-1">
+              <div className={MODEL_CARD_FIELD_CLASS}>
+                <div className="text-[13px] font-medium text-foreground">
+                  For non-Codex models without native search, which local search tool do you want to
+                  use?
+                </div>
                 <Select
-                  value={effectiveSearchProvider}
-                  onValueChange={(value) => applySearchProvider(value as WebSearchBackendValue)}
+                  value={localFallbackProvider}
+                  onValueChange={(value) =>
+                    applyLocalFallbackProvider(value as LocalWebSearchProviderValue)
+                  }
                 >
                   <SelectTrigger
-                    aria-label="Workspace search provider"
+                    aria-label="Local search fallback provider"
                     className={MODEL_CARD_SELECT_CLASS}
                     size="sm"
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {WEB_SEARCH_BACKEND_VALUES.map((entry) => (
+                    {LOCAL_WEB_SEARCH_PROVIDERS.map((entry) => (
                       <SelectItem key={entry} value={entry}>
-                        {formatWebSearchBackendLabel(entry)}
+                        {LOCAL_WEB_SEARCH_PROVIDER_LABELS[entry]}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+              <div
+                className={cn(
+                  "text-xs",
+                  selectedLocalProviderConnected ? "text-muted-foreground" : "text-warning",
+                )}
+              >
+                {selectedLocalProviderConnected
+                  ? `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is ready as the fallback local search tool for non-Codex models.`
+                  : `Add a ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} API key in Providers > Tool Providers to use it as the non-Codex fallback local search tool.`}
+              </div>
             </div>
-
-            {searchProviderUsesNative ? (
-              <div className="grid gap-3 rounded-lg border border-border/60 bg-background/35 p-3">
-                <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="text-[13px] font-medium text-foreground">
-                    For non-Codex models without native search, which local search tool do you want
-                    to use?
-                  </div>
-                  <Select
-                    value={localFallbackProvider}
-                    onValueChange={(value) =>
-                      applyLocalFallbackProvider(value as LocalWebSearchProviderValue)
-                    }
-                  >
-                    <SelectTrigger
-                      aria-label="Local search fallback provider"
-                      className={MODEL_CARD_SELECT_CLASS}
-                      size="sm"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LOCAL_WEB_SEARCH_PROVIDERS.map((entry) => (
-                        <SelectItem key={entry} value={entry}>
-                          {LOCAL_WEB_SEARCH_PROVIDER_LABELS[entry]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div
-                  className={cn(
-                    "text-xs",
-                    selectedLocalProviderConnected ? "text-muted-foreground" : "text-warning",
-                  )}
-                >
-                  {selectedLocalProviderConnected
-                    ? `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is ready as the fallback local search tool for non-Codex models.`
-                    : `Add a ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} API key in Providers > Tool Providers to use it as the non-Codex fallback local search tool.`}
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-border/60 bg-background/35 p-3 text-xs text-muted-foreground">
-                {hasLegacyGeminiSearchOverride
-                  ? `Google models currently use local ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} search because these settings still have a Google-specific override. Choose Native above to restore provider-native search for both providers.`
-                  : `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is the active local search tool for non-Codex models.`}
-              </div>
-            )}
-          </div>
+          ) : (
+            <div className="text-xs text-muted-foreground">
+              {hasLegacyGeminiSearchOverride
+                ? `Google models currently use local ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} search because these settings still have a Google-specific override. Choose Native above to restore provider-native search for both providers.`
+                : `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is the active local search tool for non-Codex models.`}
+            </div>
+          )}
         </div>
 
-        <div className="rounded-lg border border-border/60 px-4 py-4">
+        <div className="border-t border-border/40 pt-4">
           <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground">Codex web search mode</div>
@@ -626,7 +624,7 @@ export function SearchSettingsCard({
             </div>
           </div>
           {!codexUsesNativeWebSearch ? (
-            <div className="mt-3 rounded-lg border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground">
+            <div className="mt-3 text-xs text-muted-foreground">
               Switch search provider to Native to use Codex app-server native web search mode.
             </div>
           ) : null}

@@ -121,6 +121,7 @@ export function Canvas({ path }: { path: string }) {
   const [previewRefreshTrigger, setPreviewRefreshTrigger] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "dirty" | "saving" | "error">("saved");
   const [promptText, setPromptText] = useState<string>("");
   const [selectedText, setSelectedText] = useState<string>("");
   const [floatingCoords, setFloatingCoords] = useState<{ x: number; y: number } | null>(null);
@@ -157,6 +158,7 @@ export function Canvas({ path }: { path: string }) {
       setContentTruncated(result.truncated);
       contentRef.current = fileContent;
       lastSavedContentRef.current = fileContent;
+      setSaveStatus("saved");
       setError(null);
       if (editorRef.current && isMarkdown) {
         editorRef.current.innerHTML = markdownToHtml(fileContent);
@@ -204,16 +206,23 @@ export function Canvas({ path }: { path: string }) {
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
+    if (contentTruncated) return;
+    if (content === lastSavedContentRef.current) {
+      setSaveStatus((current) => (current === "saving" ? current : "saved"));
+      return;
+    }
+    setSaveStatus("dirty");
     const timer = setTimeout(async () => {
-      if (contentTruncated) return;
-      if (content === lastSavedContentRef.current) return;
+      setSaveStatus("saving");
       try {
         await writeFile({ path, content });
         lastSavedContentRef.current = content;
         contentRef.current = content;
+        setSaveStatus("saved");
         setPreviewRefreshTrigger((t) => t + 1);
       } catch (err) {
         console.error("Failed to auto-save file:", err);
+        setSaveStatus("error");
       }
     }, 500);
 
@@ -762,7 +771,27 @@ export function Canvas({ path }: { path: string }) {
                     <TabsContent value="edit" className="h-full m-0 p-0 outline-none bg-background">
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
-                          <span>Markdown Source</span>
+                          <span className="flex items-center gap-2">
+                            <span>Markdown Source</span>
+                            <span
+                              data-slot="canvas-save-status"
+                              className={cn(
+                                "rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                                saveStatus === "saved" && "border-success/30 text-success",
+                                saveStatus === "dirty" && "border-border text-muted-foreground",
+                                saveStatus === "saving" && "border-primary/30 text-primary",
+                                saveStatus === "error" && "border-destructive/40 text-destructive",
+                              )}
+                            >
+                              {saveStatus === "saved"
+                                ? "Saved"
+                                : saveStatus === "dirty"
+                                  ? "Unsaved"
+                                  : saveStatus === "saving"
+                                    ? "Saving"
+                                    : "Save failed"}
+                            </span>
+                          </span>
                           <span className="tabular-nums font-mono">
                             {content.length} characters
                           </span>
@@ -811,7 +840,27 @@ export function Canvas({ path }: { path: string }) {
                         pxClass,
                       )}
                     >
-                      <span>Source Editor (Auto-saving)</span>
+                      <span className="flex items-center gap-2">
+                        <span>Source Editor</span>
+                        <span
+                          data-slot="canvas-save-status"
+                          className={cn(
+                            "rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                            saveStatus === "saved" && "border-success/30 text-success",
+                            saveStatus === "dirty" && "border-border text-muted-foreground",
+                            saveStatus === "saving" && "border-primary/30 text-primary",
+                            saveStatus === "error" && "border-destructive/40 text-destructive",
+                          )}
+                        >
+                          {saveStatus === "saved"
+                            ? "Saved"
+                            : saveStatus === "dirty"
+                              ? "Unsaved"
+                              : saveStatus === "saving"
+                                ? "Saving"
+                                : "Save failed"}
+                        </span>
+                      </span>
                       <span className="tabular-nums font-mono">{content.length} characters</span>
                     </div>
                     <div className={cn("flex-1 min-h-0", pxClass)}>

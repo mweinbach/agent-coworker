@@ -5,7 +5,10 @@ import type { PluginCatalogSnapshot, SkillEntry, TurnReference } from "@/lib/wsP
  * color (not an outline). Used by the composer highlight overlay and the
  * transcript mention chips so they look identical. Per-use callers add padding.
  */
-export const MENTION_CHIP_CLASS = "rounded-[5px] bg-primary/20 font-medium text-primary";
+// Chip chrome must not change glyph advance width in the composer overlay —
+// font-medium / horizontal padding desync the caret from the transparent textarea.
+export const MENTION_CHIP_CLASS = "rounded-[5px] bg-primary/20 text-primary";
+export const MENTION_CHIP_PADDED_CLASS = "rounded-[5px] bg-primary/20 px-1 py-0.5 text-primary";
 
 /**
  * Pure, DOM-free parsing for composer @-mentions of skills and plugins. The

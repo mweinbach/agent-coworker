@@ -1,6 +1,14 @@
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
-import { FlatList, KeyboardAvoidingView, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FlatList,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  KeyboardAvoidingView,
+  Pressable,
+  Text,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ComposerBar } from "@/components/ComposerBar";
@@ -27,8 +35,22 @@ type ThreadDetailListItem =
       data: ChatRenderItem;
     };
 
+type ThreadActionError = {
+  kind: "load" | "send";
+  message: string;
+};
+
+const NEAR_BOTTOM_THRESHOLD_PX = 96;
+
 function renderItemKey(item: ChatRenderItem): string {
   return item.kind === "activity-group" ? item.id : item.item.id;
+}
+
+function describeError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return fallback;
 }
 
 export default function ThreadDetailScreen() {
@@ -45,36 +67,49 @@ export default function ThreadDetailScreen() {
   const interruptThread = useThreadStore((state) => state.interruptThread);
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
+  const [actionError, setActionError] = useState<ThreadActionError | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const listRef = useRef<FlatList<ThreadDetailListItem>>(null);
   const runtimeClient = getActiveCoworkJsonRpcClient();
 
   const isDraftThread = threadId.startsWith("draft-");
+  const turnActive = activeTurnStartedAt !== null;
 
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected =
     connectionState.status === "connected" && connectionState.transportMode === "native";
   const isOfflineReadOnly = !isConnected && !isDraftThread;
 
+  const loadThreadFeed = useCallback(async () => {
+    if (!threadId || isDraftThread || !isConnected || !runtimeClient) {
+      return;
+    }
+    try {
+      await runtimeClient.resumeThread(threadId);
+      const reread = await runtimeClient.readThread(threadId);
+      if (reread.coworkSnapshot) {
+        useThreadStore.getState().hydrate(reread.coworkSnapshot);
+      }
+      setActionError((current) => (current?.kind === "load" ? null : current));
+    } catch (error) {
+      setActionError({
+        kind: "load",
+        message: describeError(error, "Failed to load this conversation."),
+      });
+    }
+  }, [threadId, isConnected, runtimeClient, isDraftThread]);
+
   useEffect(() => {
     let active = true;
-    async function loadThreadFeed() {
-      if (!threadId || isDraftThread || !isConnected || !runtimeClient) {
-        return;
-      }
-      try {
-        await runtimeClient.resumeThread(threadId);
-        const reread = await runtimeClient.readThread(threadId);
-        if (active && reread.coworkSnapshot) {
-          useThreadStore.getState().hydrate(reread.coworkSnapshot);
-        }
-      } catch (error) {
-        console.error("Failed to load thread feed:", error);
-      }
-    }
-    void loadThreadFeed();
+    void (async () => {
+      if (!active) return;
+      await loadThreadFeed();
+    })();
     return () => {
       active = false;
     };
-  }, [threadId, isConnected, runtimeClient, isDraftThread]);
+  }, [loadThreadFeed, loadAttempt]);
 
   const renderItems = useMemo(
     () => buildChatRenderItems(filterFeedForDisplay(thread?.feed ?? [], showDebugMessages)),
@@ -91,6 +126,32 @@ export default function ThreadDetailScreen() {
     }
     return null;
   }, [activeTurnStartedAt, renderItems]);
+
+  const listData = useMemo(() => {
+    const activePendingRequest = isConnected ? pendingRequest : null;
+    return [
+      ...renderItems.map((item) => ({ type: "render" as const, data: item })),
+      ...(activePendingRequest ? [{ type: "pending" as const, data: activePendingRequest }] : []),
+    ] as ThreadDetailListItem[];
+  }, [isConnected, pendingRequest, renderItems]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    setStickToBottom(distanceFromBottom <= NEAR_BOTTOM_THRESHOLD_PX);
+  }, []);
+
+  const scrollToLatest = useCallback((animated = true) => {
+    listRef.current?.scrollToEnd({ animated });
+    setStickToBottom(true);
+  }, []);
+
+  const handleContentSizeChange = useCallback(() => {
+    if (!stickToBottom) return;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    });
+  }, [stickToBottom]);
 
   if (!thread) {
     return (
@@ -128,8 +189,41 @@ export default function ThreadDetailScreen() {
     clearPendingRequest(activeThread.id);
   }
 
+  async function handleSubmitComposer() {
+    if (!isConnected) {
+      if (isDraftThread) {
+        submitComposer(activeThread.id);
+      }
+      return;
+    }
+    if (runtimeClient && !isDraftThread && activeThread.composerDraft.trim()) {
+      const draft = activeThread.composerDraft;
+      const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
+        ?.randomUUID
+        ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
+        : `local-${Date.now()}`;
+      useThreadStore.getState().appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
+      setComposerDraft(activeThread.id, "");
+      setActionError((current) => (current?.kind === "send" ? null : current));
+      setStickToBottom(true);
+      try {
+        await runtimeClient.startTurn(activeThread.id, draft, clientMessageId);
+      } catch (error) {
+        setComposerDraft(activeThread.id, draft);
+        setActionError({
+          kind: "send",
+          message: describeError(error, "Failed to send message."),
+        });
+      }
+      return;
+    }
+    submitComposer(activeThread.id);
+  }
+
   const activePendingRequest = isConnected ? pendingRequest : null;
-  const showSessionBadge = isDraftThread || activePendingRequest !== null || isOfflineReadOnly;
+  const showStop = turnActive || activePendingRequest !== null;
+  const showSessionBadge =
+    isDraftThread || activePendingRequest !== null || isOfflineReadOnly || turnActive;
 
   return (
     <>
@@ -138,7 +232,7 @@ export default function ThreadDetailScreen() {
           title: activeThread.title,
         }}
       />
-      {activePendingRequest ? (
+      {showStop ? (
         <Stack.Toolbar placement="right">
           <Stack.Toolbar.Button
             icon="xmark.circle.fill"
@@ -160,6 +254,7 @@ export default function ThreadDetailScreen() {
         }
       >
         <FlatList
+          ref={listRef}
           style={{ flex: 1, backgroundColor: theme.background }}
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={{
@@ -169,25 +264,72 @@ export default function ThreadDetailScreen() {
             paddingBottom: Math.max(insets.bottom + 96, 112),
           }}
           keyboardShouldPersistTaps="handled"
-          data={
-            [
-              ...renderItems.map((item) => ({ type: "render", data: item })),
-              ...(activePendingRequest ? [{ type: "pending", data: activePendingRequest }] : []),
-            ] as ThreadDetailListItem[]
-          }
+          data={listData}
           keyExtractor={(item) => (item.type === "pending" ? "pending" : renderItemKey(item.data))}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          onContentSizeChange={handleContentSizeChange}
           ListHeaderComponent={
-            showSessionBadge
+            showSessionBadge || actionError
               ? () => (
-                  <View
-                    style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingBottom: 4 }}
-                  >
-                    {isDraftThread ? <StatusPill label="local draft" tone="primary" /> : null}
-                    {isOfflineReadOnly ? (
-                      <StatusPill label="offline · read only" tone="warning" />
+                  <View style={{ gap: 10, paddingBottom: 4 }}>
+                    {showSessionBadge ? (
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                        {isDraftThread ? <StatusPill label="local draft" tone="primary" /> : null}
+                        {isOfflineReadOnly ? (
+                          <StatusPill label="offline · read only" tone="warning" />
+                        ) : null}
+                        {turnActive && !activePendingRequest ? (
+                          <StatusPill label="working" tone="primary" />
+                        ) : null}
+                        {activePendingRequest ? (
+                          <StatusPill label="needs response" tone="warning" />
+                        ) : null}
+                      </View>
                     ) : null}
-                    {activePendingRequest ? (
-                      <StatusPill label="needs response" tone="warning" />
+                    {actionError ? (
+                      <View
+                        style={{
+                          gap: 10,
+                          borderRadius: 16,
+                          borderCurve: "continuous",
+                          borderWidth: 1,
+                          borderColor: theme.danger,
+                          backgroundColor: theme.dangerMuted,
+                          paddingHorizontal: 14,
+                          paddingVertical: 12,
+                        }}
+                      >
+                        <Text
+                          selectable
+                          style={{ color: theme.danger, fontSize: 14, lineHeight: 20 }}
+                        >
+                          {actionError.message}
+                        </Text>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={
+                            actionError.kind === "load" ? "Retry loading thread" : "Retry send"
+                          }
+                          onPress={() => {
+                            if (actionError.kind === "load") {
+                              setLoadAttempt((value) => value + 1);
+                              return;
+                            }
+                            void handleSubmitComposer();
+                          }}
+                          style={({ pressed }) => ({
+                            alignSelf: "flex-start",
+                            borderRadius: 999,
+                            borderCurve: "continuous",
+                            backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+                            paddingHorizontal: 14,
+                            paddingVertical: 8,
+                          })}
+                        >
+                          <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Retry</Text>
+                        </Pressable>
+                      </View>
                     ) : null}
                   </View>
                 )
@@ -249,6 +391,39 @@ export default function ThreadDetailScreen() {
           }}
         />
 
+        {!stickToBottom && listData.length > 0 ? (
+          <View
+            pointerEvents="box-none"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: Math.max(insets.bottom + 72, 88),
+              alignItems: "center",
+            }}
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Jump to latest messages"
+              onPress={() => scrollToLatest(true)}
+              style={({ pressed }) => ({
+                borderRadius: 999,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
+                paddingHorizontal: 14,
+                paddingVertical: 8,
+                boxShadow: "0 8px 20px rgba(0, 0, 0, 0.12)",
+              })}
+            >
+              <Text style={{ color: theme.text, fontSize: 13, fontWeight: "600" }}>
+                Jump to latest
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <View
           pointerEvents="box-none"
           style={{
@@ -267,25 +442,8 @@ export default function ThreadDetailScreen() {
           <ComposerBar
             value={activeThread.composerDraft}
             onChangeText={(text) => setComposerDraft(activeThread.id, text)}
-            onSubmit={async () => {
-              if (!isConnected) {
-                return;
-              }
-              if (runtimeClient && !isDraftThread && activeThread.composerDraft.trim()) {
-                const draft = activeThread.composerDraft;
-                const clientMessageId = (globalThis as any).crypto.randomUUID() as string;
-                useThreadStore
-                  .getState()
-                  .appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
-                setComposerDraft(activeThread.id, "");
-                try {
-                  await runtimeClient.startTurn(activeThread.id, draft, clientMessageId);
-                } catch (error) {
-                  console.error("Failed to start turn:", error);
-                }
-                return;
-              }
-              submitComposer(activeThread.id);
+            onSubmit={() => {
+              void handleSubmitComposer();
             }}
             helperText={
               isOfflineReadOnly
@@ -295,7 +453,7 @@ export default function ThreadDetailScreen() {
                   : null
             }
             submitLabel={isDraftThread ? "Save draft" : "Send"}
-            disabled={!isConnected || !activeThread.composerDraft.trim()}
+            disabled={isOfflineReadOnly}
           />
         </View>
       </KeyboardAvoidingView>

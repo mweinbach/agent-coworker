@@ -4,6 +4,7 @@ import { useEffect, useMemo } from "react";
 import { useAppStore } from "../app/store";
 import type { ResearchCard } from "../app/types";
 import { Button } from "../components/ui/button";
+import { Skeleton } from "../components/ui/skeleton";
 import { NewResearchComposer } from "./research/NewResearchComposer";
 import { ResearchCardGrid } from "./research/ResearchCardGrid";
 import { ResearchDetailPane } from "./research/ResearchDetailPane";
@@ -13,6 +14,7 @@ export function ResearchView() {
   const researchOrder = useAppStore((s) => s.researchOrder);
   const selectedResearchId = useAppStore((s) => s.selectedResearchId);
   const researchListError = useAppStore((s) => s.researchListError);
+  const researchListLoading = useAppStore((s) => s.researchListLoading);
   const refreshResearchList = useAppStore((s) => s.refreshResearchList);
   const selectResearch = useAppStore((s) => s.selectResearch);
 
@@ -61,13 +63,26 @@ export function ResearchView() {
               {researchListError}
             </div>
           ) : null}
-          {research.length > 0 ? (
+          {researchListLoading && research.length === 0 ? (
+            <div className="flex flex-col gap-2 px-1 py-1" aria-busy="true" aria-label="Loading research">
+              <Skeleton className="h-16 w-full rounded-xl" />
+              <Skeleton className="h-16 w-full rounded-xl" />
+              <Skeleton className="h-16 w-full rounded-xl" />
+            </div>
+          ) : research.length > 0 ? (
             <ResearchCardGrid
               research={research}
               selectedResearchId={selectedResearchId}
               onSelectResearch={(researchId) => void selectResearch(researchId)}
             />
-          ) : null}
+          ) : (
+            <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-3 py-6 text-center">
+              <p className="text-sm font-medium text-foreground">No research yet</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                Start a new research run from the composer on the right.
+              </p>
+            </div>
+          )}
         </div>
       </section>
 

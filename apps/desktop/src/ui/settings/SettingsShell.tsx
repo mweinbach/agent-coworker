@@ -12,6 +12,7 @@ import {
   ShieldCheckIcon,
   SlidersHorizontalIcon,
   UserRoundCogIcon,
+  UsersRoundIcon,
   WifiIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -67,7 +68,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
     description: "Menu bar, tray, and quick chat controls for the desktop app.",
   },
   defaults: {
-    title: "Defaults",
+    title: "Behavior",
     description: "Defaults for models, tools, and behavior everywhere.",
   },
   profileMemory: {
@@ -119,7 +120,7 @@ const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: s
     description: "Connect external tools and data sources.",
   },
   workspaces: {
-    title: "Defaults",
+    title: "Behavior",
     description: "Defaults for models, tools, and behavior everywhere.",
   },
   memory: {
@@ -170,7 +171,7 @@ export function getSettingsGroups(
         {
           id: "subagents",
           label: "Subagents",
-          icon: BotIcon,
+          icon: UsersRoundIcon,
           render: () => <SubagentsPage />,
         },
         {
@@ -186,7 +187,7 @@ export function getSettingsGroups(
       pages: [
         {
           id: "defaults",
-          label: "Defaults",
+          label: "Behavior",
           icon: SlidersHorizontalIcon,
           render: () => <DefaultsSettingsPage />,
         },

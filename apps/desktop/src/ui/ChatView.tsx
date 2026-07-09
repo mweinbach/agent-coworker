@@ -24,6 +24,7 @@ import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { Button } from "../components/ui/button";
 import {
+  appendAttachmentSkippedNotes,
   buildComposerAttachmentSignature,
   type ComposerAttachmentFile,
   createComposerAttachmentFile,
@@ -241,6 +242,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const submitInFlightRef = useRef(false);
   const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -256,7 +258,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   useLayoutEffect(() => {
     const el = messageBarOverlayElement;
     if (!el) {
-      setComposerOverlayHeight(composerOverlayMinHeight);
+      // Source-task lock bar is in-flow (not absolute), so the feed must not
+      // also reserve overlay space — that double-counts bottom chrome.
+      setComposerOverlayHeight(sourceTask && !readOnlyNotice ? 0 : composerOverlayMinHeight);
       return;
     }
 
@@ -274,7 +278,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     const observer = new ResizeObserverCtor(updateHeight);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [composerOverlayMinHeight, messageBarOverlayElement]);
+  }, [composerOverlayMinHeight, messageBarOverlayElement, readOnlyNotice, sourceTask]);
 
   useEffect(() => {
     return () => {
@@ -389,6 +393,21 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       const entry = renderItems[i];
       if (entry?.kind === "activity-group") {
         return entry.id;
+      }
+    }
+    return null;
+  }, [renderItems, rt?.busy]);
+  const streamingAssistantMessageId = useMemo(() => {
+    if (rt?.busy !== true) return null;
+    for (let i = renderItems.length - 1; i >= 0; i--) {
+      const entry = renderItems[i];
+      if (!entry) continue;
+      if (entry.kind === "activity-group") continue;
+      if (entry.item.kind === "message" && entry.item.role === "assistant") {
+        return entry.item.id;
+      }
+      if (entry.item.kind === "message" && entry.item.role === "user") {
+        return null;
       }
     }
     return null;
@@ -561,19 +580,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       workspaceId: string,
       threadId: string,
       attachments: readonly ComposerAttachmentFile[],
-    ): Promise<FileAttachmentInput[]> => {
-      const resolved = await resolveComposerAttachmentsForWorkspace(
+    ): Promise<{ attachments: FileAttachmentInput[]; skippedNotes: string[] }> => {
+      // Soft-skip failed attachments (same policy as NewChatLanding): keep successful
+      // uploads and append skip notes to the message instead of hard-failing the send.
+      return resolveComposerAttachmentsForWorkspace(
         useAppStore.getState,
         useAppStore.setState,
         workspaceId,
         attachments,
         { threadId },
       );
-      if (resolved.skippedNotes.length > 0) {
-        const detail = resolved.skippedNotes.join(" ");
-        throw new Error(detail);
-      }
-      return resolved.attachments;
     },
     [],
   );
@@ -587,24 +603,29 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const submitComposer = useCallback(
     (busyPolicy: "reject" | "steer") => {
       if (!thread) return;
+      if (submitInFlightRef.current) return;
       if (preparingAttachments) return;
       if (pendingTurnStart?.status === "sending") return;
       if (!composerText.trim() && pendingAttachments.length === 0) return;
 
       const targetThreadId = thread.id;
       const targetWorkspaceId = thread.workspaceId;
+      submitInFlightRef.current = true;
       setPreparingAttachments(true);
       setAttachmentPickerError(null);
       void (async () => {
         try {
-          const attachments =
-            pendingAttachments.length > 0
-              ? await resolvePendingAttachmentsForSend(
-                  targetWorkspaceId,
-                  targetThreadId,
-                  pendingAttachments,
-                )
-              : undefined;
+          let messageText = composerText;
+          let attachments: FileAttachmentInput[] | undefined;
+          if (pendingAttachments.length > 0) {
+            const resolved = await resolvePendingAttachmentsForSend(
+              targetWorkspaceId,
+              targetThreadId,
+              pendingAttachments,
+            );
+            attachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
+            messageText = appendAttachmentSkippedNotes(composerText, resolved.skippedNotes);
+          }
           const attachmentSignature =
             attachments && attachments.length > 0 ? buildAttachmentSignature(attachments) : null;
           setSubmittedAttachmentSignature(attachmentSignature);
@@ -614,9 +635,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             return;
           }
 
+          // Soft-skip may leave only notes (no files and no user text). Still send so the
+          // model learns what failed; otherwise require real content.
+          if (!messageText.trim() && (!attachments || attachments.length === 0)) {
+            setSubmittedAttachmentSignature(null);
+            return;
+          }
+
           const references = extractReferencesFromText(composerText, mentionCatalog);
           const accepted = await sendMessage(
-            composerText,
+            messageText,
             busyPolicy,
             attachments,
             references.length > 0 ? references : undefined,
@@ -634,6 +662,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           const message = error instanceof Error ? error.message : String(error);
           setAttachmentPickerError(message);
         } finally {
+          submitInFlightRef.current = false;
           setPreparingAttachments(false);
         }
       })();
@@ -666,6 +695,11 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      const isComposing =
+        event.nativeEvent.isComposing ||
+        // keyCode 229 is the classic IME composition signal (some browsers still rely on it).
+        event.nativeEvent.keyCode === 229;
+
       if (
         event.key === "Enter" &&
         !event.shiftKey &&
@@ -673,9 +707,34 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         !event.ctrlKey &&
         !event.altKey
       ) {
+        if (isComposing) return;
+
+        const busy = rt?.busy === true;
+        const hasPendingInput = Boolean(composerText.trim() || pendingAttachments.length > 0);
+        const submitState = getComposerSubmitState({
+          busy,
+          hasPromptModal:
+            hasPromptModal ||
+            hasFilePreview ||
+            preparingAttachments ||
+            sourceTask !== null ||
+            readOnlyNotice !== undefined,
+          composerText,
+          hasPendingAttachments: pendingAttachments.length > 0,
+          pendingAttachmentSignature,
+          pendingTurnStart,
+          pendingSteer: rt?.pendingSteer ?? null,
+          sessionId: rt?.sessionId ?? null,
+          threadStatus: thread?.status ?? "active",
+        });
+        if (submitState.disabled || preparingAttachments || !hasPendingInput) {
+          event.preventDefault();
+          return;
+        }
+
         event.preventDefault();
-        submitComposer(resolveComposerBusyPolicy(rt?.busy === true));
-      } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        submitComposer(resolveComposerBusyPolicy(busy));
+      } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !isComposing) {
         event.preventDefault();
         const textarea = event.currentTarget;
         const start = textarea.selectionStart;
@@ -688,7 +747,23 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         });
       }
     },
-    [rt?.busy, submitComposer, setComposerText],
+    [
+      composerText,
+      hasFilePreview,
+      hasPromptModal,
+      pendingAttachmentSignature,
+      pendingAttachments.length,
+      pendingTurnStart,
+      preparingAttachments,
+      readOnlyNotice,
+      rt?.busy,
+      rt?.pendingSteer,
+      rt?.sessionId,
+      setComposerText,
+      sourceTask,
+      submitComposer,
+      thread?.status,
+    ],
   );
 
   const retryFailedTurn = useCallback(async (): Promise<boolean> => {
@@ -753,6 +828,31 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   return (
     <ChatViewContext.Provider value={contextValue}>
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
+        {disconnected ? (
+          <div
+            role="status"
+            data-slot="connection-banner"
+            className="flex shrink-0 items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-4 py-2 text-sm"
+          >
+            <div className="min-w-0">
+              <span className="font-medium text-foreground">Disconnected</span>
+              <span className="text-muted-foreground">
+                {" "}
+                — reconnect to continue this chat.
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={() => void reconnectThread(selectedThreadId)}
+            >
+              Reconnect
+            </Button>
+          </div>
+        ) : null}
+
         <ChatFeed
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
@@ -763,6 +863,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           liveActivityGroupId={liveActivityGroupId}
           liveStartedAt={rt?.busySince ?? null}
           showWorkingPlaceholder={workingPlaceholderVisible}
+          streamingAssistantMessageId={streamingAssistantMessageId}
           citationUrlsByMessageId={citationUrlsByMessageId}
           citationSourcesByMessageId={citationSourcesByMessageId}
           desktopBasePath={workspace?.path ?? null}

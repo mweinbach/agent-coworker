@@ -1,8 +1,10 @@
-import { ArchiveIcon, ClockIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
+import { ArchiveIcon, ClockIcon, RotateCcwIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useAppStore } from "../../../app/store";
 import { isStandardChatThread } from "../../../app/threadFilters";
 import { workspaceLabelForThread } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
 import {
   Select,
   SelectContent,
@@ -33,10 +35,24 @@ export function ArchivedChatsPage() {
   const restoreThread = useAppStore((s) => s.restoreThread);
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
   const setArchivedChatsAutoDeleteDays = useAppStore((s) => s.setArchivedChatsAutoDeleteDays);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const archivedThreads = threads.filter(
     (thread) => thread.archived && isStandardChatThread(thread, { includeArchived: true }),
   );
+  const filteredArchivedThreads = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return archivedThreads;
+    return archivedThreads.filter((thread) => {
+      const title = (thread.title || "New thread").toLowerCase();
+      const workspaceName = workspaceLabelForThread(
+        workspaces,
+        thread.workspaceId,
+        "Unknown workspace",
+      ).toLowerCase();
+      return title.includes(query) || workspaceName.includes(query);
+    });
+  }, [archivedThreads, searchQuery, workspaces]);
   const currentAutoDelete = desktopSettings.archivedChatsAutoDeleteDays;
 
   const handleDelete = async (threadId: string, title: string) => {
@@ -100,52 +116,72 @@ export function ArchivedChatsPage() {
           description="Archived chats will be stored here. You can archive any chat from the sidebar by hovering over its date label."
         />
       ) : (
-        <SettingsSection title={`Archived Chats (${archivedThreads.length})`}>
-          {archivedThreads.map((thread) => {
-            const wsName = workspaceLabelForThread(
-              workspaces,
-              thread.workspaceId,
-              "Unknown workspace",
-            );
-            return (
-              <SettingsRow
-                key={thread.id}
-                title={<span className="truncate">{thread.title || "New thread"}</span>}
-                description={
-                  <span className="flex items-center gap-2.5">
-                    <span>{wsName}</span>
-                    <span className="text-[10px] opacity-45">•</span>
-                    <span className="flex items-center gap-1">
-                      <ClockIcon className="h-3 w-3" />
-                      <span>Archived {formatArchivedDate(thread.archivedAt)}</span>
+        <SettingsSection
+          title={`Archived Chats (${filteredArchivedThreads.length}${
+            searchQuery.trim() ? ` of ${archivedThreads.length}` : ""
+          })`}
+        >
+          <div className="relative mb-3">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search archived chats"
+              aria-label="Search archived chats"
+              className="h-9 pl-8 text-[13px]"
+            />
+          </div>
+          {filteredArchivedThreads.length === 0 ? (
+            <div className="px-1 py-4 text-sm text-muted-foreground">
+              No archived chats match “{searchQuery.trim()}”.
+            </div>
+          ) : (
+            filteredArchivedThreads.map((thread) => {
+              const wsName = workspaceLabelForThread(
+                workspaces,
+                thread.workspaceId,
+                "Unknown workspace",
+              );
+              return (
+                <SettingsRow
+                  key={thread.id}
+                  title={<span className="truncate">{thread.title || "New thread"}</span>}
+                  description={
+                    <span className="flex items-center gap-2.5">
+                      <span>{wsName}</span>
+                      <span className="text-[10px] opacity-45">•</span>
+                      <span className="flex items-center gap-1">
+                        <ClockIcon className="h-3 w-3" />
+                        <span>Archived {formatArchivedDate(thread.archivedAt)}</span>
+                      </span>
                     </span>
-                  </span>
-                }
-                control={
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] px-2.5"
-                      onClick={() => void restoreThread(thread.id)}
-                    >
-                      <RotateCcwIcon className="h-3.5 w-3.5" />
-                      Restore
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/[0.06] px-2.5"
-                      onClick={() => handleDelete(thread.id, thread.title)}
-                    >
-                      <Trash2Icon className="h-3.5 w-3.5" />
-                      Delete
-                    </Button>
-                  </div>
-                }
-              />
-            );
-          })}
+                  }
+                  control={
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] px-2.5"
+                        onClick={() => void restoreThread(thread.id)}
+                      >
+                        <RotateCcwIcon className="h-3.5 w-3.5" />
+                        Restore
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/[0.06] px-2.5"
+                        onClick={() => handleDelete(thread.id, thread.title)}
+                      >
+                        <Trash2Icon className="h-3.5 w-3.5" />
+                        Delete
+                      </Button>
+                    </div>
+                  }
+                />
+              );
+            })
+          )}
         </SettingsSection>
       )}
     </>

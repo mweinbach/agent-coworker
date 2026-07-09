@@ -259,6 +259,8 @@ export type AppStoreState = {
   providerUiState: PersistedProviderUiState;
 
   composerText: string;
+  /** Drafts keyed by thread id; active draft is mirrored in composerText. */
+  composerTextByThreadId: Record<string, string>;
   newChatLandingTarget: NewChatLandingTarget | null;
   injectContext: boolean;
   developerMode: boolean;

@@ -1,12 +1,17 @@
 import {
+  BookOpenIcon,
+  ClipboardPlusIcon,
   FolderIcon,
   HistoryIcon,
   MessageSquareIcon,
+  PanelLeftIcon,
   Settings2Icon,
   SparklesIcon,
+  SquareIcon,
 } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 
+import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
@@ -39,14 +44,26 @@ export const CommandPalette = memo(function CommandPalette({
   const threads = useAppStore((s) => s.threads);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const selectedThreadBusy = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.busy === true : false,
+  );
   const developerMode = useAppStore((s) => s.developerMode);
   const remoteAccessAvailable = useAppStore((s) => s.desktopFeatureFlags.remoteAccess === true);
+  const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags.tasks === true);
+  const googleResearchAvailable = useAppStore((s) =>
+    hasGoogleApiKeyForResearch(s.providerStatusByName.google),
+  );
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
+  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
 
   const selectThread = useAppStore((s) => s.selectThread);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const openSettings = useAppStore((s) => s.openSettings);
   const openSkills = useAppStore((s) => s.openSkills);
+  const openNewTask = useAppStore((s) => s.openNewTask);
+  const openResearch = useAppStore((s) => s.openResearch);
+  const cancelThread = useAppStore((s) => s.cancelThread);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
 
   // Recent ordinary chat threads, newest first.
   const recentThreads = useMemo(() => {
@@ -134,6 +151,28 @@ export const CommandPalette = memo(function CommandPalette({
     close();
   }, [handleNewChat, close]);
 
+  const handleNewTaskClick = useCallback(() => {
+    void openNewTask();
+    close();
+  }, [openNewTask, close]);
+
+  const handleResearchClick = useCallback(() => {
+    void openResearch();
+    close();
+  }, [openResearch, close]);
+
+  const handleStopTurnClick = useCallback(() => {
+    if (selectedThreadId && selectedThreadBusy) {
+      cancelThread(selectedThreadId);
+    }
+    close();
+  }, [cancelThread, close, selectedThreadBusy, selectedThreadId]);
+
+  const handleToggleSidebarClick = useCallback(() => {
+    toggleSidebar();
+    close();
+  }, [close, toggleSidebar]);
+
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
       <CommandInput placeholder="Search threads, workspaces, settings, skills…" />
@@ -144,6 +183,28 @@ export const CommandPalette = memo(function CommandPalette({
           <CommandItem onSelect={handleNewChatClick} value="new chat">
             <MessageSquareIcon />
             <span>New chat</span>
+          </CommandItem>
+          {tasksEnabled ? (
+            <CommandItem onSelect={handleNewTaskClick} value="new task">
+              <ClipboardPlusIcon />
+              <span>New task</span>
+            </CommandItem>
+          ) : null}
+          {googleResearchAvailable ? (
+            <CommandItem onSelect={handleResearchClick} value="research open">
+              <BookOpenIcon />
+              <span>Research</span>
+            </CommandItem>
+          ) : null}
+          {selectedThreadBusy ? (
+            <CommandItem onSelect={handleStopTurnClick} value="stop current turn">
+              <SquareIcon />
+              <span>Stop current turn</span>
+            </CommandItem>
+          ) : null}
+          <CommandItem onSelect={handleToggleSidebarClick} value="toggle sidebar">
+            <PanelLeftIcon />
+            <span>{sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
           </CommandItem>
           <CommandItem onSelect={handleOpenSkills} value="browse skills">
             <SparklesIcon />

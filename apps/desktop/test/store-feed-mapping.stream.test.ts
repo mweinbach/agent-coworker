@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  clearThreadModelStreamRuntime,
   createThreadModelStreamRuntime,
   extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
@@ -9,6 +10,15 @@ import {
 import type { TranscriptEvent } from "../src/app/types";
 
 describe("desktop transcript feed mapping", () => {
+  test("clears tool retry lineage with the thread stream runtime", () => {
+    const runtime = createThreadModelStreamRuntime();
+    runtime.toolItemIdByCallId.set("failed-call", "failed-item");
+
+    clearThreadModelStreamRuntime(runtime);
+
+    expect(runtime.toolItemIdByCallId.size).toBe(0);
+  });
+
   test("keeps separate assistant text streams within one turn", () => {
     const transcript: TranscriptEvent[] = [
       {
@@ -862,6 +872,108 @@ describe("desktop transcript feed mapping", () => {
         },
       },
     });
+  });
+
+  test("maps explicit retry call ids to stable feed item lineage", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-retry",
+          index: 0,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_error",
+          part: {
+            toolCallId: "failed-call",
+            toolName: "bash",
+            error: "failed",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-retry",
+          index: 1,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_result",
+          part: {
+            toolCallId: "retry-call",
+            toolName: "bash",
+            retryOf: "failed-call",
+            output: { exitCode: 0 },
+          },
+        },
+      },
+    ];
+
+    const tools = mapTranscriptToFeed(transcript).filter((item) => item.kind === "tool");
+
+    expect(tools).toHaveLength(2);
+    expect(tools[1]).toMatchObject({
+      state: "output-available",
+      retryOf: tools[0]?.id,
+    });
+  });
+
+  test("preserves the first terminal tool state for one streamed call id", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-terminal",
+          index: 0,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_error",
+          part: {
+            toolCallId: "same-call",
+            toolName: "bash",
+            error: "failed",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-terminal",
+          index: 1,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_result",
+          part: {
+            toolCallId: "same-call",
+            toolName: "bash",
+            output: { exitCode: 0 },
+          },
+        },
+      },
+    ];
+
+    expect(mapTranscriptToFeed(transcript).filter((item) => item.kind === "tool")).toEqual([
+      expect.objectContaining({
+        state: "output-error",
+        result: { error: "failed" },
+      }),
+    ]);
   });
 
   test("replays raw google interactions reasoning and tool traces from persisted sessions", () => {

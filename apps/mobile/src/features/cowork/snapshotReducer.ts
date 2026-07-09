@@ -1,4 +1,5 @@
 import type { ProjectedItem, SessionFeedItem } from "./protocolTypes";
+import { isTerminalToolState } from "./toolFeedState";
 
 export type MobileFeedState = {
   feed: SessionFeedItem[];
@@ -94,17 +95,36 @@ function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem)
         ts: existingTsOr(ts, existing),
         text: item.text,
       };
-    case "toolCall":
+    case "toolCall": {
+      const existingTool = existing?.kind === "tool" ? existing : undefined;
+      const existingTerminal = existingTool ? isTerminalToolState(existingTool.state) : false;
+      const incomingTerminal = isTerminalToolState(item.state);
+      const preserveExistingTerminal =
+        existingTool !== undefined &&
+        existingTerminal &&
+        (!incomingTerminal || existingTool.state !== item.state);
+      const state = preserveExistingTerminal && existingTool ? existingTool.state : item.state;
+      const args = preserveExistingTerminal ? existingTool?.args : item.args;
+      const result =
+        preserveExistingTerminal || (existingTerminal && item.result === undefined)
+          ? existingTool?.result
+          : item.result;
+      const retryOf = preserveExistingTerminal
+        ? existingTool?.retryOf
+        : (item.retryOf ?? existingTool?.retryOf);
+      const approval = preserveExistingTerminal ? existingTool?.approval : item.approval;
       return {
         id: item.id,
         kind: "tool",
         ts: existingTsOr(ts, existing),
-        name: item.toolName,
-        state: item.state,
-        ...(item.args !== undefined ? { args: item.args } : {}),
-        ...(item.result !== undefined ? { result: item.result } : {}),
-        ...(item.approval ? { approval: item.approval } : {}),
+        name: preserveExistingTerminal && existingTool ? existingTool.name : item.toolName,
+        state,
+        ...(args !== undefined ? { args } : {}),
+        ...(result !== undefined ? { result } : {}),
+        ...(retryOf !== undefined ? { retryOf } : {}),
+        ...(approval ? { approval } : {}),
       };
+    }
     case "system":
       return {
         id: item.id,

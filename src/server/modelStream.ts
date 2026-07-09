@@ -88,6 +88,7 @@ type PartNormalizerContext = {
   id: () => string;
   toolCallId: () => string;
   toolName: () => string;
+  toolRetryOf: () => string | undefined;
   fallbackId: (kind: string) => string;
   san: (value: unknown) => unknown;
 };
@@ -159,10 +160,11 @@ const streamPartNormalizers: Record<
       mode,
       providerMetadata,
     }),
-  "tool-input-start": ({ emit, parsedRaw, toolCallId, toolName, providerMetadata }) =>
+  "tool-input-start": ({ emit, parsedRaw, toolCallId, toolName, toolRetryOf, providerMetadata }) =>
     emit("tool_input_start", {
       id: toolCallId(),
       toolName: toolName(),
+      retryOf: toolRetryOf(),
       providerExecuted: asBoolean(parsedRaw.providerExecuted),
       dynamic: asBoolean(parsedRaw.dynamic),
       title: asString(parsedRaw.title),
@@ -174,38 +176,54 @@ const streamPartNormalizers: Record<
       delta: asSafeString(parsedRaw.delta),
       providerMetadata,
     }),
-  "tool-input-end": ({ emit, toolCallId, providerMetadata }) =>
-    emit("tool_input_end", { id: toolCallId(), providerMetadata }),
-  "tool-call": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+  "tool-input-end": ({ emit, toolCallId, toolRetryOf, providerMetadata }) =>
+    emit("tool_input_end", {
+      id: toolCallId(),
+      retryOf: toolRetryOf(),
+      providerMetadata,
+    }),
+  "tool-call": ({ emit, parsedRaw, toolCallId, toolName, toolRetryOf, san, providerMetadata }) =>
     emit("tool_call", {
       toolCallId: toolCallId(),
       toolName: toolName(),
+      retryOf: toolRetryOf(),
       input: san(parsedRaw.input) ?? {},
       dynamic: asBoolean(parsedRaw.dynamic),
       invalid: asBoolean(parsedRaw.invalid),
       error: san(parsedRaw.error),
       providerMetadata,
     }),
-  "tool-result": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+  "tool-result": ({ emit, parsedRaw, toolCallId, toolName, toolRetryOf, san, providerMetadata }) =>
     emit("tool_result", {
       toolCallId: toolCallId(),
       toolName: toolName(),
+      retryOf: toolRetryOf(),
       output: san(parsedRaw.output) ?? null,
       dynamic: asBoolean(parsedRaw.dynamic),
       providerMetadata,
     }),
-  "tool-error": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+  "tool-error": ({ emit, parsedRaw, toolCallId, toolName, toolRetryOf, san, providerMetadata }) =>
     emit("tool_error", {
       toolCallId: toolCallId(),
       toolName: toolName(),
+      retryOf: toolRetryOf(),
       error: san(parsedRaw.error) ?? "unknown_error",
       dynamic: asBoolean(parsedRaw.dynamic),
       providerMetadata,
     }),
-  "tool-output-denied": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+  "tool-output-denied": ({
+    emit,
+    parsedRaw,
+    toolCallId,
+    toolName,
+    toolRetryOf,
+    san,
+    providerMetadata,
+  }) =>
     emit("tool_output_denied", {
       toolCallId: toolCallId(),
       toolName: toolName(),
+      retryOf: toolRetryOf(),
       reason: san(parsedRaw.reason),
       providerMetadata,
     }),
@@ -399,6 +417,7 @@ export function normalizeModelStreamPart(
   const toolCallId = () =>
     asIdString(parsedRaw.toolCallId) ?? asIdString(parsedRaw.id) ?? fallbackId("tool");
   const toolName = () => asString(parsedRaw.toolName) ?? "tool";
+  const toolRetryOf = () => asIdString(parsedRaw.retryOf) ?? asIdString(parsedRaw.retry_of);
   const normalizer = streamPartNormalizers[type];
   if (normalizer) {
     return normalizer({
@@ -409,6 +428,7 @@ export function normalizeModelStreamPart(
       id,
       toolCallId,
       toolName,
+      toolRetryOf,
       fallbackId,
       san,
     });

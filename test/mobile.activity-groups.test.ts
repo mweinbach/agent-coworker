@@ -73,6 +73,53 @@ describe("mobile chat activity groups", () => {
     expect(summary.status).toBe("done");
   });
 
+  test("preserves unrelated failures and only recovers explicit retry lineage", () => {
+    const unresolved = summarizeActivityGroup([
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed" },
+      },
+      {
+        id: "unrelated",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-available",
+        result: "ok",
+      },
+    ]);
+    expect(unresolved.status).toBe("issue");
+    expect(unresolved.entries).toHaveLength(2);
+    expect(unresolved.entries[0]).not.toHaveProperty("recoveredById");
+
+    const recovered = summarizeActivityGroup([
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed" },
+      },
+      {
+        id: "retry",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-available",
+        retryOf: "failed",
+        result: { exitCode: 0 },
+      },
+    ]);
+    expect(recovered.status).toBe("done");
+    expect(recovered.entries).toHaveLength(2);
+    expect(recovered.entries[0]).toMatchObject({ recoveredById: "retry" });
+  });
+
   test("parseReasoningSections splits bold headings into collapsible sections", () => {
     expect(
       parseReasoningSections(

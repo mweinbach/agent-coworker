@@ -135,4 +135,88 @@ describe("JSON-RPC projectors", () => {
     ]);
     expect(new Set(toolOutputAvailable.map((event) => event.payload?.item?.id)).size).toBe(2);
   });
+
+  test("projectors preserve the first terminal state for one call id", () => {
+    const emissions: Array<{ eventType: string; payload: any }> = [];
+    const projector = createThreadJournalNotificationProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(
+      streamChunk("tool_error", {
+        toolCallId: "same-call",
+        toolName: "bash",
+        error: "failed",
+      }),
+    );
+    projector.handle(
+      streamChunk("tool_result", {
+        toolCallId: "same-call",
+        toolName: "bash",
+        output: { exitCode: 0 },
+      }),
+    );
+
+    const terminalItems = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .map((event) => event.payload?.item)
+      .filter((item) => item?.id === `toolCall:${turnId}:same-call`);
+
+    expect(terminalItems).toHaveLength(1);
+    expect(terminalItems[0]).toMatchObject({
+      state: "output-error",
+      result: { error: "failed" },
+    });
+  });
+
+  test("projectors translate explicit retry call ids into projected item lineage", () => {
+    const emissions: Array<{ eventType: string; payload: any }> = [];
+    const projector = createThreadJournalNotificationProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(
+      streamChunk("tool_error", {
+        toolCallId: "call-failed",
+        toolName: "bash",
+        error: "failed",
+      }),
+    );
+    projector.handle(
+      streamChunk("tool_result", {
+        toolCallId: "call-retry",
+        toolName: "bash",
+        retryOf: "call-failed",
+        output: { exitCode: 0 },
+      }),
+    );
+
+    const retry = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .map((event) => event.payload?.item)
+      .find((item) => item?.id === `toolCall:${turnId}:call-retry`);
+
+    expect(retry).toMatchObject({
+      id: `toolCall:${turnId}:call-retry`,
+      type: "toolCall",
+      state: "output-available",
+      retryOf: `toolCall:${turnId}:call-failed`,
+    });
+  });
 });

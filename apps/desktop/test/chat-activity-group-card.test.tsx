@@ -294,7 +294,7 @@ describe("desktop activity group card", () => {
     expect(html).toContain("Working for 1m 0s");
   });
 
-  test("skips blank reasoning placeholders and keeps Codex native web search visible", () => {
+  test("shows recovered failures alongside their explicit retry", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {
         live: true,
@@ -328,6 +328,7 @@ describe("desktop activity group card", () => {
             ts: "2024-01-01T00:00:03.000Z",
             name: "nativeWebSearch",
             state: "output-available",
+            retryOf: "t-memory",
             result: {
               status: "completed",
               action: {
@@ -345,10 +346,13 @@ describe("desktop activity group card", () => {
     const toolRows = doc.querySelectorAll('[data-activity-entry-kind="tool"]');
 
     expect(reasoningRows).toHaveLength(1);
-    expect(toolRows).toHaveLength(1);
-    expect(html).not.toContain("Memory");
+    expect(toolRows).toHaveLength(2);
+    expect(html).toContain("Memory");
     expect(html).toContain("Web Search");
     expect(html).toContain("Search: LGA crash 2026");
+    expect(doc.querySelector('[data-tool-recovery="retry"]')?.textContent).toContain(
+      "Recovered after retry",
+    );
     expect(reasoningRows[0]?.textContent).not.toContain("Summary");
     expect(reasoningRows[0]?.textContent).toContain("Searching for crash details");
   });

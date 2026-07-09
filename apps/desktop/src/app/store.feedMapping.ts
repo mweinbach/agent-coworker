@@ -35,6 +35,8 @@ export type ThreadModelStreamRuntime = {
   reasoningTextHistoryInTurn: string[];
   reasoningTurns: Set<string>;
   toolItemIdByKey: Map<string, string>;
+  toolItemIdByCallId: Map<string, string>;
+  terminalToolItemIds: Set<string>;
   latestToolKeyByTurnAndName: Map<string, string>;
   toolInputByKey: Map<string, string>;
   lastAssistantTurnId: string | null;
@@ -189,6 +191,8 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
     reasoningTextHistoryInTurn: [],
     reasoningTurns: new Set(),
     toolItemIdByKey: new Map(),
+    toolItemIdByCallId: new Map(),
+    terminalToolItemIds: new Set(),
     latestToolKeyByTurnAndName: new Map(),
     toolInputByKey: new Map(),
     lastAssistantTurnId: null,
@@ -206,6 +210,8 @@ export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime)
   runtime.reasoningTextHistoryInTurn = [];
   runtime.reasoningTurns.clear();
   runtime.toolItemIdByKey.clear();
+  runtime.toolItemIdByCallId.clear();
+  runtime.terminalToolItemIds.clear();
   runtime.latestToolKeyByTurnAndName.clear();
   runtime.toolInputByKey.clear();
   runtime.lastReasoningTurnId = null;
@@ -290,6 +296,7 @@ export function hasMatchingStreamedReasoningText(
 
 function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.toolItemIdByKey.clear();
+  runtime.terminalToolItemIds.clear();
   runtime.latestToolKeyByTurnAndName.clear();
   runtime.toolInputByKey.clear();
 }
@@ -461,6 +468,29 @@ function toolSyntheticApprovalKey(turnId: string, approvalId: string): string {
   return `${turnId}:approval:${approvalId}`;
 }
 
+function rememberToolItemId(
+  stream: ThreadModelStreamRuntime,
+  turnId: string,
+  key: string,
+  itemId: string,
+) {
+  stream.toolItemIdByCallId.set(`${turnId}:${key}`, itemId);
+  stream.toolItemIdByCallId.set(key, itemId);
+}
+
+function resolveRetryItemId(
+  stream: ThreadModelStreamRuntime,
+  turnId: string,
+  retryOf?: string,
+): string | undefined {
+  if (!retryOf) return undefined;
+  return (
+    stream.toolItemIdByCallId.get(`${turnId}:${retryOf}`) ??
+    stream.toolItemIdByCallId.get(retryOf) ??
+    (retryOf.startsWith("toolCall:") ? retryOf : undefined)
+  );
+}
+
 function toolNameFromApproval(toolCall: unknown): string {
   if (isRecord(toolCall)) {
     const toolName = toolCall.toolName;
@@ -500,6 +530,7 @@ function resolveToolItem(
   const fullKey = `${turnId}:${key}`;
   const directItemId = stream.toolItemIdByKey.get(fullKey);
   if (directItemId) {
+    rememberToolItemId(stream, turnId, key, directItemId);
     rememberLatestToolKey(stream, turnId, name, fullKey);
     return { fullKey, itemId: directItemId };
   }
@@ -514,7 +545,7 @@ function resolveToolItem(
   }
 
   const latestItemId = stream.toolItemIdByKey.get(latestKey);
-  if (!latestItemId) {
+  if (!latestItemId || stream.terminalToolItemIds.has(latestItemId)) {
     return { fullKey };
   }
 
@@ -528,6 +559,7 @@ function resolveToolItem(
   }
 
   stream.toolItemIdByKey.set(fullKey, latestItemId);
+  rememberToolItemId(stream, turnId, key, latestItemId);
   rememberLatestToolKey(stream, turnId, name, fullKey);
   return { fullKey, itemId: latestItemId };
 }
@@ -751,6 +783,7 @@ function applyModelStreamUpdate(
         if (item.kind !== "tool" || isTerminalToolState(item.state)) return item;
         return { ...item, state: "output-error", result: incompleteToolStreamResult(error) };
       });
+      stream.terminalToolItemIds.add(itemId);
     }
     ops.onToolTerminal?.();
   };
@@ -812,6 +845,7 @@ function applyModelStreamUpdate(
   }
 
   if (update.kind === "tool_input_start") {
+    const retryOf = resolveRetryItemId(stream, update.turnId, update.retryOf);
     const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
     stream.toolInputByKey.delete(fullKey);
     if (itemId) {
@@ -822,6 +856,7 @@ function applyModelStreamUpdate(
               name: update.name,
               state: "input-streaming",
               args: update.args ?? item.args,
+              ...(retryOf ? { retryOf } : {}),
             }
           : item,
       );
@@ -830,6 +865,7 @@ function applyModelStreamUpdate(
 
     const id = ops.makeId();
     stream.toolItemIdByKey.set(fullKey, id);
+    rememberToolItemId(stream, update.turnId, update.key, id);
     rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
     push({
       id,
@@ -838,6 +874,7 @@ function applyModelStreamUpdate(
       name: update.name,
       state: "input-streaming",
       args: update.args,
+      ...(retryOf ? { retryOf } : {}),
     });
     return;
   }
@@ -850,6 +887,7 @@ function applyModelStreamUpdate(
     if (!itemId) {
       const id = ops.makeId();
       stream.toolItemIdByKey.set(fullKey, id);
+      rememberToolItemId(stream, update.turnId, update.key, id);
       push({
         id,
         kind: "tool",
@@ -873,6 +911,7 @@ function applyModelStreamUpdate(
   }
 
   if (update.kind === "tool_input_end") {
+    const retryOf = resolveRetryItemId(stream, update.turnId, update.retryOf);
     const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
     const nextInput = stream.toolInputByKey.get(fullKey) ?? "";
 
@@ -884,6 +923,7 @@ function applyModelStreamUpdate(
               name: update.name,
               state: item.state === "approval-requested" ? item.state : "input-available",
               args: nextInput ? normalizeToolArgsFromInput(nextInput, item.args) : item.args,
+              ...(retryOf ? { retryOf } : {}),
             }
           : item,
       );
@@ -893,6 +933,7 @@ function applyModelStreamUpdate(
     if (!nextInput) return;
     const id = ops.makeId();
     stream.toolItemIdByKey.set(fullKey, id);
+    rememberToolItemId(stream, update.turnId, update.key, id);
     rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
     push({
       id,
@@ -901,11 +942,13 @@ function applyModelStreamUpdate(
       name: update.name,
       state: "input-available",
       args: normalizeToolArgsFromInput(nextInput),
+      ...(retryOf ? { retryOf } : {}),
     });
     return;
   }
 
   if (update.kind === "tool_call") {
+    const retryOf = resolveRetryItemId(stream, update.turnId, update.retryOf);
     const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
     if (itemId) {
       ops.updateFeedItem(itemId, (item) =>
@@ -915,6 +958,7 @@ function applyModelStreamUpdate(
               name: update.name,
               state: item.state === "approval-requested" ? item.state : "input-available",
               args: update.args ?? item.args,
+              ...(retryOf ? { retryOf } : {}),
             }
           : item,
       );
@@ -923,6 +967,7 @@ function applyModelStreamUpdate(
 
     const id = ops.makeId();
     stream.toolItemIdByKey.set(fullKey, id);
+    rememberToolItemId(stream, update.turnId, update.key, id);
     rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
     push({
       id,
@@ -931,6 +976,7 @@ function applyModelStreamUpdate(
       name: update.name,
       state: "input-available",
       args: update.args,
+      ...(retryOf ? { retryOf } : {}),
     });
     return;
   }
@@ -940,6 +986,7 @@ function applyModelStreamUpdate(
     update.kind === "tool_error" ||
     update.kind === "tool_output_denied"
   ) {
+    const retryOf = resolveRetryItemId(stream, update.turnId, update.retryOf);
     const { fullKey, itemId } = resolveToolItem(stream, update.turnId, update.key, update.name);
     const result =
       update.kind === "tool_result"
@@ -956,6 +1003,7 @@ function applyModelStreamUpdate(
     const completedAt = ops.nowIso();
 
     if (itemId) {
+      if (stream.terminalToolItemIds.has(itemId)) return;
       ops.updateFeedItem(itemId, (item) =>
         item.kind === "tool"
           ? {
@@ -964,14 +1012,27 @@ function applyModelStreamUpdate(
               state,
               result,
               completedAt: item.completedAt ?? completedAt,
+              ...(retryOf ? { retryOf } : {}),
             }
           : item,
       );
+      stream.terminalToolItemIds.add(itemId);
     } else {
       const id = ops.makeId();
       stream.toolItemIdByKey.set(fullKey, id);
+      rememberToolItemId(stream, update.turnId, update.key, id);
       rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
-      push({ id, kind: "tool", ts: completedAt, name: update.name, state, result, completedAt });
+      push({
+        id,
+        kind: "tool",
+        ts: completedAt,
+        name: update.name,
+        state,
+        result,
+        completedAt,
+        ...(retryOf ? { retryOf } : {}),
+      });
+      stream.terminalToolItemIds.add(id);
     }
 
     ops.onToolTerminal?.();
@@ -983,7 +1044,7 @@ function applyModelStreamUpdate(
     const latestKey = stream.latestToolKeyByTurnAndName.get(toolTurnNameKey(update.turnId, name));
     const itemId = latestKey ? stream.toolItemIdByKey.get(latestKey) : undefined;
 
-    if (itemId) {
+    if (itemId && !stream.terminalToolItemIds.has(itemId)) {
       ops.updateFeedItem(itemId, (item) =>
         item.kind === "tool"
           ? {

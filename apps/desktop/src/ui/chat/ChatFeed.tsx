@@ -4,7 +4,7 @@ import {
   MessageSquareIcon,
   RotateCcwIcon,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import type { SandboxApprovalPrompt } from "../../app/types";
 import { Button } from "../../components/ui/button";
@@ -34,6 +34,8 @@ import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 9;
+/** Soft window: keep the last N list entries mounted; older ones expand on demand. */
+const FEED_RENDER_WINDOW = 80;
 
 export type VisibleSandboxApproval = {
   threadId: string;
@@ -287,6 +289,22 @@ export const ChatFeed = memo(function ChatFeed(props: {
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
   const feedListEntries = useMemo(() => buildFeedListEntries(renderItems), [renderItems]);
+  const [showAllFeedEntries, setShowAllFeedEntries] = useState(false);
+
+  useEffect(() => {
+    setShowAllFeedEntries(false);
+  }, []);
+
+  const windowedFeedEntries = useMemo(() => {
+    if (showAllFeedEntries || feedListEntries.length <= FEED_RENDER_WINDOW) {
+      return { entries: feedListEntries, hiddenCount: 0 };
+    }
+    const hiddenCount = feedListEntries.length - FEED_RENDER_WINDOW;
+    return {
+      entries: feedListEntries.slice(hiddenCount),
+      hiddenCount,
+    };
+  }, [feedListEntries, showAllFeedEntries]);
 
   return (
     <MessageScrollerProvider
@@ -359,53 +377,69 @@ export const ChatFeed = memo(function ChatFeed(props: {
                 </Empty>
               </MessageScrollerItem>
             ) : (
-              feedListEntries.map((entry) => {
-                if (entry.kind === "day-separator") {
+              <>
+                {windowedFeedEntries.hiddenCount > 0 ? (
+                  <MessageScrollerItem messageId="status:show-older">
+                    <div className="flex justify-center py-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowAllFeedEntries(true)}
+                      >
+                        Show {windowedFeedEntries.hiddenCount} older messages
+                      </Button>
+                    </div>
+                  </MessageScrollerItem>
+                ) : null}
+                {windowedFeedEntries.entries.map((entry) => {
+                  if (entry.kind === "day-separator") {
+                    return (
+                      <MessageScrollerItem key={entry.id} messageId={entry.id}>
+                        <DaySeparatorRow label={entry.label} />
+                      </MessageScrollerItem>
+                    );
+                  }
+
+                  const item = entry.item;
+                  const messageId = item.kind === "activity-group" ? item.id : item.item.id;
                   return (
-                    <MessageScrollerItem key={entry.id} messageId={entry.id}>
-                      <DaySeparatorRow label={entry.label} />
+                    <MessageScrollerItem
+                      key={messageId}
+                      messageId={messageId}
+                      scrollAnchor={isVisibleUserTurn(item)}
+                    >
+                      {item.kind === "activity-group" ? (
+                        <ActivityGroupCard
+                          items={item.items}
+                          live={item.id === liveActivityGroupId}
+                          liveStartedAt={liveStartedAt}
+                          onRetry={
+                            item.id === retryableActivityGroupId ? onRetryFailedTurn : undefined
+                          }
+                          retryDisabled={retryFailedTurnDisabled}
+                        />
+                      ) : (
+                        <InlineErrorBoundary
+                          label={`This message couldn't be rendered (${item.item.kind}).`}
+                        >
+                          <FeedRow
+                            item={item.item}
+                            citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
+                            citationSources={citationSourcesByMessageId.get(item.item.id)}
+                            desktopBasePath={desktopBasePath}
+                            isStreaming={
+                              item.item.kind === "message" &&
+                              item.item.role === "assistant" &&
+                              item.item.id === streamingAssistantMessageId
+                            }
+                          />
+                        </InlineErrorBoundary>
+                      )}
                     </MessageScrollerItem>
                   );
-                }
-
-                const item = entry.item;
-                const messageId = item.kind === "activity-group" ? item.id : item.item.id;
-                return (
-                  <MessageScrollerItem
-                    key={messageId}
-                    messageId={messageId}
-                    scrollAnchor={isVisibleUserTurn(item)}
-                  >
-                    {item.kind === "activity-group" ? (
-                      <ActivityGroupCard
-                        items={item.items}
-                        live={item.id === liveActivityGroupId}
-                        liveStartedAt={liveStartedAt}
-                        onRetry={
-                          item.id === retryableActivityGroupId ? onRetryFailedTurn : undefined
-                        }
-                        retryDisabled={retryFailedTurnDisabled}
-                      />
-                    ) : (
-                      <InlineErrorBoundary
-                        label={`This message couldn't be rendered (${item.item.kind}).`}
-                      >
-                        <FeedRow
-                          item={item.item}
-                          citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
-                          citationSources={citationSourcesByMessageId.get(item.item.id)}
-                          desktopBasePath={desktopBasePath}
-                          isStreaming={
-                            item.item.kind === "message" &&
-                            item.item.role === "assistant" &&
-                            item.item.id === streamingAssistantMessageId
-                          }
-                        />
-                      </InlineErrorBoundary>
-                    )}
-                  </MessageScrollerItem>
-                );
-              })
+                })}
+              </>
             )}
 
             {showWorkingPlaceholder ? (

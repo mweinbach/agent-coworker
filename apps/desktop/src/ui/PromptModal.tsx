@@ -99,7 +99,8 @@ function AskPromptContent(props: {
                 <Button
                   key={option}
                   variant="outline"
-                  className="h-auto w-full justify-start rounded-2xl border-border/60 bg-background/80 px-4 py-3 text-left text-sm leading-5 whitespace-normal shadow-none hover:bg-muted/45"
+                  size="sm"
+                  className="h-auto w-full justify-start rounded-lg border-border/70 bg-background px-3 py-2.5 text-left text-sm leading-5 whitespace-normal shadow-none hover:bg-muted/45"
                   type="button"
                   onClick={() =>
                     props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, option)
@@ -112,7 +113,7 @@ function AskPromptContent(props: {
           </div>
         ) : null}
 
-        <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-muted/16 p-4">
+        <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-muted/16 p-3">
           <div className="flex items-center justify-between gap-3">
             <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               {hasOptions ? "Custom answer" : "Your answer"}
@@ -129,14 +130,15 @@ function AskPromptContent(props: {
                   submitFreeText();
                 }
               }}
-              className="h-10 rounded-xl border-border/60 bg-background shadow-none"
+              className="h-9 rounded-md border-border/70 bg-background shadow-none"
               placeholder={hasOptions ? "Or type a custom answer..." : "Type your answer..."}
               aria-label="Custom answer"
               autoFocus={!hasOptions}
             />
             <Button
               type="button"
-              className="h-10 rounded-xl px-4"
+              size="sm"
+              className="h-9 px-3"
               disabled={!freeText.trim()}
               onClick={submitFreeText}
             >
@@ -146,16 +148,23 @@ function AskPromptContent(props: {
         </div>
 
         <DialogFooter className="border-t border-border/60 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
             <Button
-              variant="ghost"
-              className="px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+              variant="outline"
+              size="sm"
               type="button"
               onClick={skip}
+              aria-keyshortcuts="Escape"
             >
               Skip for now
             </Button>
-            <span className="text-[11px] text-muted-foreground">Esc skips this question</span>
+            <p className="text-xs leading-snug text-muted-foreground" id="ask-prompt-esc-hint">
+              Press{" "}
+              <kbd className="rounded border border-border/70 bg-muted/40 px-1 py-px font-mono text-[10px]">
+                Esc
+              </kbd>{" "}
+              to skip without answering. The agent continues without this input.
+            </p>
           </div>
         </DialogFooter>
       </div>
@@ -177,7 +186,7 @@ export function PromptModal() {
       onOpenChange={(open) => {
         // For ask modals, always send a response so the server-side deferred
         // promise resolves.  Dismissing without answering would leave the agent
-        // hanging forever.
+        // hanging forever. Esc and the Skip control both land here as skip.
         if (!open && isAsk) {
           answerAsk(modal.threadId, modal.prompt.requestId, ASK_SKIP_TOKEN);
           return;
@@ -192,6 +201,7 @@ export function PromptModal() {
               ? "w-[min(96vw,50rem)] max-h-[88vh] gap-0 overflow-hidden p-0"
               : "flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0"
           }
+          aria-describedby={isAsk ? "ask-prompt-esc-hint" : undefined}
           onEscapeKeyDown={
             isAsk
               ? () => {
@@ -236,6 +246,7 @@ export function PromptModal() {
               <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-3">
                 <Button
                   variant="outline"
+                  size="sm"
                   type="button"
                   onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}
                 >
@@ -243,6 +254,7 @@ export function PromptModal() {
                 </Button>
                 <Button
                   variant={modal.prompt.dangerous ? "destructive" : "default"}
+                  size="sm"
                   type="button"
                   onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, true)}
                 >

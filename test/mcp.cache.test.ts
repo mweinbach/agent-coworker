@@ -129,7 +129,7 @@ describe("MCP Caching and Lifecycle", () => {
     let currentServers = servers1;
     const loadMCPServers = mock(async () => currentServers);
     const loadMCPTools = mock(async (servers) => {
-      const isBun = (servers[0]?.transport as any).command === "bun";
+      const isBun = (servers[0]?.transport as { command?: string } | undefined)?.command === "bun";
       return {
         tools: { [isBun ? "bun-tool" : "node-tool"]: {} },
         errors: [],

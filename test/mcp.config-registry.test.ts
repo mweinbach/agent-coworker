@@ -711,7 +711,7 @@ describe("mcp config registry", () => {
       const snapshot = await loadMCPConfigRegistry(config);
       const server = snapshot.servers.find((s) => s.name === "my-server");
       expect(server?.source).toBe("workspace");
-      expect((server?.transport as { command: string }).command).toBe("new-cmd");
+      expect((server?.transport as { command?: string } | undefined)?.command).toBe("new-cmd");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

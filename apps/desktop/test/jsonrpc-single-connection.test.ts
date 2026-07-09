@@ -979,9 +979,9 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(startParams).toMatchObject({ baseUrl: "http://localhost:1234" });
     const turnStarts = jsonRpcRequests.filter((entry) => entry.method === "turn/start");
     expect(turnStarts).toHaveLength(2);
-    expect((turnStarts[1]?.params as { clientMessageId?: string }).clientMessageId).toBe(
-      heldClientMessageId,
-    );
+    expect(
+      (turnStarts[1]?.params as { clientMessageId?: string } | undefined)?.clientMessageId,
+    ).toBe(heldClientMessageId);
 
     // Exactly one user bubble: the retry reuses the optimistic message.
     const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];

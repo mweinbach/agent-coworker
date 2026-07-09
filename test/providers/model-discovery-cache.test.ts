@@ -239,7 +239,9 @@ describe("providers/modelDiscoveryAdapters", () => {
   test("OpenAI-compatible adapter parses model lists and filters non-generation models", async () => {
     const fetchImpl = mock(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe("https://api.openai.com/v1/models");
-      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer sk-test");
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+        "Bearer sk-test",
+      );
       return jsonResponse({
         object: "list",
         data: [
@@ -297,7 +299,9 @@ describe("providers/modelDiscoveryAdapters", () => {
   test("Google adapter keeps Gemini generateContent models and filters embeddings/media", async () => {
     const fetchImpl = mock(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).not.toContain("gemini-secret");
-      expect((init?.headers as Record<string, string>)["x-goog-api-key"]).toBe("gemini-secret");
+      expect((init?.headers as Record<string, string> | undefined)?.["x-goog-api-key"]).toBe(
+        "gemini-secret",
+      );
       const parsed = new URL(String(url));
       if (!parsed.searchParams.get("pageToken")) {
         return jsonResponse({
@@ -365,8 +369,12 @@ describe("providers/modelDiscoveryAdapters", () => {
 
   test("Anthropic adapter parses paginated Claude model lists", async () => {
     const fetchImpl = mock(async (url: string | URL | Request, init?: RequestInit) => {
-      expect((init?.headers as Record<string, string>)["x-api-key"]).toBe("anthropic-secret");
-      expect((init?.headers as Record<string, string>)["anthropic-version"]).toBe("2023-06-01");
+      expect((init?.headers as Record<string, string> | undefined)?.["x-api-key"]).toBe(
+        "anthropic-secret",
+      );
+      expect((init?.headers as Record<string, string> | undefined)?.["anthropic-version"]).toBe(
+        "2023-06-01",
+      );
       const parsed = new URL(String(url));
       if (!parsed.searchParams.get("after_id")) {
         return jsonResponse({

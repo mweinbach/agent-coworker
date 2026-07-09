@@ -99,7 +99,7 @@ describe("mobile secure transport client", () => {
       spkiSha256: "b".repeat(43),
     });
     expect(
-      JSON.parse((fetchMock.mock.calls[1]?.[0] as { body?: string }).body ?? "{}"),
+      JSON.parse((fetchMock.mock.calls[1]?.[0] as { body?: string } | undefined)?.body ?? "{}"),
     ).toMatchObject({
       ticket: "cowork-pair://ticket",
       nonce: "pairing-nonce",
@@ -136,7 +136,7 @@ describe("mobile secure transport client", () => {
       "https://127.0.0.1:9443/events",
     ]);
     expect(
-      JSON.parse((fetchMock.mock.calls[1]?.[0] as { body?: string }).body ?? "{}"),
+      JSON.parse((fetchMock.mock.calls[1]?.[0] as { body?: string } | undefined)?.body ?? "{}"),
     ).toMatchObject({
       ticket: "cowork-pair://ticket",
       nonce: "pairing-nonce",

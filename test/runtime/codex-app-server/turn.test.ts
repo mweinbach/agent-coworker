@@ -480,9 +480,11 @@ describe("codex app-server turn lifecycle", () => {
       ]),
     );
     expect(
-      (resumeParams?.dynamicTools as Array<{ name?: string }>).map((tool) => tool.name),
+      (resumeParams?.dynamicTools as Array<{ name?: string }> | undefined)?.map(
+        (tool) => tool.name,
+      ),
     ).not.toContain("bash");
-    expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
+    expect(requests.find((entry) => entry.method === "turn/start")?.params?.input).toEqual([
       { type: "text", text: "Newest question", text_elements: [] },
       { type: "localImage", path: "/tmp/resumed-upload.png", detail: "original" },
     ]);

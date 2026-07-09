@@ -647,7 +647,7 @@ rl.on("line", (line) => {
       ]),
     );
     expect(
-      (startParams?.dynamicTools as Array<{ name?: string }>).map((tool) => tool.name),
+      (startParams?.dynamicTools as Array<{ name?: string }> | undefined)?.map((tool) => tool.name),
     ).not.toContain("bash");
     expect(startParams).not.toHaveProperty("baseInstructions");
     expect(startParams?.developerInstructions).toContain("## Codex App-Server Tool Boundary");

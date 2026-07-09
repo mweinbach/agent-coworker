@@ -15,7 +15,6 @@
     "jsx": "react-jsx",
     "types": ["node", "bun-types"],
     "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@cowork/*": ["../../src/*"],

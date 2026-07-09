@@ -175,7 +175,7 @@ describe("files IPC", () => {
 
     const [firstCallArgs] = showSaveDialogMock.mock.calls.slice(-1);
     expect(firstCallArgs).toHaveLength(1);
-    expect((firstCallArgs?.[0] as { defaultPath?: string }).defaultPath).toBe(
+    expect((firstCallArgs?.[0] as { defaultPath?: string } | undefined)?.defaultPath).toBe(
       path.join(tempDownloads, "Research title.pdf"),
     );
 

@@ -1212,7 +1212,9 @@ describe("providers/connectionCatalog", () => {
     const fetchImpl = mock(async (url: string | URL | Request, init?: RequestInit) => {
       const href = String(url);
       if (href === "https://api.openai.com/v1/models") {
-        expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer sk-test");
+        expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+          "Bearer sk-test",
+        );
         return jsonResponse({
           object: "list",
           data: [

@@ -89,6 +89,11 @@ mockLocalModule(
 
 // Mock threadStore hydrate method and State
 const mockHydrate = mock((snapshot: any) => {});
+const mockSetComposerDraft = mock((_threadId: string, _text: string) => {});
+const mockAppendOptimisticUserMessage = mock(
+  (_threadId: string, _text: string, _clientMessageId: string) => {},
+);
+const mockRemoveOptimisticUserMessage = mock((_threadId: string, _clientMessageId: string) => {});
 const mockThread = {
   id: "test-thread-123",
   title: "Test Thread",
@@ -99,11 +104,14 @@ const threadStoreMock = () => ({
   useThreadStore: Object.assign(
     (fn: any) => {
       const state = {
+        snapshots: {},
         getThread: () => mockThread,
         getPendingRequest: () => null,
         getActiveTurnStartedAt: () => null,
-        setComposerDraft: () => {},
+        setComposerDraft: mockSetComposerDraft,
         submitComposer: () => {},
+        appendOptimisticUserMessage: mockAppendOptimisticUserMessage,
+        removeOptimisticUserMessage: mockRemoveOptimisticUserMessage,
         interruptThread: () => {},
         clearPendingRequest: () => {},
       };
@@ -138,6 +146,9 @@ const mockResumeThread = mock(async (threadId: string) => ({
 const mockReadThread = mock(async (threadId: string) => ({
   coworkSnapshot: { sessionId: "test-thread-123", feed: [{ id: "msg-1" }] },
 }));
+const mockStartTurn = mock(
+  async (_threadId: string, _text: string, _clientMessageId: string) => {},
+);
 mockLocalModule(
   "@/features/cowork/runtimeClient",
   "apps/mobile/src/features/cowork/runtimeClient",
@@ -145,6 +156,7 @@ mockLocalModule(
     getActiveCoworkJsonRpcClient: () => ({
       resumeThread: mockResumeThread,
       readThread: mockReadThread,
+      startTurn: mockStartTurn,
     }),
   }),
 );
@@ -222,7 +234,15 @@ describe("mobile ThreadDetailScreen", () => {
     latestComposerProps = null;
     mockResumeThread.mockClear();
     mockReadThread.mockClear();
+    mockReadThread.mockImplementation(async () => ({
+      coworkSnapshot: { sessionId: "test-thread-123", feed: [{ id: "msg-1" }] },
+    }));
+    mockStartTurn.mockClear();
+    mockStartTurn.mockImplementation(async () => {});
     mockHydrate.mockClear();
+    mockSetComposerDraft.mockClear();
+    mockAppendOptimisticUserMessage.mockClear();
+    mockRemoveOptimisticUserMessage.mockClear();
   });
 
   afterAll(() => {
@@ -287,7 +307,7 @@ describe("mobile ThreadDetailScreen", () => {
         sessionId: "test-thread-123",
         feed: [{ id: "msg-1" }],
       });
-      expect(latestComposerProps?.disabled).toBe(true);
+      expect(latestComposerProps?.disabled).toBe(false);
     } finally {
       if (root) {
         try {
@@ -295,6 +315,94 @@ describe("mobile ThreadDetailScreen", () => {
             root!.unmount();
           });
         } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test("removes a rejected optimistic send before restoring its draft", async () => {
+    mockThread.composerDraft = "Retry this message";
+    mockStartTurn.mockImplementation(async () => {
+      throw new Error("send rejected");
+    });
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      await act(async () => {
+        latestComposerProps?.onSubmit();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const optimisticCall = mockAppendOptimisticUserMessage.mock.calls[0];
+      expect(optimisticCall?.slice(0, 2)).toEqual(["test-thread-123", "Retry this message"]);
+      expect(mockRemoveOptimisticUserMessage).toHaveBeenCalledWith(
+        "test-thread-123",
+        optimisticCall?.[2],
+      );
+      expect(mockSetComposerDraft.mock.calls).toContainEqual([
+        "test-thread-123",
+        "Retry this message",
+      ]);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("ignores a thread read that completes after the screen unmounts", async () => {
+    let resolveRead:
+      | ((value: { coworkSnapshot: { sessionId: string; feed: Array<{ id: string }> } }) => void)
+      | undefined;
+    mockReadThread.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockReadThread).toHaveBeenCalledWith("test-thread-123");
+
+      await act(async () => {
+        root!.unmount();
+      });
+      root = null;
+      resolveRead?.({
+        coworkSnapshot: {
+          sessionId: "test-thread-123",
+          feed: [{ id: "stale-message" }],
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockHydrate).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
       }
       harness.restore();
     }

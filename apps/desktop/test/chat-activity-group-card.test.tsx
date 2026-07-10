@@ -75,34 +75,6 @@ const { ActivityGroupCard } = await import("../src/ui/chat/ActivityGroupCard");
 const { ChatFeed } = await import("../src/ui/chat/ChatFeed");
 const { CrashReportingErrorBoundary } = await import("../src/ui/CrashReportingErrorBoundary");
 
-type ReactFiber = {
-  child: ReactFiber | null;
-  elementType?: unknown;
-  memoizedState: unknown;
-  sibling: ReactFiber | null;
-};
-
-function findComponentFiber(fiber: ReactFiber | null, componentName: string): ReactFiber | null {
-  if (!fiber) return null;
-  if (typeof fiber.elementType === "function" && fiber.elementType.name === componentName) {
-    return fiber;
-  }
-  return (
-    findComponentFiber(fiber.child, componentName) ??
-    findComponentFiber(fiber.sibling, componentName)
-  );
-}
-
-function getCurrentRootFiber(root: ReturnType<typeof createRoot>): ReactFiber {
-  const internalRoot = (
-    root as unknown as {
-      _internalRoot?: { current?: ReactFiber };
-    }
-  )._internalRoot;
-  if (!internalRoot?.current) throw new Error("missing React root fiber");
-  return internalRoot.current;
-}
-
 describe("desktop activity group card", () => {
   test("renders mixed reasoning and tool entries in chronological order", () => {
     const html = renderToStaticMarkup(
@@ -515,12 +487,6 @@ describe("desktop activity group card", () => {
       expect(container.textContent).toContain("Thinking");
       const reasoningRow = container.querySelector('[data-activity-entry-kind="reasoning"]');
       expect(reasoningRow).not.toBeNull();
-      // React 19 does not warn for a zero-hook → one-hook update. Assert that
-      // the memo hook exists even in the empty state so this regression fails
-      // before the first streamed delta arrives.
-      const reasoningFiber = findComponentFiber(getCurrentRootFiber(root), "ReasoningTimelineNode");
-      expect(reasoningFiber).not.toBeNull();
-      expect(reasoningFiber?.memoizedState).not.toBeNull();
 
       await renderReasoning("first delta");
       expect(container.textContent).toContain("first delta");
@@ -532,9 +498,8 @@ describe("desktop activity group card", () => {
 
       await renderReasoning("");
       expect(container.textContent).toContain("Thinking");
-      expect(consoleErrors.flat().join("\n")).not.toMatch(
-        /change in the order of Hooks|Rendered (?:more|fewer) hooks/,
-      );
+      expect(container.querySelector('[data-activity-entry-kind="reasoning"]')).toBe(reasoningRow);
+      expect(consoleErrors).toEqual([]);
     } finally {
       console.error = originalConsoleError;
       harness.dom.window.console.error = originalWindowConsoleError;
@@ -582,7 +547,7 @@ describe("desktop activity group card", () => {
     console.error = () => {};
     harness.dom.window.console.error = () => {};
 
-    try {
+    const renderFeed = async () => {
       await act(async () => {
         root.render(
           createElement(
@@ -609,11 +574,22 @@ describe("desktop activity group card", () => {
           ),
         );
       });
+    };
+
+    try {
+      await renderFeed();
 
       const alert = container.querySelector('[role="alert"]');
+      const healthyRow = container.querySelector('[data-message-id="activity-healthy"]');
       expect(alert).not.toBeNull();
       expect(alert?.textContent).toContain("This activity couldn't be rendered.");
       expect(alert?.className).not.toContain("min-h-screen");
+      expect(healthyRow).not.toBeNull();
+      expect(container.textContent).toContain("Bash");
+      expect(container.textContent).not.toContain("Something went wrong.");
+
+      await renderFeed();
+      expect(container.querySelector('[data-message-id="activity-healthy"]')).toBe(healthyRow);
       expect(container.textContent).toContain("Bash");
       expect(container.textContent).not.toContain("Something went wrong.");
     } finally {

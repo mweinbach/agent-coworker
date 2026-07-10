@@ -73,6 +73,60 @@ describe("mobile chat activity groups", () => {
     expect(summary.status).toBe("done");
   });
 
+  test("matches desktop failure classification for tool results", () => {
+    const cases: Array<{
+      expectedState: "output-denied" | "output-error";
+      name: string;
+      result: unknown;
+      toolName: string;
+    }> = [
+      {
+        name: "structured ok false",
+        toolName: "bash",
+        result: { ok: false, message: "command failed" },
+        expectedState: "output-error",
+      },
+      {
+        name: "structured error",
+        toolName: "read",
+        result: { error: "permission denied" },
+        expectedState: "output-error",
+      },
+      {
+        name: "structured denial",
+        toolName: "bash",
+        result: { denied: true },
+        expectedState: "output-denied",
+      },
+      {
+        name: "skill not-found string",
+        toolName: "skill",
+        result: 'Skill "pdf" not found.',
+        expectedState: "output-error",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const summary = summarizeActivityGroup([
+        {
+          id: testCase.name,
+          kind: "tool",
+          ts: "2024-01-01T00:00:01.000Z",
+          name: testCase.toolName,
+          state: "output-available",
+          result: testCase.result,
+        },
+      ]);
+
+      expect(summary.status, testCase.name).toBe("issue");
+      expect(summary.entries[0]?.kind, testCase.name).toBe("tool");
+      expect(
+        summary.entries[0]?.kind === "tool" ? summary.entries[0].item.state : null,
+        testCase.name,
+      ).toBe(testCase.expectedState);
+    }
+  });
+
   test("preserves unrelated and repeated same-tool failures without retry lineage", () => {
     const summary = summarizeActivityGroup([
       {

@@ -41,9 +41,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function effectiveToolState(item: Extract<SessionFeedItem, { kind: "tool" }>): ToolFeedState {
-  if (isRecord(item.result)) {
+  if (item.result !== undefined && isRecord(item.result)) {
     if (item.result.denied === true) return "output-denied";
-    if ("error" in item.result) return "output-error";
+    if ("error" in item.result || item.result.ok === false) return "output-error";
+  }
+  if (
+    item.name.toLowerCase() === "skill" &&
+    typeof item.result === "string" &&
+    /\bnot found\b/i.test(item.result)
+  ) {
+    return "output-error";
   }
   if (isTerminalToolState(item.state) || item.result === undefined) return item.state;
   return "output-available";

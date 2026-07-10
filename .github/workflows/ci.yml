@@ -87,14 +87,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup dependencies
-        uses: ./.github/actions/setup-bun
-
-      - name: Install Linux capture dependency
+      - name: Install Linux quality dependencies
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ffmpeg
+          apt-get install --yes --no-install-recommends ffmpeg unzip
           rm -rf /var/lib/apt/lists/*
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
 
       - name: Complete deterministic Electron matrix
         run: xvfb-run --auto-servernum --server-args="-screen 0 1400x1000x24" bun run desktop:quality

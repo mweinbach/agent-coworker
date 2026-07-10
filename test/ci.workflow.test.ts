@@ -101,7 +101,10 @@ describe("main CI workflow", () => {
     expect(qualityJob).toContain(
       "mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48",
     );
-    expect(qualityJob).toContain("apt-get install --yes --no-install-recommends ffmpeg");
+    expect(qualityJob).toContain("apt-get install --yes --no-install-recommends ffmpeg unzip");
+    expect(qualityJob.indexOf("- name: Install Linux quality dependencies")).toBeLessThan(
+      qualityJob.indexOf("- name: Setup dependencies"),
+    );
     expect(qualityJob).toContain("xvfb-run");
     expect(qualityJob).toContain("bun run desktop:quality");
     expect(qualityJob).toContain("bun run desktop:quality:proof");

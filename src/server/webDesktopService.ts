@@ -27,6 +27,9 @@ import {
   spawnStreamingSubprocess,
   subscribeLines,
 } from "../utils/subprocess";
+import { TranscriptInbox, type TranscriptInboxEvent } from "./transcriptInbox";
+
+export { TRANSCRIPT_BATCH_ID_PATTERN } from "./transcriptInbox";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const PRIVATE_FILE_MODE = 0o600;
@@ -83,11 +86,16 @@ export type DesktopPersistedState = {
   onboarding?: unknown;
 };
 
-export type DesktopTranscriptEvent = {
-  ts: string;
-  threadId: string;
-  direction: "server" | "client";
-  payload: unknown;
+export type DesktopTranscriptEvent = TranscriptInboxEvent & {
+  deliveryId?: string;
+};
+
+export type TranscriptAppendOptions = {
+  batchId?: string;
+};
+
+export type TranscriptDeleteOptions = {
+  generation?: number;
 };
 
 export type WebDesktopServiceLike = {
@@ -106,8 +114,11 @@ export type WebDesktopServiceLike = {
   stopWorkspaceServer(workspaceId: string): Promise<void>;
   readTranscript(threadId: string): Promise<DesktopTranscriptEvent[]>;
   appendTranscriptEvent(event: DesktopTranscriptEvent): Promise<void>;
-  appendTranscriptBatch(events: DesktopTranscriptEvent[]): Promise<void>;
-  deleteTranscript(threadId: string): Promise<void>;
+  appendTranscriptBatch(
+    events: DesktopTranscriptEvent[],
+    options?: TranscriptAppendOptions,
+  ): Promise<void>;
+  deleteTranscript(threadId: string, options?: TranscriptDeleteOptions): Promise<void>;
   stopAll(): Promise<void>;
 };
 
@@ -148,6 +159,8 @@ const transcriptEventSchema = z
     threadId: z.string().trim().min(1),
     direction: z.enum(["server", "client"]),
     payload: z.unknown(),
+    generation: z.number().int().nonnegative().optional(),
+    deliveryId: z.string().trim().min(1).optional(),
   })
   .passthrough();
 
@@ -797,6 +810,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
   private stateWatcher: fsSync.FSWatcher | null = null;
   private stateWatcherDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private stateWatcherLastSignature: string | null = null;
+  private readonly transcriptInbox: TranscriptInbox;
 
   constructor(
     opts: {
@@ -804,6 +818,8 @@ export class WebDesktopService implements WebDesktopServiceLike {
       homedir?: string;
       serverManager?: SourceWorkspaceServerManager;
       serverManagerFactory?: () => SourceWorkspaceServerManager;
+      transcriptInbox?: TranscriptInbox;
+      now?: () => number;
     } = {},
   ) {
     this.userDataDir = resolveDesktopUserDataDir(opts.userDataDir, opts.homedir);
@@ -811,6 +827,12 @@ export class WebDesktopService implements WebDesktopServiceLike {
     this.serverManager = opts.serverManager ?? null;
     this.serverManagerFactory =
       opts.serverManagerFactory ?? (() => new SourceWorkspaceServerManager());
+    this.transcriptInbox =
+      opts.transcriptInbox ??
+      new TranscriptInbox({
+        userDataDir: this.userDataDir,
+        now: opts.now,
+      });
   }
 
   private get stateFilePath(): string {
@@ -996,6 +1018,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
   }
 
   async readTranscript(threadId: string): Promise<DesktopTranscriptEvent[]> {
+    this.transcriptInbox.projectPending(threadId);
     let raw = "";
     try {
       raw = await fs.readFile(this.transcriptFilePath(threadId), "utf8");
@@ -1032,55 +1055,34 @@ export class WebDesktopService implements WebDesktopServiceLike {
     await this.appendTranscriptBatch([event]);
   }
 
-  async appendTranscriptBatch(events: DesktopTranscriptEvent[]): Promise<void> {
+  async appendTranscriptBatch(
+    events: DesktopTranscriptEvent[],
+    options: TranscriptAppendOptions = {},
+  ): Promise<void> {
     if (events.length === 0) {
       return;
     }
-
-    const normalizedEvents = events.map((event) => {
+    const parsedEvents = events.map((event) => {
       const parsed = transcriptEventSchema.safeParse(event);
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? "Invalid transcript event");
       }
       return parsed.data;
     });
-
-    await fs.mkdir(this.transcriptsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-    const buckets = new Map<string, DesktopTranscriptEvent[]>();
-    for (const event of normalizedEvents) {
-      const existing = buckets.get(event.threadId);
-      if (existing) {
-        existing.push(event);
-      } else {
-        buckets.set(event.threadId, [event]);
-      }
-    }
-
-    for (const [threadId, bucket] of buckets) {
-      const filePath = this.transcriptFilePath(threadId);
-      const payload = `${bucket.map((event) => JSON.stringify(event)).join("\n")}\n`;
-      await fs.appendFile(filePath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-      await fs.chmod(filePath, PRIVATE_FILE_MODE);
-    }
+    this.transcriptInbox.appendBatch(
+      parsedEvents,
+      options.batchId ?? `legacy-${globalThis.crypto.randomUUID()}`,
+    );
   }
 
-  async deleteTranscript(threadId: string): Promise<void> {
-    try {
-      await fs.unlink(this.transcriptFilePath(threadId));
-    } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : "";
-      if (code !== "ENOENT") {
-        throw error;
-      }
-    }
+  async deleteTranscript(threadId: string, options: TranscriptDeleteOptions = {}): Promise<void> {
+    this.transcriptInbox.deleteThread(threadId, options.generation);
   }
 
   async stopAll(): Promise<void> {
     this.closeStateWatcher();
     this.stateChangeListeners.clear();
+    this.transcriptInbox.close();
     await this.serverManager?.stopAll();
   }
 

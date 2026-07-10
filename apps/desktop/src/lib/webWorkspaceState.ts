@@ -63,6 +63,11 @@ export function getCurrentWebWorkspaceScopeHash(): string | null {
   return hashScope(`${scope.serverUrl}\0${scope.workspacePath}`);
 }
 
+export function getCurrentWebWorkspaceScopeKey(): string | null {
+  const scope = getCurrentScope();
+  return scope ? JSON.stringify([scope.serverUrl, scope.workspacePath]) : null;
+}
+
 function createEmptyState(): PersistedState {
   return {
     version: 2,

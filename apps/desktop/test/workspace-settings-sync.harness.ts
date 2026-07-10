@@ -676,7 +676,8 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await useAppStore.getState().drainBootstrap();
     clearJsonRpcSocketOverride();
   });
 }

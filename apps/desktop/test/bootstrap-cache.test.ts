@@ -296,6 +296,9 @@ let loadedState: any = {
   perWorkspaceSettings: true,
 };
 let loadStateError: Error | null = null;
+let loadStateCallCount = 0;
+let getUpdateStateCallCount = 0;
+let loadStateImplementation: () => Promise<unknown> = async () => loadedState;
 let taskListResponse: TaskSummary[] = [];
 let taskReadResponse: TaskRecord | null = null;
 const socketRequests: string[] = [];
@@ -332,10 +335,11 @@ mock.module("../src/lib/desktopCommands", () =>
     deleteTranscript: async () => {},
     listDirectory: async () => [],
     loadState: async () => {
+      loadStateCallCount += 1;
       if (loadStateError) {
         throw loadStateError;
       }
-      return loadedState;
+      return await loadStateImplementation();
     },
     pickWorkspaceDirectory: async () => null,
     readTranscript: async () => [],
@@ -360,7 +364,10 @@ mock.module("../src/lib/desktopCommands", () =>
     showNotification: async () => true,
     getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
     setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => MOCK_UPDATE_STATE,
+    getUpdateState: async () => {
+      getUpdateStateCallCount += 1;
+      return MOCK_UPDATE_STATE;
+    },
     getDesktopFeatureFlags: (featureOverrides) => ({
       menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
       remoteAccess:
@@ -446,11 +453,13 @@ const { createDefaultUpdaterState } = await import("../src/lib/desktopApi");
 type AppStoreState = ReturnType<typeof useAppStore.getState>;
 const defaultRefreshTasks = useAppStore.getState().refreshTasks;
 const defaultSelectTask = useAppStore.getState().selectTask;
+const defaultSelectThread = useAppStore.getState().selectThread;
 
 function restoreTaskHydrationActions() {
   useAppStore.setState({
     refreshTasks: defaultRefreshTasks,
     selectTask: defaultSelectTask,
+    selectThread: defaultSelectThread,
   });
 }
 
@@ -461,7 +470,7 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
   }
   useAppStore.setState({
     ready: false,
-    bootstrapPending: false,
+    bootstrapPhase: "idle",
     startupError: null,
     view: "chat",
     settingsPage: "providers",
@@ -577,11 +586,24 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Pr
   }
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("desktop bootstrap cache", () => {
   beforeEach(() => {
     restoreTaskHydrationActions();
     installWindowMock();
     loadStateError = null;
+    loadStateCallCount = 0;
+    getUpdateStateCallCount = 0;
+    loadStateImplementation = async () => loadedState;
     taskListResponse = [];
     taskReadResponse = null;
     socketRequests.length = 0;
@@ -623,7 +645,8 @@ describe("desktop bootstrap cache", () => {
     resetStoreToCachedSeed();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await useAppStore.getState().drainBootstrap();
     restoreTaskHydrationActions();
   });
 
@@ -634,7 +657,7 @@ describe("desktop bootstrap cache", () => {
   test("buildCachedDesktopStateSeed restores shell state from cache", () => {
     const seed = buildCachedDesktopStateSeed(cachedState);
     expect(seed?.ready).toBe(true);
-    expect(seed?.bootstrapPending).toBe(true);
+    expect(seed?.bootstrapPhase).toBe("idle");
     expect(seed?.selectedWorkspaceId).toBe("ws-cached");
     expect(seed?.selectedThreadId).toBe("thread-cached");
     expect(seed?.view).toBe("settings");
@@ -1116,18 +1139,245 @@ describe("desktop bootstrap cache", () => {
   });
 
   test("init keeps cached state visible until authoritative load completes", async () => {
+    const authoritativeLoad = createDeferred<unknown>();
+    loadStateImplementation = () => authoritativeLoad.promise;
+
     const initPromise = useAppStore.getState().init();
     expect(useAppStore.getState().ready).toBe(true);
-    expect(useAppStore.getState().bootstrapPending).toBe(true);
+    expect(useAppStore.getState().bootstrapPhase).toBe("loading");
+    expect(useAppStore.getState().workspaces[0]?.id).toBe("ws-cached");
+    expect(useAppStore.getState().selectedThreadId).toBe("thread-cached");
+
+    authoritativeLoad.resolve(loadedState);
 
     await initPromise;
 
     const state = useAppStore.getState();
-    expect(state.bootstrapPending).toBe(false);
+    expect(state.bootstrapPhase).toBe("ready");
     expect(state.selectedWorkspaceId).toBe("ws-live");
     expect(state.selectedThreadId).toBe("thread-live");
     expect(state.view).toBe("settings");
     expect(state.sidebarCollapsed).toBe(true);
+  });
+
+  test("concurrent init callers share one side-effect pass and the same promise", async () => {
+    const authoritativeLoad = createDeferred<unknown>();
+    loadStateImplementation = () => authoritativeLoad.promise;
+
+    const first = useAppStore.getState().init();
+    const second = useAppStore.getState().init();
+
+    expect(second).toBe(first);
+    expect(loadStateCallCount).toBe(1);
+    expect(getUpdateStateCallCount).toBe(0);
+
+    authoritativeLoad.resolve(loadedState);
+    await Promise.all([first, second]);
+
+    expect(loadStateCallCount).toBe(1);
+    expect(getUpdateStateCallCount).toBe(1);
+  });
+
+  test("a loading-phase reentrant init shares the already-published promise", async () => {
+    const authoritativeLoad = createDeferred<unknown>();
+    loadStateImplementation = () => authoritativeLoad.promise;
+    let reentrant: Promise<void> | null = null;
+    const unsubscribe = useAppStore.subscribe((state, previous) => {
+      if (
+        reentrant === null &&
+        state.bootstrapPhase === "loading" &&
+        previous.bootstrapPhase !== "loading"
+      ) {
+        reentrant = state.init();
+      }
+    });
+
+    try {
+      const first = useAppStore.getState().init();
+      const observedReentrant = reentrant;
+
+      authoritativeLoad.resolve(loadedState);
+      await Promise.all(observedReentrant ? [first, observedReentrant] : [first]);
+
+      expect(observedReentrant).toBe(first);
+      expect(loadStateCallCount).toBe(1);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(loadStateCallCount).toBe(1);
+    expect(getUpdateStateCallCount).toBe(1);
+  });
+
+  test("keeps deferred startup selection in its generation before the next init", async () => {
+    const paintCallbacks: FrameRequestCallback[] = [];
+    installWindowMock({
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        paintCallbacks.push(callback);
+        return paintCallbacks.length;
+      },
+    });
+    const chatCachedState = {
+      ...cachedState,
+      ui: {
+        ...cachedState.ui,
+        view: "chat",
+        lastNonSettingsView: "chat",
+        selectedWorkspaceId: "ws-live",
+        selectedThreadId: "thread-live",
+      },
+    };
+    resetStoreToCachedSeed(chatCachedState);
+    const selection = createDeferred<void>();
+    const selectedThreadIds: string[] = [];
+    useAppStore.setState({
+      selectThread: async (threadId: string) => {
+        selectedThreadIds.push(threadId);
+        await selection.promise;
+      },
+    });
+
+    const first = useAppStore.getState().init();
+    let firstSettled = false;
+    void first.then(() => {
+      firstSettled = true;
+    });
+
+    await waitForCondition(
+      () => useAppStore.getState().bootstrapPhase === "ready" && paintCallbacks.length === 1,
+    );
+    await first;
+
+    expect(firstSettled).toBe(true);
+    expect(useAppStore.getState().init()).toBe(first);
+    expect(loadStateCallCount).toBe(1);
+
+    const firstPaint = paintCallbacks.shift();
+    if (!firstPaint) {
+      throw new Error("Expected first-generation paint callback");
+    }
+    firstPaint(0);
+    await waitForCondition(() => selectedThreadIds.length === 1);
+
+    expect(selectedThreadIds).toEqual(["thread-live"]);
+    expect(useAppStore.getState().init()).toBe(first);
+
+    selection.resolve();
+    await useAppStore.getState().drainBootstrap();
+
+    const second = useAppStore.getState().init();
+    expect(second).not.toBe(first);
+    expect(loadStateCallCount).toBe(2);
+    await waitForCondition(() => paintCallbacks.length === 1);
+
+    const secondPaint = paintCallbacks.shift();
+    if (!secondPaint) {
+      throw new Error("Expected second-generation paint callback");
+    }
+    secondPaint(0);
+    await second;
+    await waitForCondition(() => selectedThreadIds.length === 2);
+
+    expect(selectedThreadIds).toEqual(["thread-live", "thread-live"]);
+  });
+
+  test("a failed bootstrap releases the single-flight promise for Retry", async () => {
+    let attempt = 0;
+    loadStateImplementation = async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("first bootstrap failed");
+      }
+      return loadedState;
+    };
+    const realError = console.error;
+    console.error = mock(() => {});
+
+    try {
+      const failed = useAppStore.getState().init();
+      await failed;
+
+      expect(useAppStore.getState().startupError).toContain("first bootstrap failed");
+      expect(useAppStore.getState().workspaces[0]?.id).toBe("ws-cached");
+
+      const retried = useAppStore.getState().init();
+      expect(retried).not.toBe(failed);
+      await retried;
+    } finally {
+      console.error = realError;
+    }
+
+    expect(loadStateCallCount).toBe(2);
+    expect(getUpdateStateCallCount).toBe(1);
+    expect(useAppStore.getState().startupError).toBeNull();
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-live");
+  });
+
+  test("keeps deferred task refresh and selection inside the bootstrap generation", async () => {
+    const task = taskRecord();
+    const taskStartupCache = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: loadedState.workspaces,
+        threads: [],
+        desktopFeatureFlagOverrides: { tasks: true },
+      },
+      ui: {
+        ...cachedState.ui,
+        selectedWorkspaceId: "ws-live",
+        selectedThreadId: null,
+        selectedTaskId: "task-1",
+        view: "settings",
+        lastNonSettingsView: "task",
+      },
+    };
+    loadedState = taskStartupCache.persistedState;
+    resetStoreToCachedSeed(taskStartupCache);
+    const refresh = createDeferred<void>();
+    const selection = createDeferred<void>();
+    let refreshCalls = 0;
+    let selectionCalls = 0;
+    useAppStore.setState({
+      refreshTasks: async (workspaceId?: string) => {
+        refreshCalls += 1;
+        await refresh.promise;
+        if (!workspaceId) {
+          return;
+        }
+        useAppStore.setState({
+          taskSummariesByWorkspaceId: {
+            [workspaceId]: [taskSummary(task)],
+          },
+        });
+      },
+      selectTask: async () => {
+        selectionCalls += 1;
+        await selection.promise;
+      },
+    });
+
+    const initPromise = useAppStore.getState().init();
+    let settled = false;
+    void initPromise.then(() => {
+      settled = true;
+    });
+
+    await waitForCondition(() => refreshCalls === 1);
+    await initPromise;
+    expect(settled).toBe(true);
+    expect(useAppStore.getState().init()).toBe(initPromise);
+
+    refresh.resolve();
+    await waitForCondition(() => selectionCalls === 1);
+    expect(useAppStore.getState().init()).toBe(initPromise);
+
+    selection.resolve();
+    await useAppStore.getState().drainBootstrap();
+
+    expect(settled).toBe(true);
+    expect(refreshCalls).toBe(1);
+    expect(selectionCalls).toBe(1);
   });
 
   test("init hydrates a settings-over-task cache written without the task-owned thread", async () => {
@@ -1151,7 +1401,7 @@ describe("desktop bootstrap cache", () => {
 
     useAppStore.setState({
       ready: true,
-      bootstrapPending: false,
+      bootstrapPhase: "ready",
       workspaces: loadedState.workspaces,
       threads: [ordinaryThread, taskThread],
       selectedWorkspaceId: "ws-live",
@@ -1307,6 +1557,13 @@ describe("desktop bootstrap cache", () => {
   });
 
   test("init marks the selected startup thread as hydrating before deferred restore finishes", async () => {
+    const paintCallbacks: FrameRequestCallback[] = [];
+    installWindowMock({
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        paintCallbacks.push(callback);
+        return paintCallbacks.length;
+      },
+    });
     const chatCachedState = {
       ...cachedState,
       ui: {
@@ -1319,16 +1576,22 @@ describe("desktop bootstrap cache", () => {
     localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(chatCachedState));
     resetStoreToCachedSeed(chatCachedState);
 
-    await useAppStore.getState().init();
+    const initPromise = useAppStore.getState().init();
+    await waitForCondition(
+      () => useAppStore.getState().bootstrapPhase === "ready" && paintCallbacks.length === 1,
+    );
+    await initPromise;
 
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await Promise.resolve();
-    await Promise.resolve();
+    const paint = paintCallbacks.shift();
+    if (!paint) {
+      throw new Error("Expected startup hydration paint callback");
+    }
+    paint(0);
+    await waitForCondition(
+      () => useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating === false,
+    );
 
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(false);
   });
@@ -1347,14 +1610,22 @@ describe("desktop bootstrap cache", () => {
     localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(chatCachedState));
     resetStoreToCachedSeed(chatCachedState);
 
-    await useAppStore.getState().init();
+    const initPromise = useAppStore.getState().init();
+    let settled = false;
+    void initPromise.then(() => {
+      settled = true;
+    });
+    await waitForCondition(() => useAppStore.getState().bootstrapPhase === "ready");
 
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
 
+    await initPromise;
+
+    expect(settled).toBe(true);
+    expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
     await waitForCondition(
       () => useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating === false,
     );
-
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(false);
   });
 
@@ -1370,7 +1641,7 @@ describe("desktop bootstrap cache", () => {
     }
 
     const state = useAppStore.getState();
-    expect(state.bootstrapPending).toBe(false);
+    expect(state.bootstrapPhase).toBe("error");
     expect(state.startupError).toContain("state load exploded");
     expect(state.workspaces[0]?.id).toBe("ws-cached");
     expect(state.selectedThreadId).toBe("thread-cached");

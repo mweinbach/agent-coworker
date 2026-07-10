@@ -35,7 +35,7 @@ describe("desktop onboarding", () => {
     useAppStore.setState(defaultStoreState);
     useAppStore.setState({
       ready: true,
-      bootstrapPending: false,
+      bootstrapPhase: "ready",
       onboardingVisible: true,
       onboardingStep: "provider",
       workspaces: [

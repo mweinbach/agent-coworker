@@ -38,6 +38,7 @@ function restoreLocalStorageMock() {
 installLocalStorageMock();
 
 const {
+  getCurrentWebWorkspaceScopeKey,
   loadPersistedState,
   savePersistedState,
   saveServerUrl,
@@ -104,6 +105,16 @@ describe("web workspace state", () => {
     expect(reloadedSecondState.workspaces[0]?.path).toBe("/tmp/workspace-two");
     expect(reloadedSecondState.threads).toHaveLength(0);
     expect(reloadedSecondState.showHiddenFiles).toBe(true);
+  });
+
+  test("uses the full server and workspace tuple as the collision-safe outbox scope", () => {
+    saveServerUrl("ws://127.0.0.1:7337/ws");
+    saveWorkspacePath("/tmp/workspace:with-delimiters");
+
+    expect(JSON.parse(getCurrentWebWorkspaceScopeKey() ?? "null")).toEqual([
+      "ws://127.0.0.1:7337/ws",
+      "/tmp/workspace:with-delimiters",
+    ]);
   });
 
   test("preserves desktop feature flag overrides in localStorage-backed state", () => {

@@ -35,13 +35,36 @@ function glassFallbackColors(isDark: boolean) {
   };
 }
 
+function sendAccessibilityLabel({
+  canSend,
+  disabled,
+  hasText,
+  submitLabel,
+}: {
+  canSend: boolean;
+  disabled: boolean;
+  hasText: boolean;
+  submitLabel: string;
+}): string {
+  if (disabled) {
+    return "Send unavailable while offline";
+  }
+  if (!hasText) {
+    return `${submitLabel}, enter a message first`;
+  }
+  if (!canSend) {
+    return submitLabel;
+  }
+  return submitLabel;
+}
+
 function ComposerSendButton({
   canSend,
-  submitLabel,
+  accessibilityLabel,
   onSubmit,
 }: {
   canSend: boolean;
-  submitLabel: string;
+  accessibilityLabel: string;
   onSubmit: () => void;
 }) {
   const theme = useAppTheme();
@@ -76,7 +99,8 @@ function ComposerSendButton({
       disabled={!canSend}
       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
       accessibilityRole="button"
-      accessibilityLabel={submitLabel}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ disabled: !canSend }}
       style={{
         width: 34,
         height: 34,
@@ -106,7 +130,14 @@ export function ComposerBar({
   disabled = false,
 }: ComposerBarProps) {
   const theme = useAppTheme();
-  const canSend = !disabled && value.trim().length > 0;
+  const hasText = value.trim().length > 0;
+  const canSend = !disabled && hasText;
+  const accessibilityLabel = sendAccessibilityLabel({
+    canSend,
+    disabled,
+    hasText,
+    submitLabel,
+  });
   const shouldUseGlass = Platform.OS === "ios" && isLiquidGlassAvailable();
   const glassColors = glassFallbackColors(theme.isDark);
 
@@ -166,6 +197,7 @@ export function ComposerBar({
           editable={!disabled}
           placeholder="Message…"
           placeholderTextColor={theme.textTertiary}
+          accessibilityLabel="Message"
           multiline
           style={{
             flex: 1,
@@ -179,7 +211,11 @@ export function ComposerBar({
             textAlignVertical: "top",
           }}
         />
-        <ComposerSendButton canSend={canSend} submitLabel={submitLabel} onSubmit={onSubmit} />
+        <ComposerSendButton
+          canSend={canSend}
+          accessibilityLabel={accessibilityLabel}
+          onSubmit={onSubmit}
+        />
       </View>
     </View>
   );

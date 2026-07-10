@@ -41,4 +41,12 @@ describe("desktop ask prompt helpers", () => {
   test("uses shared skip token constant", () => {
     expect(ASK_SKIP_TOKEN).toBe("[skipped]");
   });
+
+  test("documents Esc as skip semantics for ask prompts", async () => {
+    const source = await Bun.file(new URL("../src/ui/PromptModal.tsx", import.meta.url)).text();
+    expect(source).toContain("Esc");
+    expect(source).toContain("without answering");
+    expect(source).toContain("ASK_SKIP_TOKEN");
+    expect(source).toContain('aria-keyshortcuts="Escape"');
+  });
 });

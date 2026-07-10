@@ -297,7 +297,7 @@ describe("desktop activity group card", () => {
     expect(html).toContain("Working for 1m 0s");
   });
 
-  test("skips blank reasoning placeholders and keeps Codex native web search visible", () => {
+  test("skips blank reasoning placeholders and keeps unrecovered memory errors plus web search", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {
         live: true,
@@ -347,9 +347,10 @@ describe("desktop activity group card", () => {
     const reasoningRows = doc.querySelectorAll('[data-activity-entry-kind="reasoning"]');
     const toolRows = doc.querySelectorAll('[data-activity-entry-kind="tool"]');
 
+    // A later different tool success must not hide the unrecovered memory error.
     expect(reasoningRows).toHaveLength(1);
-    expect(toolRows).toHaveLength(1);
-    expect(html).not.toContain("Memory");
+    expect(toolRows).toHaveLength(2);
+    expect(html).toContain("Memory");
     expect(html).toContain("Web Search");
     expect(html).toContain("Search: LGA crash 2026");
     expect(reasoningRows[0]?.textContent).not.toContain("Summary");
@@ -556,7 +557,6 @@ describe("desktop activity group card", () => {
             createElement(ChatFeed, {
               transcriptOnly: false,
               disconnected: false,
-              onReconnect: () => {},
               visibleFeedLength: 2,
               hydrating: false,
               renderItems: [brokenActivityGroup, healthyActivityGroup],
@@ -568,7 +568,7 @@ describe("desktop activity group card", () => {
               desktopBasePath: null,
               composerOverlayHeight: 0,
               sandboxApprovals: [],
-              onAnswerApproval: () => {},
+              onAnswerApproval: () => true,
               selectedThreadId: "thread-1",
             }),
           ),

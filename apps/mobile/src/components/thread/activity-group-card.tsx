@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 import type { ActivityFeedItem, ActivityGroupSummary } from "@/features/cowork/activityGroups";
 import {
@@ -88,6 +88,9 @@ function ReasoningSectionNode({
     <View style={{ gap: 6, paddingBottom: 10 }}>
       <Pressable
         onPress={() => setOpen(!open)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={open ? `Collapse ${title}` : `Expand ${title}`}
         style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
       >
         <Text
@@ -201,7 +204,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   }, [summary.entries]);
 
   return (
-    <ScrollView style={{ maxHeight: 420 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+    <View style={{ gap: 0 }}>
       {summary.entries.map((entry, index) => {
         const isLast = index === summary.entries.length - 1;
 
@@ -262,7 +265,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           </TimelineNode>
         );
       })}
-    </ScrollView>
+    </View>
   );
 }
 
@@ -319,6 +322,9 @@ export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupC
       <View style={{ gap: 8, maxWidth: "100%" }}>
         <Pressable
           onPress={() => setExpanded(!expanded)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          accessibilityLabel={expanded ? "Collapse activity details" : "Expand activity details"}
           style={{
             flexDirection: "row",
             alignItems: "center",
@@ -370,6 +376,9 @@ export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupC
     >
       <Pressable
         onPress={() => setExpanded(!expanded)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={expanded ? "Collapse activity details" : "Expand activity details"}
         style={{
           flexDirection: "row",
           alignItems: "center",

@@ -21,11 +21,63 @@ import type { WorkspaceStateHelpers } from "./workspaceState";
 
 export type FeedProjectionModule = ReturnType<typeof createFeedProjectionModule>;
 
+export function composeFeedItemUpdates(
+  first: (item: FeedItem) => FeedItem,
+  second: (item: FeedItem) => FeedItem,
+): (item: FeedItem) => FeedItem {
+  return (item) => second(first(item));
+}
+
 export function createFeedProjectionModule(
   ctx: ThreadEventReducerContext,
   workspace: Pick<WorkspaceStateHelpers, "resetLiveModelStreamRuntime">,
 ) {
+  /** Coalesce projected assistant token deltas to one store write per animation frame. */
+  const pendingAssistantDeltas = new Map<
+    string,
+    { set: StoreSet; threadId: string; itemId: string; chunks: string[] }
+  >();
+  let assistantDeltaFlushScheduled = false;
+
+  function flushPendingAssistantDeltas() {
+    assistantDeltaFlushScheduled = false;
+    const batches = [...pendingAssistantDeltas.values()];
+    pendingAssistantDeltas.clear();
+    for (const batch of batches) {
+      const combined = batch.chunks.join("");
+      if (!combined) continue;
+      updateThreadFeed(batch.set, batch.threadId, (feed) =>
+        applyProjectedAgentMessageDelta(feed, batch.itemId, combined, ctx.deps.nowIso()),
+      );
+    }
+  }
+
+  function scheduleAssistantDeltaFlush() {
+    if (assistantDeltaFlushScheduled) return;
+    assistantDeltaFlushScheduled = true;
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => flushPendingAssistantDeltas());
+    } else {
+      setTimeout(() => flushPendingAssistantDeltas(), 0);
+    }
+  }
+
+  /** Ensure coalesced token text is committed before any non-delta feed mutation. */
+  function flushPendingAssistantDeltasForThread(threadId: string) {
+    let hasPending = false;
+    for (const key of pendingAssistantDeltas.keys()) {
+      if (key.startsWith(`${threadId}:`)) {
+        hasPending = true;
+        break;
+      }
+    }
+    if (hasPending || assistantDeltaFlushScheduled) {
+      flushPendingAssistantDeltas();
+    }
+  }
+
   function pushFeedItem(set: StoreSet, threadId: string, item: FeedItem) {
+    flushPendingAssistantDeltasForThread(threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -69,6 +121,7 @@ export function createFeedProjectionModule(
     beforeItemId: string,
     item: FeedItem,
   ) {
+    flushPendingAssistantDeltasForThread(threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -195,6 +248,7 @@ export function createFeedProjectionModule(
   }
 
   function applyProjectedStarted(set: StoreSet, threadId: string, item: ProjectedItem) {
+    flushPendingAssistantDeltasForThread(threadId);
     if (item.type === "userMessage") {
       reconcileProjectedUserItem(set, threadId, item);
       return;
@@ -219,6 +273,11 @@ export function createFeedProjectionModule(
       }
     }
 
+    // Flush coalesced token deltas before applying the final projected item so
+    // a late rAF cannot append after the completed snapshot replaces text, and so
+    // non-message completions keep feed ordering stable relative to prior deltas.
+    flushPendingAssistantDeltasForThread(threadId);
+
     updateThreadFeed(
       set,
       threadId,
@@ -241,6 +300,7 @@ export function createFeedProjectionModule(
     mode: "reasoning" | "summary",
     delta: string,
   ) {
+    flushPendingAssistantDeltasForThread(threadId);
     updateThreadFeed(set, threadId, (feed) =>
       applyProjectedReasoningDelta(feed, itemId, mode, delta, ctx.deps.nowIso()),
     );
@@ -252,13 +312,50 @@ export function createFeedProjectionModule(
     itemId: string,
     delta: string,
   ) {
-    updateThreadFeed(
-      set,
-      threadId,
-      (feed) => applyProjectedAgentMessageDelta(feed, itemId, delta, ctx.deps.nowIso()),
-      { touchLastMessageAt: true },
-    );
+    // Do not touch threads[].lastMessageAt on intermediate token deltas —
+    // that forces sidebar re-renders at stream rate. Started/completed still update.
+    // Coalesce to one React commit per animation frame under high token rates.
+    const key = `${threadId}:${itemId}`;
+    const existing = pendingAssistantDeltas.get(key);
+    if (existing) {
+      existing.chunks.push(delta);
+      existing.set = set;
+    } else {
+      pendingAssistantDeltas.set(key, { set, threadId, itemId, chunks: [delta] });
+    }
+    scheduleAssistantDeltaFlush();
   }
+  /** Ordered per-item updates, flushed once per animation frame (model-stream path). */
+  const pendingModelStreamUpdates = new Map<
+    string,
+    { set: StoreSet; threadId: string; itemId: string; update: (item: FeedItem) => FeedItem }
+  >();
+  let modelStreamFlushScheduled = false;
+
+  function flushPendingModelStreamUpdates() {
+    modelStreamFlushScheduled = false;
+    const batches = [...pendingModelStreamUpdates.values()];
+    pendingModelStreamUpdates.clear();
+    for (const batch of batches) {
+      updateFeedItem(batch.set, batch.threadId, batch.itemId, batch.update);
+    }
+  }
+
+  function scheduleModelStreamFlush() {
+    if (modelStreamFlushScheduled) return;
+    modelStreamFlushScheduled = true;
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => flushPendingModelStreamUpdates());
+    } else {
+      setTimeout(() => flushPendingModelStreamUpdates(), 0);
+    }
+  }
+
+  function flushModelStreamBeforeStructuralChange() {
+    if (pendingModelStreamUpdates.size === 0) return;
+    flushPendingModelStreamUpdates();
+  }
+
   function applyModelStreamUpdateToThreadFeed(
     get: StoreGet,
     set: StoreSet,
@@ -270,15 +367,26 @@ export function createFeedProjectionModule(
       makeId: ctx.deps.makeId,
       nowIso: ctx.deps.nowIso,
       pushFeedItem: (item) => {
+        flushModelStreamBeforeStructuralChange();
         pushFeedItem(set, threadId, item);
       },
       insertFeedItemBefore: (beforeItemId, item) => {
+        flushModelStreamBeforeStructuralChange();
         insertFeedItemBefore(set, threadId, beforeItemId, item);
       },
       updateFeedItem: (itemId, updateItem) => {
-        updateFeedItem(set, threadId, itemId, updateItem);
+        const key = `${threadId}:${itemId}`;
+        const pending = pendingModelStreamUpdates.get(key);
+        pendingModelStreamUpdates.set(key, {
+          set,
+          threadId,
+          itemId,
+          update: pending ? composeFeedItemUpdates(pending.update, updateItem) : updateItem,
+        });
+        scheduleModelStreamFlush();
       },
       onToolTerminal: () => {
+        flushModelStreamBeforeStructuralChange();
         const thread = get().threads.find((t) => t.id === threadId);
         if (thread) {
           set((state) => ({

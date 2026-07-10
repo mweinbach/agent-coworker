@@ -11,14 +11,17 @@ import type { MentionItem } from "./composerMentions";
  * composer input.
  */
 export function ComposerMentionMenu(props: {
+  id?: string;
+  activeOptionIdPrefix?: string;
   items: MentionItem[];
   activeIndex: number;
   query?: string;
   onSelect: (item: MentionItem) => void;
   onHover: (index: number) => void;
 }) {
-  const { items, activeIndex, query, onSelect, onHover } = props;
+  const { id, activeOptionIdPrefix, items, activeIndex, query, onSelect, onHover } = props;
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const optionIdPrefix = activeOptionIdPrefix ?? id ?? "composer-mention";
 
   // Keep the keyboard-active option visible inside the scrollable list.
   useEffect(() => {
@@ -30,6 +33,7 @@ export function ComposerMentionMenu(props: {
     const trimmed = (query ?? "").trim();
     return (
       <div
+        id={id}
         data-slot="composer-mention-menu"
         role="listbox"
         aria-busy="false"
@@ -46,6 +50,7 @@ export function ComposerMentionMenu(props: {
 
   return (
     <div
+      id={id}
       data-slot="composer-mention-menu"
       role="listbox"
       className="absolute bottom-full left-0 z-50 mb-2 w-[24rem] max-w-[92vw] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-md"
@@ -63,6 +68,7 @@ export function ComposerMentionMenu(props: {
                 </div>
               ) : null}
               <button
+                id={`${optionIdPrefix}-option-${index}`}
                 ref={(el) => {
                   itemRefs.current[index] = el;
                 }}

@@ -12,6 +12,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
   useAppStore.setState({
     ...state,
     messageBarHeight: 120,
+    developerMode: true,
     ...overrides,
   } as any);
 }
@@ -32,7 +33,7 @@ describe("MessageBarResizer", () => {
         root.render(createElement(MessageBarResizer));
       });
 
-      const resizer = container.querySelector('[aria-label="Resize minimum message bar height"]');
+      const resizer = container.querySelector('[aria-label="Resize maximum message height"]');
 
       expect(resizer).not.toBeNull();
       expect(resizer?.className).toContain("app-native-no-drag");
@@ -104,7 +105,7 @@ describe("MessageBarResizer", () => {
         root.render(createElement(MessageBarResizer));
       });
 
-      const resizer = container.querySelector('[aria-label="Resize minimum message bar height"]');
+      const resizer = container.querySelector('[aria-label="Resize maximum message height"]');
       expect(resizer).not.toBeNull();
 
       await act(async () => {

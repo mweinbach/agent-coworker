@@ -1,4 +1,5 @@
-import { ArrowUpRightIcon, GlobeIcon, ShieldAlertIcon } from "lucide-react";
+import { ArrowUpRightIcon, GlobeIcon, LoaderCircleIcon, ShieldAlertIcon } from "lucide-react";
+import { useState } from "react";
 import type { SandboxApprovalPrompt } from "../../app/types";
 import { Button } from "../../components/ui/button";
 
@@ -11,12 +12,13 @@ import { Button } from "../../components/ui/button";
 export function SandboxApprovalCard(props: {
   threadId: string;
   prompt: SandboxApprovalPrompt;
-  onAnswer: (threadId: string, requestId: string, approved: boolean) => void;
+  onAnswer: (threadId: string, requestId: string, approved: boolean) => boolean;
   selectedThreadId?: string | null;
   threadTitle?: string | null;
   onSelectThread?: (threadId: string) => void;
 }) {
   const { threadId, prompt, onAnswer } = props;
+  const [pending, setPending] = useState<"approve" | "deny" | null>(null);
   const Icon = prompt.category === "network" ? GlobeIcon : ShieldAlertIcon;
   const detail =
     prompt.detail ??
@@ -26,11 +28,20 @@ export function SandboxApprovalCard(props: {
 
   const isFromOtherThread = props.selectedThreadId != null && threadId !== props.selectedThreadId;
   const threadLabel = props.threadTitle?.trim() || "another thread";
+  const answered = pending !== null;
+
+  const answer = (approved: boolean) => {
+    if (answered) return;
+    const accepted = onAnswer(threadId, prompt.requestId, approved);
+    if (accepted) {
+      setPending(approved ? "approve" : "deny");
+    }
+  };
 
   return (
     <section
       aria-label="Sandbox approval"
-      className="max-w-3xl rounded-lg border border-destructive/40 bg-destructive/5 p-3"
+      className="rounded-lg border border-destructive/40 bg-destructive/5 p-3"
     >
       <div className="flex items-start gap-2.5">
         <Icon className="mt-0.5 size-4 shrink-0 text-destructive" />
@@ -72,16 +83,26 @@ export function SandboxApprovalCard(props: {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => onAnswer(threadId, prompt.requestId, false)}
+              disabled={answered}
+              aria-busy={pending === "deny" || undefined}
+              onClick={() => answer(false)}
             >
+              {pending === "deny" ? (
+                <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />
+              ) : null}
               Keep blocked
             </Button>
             <Button
               type="button"
               variant="destructive"
               size="sm"
-              onClick={() => onAnswer(threadId, prompt.requestId, true)}
+              disabled={answered}
+              aria-busy={pending === "approve" || undefined}
+              onClick={() => answer(true)}
             >
+              {pending === "approve" ? (
+                <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />
+              ) : null}
               Run with full access
             </Button>
           </div>

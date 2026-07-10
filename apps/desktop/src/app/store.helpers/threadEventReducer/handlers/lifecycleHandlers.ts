@@ -324,7 +324,11 @@ export function handleLifecycleThreadEvent(
       composerText.length > 0 &&
       composerText === evt.text.trim()
     ) {
-      set({ composerText: "" });
+      set((state) => {
+        const nextById = { ...state.composerTextByThreadId };
+        if (state.selectedThreadId) delete nextById[state.selectedThreadId];
+        return { composerText: "", composerTextByThreadId: nextById };
+      });
     }
     return true;
   }

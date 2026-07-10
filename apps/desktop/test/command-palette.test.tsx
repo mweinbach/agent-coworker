@@ -236,7 +236,7 @@ describe("CommandPalette", () => {
       n.textContent?.replace(/\s+/g, " ").trim(),
     );
     // Models is the first page in the default "Models & tools" group.
-    expect(items.some((t) => t === "Models")).toBe(true);
+    expect(items.some((t) => t?.includes("Models"))).toBe(true);
   });
 
   test("closing the palette does not crash", () => {

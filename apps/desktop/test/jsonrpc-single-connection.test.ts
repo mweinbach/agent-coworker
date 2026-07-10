@@ -391,6 +391,15 @@ function clearDesktopApiMock() {
 }
 
 const { useAppStore } = await import("../src/app/store");
+const {
+  __controlSocketInternal,
+  __threadEventReducerInternal,
+  disposeAllJsonRpcState,
+  waitForControlSession,
+} = await import("../src/app/store.helpers");
+const { __internal: jsonRpcSocketInternal } = await import(
+  "../src/app/store.helpers/jsonRpcSocket"
+);
 const { RUNTIME, defaultThreadRuntime, defaultWorkspaceRuntime } = await import(
   "../src/app/store.helpers/runtimeState"
 );
@@ -455,7 +464,12 @@ function seedActiveThreadState() {
 }
 
 describe("desktop JSON-RPC single connection path", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await useAppStore.getState().drainBootstrap();
+    disposeAllJsonRpcState();
+    jsonRpcSocketInternal.reset();
+    __controlSocketInternal.reset();
+    __threadEventReducerInternal.reset();
     installDesktopApiMock();
     __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(
       desktopApiMock.createOneOffChatWorkspace,
@@ -534,7 +548,15 @@ describe("desktop JSON-RPC single connection path", () => {
     } as any);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await useAppStore.getState().drainBootstrap();
+    if (RUNTIME.jsonRpcSockets.has("ws-jsonrpc")) {
+      await waitForControlSession(useAppStore.getState, useAppStore.setState, "ws-jsonrpc", 1_000);
+    }
+    disposeAllJsonRpcState();
+    jsonRpcSocketInternal.reset();
+    __controlSocketInternal.reset();
+    __threadEventReducerInternal.reset();
     __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(null);
     clearJsonRpcSocketOverride();
     clearDesktopApiMock();

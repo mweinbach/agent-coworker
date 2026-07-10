@@ -1,14 +1,17 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import {
+  createDesktopApiMock,
+  createDesktopCommandsBridgeMock,
+} from "./helpers/mockDesktopCommands";
 
 const startWorkspaceServerMock = mock(async () => ({ url: "ws://mock-popup" }));
-
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    startWorkspaceServer: startWorkspaceServerMock,
-  }),
-);
+const desktopApiMock = createDesktopApiMock({
+  startWorkspaceServer: startWorkspaceServerMock,
+});
+(globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsBridgeMock());
 
 const { useAppStore } = await import("../src/app/store");
 const { reactivateWorkspaceJsonRpcSocketState } = await import(
@@ -54,7 +57,12 @@ function resetPopupWorkspace(requestMock: RequestMock) {
 
 describe("spreadsheet workbook workspace startup", () => {
   beforeEach(() => {
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
     startWorkspaceServerMock.mockClear();
+  });
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
   test("starts the workspace server before requesting workbook data", async () => {

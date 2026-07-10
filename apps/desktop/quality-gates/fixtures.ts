@@ -390,6 +390,9 @@ async function launchQualityHarness(
     await document.fonts.ready;
   });
   await page.waitForLoadState("networkidle");
+  if (!options.holdBootstrap) {
+    await page.waitForFunction(() => window.__coworkQualityGate?.isReady() === true);
+  }
   const viewport = await page.evaluate(() => ({
     height: window.innerHeight,
     width: window.innerWidth,

@@ -23,6 +23,7 @@ export type QualityGateRuntime = {
   getFileCount(): number;
   getFeedText(itemId: string): string | null;
   getMetrics(): QualityGateMetrics;
+  isReady(): boolean;
   openSettings(page: SettingsPageId): void;
   refreshFileTree(): Promise<void>;
   resetFeed(): void;
@@ -157,6 +158,23 @@ export function installQualityGateRuntime(): void {
       return item?.kind === "message" ? item.text : null;
     },
     getMetrics: () => ({ ...metrics }),
+    isReady: () => {
+      const state = useAppStore.getState();
+      const threadId = state.selectedThreadId;
+      if (!threadId) {
+        return false;
+      }
+      const thread = state.threads.find((entry) => entry.id === threadId);
+      const runtime = state.threadRuntimeById[threadId];
+      return (
+        thread?.status === "active" &&
+        runtime?.connected === true &&
+        runtime.hydrating === false &&
+        runtime.transcriptOnly === false &&
+        runtime.sessionId === threadId &&
+        runtime.feed.length > 0
+      );
+    },
     openSettings: (page) => {
       useAppStore.getState().openSettings(page);
     },

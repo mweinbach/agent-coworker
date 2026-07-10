@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import type { ChatRenderItem } from "@/features/cowork/activityGroups";
 import { ActivityGroupCard } from "./activity-group-card";
 import { ThreadFeedItem } from "./thread-feed-item";
@@ -7,9 +9,10 @@ type ThreadRenderItemProps = {
   showDebugMessages: boolean;
   live?: boolean;
   liveStartedAt?: string | null;
+  revision: string;
 };
 
-export function ThreadRenderItem({
+function ThreadRenderItemComponent({
   renderItem,
   showDebugMessages,
   live,
@@ -21,3 +24,12 @@ export function ThreadRenderItem({
 
   return <ThreadFeedItem item={renderItem.item} showDebugMessages={showDebugMessages} />;
 }
+
+export const ThreadRenderItem = memo(
+  ThreadRenderItemComponent,
+  (previous, next) =>
+    previous.revision === next.revision &&
+    previous.showDebugMessages === next.showDebugMessages &&
+    previous.live === next.live &&
+    previous.liveStartedAt === next.liveStartedAt,
+);

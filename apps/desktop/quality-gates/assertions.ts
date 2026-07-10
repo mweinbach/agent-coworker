@@ -6,12 +6,28 @@ import type { Page, TestInfo } from "playwright";
 
 import axeBaseline from "./axe-baseline.json" with { type: "json" };
 
-const knownColorContrastTargets = new Set(axeBaseline.colorContrast.selectors);
+const knownColorContrastSelectors = axeBaseline.colorContrast.selectors;
 
-function isKnownColorContrastTarget(target: Array<string | string[]>): boolean {
-  return target.length === 1 && typeof target[0] === "string"
-    ? knownColorContrastTargets.has(target[0])
-    : false;
+async function isKnownColorContrastTarget(
+  page: Page,
+  target: Array<string | string[]>,
+): Promise<boolean> {
+  if (target.length !== 1 || typeof target[0] !== "string") {
+    return false;
+  }
+  return await page.evaluate(
+    ({ baselineSelectors, targetSelector }) => {
+      const targetElement = document.querySelector(targetSelector);
+      return (
+        targetElement !== null &&
+        baselineSelectors.some((selector) => targetElement.matches(selector))
+      );
+    },
+    {
+      baselineSelectors: knownColorContrastSelectors,
+      targetSelector: target[0],
+    },
+  );
 }
 
 export async function settleQualityPage(page: Page): Promise<void> {
@@ -37,18 +53,25 @@ export async function assertNoSeriousAxeViolations(
     builder = builder.include(include);
   }
   const results = await builder.analyze();
-  const seriousViolations = results.violations.flatMap((violation) => {
+  const seriousViolations: typeof results.violations = [];
+  for (const violation of results.violations) {
     if (violation.impact !== "critical" && violation.impact !== "serious") {
-      return [];
+      continue;
     }
     if (violation.id !== "color-contrast") {
-      return [violation];
+      seriousViolations.push(violation);
+      continue;
     }
-    const unexpectedNodes = violation.nodes.filter(
-      (node) => !isKnownColorContrastTarget(node.target),
-    );
-    return unexpectedNodes.length > 0 ? [{ ...violation, nodes: unexpectedNodes }] : [];
-  });
+    const unexpectedNodes = [];
+    for (const node of violation.nodes) {
+      if (!(await isKnownColorContrastTarget(page, node.target))) {
+        unexpectedNodes.push(node);
+      }
+    }
+    if (unexpectedNodes.length > 0) {
+      seriousViolations.push({ ...violation, nodes: unexpectedNodes });
+    }
+  }
   const axeResultsPath = testInfo.outputPath("axe-results.json");
   await fs.writeFile(axeResultsPath, `${JSON.stringify(results, null, 2)}\n`, "utf8");
   await testInfo.attach("axe-results", {

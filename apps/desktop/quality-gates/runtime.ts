@@ -177,7 +177,7 @@ export function installQualityGateRuntime(): void {
       const threadId = selectedThreadId();
       useAppStore.setState((state) => ({
         threads: state.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, status: "disconnected" as const } : thread,
+          thread.id === threadId ? { ...thread, status: "active" as const } : thread,
         ),
         threadRuntimeById: {
           ...state.threadRuntimeById,
@@ -186,6 +186,9 @@ export function installQualityGateRuntime(): void {
             connected: false,
             busy: false,
             activeTurnId: null,
+            hydrating: false,
+            sessionId: threadId,
+            transcriptOnly: false,
           },
         },
       }));

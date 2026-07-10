@@ -8,7 +8,11 @@ import type * as Electron from "electron";
 import type * as Ws from "ws";
 import { hostPlatform } from "../../../src/platform/host";
 import type { ResearchRecord } from "../../../src/server/research/types";
-import { createQualityTaskFixture, PROJECT_THREAD_ID } from "../quality-gates/fixtureData";
+import {
+  createQualityTaskArtifactDetail,
+  createQualityTaskFixture,
+  PROJECT_THREAD_ID,
+} from "../quality-gates/fixtureData";
 import type { PersistedState } from "../src/app/types";
 import {
   createDefaultUpdaterState,
@@ -280,6 +284,7 @@ function createPersistedState(scenario: QualityScenario): PersistedState {
         lastEventSeq: 0,
       },
     ],
+    developerMode: true,
     desktopFeatureFlagOverrides: {
       canvas: true,
       remoteAccess: true,
@@ -608,17 +613,6 @@ function emitCompletion(): void {
 }
 
 function emitCancellation(): void {
-  sendProjectedItem(
-    "item/completed",
-    {
-      id: "quality-cancelled",
-      type: "error",
-      message: "Response stopped by the user.",
-      code: "internal_error",
-      source: "session",
-    },
-    "quality-turn",
-  );
   sendNotification("turn/completed", {
     threadId: PROJECT_THREAD_ID,
     turn: { id: "quality-turn", status: "interrupted" },
@@ -795,6 +789,8 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       return { tasks: [createQualityTaskFixture()] };
     case "task/read":
       return { task: createQualityTaskFixture() };
+    case "task/artifact/read":
+      return { detail: createQualityTaskArtifactDetail() };
     case "task/cancel":
       metrics.taskCancellationRequests += 1;
       return { task: createQualityTaskFixture("cancelled") };

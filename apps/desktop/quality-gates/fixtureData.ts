@@ -1,4 +1,4 @@
-import type { TaskRecord } from "../../../src/shared/tasks";
+import type { TaskArtifactDetail, TaskRecord } from "../../../src/shared/tasks";
 
 export const FIXED_NOW = "2026-07-09T12:00:00.000Z";
 export const PROJECT_WORKSPACE_ID = "quality-project";
@@ -151,5 +151,19 @@ export function createQualityTaskFixture(status: TaskRecord["status"] = "blocked
         ],
     activity: [],
     latestCheckpoint: null,
+  };
+}
+
+export function createQualityTaskArtifactDetail(): TaskArtifactDetail {
+  const artifact = createQualityTaskFixture().artifacts[0];
+  if (!artifact) {
+    throw new Error("Quality task artifact fixture is missing");
+  }
+  return {
+    artifact,
+    versions: [],
+    latestVersionId: null,
+    acceptedVersionId: null,
+    activeRevision: null,
   };
 }

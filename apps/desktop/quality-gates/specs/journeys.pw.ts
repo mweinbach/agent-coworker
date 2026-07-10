@@ -58,15 +58,15 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
   await page.getByRole("button", { name: "Keep blocked" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).approvalResponses).toBe(1);
 
-  const composer = page.getByRole("textbox");
+  const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Prioritize the accessibility findings.");
   await expect(composer).toHaveValue("Prioritize the accessibility findings.");
   await page.getByRole("button", { name: "Steer current response" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).turnSteerRequests).toBe(1);
 
   await page.getByRole("button", { name: "Stop generating response" }).click();
-  await expect(page.getByText("Response stopped by the user.")).toBeVisible();
   await expect.poll(async () => (await quality.getMainMetrics()).turnInterruptRequests).toBe(1);
+  await expect(page.getByRole("button", { name: "Stop generating response" })).toHaveCount(0);
 
   await quality.emitStreamingActivity();
   await quality.emitCompletion();
@@ -87,7 +87,7 @@ test("switches through a draft chat and restores the conversation scroll anchor"
     element.scrollTop = 0;
   });
 
-  const composer = page.getByRole("textbox");
+  const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Keep this controlled draft while switching chats.");
   await page.getByRole("button", { name: /^Controlled fixture draft / }).click();
   await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
@@ -105,11 +105,13 @@ test("covers persistent disconnect recovery, tool failures, and quick chat", asy
 }) => {
   const { page } = quality;
   await page.evaluate(() => window.__coworkQualityGate?.showDisconnect());
-  await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+  await expect(page.getByText("Disconnected from this chat. Reconnect to continue.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
 
   await page.evaluate(() => window.__coworkQualityGate?.showReconnect());
-  await expect(page.getByText("Disconnected", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Disconnected from this chat. Reconnect to continue.")).toHaveCount(
+    0,
+  );
 
   await page.evaluate(() => window.__coworkQualityGate?.showToolFailureHistory());
   await page.getByRole("button", { name: /Couldn't finish/ }).click();
@@ -132,6 +134,18 @@ test("covers file preview, Canvas popout, and resizers with bounded filesystem w
   const { electronApp, page } = quality;
   await electronApp.evaluate(() => globalThis.__coworkQualityGateMain?.resetMetrics());
 
+  const messageBarResizer = page.getByRole("separator", {
+    name: "Resize maximum message height",
+  });
+  await expect(messageBarResizer).toBeVisible();
+  const initialMessageBarHeight = Number(await messageBarResizer.getAttribute("aria-valuenow"));
+  await messageBarResizer.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(messageBarResizer).toHaveAttribute(
+    "aria-valuenow",
+    String(initialMessageBarHeight + 16),
+  );
+
   await page.evaluate(() => window.__coworkQualityGate?.showFilePreview());
   await expect(page.getByRole("button", { name: "Open canvas in window" })).toBeVisible();
 
@@ -142,9 +156,6 @@ test("covers file preview, Canvas popout, and resizers with bounded filesystem w
 
   await expect(page.getByRole("separator", { name: "Resize sidebar" })).toBeVisible();
   await expect(page.getByRole("separator", { name: "Resize context sidebar" })).toBeVisible();
-  await expect(
-    page.getByRole("separator", { name: "Resize minimum message bar height" }),
-  ).toBeVisible();
   const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
   const initialSidebarWidth = Number(await sidebarResizer.getAttribute("aria-valuenow"));
   await sidebarResizer.focus();
@@ -157,16 +168,6 @@ test("covers file preview, Canvas popout, and resizers with bounded filesystem w
   await page.keyboard.press("ArrowLeft");
   await expect(contextResizer).toHaveAttribute("aria-valuenow", String(initialContextWidth + 16));
 
-  const messageBarResizer = page.getByRole("separator", {
-    name: "Resize minimum message bar height",
-  });
-  const initialMessageBarHeight = Number(await messageBarResizer.getAttribute("aria-valuenow"));
-  await messageBarResizer.focus();
-  await page.keyboard.press("ArrowUp");
-  await expect(messageBarResizer).toHaveAttribute(
-    "aria-valuenow",
-    String(initialMessageBarHeight + 16),
-  );
   await expect
     .poll(async () => (await quality.getMainMetrics()).stateSaves)
     .toBeGreaterThanOrEqual(1);
@@ -240,7 +241,7 @@ for (const zoomFactor of [1, 1.25]) {
     await electronApp.evaluate(({ BrowserWindow }, zoom) => {
       BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(zoom);
     }, zoomFactor);
-    await page.getByRole("textbox").fill("@");
+    await page.getByRole("combobox", { name: "Message input" }).fill("@");
     const menu = page.getByRole("listbox");
     await expect(menu).toBeVisible();
     const insideViewport = await menu.evaluate((element) => {

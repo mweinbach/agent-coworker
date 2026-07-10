@@ -1,7 +1,9 @@
 {
   "colorContrast": {
-    "rationale": "Issue #235 adds enforcement without changing shipping theme tokens. These exact selectors are the pre-existing light/dark sidebar and top-bar contrast debt observed in the pinned Linux image; every other color-contrast node remains blocking.",
+    "rationale": "Issue #235 adds enforcement without changing shipping theme tokens. These selectors identify the pre-existing light/dark navigation, top-bar, task, and file-panel contrast debt observed in the pinned Linux image at origin/main 98407df7; every other color-contrast node remains blocking.",
     "selectors": [
+      ".app-left-sidebar-pane input[aria-label=\"Search chats\"]",
+      ".app-left-sidebar-pane .text-foreground\\/80.h-8.justify-start:nth-child(4)",
       ".app-sidebar__new-chat-button",
       ".app-topbar__thread-subtitle",
       ".app-topbar__thread-title",
@@ -15,7 +17,14 @@
       ".text-foreground\\/80.h-8.justify-start:nth-child(3)",
       ".text-muted-foreground\\/80.text-\\[10px\\].tracking-\\[0\\.16em\\]",
       ".tracking-wide",
+      "[data-activity-entry-kind=\"tool\"] .text-muted-foreground\\/65.text-\\[11px\\]",
+      "[data-sidebar-panel=\"files\"] .text-muted-foreground\\/80.text-\\[10px\\]",
+      "[data-sidebar-section=\"chats\"] [data-sidebar-section-drag-handle=\"true\"] .text-muted-foreground\\/75",
+      "[data-sidebar-section=\"projects\"] [data-sidebar-section-drag-handle=\"true\"] .text-muted-foreground\\/75",
+      "button[title=\"Controlled fixture draft\"] .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
       "button[title=\"Controlled fixture draft\"] > .flex-1 > .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
+      "button[title=\"Electron release review\"] .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
+      "button[title=\"Quick release note\"] .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
       "button[title=\"Quick release note\"] > .flex-1 > .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
       "div[data-sidebar-section=\"chats\"] > .flex-col.gap-2.flex > .justify-between.px-1[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.uppercase.tracking-\\[0\\.16em\\]",
       "div[data-sidebar-section=\"chats\"] > .flex-col.gap-2.flex > .justify-between.px-1[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.tracking-\\[0\\.16em\\].uppercase",

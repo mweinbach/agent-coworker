@@ -222,7 +222,7 @@ describe("mobile cowork jsonrpc client", () => {
       },
     });
 
-    const readPromise = client.readThread("thread-1");
+    const readPromise = client.readThread("thread-1", { includeTurns: true });
     const initializePayload = JSON.parse(sent[0]!);
     expect(initializePayload.method).toBe("initialize");
     expect(sent).toHaveLength(1);
@@ -255,6 +255,7 @@ describe("mobile cowork jsonrpc client", () => {
       method: "thread/read",
       params: {
         threadId: "thread-1",
+        includeTurns: true,
       },
     });
 

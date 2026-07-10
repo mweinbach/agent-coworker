@@ -203,6 +203,7 @@ export const jsonRpcThreadTurnNotificationSchemas = {
           items: z.array(projectedItemSchema),
         })
         .strict(),
+      replayed: z.boolean().optional(),
     })
     .strict(),
   "item/started": z

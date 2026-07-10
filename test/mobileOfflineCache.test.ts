@@ -91,6 +91,8 @@ describe("mobile offline cache", () => {
           workspaceKind: "project",
           feed: [],
           composerDraft: "",
+          composerAttachments: [],
+          composerSubmission: null,
           pendingPrompt: false,
           pendingServerRequest: null,
         },
@@ -151,6 +153,8 @@ describe("mobile offline cache", () => {
             },
           ],
           composerDraft: "do not persist drafts",
+          composerAttachments: [],
+          composerSubmission: null,
           pendingPrompt: true,
           pendingServerRequest: {
             kind: "ask",

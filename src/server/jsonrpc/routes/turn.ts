@@ -1,3 +1,4 @@
+import { IdempotencyConflictError } from "../../../shared/idempotencyLedger";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
@@ -85,14 +86,48 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       if (await rejectIfLmStudioUnreachable(context, ws, message.id, binding.runtime)) {
         return;
       }
+      const runtime = binding.runtime;
+      let idempotencyClaim: ReturnType<typeof runtime.turns.claimUserMessage>;
+      try {
+        idempotencyClaim = runtime.turns.claimUserMessage({
+          text,
+          clientMessageId,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          inputParts: orderedParts,
+          references,
+        });
+      } catch (error) {
+        if (!(error instanceof IdempotencyConflictError)) throw error;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: `turn/start clientMessageId conflict: ${error.message}`,
+        });
+        return;
+      }
+      if (idempotencyClaim?.kind === "replay") {
+        const replay = await idempotencyClaim.outcome;
+        if (replay.status === "rejected") {
+          context.jsonrpc.sendError(ws, message.id, {
+            code: JSONRPC_ERROR_CODES.invalidRequest,
+            message: replay.message,
+          });
+          return;
+        }
+        context.jsonrpc.sendResult(ws, message.id, {
+          turn: {
+            id: replay.value.turnId,
+            threadId,
+            status: "inProgress",
+            items: [],
+          },
+          replayed: true,
+        });
+        return;
+      }
       const outcome = await captureBindingOutcome(
         context,
         binding,
         () => {
-          const runtime = binding.runtime;
-          if (!runtime) {
-            throw new Error("Thread runtime is unavailable");
-          }
           return runtime.turns.sendUserMessage(
             text,
             clientMessageId,
@@ -100,7 +135,10 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
             references,
-            { allowThreadManagementTools: ws.data?.taskReadAllowed !== false },
+            {
+              allowThreadManagementTools: ws.data?.taskReadAllowed !== false,
+              idempotencyClaim,
+            },
           );
         },
         (event): event is JsonRpcTurnStartOutcome =>

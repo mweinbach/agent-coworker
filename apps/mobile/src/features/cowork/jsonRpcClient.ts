@@ -388,10 +388,16 @@ export class CoworkJsonRpcClient {
     return coworkThreadListResultSchema.parse(result);
   }
 
-  async readThread(threadId: string): Promise<CoworkThreadReadResult> {
+  async readThread(
+    threadId: string,
+    options?: { includeTurns?: boolean },
+  ): Promise<CoworkThreadReadResult> {
     const initializing = this.ensureInitialized();
     if (initializing) await initializing;
-    const result = await this.request("thread/read", { threadId });
+    const result = await this.request("thread/read", {
+      threadId,
+      ...(options?.includeTurns ? { includeTurns: true } : {}),
+    });
     return coworkThreadReadResultSchema.parse(result);
   }
 

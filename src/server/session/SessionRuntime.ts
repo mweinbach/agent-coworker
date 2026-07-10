@@ -22,6 +22,11 @@ import type { AgentSession } from "./AgentSession";
 import type { PendingPromptReplayEvent } from "./InteractionManager";
 import type { McpServerLookup } from "./mcp/McpServerLookup";
 import type { SeededSessionContext } from "./SessionContext";
+import type {
+  SendUserMessageOptions,
+  UserMessageIdempotencyClaim,
+  UserMessageIdempotencyInput,
+} from "./TurnExecutionManager";
 import type { TaskLockError } from "./taskLocks";
 
 export class SessionSnapshotService {
@@ -142,7 +147,7 @@ export class SessionTurnService {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: SendUserMessageOptions,
   ): Promise<void> {
     await this.session.sendUserMessage(
       text,
@@ -153,6 +158,10 @@ export class SessionTurnService {
       references,
       opts,
     );
+  }
+
+  claimUserMessage(input: UserMessageIdempotencyInput): UserMessageIdempotencyClaim | null {
+    return this.session.claimUserMessage(input);
   }
 
   async sendSteerMessage(

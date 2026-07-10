@@ -58,6 +58,7 @@ export type UserMessageTurnRunnerDeps = {
   validateUploadedFileAttachments: UserMessageAttachmentHelpers["validateUploadedFileAttachments"];
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   waitForLiveSteerSettlement?: () => Promise<void>;
+  onUserMessageAccepted?: (clientMessageId: string | undefined, turnId: string) => void;
 };
 
 export type UserMessageTurnRunner = {
@@ -109,6 +110,7 @@ export function createUserMessageTurnRunner(
     validateUploadedFileAttachments,
     onAdvancedMemoryChanged,
     waitForLiveSteerSettlement,
+    onUserMessageAccepted,
   } = deps;
 
   const updateSessionExecutionState = (executionState: AgentExecutionState) => {
@@ -324,6 +326,7 @@ export function createUserMessageTurnRunner(
         text: visibleText,
         clientMessageId,
       });
+      onUserMessageAccepted?.(clientMessageId, turnId);
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       context.queuePersistSessionSnapshot("session.user_message");
       context.emit({

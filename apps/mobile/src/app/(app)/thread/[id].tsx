@@ -18,6 +18,12 @@ import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
 import { buildChatRenderItems, type ChatRenderItem } from "@/features/cowork/activityGroups";
+import {
+  type ComposerSubmission,
+  getComposerPolicy,
+  hasComposerContent,
+  toComposerTurnInput,
+} from "@/features/cowork/composer-policy";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
@@ -36,10 +42,18 @@ type ThreadDetailListItem =
       data: ChatRenderItem;
     };
 
-type ThreadActionError = {
-  kind: "load" | "send";
-  message: string;
-};
+type ThreadActionError =
+  | { kind: "load"; message: string }
+  | { kind: "send"; message: string }
+  | {
+      kind: "respond";
+      message: string;
+      response: {
+        requestId: string | number;
+        result: unknown;
+      };
+    }
+  | { kind: "interrupt"; message: string };
 
 const NEAR_BOTTOM_THRESHOLD_PX = 96;
 const EMPTY_AGENTS: unknown[] = [];
@@ -80,6 +94,22 @@ function describeError(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function reconcileActiveTurn(
+  threadId: string,
+  turns: Array<{ id: string; status: string }> | undefined,
+): void {
+  const latestTurn = turns?.at(-1);
+  const store = useThreadStore.getState();
+  if (!latestTurn) return;
+  if (latestTurn?.status === "inProgress") {
+    if (store.getActiveTurnStartedAt(threadId) === null) {
+      store.markTurnStarted(threadId, new Date().toISOString());
+    }
+    return;
+  }
+  store.markTurnCompleted(threadId);
+}
+
 export default function ThreadDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const threadId = typeof params.id === "string" ? params.id : "";
@@ -95,16 +125,22 @@ export default function ThreadDetailScreen() {
   const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
   const submitComposer = useThreadStore((state) => state.submitComposer);
+  const beginComposerSubmission = useThreadStore((state) => state.beginComposerSubmission);
+  const retryComposerSubmission = useThreadStore((state) => state.retryComposerSubmission);
+  const failComposerSubmission = useThreadStore((state) => state.failComposerSubmission);
+  const acceptComposerSubmission = useThreadStore((state) => state.acceptComposerSubmission);
   const appendOptimisticUserMessage = useThreadStore((state) => state.appendOptimisticUserMessage);
   const removeOptimisticUserMessage = useThreadStore((state) => state.removeOptimisticUserMessage);
   const interruptThread = useThreadStore((state) => state.interruptThread);
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
   const [actionError, setActionError] = useState<ThreadActionError | null>(null);
+  const [isStopping, setIsStopping] = useState(false);
 
   const [stickToBottom, setStickToBottom] = useState(true);
   const listRef = useRef<FlatList<ThreadDetailListItem>>(null);
   const loadRequestIdRef = useRef(0);
+  const stoppingRef = useRef(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
 
   const isDraftThread = threadId.startsWith("draft-");
@@ -123,11 +159,12 @@ export default function ThreadDetailScreen() {
     try {
       await runtimeClient.resumeThread(threadId);
       if (requestId !== loadRequestIdRef.current) return;
-      const reread = await runtimeClient.readThread(threadId);
+      const reread = await runtimeClient.readThread(threadId, { includeTurns: true });
       if (requestId !== loadRequestIdRef.current) return;
       if (reread.coworkSnapshot) {
         useThreadStore.getState().hydrate(reread.coworkSnapshot);
       }
+      reconcileActiveTurn(threadId, reread.thread.turns);
       setActionError((current) => (current?.kind === "load" ? null : current));
     } catch (error) {
       if (requestId !== loadRequestIdRef.current) return;
@@ -203,60 +240,138 @@ export default function ThreadDetailScreen() {
   const activeThread = thread;
 
   async function interruptCurrentThread() {
-    if (runtimeClient && !isDraftThread) {
-      await runtimeClient.interruptTurn(activeThread.id);
-      const reread = await runtimeClient.readThread(activeThread.id);
-      if (reread.coworkSnapshot) {
-        useThreadStore.getState().hydrate(reread.coworkSnapshot);
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    setIsStopping(true);
+    setActionError((current) => (current?.kind === "interrupt" ? null : current));
+    try {
+      if (runtimeClient && !isDraftThread) {
+        await runtimeClient.interruptTurn(activeThread.id);
+        const reread = await runtimeClient.readThread(activeThread.id, { includeTurns: true });
+        if (reread.coworkSnapshot) {
+          useThreadStore.getState().hydrate(reread.coworkSnapshot);
+        }
+        reconcileActiveTurn(activeThread.id, reread.thread.turns);
+        return;
       }
-      return;
+      interruptThread(activeThread.id);
+    } catch (error) {
+      setActionError({
+        kind: "interrupt",
+        message: describeError(error, "Failed to stop this turn."),
+      });
+    } finally {
+      stoppingRef.current = false;
+      setIsStopping(false);
     }
-    interruptThread(activeThread.id);
   }
 
-  async function answerServerRequest(result: unknown) {
+  async function answerServerRequest(requestId: string | number, result: unknown) {
     const client = getActiveCoworkJsonRpcClient();
-    if (!client || !pendingRequest) {
-      return;
+    if (!client) {
+      return false;
     }
-    await client.respondServerRequest(pendingRequest.requestId, result);
-    clearPendingRequest(activeThread.id);
+    setActionError((current) => (current?.kind === "respond" ? null : current));
+    try {
+      await client.respondServerRequest(requestId, result);
+      clearPendingRequest(activeThread.id);
+      return true;
+    } catch (error) {
+      setActionError({
+        kind: "respond",
+        message: describeError(error, "Failed to send your response."),
+        response: { requestId, result },
+      });
+      return false;
+    }
+  }
+
+  async function sendComposerSubmission(submission: ComposerSubmission) {
+    const client = getActiveCoworkJsonRpcClient();
+    const optimisticText =
+      submission.text || submission.attachments.map((attachment) => attachment.filename).join(", ");
+    appendOptimisticUserMessage(activeThread.id, optimisticText, submission.clientMessageId);
+    setActionError((current) => (current?.kind === "send" ? null : current));
+    setStickToBottom(true);
+    try {
+      if (!client) {
+        throw new Error("Desktop connection is unavailable.");
+      }
+      await client.startTurn(
+        activeThread.id,
+        toComposerTurnInput(submission),
+        submission.clientMessageId,
+      );
+      acceptComposerSubmission(activeThread.id, submission.clientMessageId);
+    } catch (error) {
+      const message = describeError(error, "Failed to send message.");
+      removeOptimisticUserMessage(activeThread.id, submission.clientMessageId);
+      failComposerSubmission(activeThread.id, submission.clientMessageId, message);
+      setActionError({ kind: "send", message });
+    }
+  }
+
+  async function retryFailedComposerSubmission() {
+    const submission = retryComposerSubmission(activeThread.id);
+    if (submission) {
+      await sendComposerSubmission(submission);
+    }
   }
 
   async function handleSubmitComposer() {
-    if (!isConnected) {
-      if (isDraftThread) {
-        submitComposer(activeThread.id);
-      }
+    if (isDraftThread) {
+      submitComposer(activeThread.id);
       return;
     }
-    if (runtimeClient && !isDraftThread && activeThread.composerDraft.trim()) {
-      const draft = activeThread.composerDraft;
-      const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
-        ?.randomUUID
-        ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
-        : `local-${Date.now()}`;
-      appendOptimisticUserMessage(activeThread.id, draft, clientMessageId);
-      setComposerDraft(activeThread.id, "");
-      setActionError((current) => (current?.kind === "send" ? null : current));
-      setStickToBottom(true);
-      try {
-        await runtimeClient.startTurn(activeThread.id, draft, clientMessageId);
-      } catch (error) {
-        removeOptimisticUserMessage(activeThread.id, clientMessageId);
-        setComposerDraft(activeThread.id, draft);
-        setActionError({
-          kind: "send",
-          message: describeError(error, "Failed to send message."),
-        });
-      }
-      return;
+    if (!isConnected || !runtimeClient) return;
+    const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
+      ?.randomUUID
+      ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
+      : `local-${Date.now()}`;
+    const submission = beginComposerSubmission(activeThread.id, clientMessageId);
+    if (submission) {
+      await sendComposerSubmission(submission);
     }
-    submitComposer(activeThread.id);
   }
 
   const activePendingRequest = isConnected ? pendingRequest : null;
   const showStop = turnActive || activePendingRequest !== null;
+  const isSubmitting = activeThread.composerSubmission?.status === "submitting";
+  const composerPolicy = getComposerPolicy({
+    connected: isConnected,
+    draftThread: isDraftThread,
+    hasContent: hasComposerContent(
+      activeThread.composerDraft,
+      activeThread.composerAttachments ?? [],
+    ),
+    isBusy: showStop,
+    isSubmitting,
+    hasFailedSubmission: activeThread.composerSubmission?.status === "failed",
+  });
+
+  function retryActionError(error: ThreadActionError): void {
+    switch (error.kind) {
+      case "load":
+        void loadThreadFeed();
+        return;
+      case "send":
+        void retryFailedComposerSubmission();
+        return;
+      case "respond": {
+        const requestId = activePendingRequest?.requestId ?? error.response.requestId;
+        void answerServerRequest(requestId, error.response.result);
+        return;
+      }
+      case "interrupt":
+        void interruptCurrentThread();
+        return;
+      default: {
+        const exhaustive: never = error;
+        throw new Error(`Unhandled thread action error: ${String(exhaustive)}`);
+      }
+    }
+  }
+
   const showSessionBadge =
     isDraftThread || activePendingRequest !== null || isOfflineReadOnly || turnActive;
 
@@ -271,7 +386,8 @@ export default function ThreadDetailScreen() {
         <Stack.Toolbar placement="right">
           <Stack.Toolbar.Button
             icon="xmark.circle.fill"
-            accessibilityLabel="Stop turn"
+            accessibilityLabel={isStopping ? "Stopping turn" : "Stop turn"}
+            disabled={isStopping}
             onPress={() => {
               void interruptCurrentThread();
             }}
@@ -344,15 +460,9 @@ export default function ThreadDetailScreen() {
                         </Text>
                         <Pressable
                           accessibilityRole="button"
-                          accessibilityLabel={
-                            actionError.kind === "load" ? "Retry loading thread" : "Retry send"
-                          }
+                          accessibilityLabel={`Retry ${actionError.kind}`}
                           onPress={() => {
-                            if (actionError.kind === "load") {
-                              void loadThreadFeed();
-                              return;
-                            }
-                            void handleSubmitComposer();
+                            retryActionError(actionError);
                           }}
                           style={({ pressed }) => ({
                             alignSelf: "flex-start",
@@ -400,18 +510,20 @@ export default function ThreadDetailScreen() {
                   askDraft={askDraft}
                   onChangeAskDraft={setAskDraft}
                   onAnswerOption={(answer) => {
-                    void answerServerRequest({ answer });
+                    void answerServerRequest(request.requestId, { answer });
                   }}
                   onAnswerText={() => {
-                    void answerServerRequest({ answer: askDraft || "ok" }).then(() => {
-                      setAskDraft("");
-                    });
+                    void answerServerRequest(request.requestId, { answer: askDraft || "ok" }).then(
+                      (sent) => {
+                        if (sent) setAskDraft("");
+                      },
+                    );
                   }}
                   onApprove={() => {
-                    void answerServerRequest({ decision: "accept" });
+                    void answerServerRequest(request.requestId, { decision: "accept" });
                   }}
                   onReject={() => {
-                    void answerServerRequest({ decision: "reject" });
+                    void answerServerRequest(request.requestId, { decision: "reject" });
                   }}
                 />
               );
@@ -481,6 +593,14 @@ export default function ThreadDetailScreen() {
             onSubmit={() => {
               void handleSubmitComposer();
             }}
+            onStop={() => {
+              void interruptCurrentThread();
+            }}
+            canEdit={composerPolicy.canEdit}
+            canSubmit={composerPolicy.canSubmit}
+            isSubmitting={isSubmitting}
+            isBusy={showStop}
+            isStopping={isStopping}
             helperText={
               isOfflineReadOnly
                 ? "Showing cached messages. Connect to your desktop to send."
@@ -489,7 +609,6 @@ export default function ThreadDetailScreen() {
                   : null
             }
             submitLabel={isDraftThread ? "Save draft" : "Send"}
-            disabled={isOfflineReadOnly}
           />
         </View>
       </KeyboardAvoidingView>

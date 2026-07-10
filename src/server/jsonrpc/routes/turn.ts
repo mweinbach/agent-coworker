@@ -1,3 +1,4 @@
+import { resolveToolRetryIntent, type ToolRetryIntent } from "../../../shared/toolRetry";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
@@ -63,7 +64,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
 
-      const { threadId, input, clientMessageId, references } = parsed.data;
+      const { threadId, input, clientMessageId, references, retry } = parsed.data;
       const { text, attachments, orderedParts } = context.utils.extractInput(input);
       const hasInput = text || attachments.length > 0;
       if (!threadId || !hasInput) {
@@ -85,6 +86,25 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       if (await rejectIfLmStudioUnreachable(context, ws, message.id, binding.runtime)) {
         return;
       }
+      if (retry && ws.data.rpc?.capabilities.toolRetryLineage !== true) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: "turn/start retry requires the toolRetryLineage client capability.",
+        });
+        return;
+      }
+      let toolRetryIntent: ToolRetryIntent | undefined;
+      try {
+        toolRetryIntent = retry
+          ? resolveToolRetryIntent(binding.runtime.snapshot.peek().feed, retry)
+          : undefined;
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : "Invalid tool retry target.",
+        });
+        return;
+      }
       const outcome = await captureBindingOutcome(
         context,
         binding,
@@ -100,7 +120,10 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             attachments.length > 0 ? attachments : undefined,
             orderedParts,
             references,
-            { allowThreadManagementTools: ws.data?.taskReadAllowed !== false },
+            {
+              allowThreadManagementTools: ws.data?.taskReadAllowed !== false,
+              ...(toolRetryIntent ? { toolRetryIntent } : {}),
+            },
           );
         },
         (event): event is JsonRpcTurnStartOutcome =>

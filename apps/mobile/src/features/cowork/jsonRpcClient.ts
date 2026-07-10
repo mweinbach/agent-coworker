@@ -311,6 +311,7 @@ export class CoworkJsonRpcClient {
   private readonly clientInfo: JsonRpcClientOptions["clientInfo"];
   private initializePromise: Promise<void> | null = null;
   private transportGeneration = 0;
+  private serverSupportsToolRetryLineage = false;
 
   constructor(options: JsonRpcClientOptions) {
     this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 15_000);
@@ -324,7 +325,12 @@ export class CoworkJsonRpcClient {
     this.transportGeneration += 1;
     this.initialized = false;
     this.initializePromise = null;
+    this.serverSupportsToolRetryLineage = false;
     this.rejectAllPending(reason);
+  }
+
+  get supportsToolRetryLineage(): boolean {
+    return this.serverSupportsToolRetryLineage;
   }
 
   async initialize(): Promise<void> {
@@ -337,12 +343,21 @@ export class CoworkJsonRpcClient {
     const generation = this.transportGeneration;
     const initializePromise = (async () => {
       try {
-        await this.request("initialize", {
+        const initializeResult = await this.request("initialize", {
           clientInfo: this.clientInfo,
           capabilities: {
-            experimentalApi: false,
+            experimentalApi: true,
+            toolRetryLineage: true,
           },
         });
+        if (initializeResult && typeof initializeResult === "object") {
+          const result = initializeResult as Record<string, unknown>;
+          const capabilities =
+            result.capabilities && typeof result.capabilities === "object"
+              ? (result.capabilities as Record<string, unknown>)
+              : null;
+          this.serverSupportsToolRetryLineage = capabilities?.toolRetryLineage === true;
+        }
       } catch (error) {
         if (
           !matchesJsonRpcError(error, JSONRPC_ALREADY_INITIALIZED_ERROR_CODE, "Already initialized")
@@ -406,11 +421,18 @@ export class CoworkJsonRpcClient {
     threadId: string,
     input: string | CoworkTurnInputPart[],
     clientMessageId?: string,
+    retryToolItemIds?: string[],
   ): Promise<void> {
+    if (retryToolItemIds && retryToolItemIds.length > 0 && !this.serverSupportsToolRetryLineage) {
+      throw new Error("This server does not support exact tool retries.");
+    }
     await this.request("turn/start", {
       threadId,
       input: typeof input === "string" ? [{ type: "text", text: input }] : input,
       ...(clientMessageId ? { clientMessageId } : {}),
+      ...(retryToolItemIds && retryToolItemIds.length > 0
+        ? { retry: { toolItemIds: retryToolItemIds } }
+        : {}),
     });
   }
 

@@ -764,15 +764,25 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     ],
   );
 
-  const retryFailedTurn = useCallback(async (): Promise<boolean> => {
-    if (!thread || useAppStore.getState().selectedThreadId !== thread.id) return false;
-    const draftBeforeRetry = useAppStore.getState().composerText;
-    const accepted = await sendMessage(HIDDEN_RETRY_TURN_PROMPT, "reject");
-    if (accepted && draftBeforeRetry && useAppStore.getState().composerText === "") {
-      setComposerText(draftBeforeRetry);
-    }
-    return accepted;
-  }, [sendMessage, setComposerText, thread]);
+  const retryFailedTurn = useCallback(
+    async (toolItemIds: string[]): Promise<boolean> => {
+      if (!thread || useAppStore.getState().selectedThreadId !== thread.id) return false;
+      if (toolItemIds.length === 0) return false;
+      const draftBeforeRetry = useAppStore.getState().composerText;
+      const accepted = await sendMessage(
+        HIDDEN_RETRY_TURN_PROMPT,
+        "reject",
+        undefined,
+        undefined,
+        toolItemIds,
+      );
+      if (accepted && draftBeforeRetry && useAppStore.getState().composerText === "") {
+        setComposerText(draftBeforeRetry);
+      }
+      return accepted;
+    },
+    [sendMessage, setComposerText, thread],
+  );
 
   if (!selectedThreadId || !thread) {
     return <NewChatLanding />;

@@ -24,7 +24,11 @@ import {
 } from "../../components/ui/message-scroller";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { ActivityGroupCard } from "./ActivityGroupCard";
-import { type ChatRenderItem, summarizeActivityGroup } from "./activityGroups";
+import {
+  type ChatRenderItem,
+  summarizeActivityGroup,
+  unresolvedToolFailureIds,
+} from "./activityGroups";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
@@ -65,7 +69,9 @@ function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string |
     const item = renderItems[index];
     if (!item) continue;
     if (item.kind === "activity-group") {
-      return summarizeActivityGroup(item.items).status === "issue" ? item.id : null;
+      return summarizeActivityGroup(item.items, item.recoveredToolIds).status === "issue"
+        ? item.id
+        : null;
     }
     if (item.item.kind === "message") return null;
   }
@@ -263,7 +269,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
   selectedThreadId?: string | null;
   threadTitleById?: ReadonlyMap<string, string>;
   onSelectThread?: (threadId: string) => void;
-  onRetryFailedTurn?: () => Promise<boolean>;
+  onRetryFailedTurn?: (toolItemIds: string[]) => Promise<boolean>;
   retryFailedTurnDisabled?: boolean;
 }) {
   const {
@@ -450,10 +456,16 @@ export const ChatFeed = memo(function ChatFeed(props: {
                       {item.kind === "activity-group" ? (
                         <ActivityGroupCard
                           items={item.items}
+                          recoveredToolIds={item.recoveredToolIds}
                           live={item.id === liveActivityGroupId}
                           liveStartedAt={liveStartedAt}
                           onRetry={
-                            item.id === retryableActivityGroupId ? onRetryFailedTurn : undefined
+                            item.id === retryableActivityGroupId && onRetryFailedTurn
+                              ? () =>
+                                  onRetryFailedTurn(
+                                    unresolvedToolFailureIds(item.items, item.recoveredToolIds),
+                                  )
+                              : undefined
                           }
                           retryDisabled={retryFailedTurnDisabled}
                         />

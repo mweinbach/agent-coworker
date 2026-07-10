@@ -346,6 +346,7 @@ export type AppStoreState = {
     busyPolicy?: ThreadBusyPolicy,
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[],
     references?: import("../lib/wsProtocol").TurnReference[],
+    retryToolItemIds?: string[],
   ) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;

@@ -1,5 +1,6 @@
 import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
+import type { ToolRetryIntent } from "../../../shared/toolRetry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { ApproveCommandOptions, TurnReference } from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
@@ -68,8 +69,13 @@ export type UserMessageTurnRunner = {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: UserMessageTurnOptions,
   ) => Promise<void>;
+};
+
+export type UserMessageTurnOptions = {
+  allowThreadManagementTools?: boolean;
+  toolRetryIntent?: ToolRetryIntent;
 };
 
 export type UserMessageTurnFinalizerCheckpoint = {
@@ -186,7 +192,7 @@ export function createUserMessageTurnRunner(
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: UserMessageTurnOptions,
   ) => {
     if (context.state.running) {
       context.emitError("busy", "session", "Agent is busy");
@@ -265,6 +271,7 @@ export function createUserMessageTurnRunner(
       includeRawChunks,
       onAdvancedMemoryChanged,
       allowThreadManagementTools: opts?.allowThreadManagementTools,
+      toolRetryIntent: opts?.toolRetryIntent,
       setAcceptingSteers: (accepting) => {
         context.state.acceptingSteers = accepting;
       },

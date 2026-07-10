@@ -41,6 +41,7 @@ import type {
   PersistentAgentSummary,
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
+import type { ToolRetryIntent } from "../../shared/toolRetry";
 import { getAiCoworkerPaths } from "../../store/connections";
 import type {
   AgentConfig,
@@ -1889,7 +1890,10 @@ export class AgentSession {
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
     references?: import("../../types").TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: {
+      allowThreadManagementTools?: boolean;
+      toolRetryIntent?: ToolRetryIntent;
+    },
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {

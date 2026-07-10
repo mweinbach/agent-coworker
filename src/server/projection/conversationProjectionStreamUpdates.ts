@@ -123,6 +123,9 @@ export function createStreamUpdateHandler(
       if (update.args !== undefined) {
         toolState.args = update.args;
       }
+      if (update.retryOf !== undefined) {
+        toolState.retryOf = update.retryOf;
+      }
       if (toolState.state !== "approval-requested") {
         toolState.state = "input-available";
       }

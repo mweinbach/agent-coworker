@@ -251,6 +251,7 @@ export function createMessagingModule(
     clientMessageId: string,
     attachments?: FileAttachmentInput[],
     references?: TurnReference[],
+    retryToolItemIds?: string[],
   ) {
     void startJsonRpcTurn(
       get,
@@ -261,6 +262,7 @@ export function createMessagingModule(
       clientMessageId,
       attachments,
       references,
+      retryToolItemIds,
     ).catch((error) => {
       const lmStudio = parseLmStudioUnreachableError(error);
       if (lmStudio) {
@@ -288,7 +290,7 @@ export function createMessagingModule(
               installed: lmStudio.installed,
               canAutoStart: lmStudio.canAutoStart,
               phase: "prompt",
-              retry: { text, clientMessageId, attachments, references },
+              retry: { text, clientMessageId, attachments, references, retryToolItemIds },
             },
           };
         });
@@ -338,6 +340,7 @@ export function createMessagingModule(
     attachments?: FileAttachmentInput[],
     references?: TurnReference[],
     presetClientMessageId?: string,
+    retryToolItemIds?: string[],
   ): boolean {
     const trimmed = text.trim();
     const hasAttachments = attachments && attachments.length > 0;
@@ -481,6 +484,7 @@ export function createMessagingModule(
       clientMessageId,
       attachments,
       references,
+      retryToolItemIds,
     );
     return true;
   }

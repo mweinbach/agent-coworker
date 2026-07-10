@@ -5,6 +5,7 @@ import {
   buildChatRenderItems,
   shouldShowWorkingPlaceholder,
   summarizeActivityGroup,
+  unresolvedToolFailureIds,
 } from "../src/ui/chat/activityGroups";
 
 describe("desktop chat activity groups", () => {
@@ -51,7 +52,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-r1", items: [feed[1], feed[2], feed[3]] },
+      {
+        kind: "activity-group",
+        id: "activity-r1",
+        items: [feed[1], feed[2], feed[3]],
+        recoveredToolIds: [],
+      },
       { kind: "feed-item", item: feed[4] },
     ]);
   });
@@ -90,7 +96,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-t1", items: [feed[1]] },
+      {
+        kind: "activity-group",
+        id: "activity-t1",
+        items: [feed[1]],
+        recoveredToolIds: [],
+      },
       { kind: "feed-item", item: feed[2] },
       { kind: "feed-item", item: feed[3] },
     ]);
@@ -125,7 +136,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-r1", items: [feed[1], feed[2]] },
+      {
+        kind: "activity-group",
+        id: "activity-r1",
+        items: [feed[1], feed[2]],
+        recoveredToolIds: [],
+      },
       { kind: "feed-item", item: feed[3] },
     ]);
   });
@@ -150,7 +166,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-r-pending", items: [feed[1]] },
+      {
+        kind: "activity-group",
+        id: "activity-r-pending",
+        items: [feed[1]],
+        recoveredToolIds: [],
+      },
     ]);
   });
 
@@ -730,6 +751,120 @@ describe("desktop chat activity groups", () => {
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
     expect(toolEntries).toHaveLength(2);
     expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
+  });
+
+  test("explicit successful retry keeps both calls visible and resolves the targeted failure", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test" },
+        result: { error: "failed" },
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        result: { exitCode: 0 },
+        retryOf: "failed",
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.recoveredToolIds).toEqual(["failed"]);
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual(["failed", "replacement"]);
+  });
+
+  test("one successful retry leaves another failure unresolved", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "failed-one",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test one" },
+      },
+      {
+        id: "failed-two",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test two" },
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test one" },
+        retryOf: "failed-one",
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.recoveredToolIds).toEqual(["failed-one"]);
+  });
+
+  test("projects recovery across turn boundaries without deleting either call", () => {
+    const feed: FeedItem[] = [
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test" },
+      },
+      {
+        id: "assistant-boundary",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "The command failed.",
+      },
+      {
+        id: "retry-turn",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:03.000Z",
+        text: "Retry it.",
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:04.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        retryOf: "failed",
+      },
+    ];
+
+    const groups = buildChatRenderItems(feed).filter(
+      (
+        item,
+      ): item is Extract<
+        ReturnType<typeof buildChatRenderItems>[number],
+        { kind: "activity-group" }
+      > => item.kind === "activity-group",
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.recoveredToolIds).toEqual(["failed"]);
+    expect(summarizeActivityGroup(groups[0]!.items, groups[0]!.recoveredToolIds).status).toBe(
+      "done",
+    );
+    expect(unresolvedToolFailureIds(groups[0]!.items, groups[0]!.recoveredToolIds)).toEqual([]);
+    expect(groups[0]?.items.map((item) => item.id)).toEqual(["failed"]);
+    expect(groups[1]?.items.map((item) => item.id)).toEqual(["replacement"]);
   });
 });
 

@@ -18,6 +18,7 @@ import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
 import { buildChatRenderItems, type ChatRenderItem } from "@/features/cowork/activityGroups";
+import { HIDDEN_RETRY_TURN_PROMPT } from "@/features/cowork/chatRetry";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
@@ -255,6 +256,28 @@ export default function ThreadDetailScreen() {
     submitComposer(activeThread.id);
   }
 
+  async function retryFailedToolCalls(toolItemIds: string[]) {
+    if (!runtimeClient || isDraftThread || turnActive || toolItemIds.length === 0) return;
+    const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
+      ?.randomUUID
+      ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
+      : `local-${Date.now()}`;
+    setActionError((current) => (current?.kind === "send" ? null : current));
+    try {
+      await runtimeClient.startTurn(
+        activeThread.id,
+        HIDDEN_RETRY_TURN_PROMPT,
+        clientMessageId,
+        toolItemIds,
+      );
+    } catch (error) {
+      setActionError({
+        kind: "send",
+        message: describeError(error, "Failed to retry tool calls."),
+      });
+    }
+  }
+
   const activePendingRequest = isConnected ? pendingRequest : null;
   const showStop = turnActive || activePendingRequest !== null;
   const showSessionBadge =
@@ -422,6 +445,8 @@ export default function ThreadDetailScreen() {
                 showDebugMessages={showDebugMessages}
                 live={item.data.kind === "activity-group" && item.data.id === liveActivityGroupId}
                 liveStartedAt={activeTurnStartedAt}
+                onRetryToolCalls={retryFailedToolCalls}
+                retryDisabled={!isConnected || turnActive}
               />
             );
           }}

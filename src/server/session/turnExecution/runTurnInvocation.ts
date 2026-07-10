@@ -1,3 +1,4 @@
+import { createToolRetryMatcher, type ToolRetryIntent } from "../../../shared/toolRetry";
 import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
@@ -30,6 +31,7 @@ export type RunTurnInvocationDeps = {
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   setAcceptingSteers: (accepting: boolean) => void;
   allowThreadManagementTools?: boolean;
+  toolRetryIntent?: ToolRetryIntent;
 };
 
 export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
@@ -46,7 +48,9 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     onAdvancedMemoryChanged,
     setAcceptingSteers,
     allowThreadManagementTools,
+    toolRetryIntent,
   } = deps;
+  const toolRetryMatcher = createToolRetryMatcher(toolRetryIntent);
 
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
     const abortSignal = context.state.abortController?.signal;
@@ -327,6 +331,12 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           fallbackIdSeed: turnId,
           rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
         });
+        if (normalized.partType === "tool_call" && typeof normalized.part.toolName === "string") {
+          const retryOf = toolRetryMatcher.confirm(normalized.part.toolName, normalized.part.input);
+          if (retryOf !== undefined) {
+            normalized.part.retryOf = retryOf;
+          }
+        }
         if (normalized.partType === "error") {
           tracker.lastStreamError = normalized.part.error;
         }

@@ -9,6 +9,7 @@ import type {
   AgentSpawnContextOptions,
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
+import type { ToolRetryIntent } from "../../shared/toolRetry";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -142,7 +143,10 @@ export class SessionTurnService {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: {
+      allowThreadManagementTools?: boolean;
+      toolRetryIntent?: ToolRetryIntent;
+    },
   ): Promise<void> {
     await this.session.sendUserMessage(
       text,

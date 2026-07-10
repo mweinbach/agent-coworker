@@ -1199,6 +1199,7 @@ export function createThreadActions(
       busyPolicy: ThreadBusyPolicy = "reject",
       attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[],
       references?: import("../../lib/wsProtocol").TurnReference[],
+      retryToolItemIds?: string[],
     ): Promise<boolean> => {
       const activeThreadId = get().selectedThreadId;
       if (!activeThreadId) return false;
@@ -1282,6 +1283,8 @@ export function createThreadActions(
         busyPolicy,
         attachments,
         references,
+        undefined,
+        retryToolItemIds,
       );
       if (!accepted) return false;
       if (busyPolicy === "steer" && rt?.busy) return true;

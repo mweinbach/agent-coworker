@@ -660,6 +660,7 @@ export type LmStudioStartModalState = {
     clientMessageId: string;
     attachments?: FileAttachmentInput[];
     references?: TurnReference[];
+    retryToolItemIds?: string[];
   } | null;
 };
 

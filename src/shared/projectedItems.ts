@@ -60,6 +60,7 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
       state: projectedToolStateSchema,
       args: z.unknown().optional(),
       result: z.unknown().optional(),
+      retryOf: nonEmptyStringSchema.optional(),
       approval: z
         .object({
           approvalId: nonEmptyStringSchema,
@@ -190,6 +191,11 @@ function toFeedItem(
         state: nextState,
         ...(args !== undefined ? { args } : {}),
         ...(result !== undefined ? { result } : {}),
+        ...(item.retryOf !== undefined
+          ? { retryOf: item.retryOf }
+          : existingTool?.retryOf !== undefined
+            ? { retryOf: existingTool.retryOf }
+            : {}),
         ...(approval ? { approval } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
       };

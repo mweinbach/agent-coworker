@@ -135,4 +135,44 @@ describe("JSON-RPC projectors", () => {
     ]);
     expect(new Set(toolOutputAvailable.map((event) => event.payload?.item?.id)).size).toBe(2);
   });
+
+  test("projectors preserve confirmed retry lineage through authoritative completion", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(
+      streamChunk("tool_call", {
+        toolCallId: "replacement",
+        toolName: "bash",
+        input: { command: "bun test" },
+        retryOf: "toolCall:earlier-turn:failed",
+      }),
+    );
+    projector.handle(
+      streamChunk("tool_result", {
+        toolCallId: "replacement",
+        toolName: "bash",
+        output: { exitCode: 0 },
+      }),
+    );
+
+    const completed = outbound
+      .filter((message) => message.method === "item/completed")
+      .map((message) => message.params?.item)
+      .find((item) => item?.state === "output-available");
+    expect(completed).toMatchObject({
+      id: `toolCall:${turnId}:replacement`,
+      retryOf: "toolCall:earlier-turn:failed",
+      result: { exitCode: 0 },
+    });
+  });
 });

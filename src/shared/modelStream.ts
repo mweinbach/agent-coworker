@@ -64,7 +64,14 @@ export type ModelStreamUpdate =
   | { kind: "tool_input_start"; turnId: string; key: string; name: string; args?: unknown }
   | { kind: "tool_input_delta"; turnId: string; key: string; delta: string }
   | { kind: "tool_input_end"; turnId: string; key: string; name: string }
-  | { kind: "tool_call"; turnId: string; key: string; name: string; args?: unknown }
+  | {
+      kind: "tool_call";
+      turnId: string;
+      key: string;
+      name: string;
+      args?: unknown;
+      retryOf?: string;
+    }
   | { kind: "tool_result"; turnId: string; key: string; name: string; result: unknown }
   | { kind: "tool_error"; turnId: string; key: string; name: string; error: unknown }
   | { kind: "tool_output_denied"; turnId: string; key: string; name: string; reason?: unknown }
@@ -506,6 +513,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         key: toolKey(evt),
         name: toolName(evt),
         args: part.input,
+        ...(asString(part.retryOf) ? { retryOf: asString(part.retryOf) } : {}),
       };
     case "tool_result":
       return {

@@ -7,6 +7,8 @@ type ThreadRenderItemProps = {
   showDebugMessages: boolean;
   live?: boolean;
   liveStartedAt?: string | null;
+  onRetryToolCalls?: (toolItemIds: string[]) => Promise<void>;
+  retryDisabled?: boolean;
 };
 
 export function ThreadRenderItem({
@@ -14,9 +16,20 @@ export function ThreadRenderItem({
   showDebugMessages,
   live,
   liveStartedAt,
+  onRetryToolCalls,
+  retryDisabled,
 }: ThreadRenderItemProps) {
   if (renderItem.kind === "activity-group") {
-    return <ActivityGroupCard items={renderItem.items} live={live} liveStartedAt={liveStartedAt} />;
+    return (
+      <ActivityGroupCard
+        items={renderItem.items}
+        recoveredToolIds={renderItem.recoveredToolIds}
+        live={live}
+        liveStartedAt={liveStartedAt}
+        onRetry={onRetryToolCalls}
+        retryDisabled={retryDisabled}
+      />
+    );
   }
 
   return <ThreadFeedItem item={renderItem.item} showDebugMessages={showDebugMessages} />;

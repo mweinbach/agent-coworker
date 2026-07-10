@@ -211,6 +211,44 @@ describe("JsonRpcSocket runtime", () => {
     await expect(requestPromise).resolves.toEqual({ threads: [] });
   });
 
+  test("negotiates tool retry lineage without changing the legacy handshake shape", async () => {
+    FakeWebSocket.instances = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop", version: "1.0.0" },
+      toolRetryLineage: true,
+      WebSocketImpl: FakeWebSocket as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws = FakeWebSocket.instances[0]!;
+    expect(parseSentMessages(ws)[0]).toMatchObject({
+      method: "initialize",
+      params: {
+        capabilities: {
+          experimentalApi: false,
+          toolRetryLineage: true,
+        },
+      },
+    });
+    await ws.emitMessage(
+      JSON.stringify({
+        id: 1,
+        result: {
+          protocolVersion: "0.1",
+          capabilities: {
+            experimentalApi: true,
+            toolRetryLineage: true,
+          },
+        },
+      }),
+    );
+    await socket.readyPromise;
+    expect(socket.supportsToolRetryLineage).toBe(true);
+  });
+
   test("routes server requests to the handler and can respond", async () => {
     FakeWebSocket.instances = [];
     const requests: Array<{ id: string | number; method: string }> = [];

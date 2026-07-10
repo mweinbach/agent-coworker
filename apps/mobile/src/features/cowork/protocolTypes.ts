@@ -86,6 +86,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       state: projectedToolStateSchema,
       args: z.unknown().optional(),
       result: z.unknown().optional(),
+      retryOf: nonEmptyStringSchema.optional(),
       approval: z
         .object({
           approvalId: nonEmptyStringSchema,
@@ -166,6 +167,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       state: projectedToolStateSchema,
       args: z.unknown().optional(),
       result: z.unknown().optional(),
+      retryOf: nonEmptyStringSchema.optional(),
       approval: z
         .object({
           approvalId: nonEmptyStringSchema,

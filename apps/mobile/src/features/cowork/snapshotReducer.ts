@@ -103,6 +103,11 @@ function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem)
         state: item.state,
         ...(item.args !== undefined ? { args: item.args } : {}),
         ...(item.result !== undefined ? { result: item.result } : {}),
+        ...(item.retryOf !== undefined
+          ? { retryOf: item.retryOf }
+          : existing?.kind === "tool" && existing.retryOf !== undefined
+            ? { retryOf: existing.retryOf }
+            : {}),
         ...(item.approval ? { approval: item.approval } : {}),
       };
     case "system":

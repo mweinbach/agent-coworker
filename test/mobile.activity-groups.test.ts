@@ -3,6 +3,7 @@ import {
   buildChatRenderItems,
   parseReasoningSections,
   summarizeActivityGroup,
+  unresolvedToolFailureIds,
 } from "../apps/mobile/src/features/cowork/activityGroups";
 import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
 
@@ -42,7 +43,12 @@ describe("mobile chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-r1", items: [feed[1], feed[2]] },
+      {
+        kind: "activity-group",
+        id: "activity-r1",
+        items: [feed[1], feed[2]],
+        recoveredToolIds: [],
+      },
       { kind: "feed-item", item: feed[3] },
     ]);
   });
@@ -205,6 +211,143 @@ describe("mobile chat activity groups", () => {
         sourceIds: ["tool-call"],
       },
     });
+  });
+
+  test("shows recovered failures and keeps the group unresolved until every failure recovers", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "failed-one",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test one" },
+      },
+      {
+        id: "failed-two",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-error",
+        args: { path: "missing.ts" },
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test one" },
+        retryOf: "failed-one",
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.recoveredToolIds).toEqual(["failed-one"]);
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual([
+      "failed-one",
+      "failed-two",
+      "replacement",
+    ]);
+  });
+
+  test("hides the legacy retry transport marker while grouping retry activity", () => {
+    const feed: SessionFeedItem[] = [
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test" },
+      },
+      {
+        id: "transport",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "[[cowork:hidden-retry-turn]]\nContinue.",
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        retryOf: "failed",
+      },
+    ];
+
+    expect(buildChatRenderItems(feed)).toEqual([
+      {
+        kind: "activity-group",
+        id: "activity-failed",
+        items: [feed[0], feed[2]],
+        recoveredToolIds: ["failed"],
+      },
+    ]);
+  });
+
+  test("projects recovered status across separate turns", () => {
+    const feed: SessionFeedItem[] = [
+      {
+        id: "failed-one",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test one" },
+      },
+      {
+        id: "failed-two",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-denied",
+        args: { path: "private.ts" },
+      },
+      {
+        id: "assistant-boundary",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:03.000Z",
+        text: "One command failed and one read was denied.",
+      },
+      {
+        id: "retry-turn",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:04.000Z",
+        text: "Retry the command.",
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:05.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test one" },
+        retryOf: "failed-one",
+      },
+    ];
+
+    const groups = buildChatRenderItems(feed).filter(
+      (
+        item,
+      ): item is Extract<
+        ReturnType<typeof buildChatRenderItems>[number],
+        { kind: "activity-group" }
+      > => item.kind === "activity-group",
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.recoveredToolIds).toEqual(["failed-one"]);
+    expect(summarizeActivityGroup(groups[0]!.items, groups[0]!.recoveredToolIds).status).toBe(
+      "issue",
+    );
+    expect(unresolvedToolFailureIds(groups[0]!.items, groups[0]!.recoveredToolIds)).toEqual([
+      "failed-two",
+    ]);
   });
 
   test("parseReasoningSections splits bold headings into collapsible sections", () => {

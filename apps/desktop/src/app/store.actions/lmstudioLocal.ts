@@ -82,6 +82,7 @@ export function createLmStudioLocalActions(
               retry.attachments,
               retry.references,
               retry.clientMessageId,
+              retry.retryToolItemIds,
             );
           }
           void get().refreshProviderStatus({ workspaceId: modal.workspaceId });

@@ -113,6 +113,7 @@ export type SessionFeedItem =
         | "output-denied";
       args?: unknown;
       result?: unknown;
+      retryOf?: string;
       completedAt?: string;
       approval?: {
         approvalId: string;
@@ -209,6 +210,7 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
       ]),
       args: z.unknown().optional(),
       result: z.unknown().optional(),
+      retryOf: z.string().trim().min(1).optional(),
       completedAt: isoTimestampSchema.optional(),
       approval: z
         .object({

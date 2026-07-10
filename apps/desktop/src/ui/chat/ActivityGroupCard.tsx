@@ -262,9 +262,11 @@ function toPrettyJson(value: unknown): string {
 function ToolTimelineNode({
   item,
   isLast,
+  recovered,
 }: {
   item: Extract<ActivityFeedItem, { kind: "tool" }>;
   isLast: boolean;
+  recovered: boolean;
 }) {
   const formatting = useMemo(
     () => formatToolCard(item.name, item.args, item.result, item.state),
@@ -302,11 +304,29 @@ function ToolTimelineNode({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
-                <ToolStateIndicator state={item.state} />
+                {recovered ? (
+                  <Badge
+                    variant="outline"
+                    className="px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide"
+                    data-tool-recovery="recovered"
+                  >
+                    Recovered
+                  </Badge>
+                ) : (
+                  <ToolStateIndicator state={item.state} />
+                )}
               </div>
               {formatting.subtitle ? (
                 <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">
                   {formatting.subtitle}
+                </div>
+              ) : null}
+              {item.retryOf ? (
+                <div
+                  className="mt-0.5 text-[10px] font-medium text-muted-foreground/70"
+                  data-tool-recovery="retry"
+                >
+                  Retry of failed call
                 </div>
               ) : null}
             </div>
@@ -359,11 +379,29 @@ function ToolTimelineNode({
         <div className="min-w-0 py-0.5">
           <div className="flex items-center gap-1.5">
             <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
-            <ToolStateIndicator state={item.state} />
+            {recovered ? (
+              <Badge
+                variant="outline"
+                className="px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide"
+                data-tool-recovery="recovered"
+              >
+                Recovered
+              </Badge>
+            ) : (
+              <ToolStateIndicator state={item.state} />
+            )}
           </div>
           {formatting.subtitle ? (
             <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">
               {formatting.subtitle}
+            </div>
+          ) : null}
+          {item.retryOf ? (
+            <div
+              className="mt-0.5 text-[10px] font-medium text-muted-foreground/70"
+              data-tool-recovery="retry"
+            >
+              Retry of failed call
             </div>
           ) : null}
         </div>
@@ -398,6 +436,10 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
     if (reasoningEntries.length === 0) return null;
     return reasoningEntries[reasoningEntries.length - 1].item.id;
   }, [summary.entries]);
+  const recoveredToolIds = useMemo(
+    () => new Set(summary.recoveredToolIds),
+    [summary.recoveredToolIds],
+  );
 
   return (
     <div ref={containerRef} className="max-h-[26rem] overflow-y-auto pr-0.5">
@@ -420,7 +462,11 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
 
         return (
           <div key={entry.item.id} data-activity-entry-kind="tool">
-            <ToolTimelineNode item={entry.item} isLast={isLast} />
+            <ToolTimelineNode
+              item={entry.item}
+              isLast={isLast}
+              recovered={recoveredToolIds.has(entry.item.id)}
+            />
           </div>
         );
       })}
@@ -432,6 +478,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
 
 export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   items: ActivityFeedItem[];
+  recoveredToolIds?: string[];
   live?: boolean;
   liveNowMs?: number;
   liveStartedAt?: string | null;
@@ -450,7 +497,10 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
     return () => window.clearInterval(interval);
   }, [props.live, liveNowMsProp]);
 
-  const summary = useMemo(() => summarizeActivityGroup(props.items), [props.items]);
+  const summary = useMemo(
+    () => summarizeActivityGroup(props.items, props.recoveredToolIds),
+    [props.items, props.recoveredToolIds],
+  );
   const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
   const isComplete = displayStatus === "done";
   const hasUnrecoveredIssue = displayStatus === "issue";

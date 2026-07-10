@@ -172,4 +172,128 @@ describe("createRunTurnInvocation", () => {
     expect(typeof durationMs).toBe("number");
     expect(durationMs).toBeGreaterThanOrEqual(0);
   });
+
+  test("attaches retry lineage only to the first exact replacement invocation", async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const runTurnImpl = mock(async (params: RunTurnParams) => {
+      await params.onModelStreamPart?.({
+        type: "tool-call",
+        toolCallId: "wrong-tool",
+        toolName: "read",
+        input: { command: "bun test" },
+      } as never);
+      await params.onModelStreamPart?.({
+        type: "tool-call",
+        toolCallId: "wrong-args",
+        toolName: "bash",
+        input: { command: "bun test --watch" },
+      } as never);
+      await params.onModelStreamPart?.({
+        type: "tool-call",
+        toolCallId: "replacement",
+        toolName: "bash",
+        input: { command: "bun test" },
+      } as never);
+      await params.onModelStreamPart?.({
+        type: "tool-call",
+        toolCallId: "duplicate",
+        toolName: "bash",
+        input: { command: "bun test" },
+      } as never);
+      return { text: "", reasoningText: undefined, responseMessages: [] };
+    });
+    const context = {
+      id: "session-retry",
+      state: {
+        config: makeConfig("/tmp/run-turn-retry"),
+        system: "System prompt",
+        messages: [],
+        allMessages: [],
+        providerState: null,
+        turnReferencedPlugins: [],
+        discoveredSkills: [],
+        yolo: false,
+        maxSteps: 100,
+        abortController: null,
+        costTracker: null,
+        sessionInfo: {
+          sessionKind: "root",
+          role: null,
+          profile: null,
+          depth: 0,
+          targetPaths: null,
+        },
+      },
+      deps: {
+        harnessContextStore: { get: mock(() => null) },
+        runTurnImpl,
+        toolEnv: { PATH: "/usr/bin" },
+      },
+      emit: (event: Record<string, unknown>) => emitted.push(event),
+      emitTelemetry: mock(() => {}),
+    } as unknown as SessionContext;
+    const invokeRunTurn = createRunTurnInvocation({
+      context,
+      turnId: "turn-retry",
+      steerCoordinator: {
+        drainPendingSteers: mock(async () => undefined),
+      } as unknown as SteerCoordinator,
+      log: () => {},
+      askUser: async () => "",
+      approveCommand: async () => true,
+      updateTodos: () => {},
+      tracker: {
+        startedStepCount: 0,
+        streamPartIndex: 0,
+        rawStreamEventIndex: 0,
+        lastStreamError: null,
+        turnAnnouncedAtMs: null,
+        firstOutputObserved: false,
+      },
+      includeRawChunks: false,
+      setAcceptingSteers: () => {},
+      toolRetryIntent: {
+        targets: [
+          {
+            itemId: "toolCall:previous-turn:failed",
+            toolName: "bash",
+            argsFingerprint: '{"command":"bun test"}',
+          },
+        ],
+      },
+    });
+
+    await invokeRunTurn(10);
+
+    const toolCalls = emitted
+      .filter((event) => event.type === "model_stream_chunk")
+      .map((event) => event.part)
+      .filter(
+        (part): part is Record<string, unknown> =>
+          typeof part === "object" && part !== null && "toolCallId" in part,
+      );
+    expect(toolCalls).toEqual([
+      {
+        toolCallId: "wrong-tool",
+        toolName: "read",
+        input: { command: "bun test" },
+      },
+      {
+        toolCallId: "wrong-args",
+        toolName: "bash",
+        input: { command: "bun test --watch" },
+      },
+      {
+        toolCallId: "replacement",
+        toolName: "bash",
+        input: { command: "bun test" },
+        retryOf: "toolCall:previous-turn:failed",
+      },
+      {
+        toolCallId: "duplicate",
+        toolName: "bash",
+        input: { command: "bun test" },
+      },
+    ]);
+  });
 });

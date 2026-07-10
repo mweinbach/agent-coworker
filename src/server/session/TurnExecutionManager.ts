@@ -12,6 +12,7 @@ import {
 } from "./taskLocks";
 import {
   createUserMessageTurnRunner,
+  type UserMessageTurnOptions,
   type UserMessageTurnRunner,
 } from "./turnExecution/runUserMessageTurn";
 import { createSteerCoordinator, type SteerCoordinator } from "./turnExecution/steerCoordinator";
@@ -145,7 +146,7 @@ export class TurnExecutionManager {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: UserMessageTurnOptions,
   ) {
     const taskLock = this.getTaskLock();
     if (taskLock) {

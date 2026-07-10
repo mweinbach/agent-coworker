@@ -2,13 +2,27 @@ import { describe, expect, test } from "bun:test";
 import { SocketSendQueue } from "../src/server/runtime/SocketSendQueue";
 import type { StartServerSocket } from "../src/server/startServer/types";
 
-function fakeSocket(sendImpl: (serialized: string) => number): StartServerSocket {
+type FakeSocketOptions = {
+  optOutNotificationMethods?: string[];
+  omitRpc?: boolean;
+};
+
+function fakeSocket(
+  sendImpl: (serialized: string) => number,
+  options: FakeSocketOptions = {},
+): StartServerSocket {
   return {
     data: {
       connectionId: "conn-1",
-      rpc: {
-        capabilities: { optOutNotificationMethods: [] },
-      },
+      ...(options.omitRpc
+        ? {}
+        : {
+            rpc: {
+              capabilities: {
+                optOutNotificationMethods: options.optOutNotificationMethods ?? [],
+              },
+            },
+          }),
     },
     send: sendImpl,
   } as unknown as StartServerSocket;
@@ -70,6 +84,23 @@ describe("WebSocket backpressure queue", () => {
     backpressured = false;
     q.flush(ws);
     expect(q.getStats().queueDepthByConnection["conn-1"]).toBeUndefined();
+  });
+
+  test("respects per-connection notification opt-outs", () => {
+    const q = new SocketSendQueue(500);
+    const ws = fakeSocket(() => 1, {
+      optOutNotificationMethods: ["item/agentMessage/delta"],
+    });
+
+    expect(q.shouldSendNotification(ws, "item/agentMessage/delta")).toBe(false);
+    expect(q.shouldSendNotification(ws, "item/tool/start")).toBe(true);
+  });
+
+  test("sends notifications by default before JSON-RPC capabilities are initialized", () => {
+    const q = new SocketSendQueue(500);
+    const ws = fakeSocket(() => 1, { omitRpc: true });
+
+    expect(q.shouldSendNotification(ws, "item/agentMessage/delta")).toBe(true);
   });
 });
 

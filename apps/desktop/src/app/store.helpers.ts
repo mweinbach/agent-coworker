@@ -46,8 +46,10 @@ import type {
   ProviderName,
   SessionEvent,
   TodoItem,
+  TurnReference,
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
+import type { ComposerDraftRevision, ComposerDraftsByKey } from "./composerDrafts";
 import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
@@ -263,9 +265,7 @@ export type AppStoreState = {
   providerLastAuthResult: ProviderAuthResultEvent | null;
   providerUiState: PersistedProviderUiState;
 
-  composerText: string;
-  /** Drafts keyed by thread id; active draft is mirrored in composerText. */
-  composerTextByThreadId: Record<string, string>;
+  composerDraftsByKey: ComposerDraftsByKey;
   newChatLandingTarget: NewChatLandingTarget | null;
   injectContext: boolean;
   developerMode: boolean;
@@ -324,6 +324,7 @@ export type AppStoreState = {
     provider?: ProviderName;
     model?: string;
     reasoningEffort?: ReasoningEffortValue;
+    draftSubmission?: ComposerDraftRevision;
   }) => Promise<boolean>;
   openNewChatLanding: (opts?: {
     defaultTargetKind?: "project" | "oneOff";
@@ -345,6 +346,7 @@ export type AppStoreState = {
       references?: import("../lib/wsProtocol").TurnReference[];
       refreshSnapshot?: boolean;
       signal?: AbortSignal;
+      draftSubmission?: ComposerDraftRevision;
     },
   ) => Promise<boolean>;
   renameThread: (threadId: string, newTitle: string) => void;
@@ -354,6 +356,10 @@ export type AppStoreState = {
     busyPolicy?: ThreadBusyPolicy,
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[],
     references?: import("../lib/wsProtocol").TurnReference[],
+    options?: {
+      targetThreadId?: string;
+      draftSubmission?: ComposerDraftRevision;
+    },
   ) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
@@ -363,7 +369,14 @@ export type AppStoreState = {
     provider: ProviderName,
     effort: ReasoningEffortValue,
   ) => void;
-  setComposerText: (text: string) => void;
+  setComposerText: (text: string, references?: TurnReference[]) => void;
+  addComposerAttachments: (files: File[]) => Promise<void>;
+  removeComposerAttachment: (index: number) => void;
+  setComposerDraftModel: (provider: ProviderName, model: string) => void;
+  setComposerDraftReasoningEffort: (effort: ReasoningEffortValue | null) => void;
+  clearComposerDraft: (owner: ComposerDraftRevision) => boolean;
+  discardComposerDraft: (key?: string) => boolean;
+  pruneComposerDrafts: (nowMs?: number) => void;
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;
   setShowHiddenFiles: (v: boolean) => void;

@@ -25,6 +25,7 @@ import {
   type PersistedPrivacyTelemetrySettings,
   type PrivacyTelemetrySettings,
 } from "../../../../src/telemetry/config";
+import type { NewChatLandingTarget } from "../lib/newChatLanding";
 import { normalizeQuickChatShortcutAccelerator } from "../lib/quickChatShortcut";
 import type {
   ApprovalRiskCode,
@@ -44,6 +45,7 @@ import type {
   SkillUpdateCheckResult,
   TurnReference,
 } from "../lib/wsProtocol";
+import type { ComposerDraftRevision, PersistedComposerDrafts } from "./composerDrafts";
 import type {
   ReasoningEffortValue,
   WorkspaceProviderOptions,
@@ -355,6 +357,7 @@ export type CachedDesktopUiState = {
   contextSidebarWidth?: number;
   canvasSidebarWidth?: number;
   messageBarHeight?: number;
+  newChatLandingTarget?: NewChatLandingTarget | null;
 };
 
 export type DesktopStateCache = {
@@ -390,6 +393,7 @@ export type PersistedState = {
   providerState?: PersistedProviderState;
   providerUiState?: PersistedProviderUiState;
   onboarding?: PersistedOnboardingState;
+  composerDrafts?: PersistedComposerDrafts;
 };
 
 type TranscriptDirection = "server" | "client";
@@ -660,6 +664,7 @@ export type LmStudioStartModalState = {
     clientMessageId: string;
     attachments?: FileAttachmentInput[];
     references?: TurnReference[];
+    draftSubmission?: ComposerDraftRevision;
   } | null;
 };
 

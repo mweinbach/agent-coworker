@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { buildAttachmentSignature } from "../src/app/attachmentInputs";
+import {
+  composerDraftKeyForNewChatTarget,
+  composerDraftKeyForThread,
+  createEmptyComposerDraft,
+} from "../src/app/composerDrafts";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import {
   clearJsonRpcSocketOverride,
@@ -29,6 +34,16 @@ const MOCK_UPDATE_STATE = {
   progress: null,
   error: null,
 };
+
+function composerDraftsWithText(key: string, text: string) {
+  return {
+    [key]: {
+      ...createEmptyComposerDraft("2026-03-12T00:00:00.000Z"),
+      revision: 1,
+      text,
+    },
+  };
+}
 
 class MockMutationObserver {
   observe() {}
@@ -124,6 +139,8 @@ describe("desktop chat view stability", () => {
       selectedTaskId: null,
       tasksById: {},
       taskSummariesByWorkspaceId: {},
+      composerDraftsByKey: {},
+      newChatLandingTarget: null,
     });
   });
 
@@ -176,7 +193,7 @@ describe("desktop chat view stability", () => {
         },
       ],
       providerConnected: ["openai"],
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -221,7 +238,10 @@ describe("desktop chat view stability", () => {
       threads: [],
       workspaceRuntimeById: {},
       threadRuntimeById: {},
-      composerText: "Draft a release note",
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForNewChatTarget({ kind: "oneOff" }),
+        "Draft a release note",
+      ),
       providerDefaultModelByProvider: {},
     });
 
@@ -296,7 +316,10 @@ describe("desktop chat view stability", () => {
       threads: [],
       workspaceRuntimeById: {},
       threadRuntimeById: {},
-      composerText: "Plan the onboarding flow",
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForNewChatTarget({ kind: "project", workspaceId: "ws-1" }),
+        "Plan the onboarding flow",
+      ),
     });
 
     const harness = setupChatViewJsdom();
@@ -395,7 +418,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -491,7 +514,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -578,7 +601,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 144,
       developerMode: true,
     });
@@ -683,7 +706,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 120,
     });
 
@@ -857,7 +880,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 120,
     });
 
@@ -903,7 +926,7 @@ describe("desktop chat view stability", () => {
       });
 
       await act(async () => {
-        useAppStore.setState({ composerText: "draft after reading" });
+        useAppStore.getState().setComposerText("draft after reading");
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
 
@@ -991,7 +1014,7 @@ describe("desktop chat view stability", () => {
         },
       ],
       providerConnected: ["openai"],
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1125,7 +1148,7 @@ describe("desktop chat view stability", () => {
         },
       ],
       providerConnected: ["openai"],
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1217,7 +1240,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1327,7 +1350,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     } as any);
 
     const harness = setupChatViewJsdom();
@@ -1408,7 +1431,7 @@ describe("desktop chat view stability", () => {
           activeTurnId: "turn-1",
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1433,7 +1456,7 @@ describe("desktop chat view stability", () => {
       expect(statusRow?.textContent).toContain("Type guidance to add, or stop to cancel.");
 
       await act(async () => {
-        useAppStore.setState({ composerText: "tighten scope" });
+        useAppStore.getState().setComposerText("tighten scope");
       });
 
       // Stop remains available while typing a steer (audit P0).
@@ -1545,7 +1568,7 @@ describe("desktop chat view stability", () => {
           activeTurnId: "turn-1",
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 120,
       developerMode: true,
     });
@@ -1602,9 +1625,13 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("keeps attachment-only steers pending until acceptance, then clears them", async () => {
+  test("keeps attachment-only steers until the captured submission succeeds", async () => {
     const originalState = useAppStore.getState();
     let submittedAttachmentSignature = "";
+    let resolveSend: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      resolveSend = resolve;
+    });
 
     useAppStore.setState({
       ready: true,
@@ -1657,18 +1684,24 @@ describe("desktop chat view stability", () => {
           activeTurnId: "turn-1",
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       sendMessage: async (
         text: string,
         busyPolicy?: "reject" | "steer",
         attachments?: Array<{ filename: string; contentBase64: string; mimeType: string }>,
+        _references?: unknown,
+        options?: { draftSubmission?: { key: string; revision: number } },
       ) => {
         expect(text).toBe("");
         expect(busyPolicy).toBe("steer");
         submittedAttachmentSignature = buildAttachmentSignature(attachments);
+        await sendGate;
+        if (options?.draftSubmission) {
+          useAppStore.getState().clearComposerDraft(options.draftSubmission);
+        }
         return true;
       },
-    } as any);
+    } as never);
 
     const harness = setupChatViewJsdom();
 
@@ -1742,18 +1775,8 @@ describe("desktop chat view stability", () => {
       );
 
       await act(async () => {
-        useAppStore.setState((state) => ({
-          threadRuntimeById: {
-            ...state.threadRuntimeById,
-            "thread-1": {
-              ...state.threadRuntimeById["thread-1"]!,
-              pendingSteer: {
-                ...state.threadRuntimeById["thread-1"]!.pendingSteer!,
-                status: "accepted",
-              },
-            },
-          },
-        }));
+        resolveSend?.();
+        await sendGate;
         await Promise.resolve();
       });
 

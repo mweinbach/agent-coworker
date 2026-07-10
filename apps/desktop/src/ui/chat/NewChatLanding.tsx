@@ -12,6 +12,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAttachmentCountValidationMessage } from "../../../../../src/shared/attachments";
 import { buildAttachmentDisplayText } from "../../app/attachmentInputs";
 import {
+  type ComposerDraftRevision,
+  resolveActiveComposerDraftKey,
+  selectActiveComposerDraft,
+} from "../../app/composerDrafts";
+import {
   getWorkspaceGoogleReasoningEffort,
   type ReasoningEffortValue,
 } from "../../app/openaiCompatibleProviderOptions";
@@ -32,10 +37,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import {
   appendAttachmentSkippedNotes,
-  type ComposerAttachmentFile,
-  createComposerAttachmentFile,
   resolveComposerAttachmentsForWorkspace,
-  revokeComposerAttachmentPreview,
 } from "../../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../../lib/modelChoices";
 import { resolveNewChatLandingTarget } from "../../lib/newChatLanding";
@@ -62,8 +64,15 @@ export function NewChatLanding() {
   const workspaceLifecycleEnabled = useAppStore(
     (s) => s.desktopFeatureFlags.workspaceLifecycle !== false,
   );
-  const composerText = useAppStore((s) => s.composerText);
+  const composerDraft = useAppStore(selectActiveComposerDraft);
+  const composerDraftKey = useAppStore(resolveActiveComposerDraftKey);
+  const composerText = composerDraft.text;
+  const pendingAttachments = composerDraft.attachments;
   const setComposerText = useAppStore((s) => s.setComposerText);
+  const addComposerAttachments = useAppStore((s) => s.addComposerAttachments);
+  const removeComposerAttachment = useAppStore((s) => s.removeComposerAttachment);
+  const setComposerDraftModel = useAppStore((s) => s.setComposerDraftModel);
+  const setComposerDraftReasoningEffort = useAppStore((s) => s.setComposerDraftReasoningEffort);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const newThread = useAppStore((s) => s.newThread);
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
@@ -73,13 +82,37 @@ export function NewChatLanding() {
     [newChatLandingTarget, selectedWorkspaceId, workspaces],
   );
   const [selectorOpen, setSelectorOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [modelTouched, setModelTouched] = useState(false);
-  const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachmentFile[]>([]);
-  const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null);
+  const [submittingDraftKeys, setSubmittingDraftKeys] = useState<Set<string>>(() => new Set());
+  const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
+  const submitting = submittingDraftKeys.has(composerDraftKey);
+  const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
+  const setSubmitting = useCallback(
+    (next: boolean) => {
+      setSubmittingDraftKeys((current) => {
+        const updated = new Set(current);
+        if (next) updated.add(composerDraftKey);
+        else updated.delete(composerDraftKey);
+        return updated;
+      });
+    },
+    [composerDraftKey],
+  );
+  const setAttachmentPickerError = useCallback(
+    (message: string | null) => {
+      setAttachmentPickerErrors((current) => {
+        if (message === null) {
+          if (!(composerDraftKey in current)) return current;
+          const next = { ...current };
+          delete next[composerDraftKey];
+          return next;
+        }
+        return { ...current, [composerDraftKey]: message };
+      });
+    },
+    [composerDraftKey],
+  );
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const pendingAttachmentsRef = useRef<ComposerAttachmentFile[]>([]);
 
   const projectWorkspaces = useMemo(
     () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
@@ -112,6 +145,12 @@ export function NewChatLanding() {
           preferred);
     return buildMentionCatalog(source?.skills, source?.pluginsCatalog ?? null);
   }, [workspaceRuntimeById, mentionSourceWorkspaceId]);
+  const updateComposerText = useCallback(
+    (text: string) => {
+      setComposerText(text, extractReferencesFromText(text, mentionCatalog));
+    },
+    [mentionCatalog, setComposerText],
+  );
 
   const trimmedComposerText = composerText.trim();
   const hasPendingAttachments = pendingAttachments.length > 0;
@@ -124,13 +163,10 @@ export function NewChatLanding() {
     () => resolveDefaultNewChatModel(fallbackModelWorkspace),
     [fallbackModelWorkspace],
   );
-  const [modelSelection, setModelSelection] =
-    useState<ComposerModelSelection>(defaultModelSelection);
-  const [reasoningOverride, setReasoningOverride] = useState<{
-    provider: ComposerModelSelection["provider"];
-    model: string;
-    effort: ReasoningEffortValue;
-  } | null>(null);
+  const modelSelection: ComposerModelSelection =
+    composerDraft.provider && composerDraft.model
+      ? { provider: composerDraft.provider, model: composerDraft.model }
+      : defaultModelSelection;
 
   const reasoningConfig = useMemo(
     () =>
@@ -147,36 +183,11 @@ export function NewChatLanding() {
           )
         : undefined;
   const reasoningEffort: ReasoningEffortValue | null = reasoningConfig
-    ? reasoningOverride?.provider === modelSelection.provider &&
-      reasoningOverride.model === modelSelection.model
-      ? reasoningOverride.effort
-      : (workspaceReasoningEffort ?? reasoningConfig.defaultEffort)
+    ? (composerDraft.reasoningEffort ?? workspaceReasoningEffort ?? reasoningConfig.defaultEffort)
     : null;
-  useEffect(() => {
-    if (!modelTouched) {
-      setModelSelection(defaultModelSelection);
-    }
-  }, [defaultModelSelection, modelTouched]);
 
   useEffect(() => {
     textareaRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    pendingAttachmentsRef.current = pendingAttachments;
-  }, [pendingAttachments]);
-
-  useEffect(() => {
-    return () => {
-      pendingAttachmentsRef.current.forEach(revokeComposerAttachmentPreview);
-    };
-  }, []);
-
-  const clearPendingAttachments = useCallback(() => {
-    setPendingAttachments((current) => {
-      current.forEach(revokeComposerAttachmentPreview);
-      return [];
-    });
   }, []);
 
   const ingestAttachmentFiles = useCallback(
@@ -192,12 +203,9 @@ export function NewChatLanding() {
       }
 
       setAttachmentPickerError(null);
-      setPendingAttachments((prev) => [
-        ...prev,
-        ...selectedFiles.map(createComposerAttachmentFile),
-      ]);
+      await addComposerAttachments(selectedFiles);
     },
-    [pendingAttachments.length, submitting],
+    [addComposerAttachments, pendingAttachments.length, setAttachmentPickerError, submitting],
   );
 
   const handleFileSelect = useCallback(
@@ -210,17 +218,13 @@ export function NewChatLanding() {
     [ingestAttachmentFiles],
   );
 
-  const removeAttachment = useCallback((index: number) => {
-    setAttachmentPickerError(null);
-    setPendingAttachments((prev) => {
-      const next = [...prev];
-      const [removed] = next.splice(index, 1);
-      if (removed) {
-        revokeComposerAttachmentPreview(removed);
-      }
-      return next;
-    });
-  }, []);
+  const removeAttachment = useCallback(
+    (index: number) => {
+      setAttachmentPickerError(null);
+      removeComposerAttachment(index);
+    },
+    [removeComposerAttachment, setAttachmentPickerError],
+  );
 
   const submitNewChat = useCallback(
     async (event?: FormEvent<HTMLFormElement>) => {
@@ -232,51 +236,61 @@ export function NewChatLanding() {
       setSubmitting(true);
       setAttachmentPickerError(null);
 
+      const submittedTarget = target;
+      const submittedText = composerText;
+      const submittedAttachments = [...pendingAttachments];
+      const submittedModelSelection = modelSelection;
+      const submittedReasoningEffort = reasoningEffort;
+      const draftSubmission: ComposerDraftRevision = {
+        key: composerDraftKey,
+        revision: composerDraft.revision,
+      };
       const attachmentTitleHint = buildAttachmentDisplayText(
-        pendingAttachments.map((attachment) => ({ filename: attachment.filename })),
+        submittedAttachments.map((attachment) => ({ filename: attachment.filename })),
       );
-      const titleHint = trimmedComposerText || attachmentTitleHint || "New chat";
-      const references = extractReferencesFromText(composerText, mentionCatalog);
+      const titleHint = submittedText.trim() || attachmentTitleHint || "New chat";
+      const references = extractReferencesFromText(submittedText, mentionCatalog);
       const referencesArg = references.length > 0 ? references : undefined;
 
       try {
-        let firstMessage = trimmedComposerText;
+        let firstMessage = submittedText.trim();
         let attachments: FileAttachmentInput[] | undefined;
         let attachmentFiles: File[] | undefined;
 
-        if (hasPendingAttachments) {
-          if (target.kind === "project") {
+        if (submittedAttachments.length > 0) {
+          if (submittedTarget.kind === "project") {
             await ensureServerRunning(
               useAppStore.getState,
               useAppStore.setState,
-              target.workspaceId,
+              submittedTarget.workspaceId,
             );
             const resolved = await resolveComposerAttachmentsForWorkspace(
               useAppStore.getState,
               useAppStore.setState,
-              target.workspaceId,
-              pendingAttachments,
+              submittedTarget.workspaceId,
+              submittedAttachments,
             );
             attachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
             firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
           } else {
-            attachmentFiles = pendingAttachments.map((attachment) => attachment.file);
+            attachmentFiles = submittedAttachments.map((attachment) => attachment.file);
           }
         }
 
         const ok =
-          target.kind === "project"
+          submittedTarget.kind === "project"
             ? await newThread({
                 scope: "project",
-                workspaceId: target.workspaceId,
+                workspaceId: submittedTarget.workspaceId,
                 firstMessage,
                 titleHint,
                 mode: "session",
                 attachments,
                 references: referencesArg,
-                provider: modelSelection.provider,
-                model: modelSelection.model,
-                reasoningEffort: reasoningEffort ?? undefined,
+                provider: submittedModelSelection.provider,
+                model: submittedModelSelection.model,
+                reasoningEffort: submittedReasoningEffort ?? undefined,
+                draftSubmission,
               })
             : await newThread({
                 scope: "oneOff",
@@ -285,15 +299,13 @@ export function NewChatLanding() {
                 mode: "session",
                 attachmentFiles,
                 references: referencesArg,
-                provider: modelSelection.provider,
-                model: modelSelection.model,
-                reasoningEffort: reasoningEffort ?? undefined,
+                provider: submittedModelSelection.provider,
+                model: submittedModelSelection.model,
+                reasoningEffort: submittedReasoningEffort ?? undefined,
+                draftSubmission,
               });
 
-        if (ok) {
-          clearPendingAttachments();
-          setComposerText("");
-        } else {
+        if (!ok) {
           setSubmitting(false);
         }
       } catch (error) {
@@ -304,18 +316,18 @@ export function NewChatLanding() {
     },
     [
       canSubmitNewChat,
-      clearPendingAttachments,
+      composerDraft,
+      composerDraftKey,
       composerText,
-      hasPendingAttachments,
       mentionCatalog,
       modelSelection,
       newThread,
       pendingAttachments,
       reasoningEffort,
-      setComposerText,
+      setAttachmentPickerError,
+      setSubmitting,
       submitting,
       target,
-      trimmedComposerText,
     ],
   );
 
@@ -385,7 +397,7 @@ export function NewChatLanding() {
               disabled={submitting}
               className="h-8 rounded-full border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground"
               onClick={() => {
-                setComposerText(starter.prompt);
+                updateComposerText(starter.prompt);
                 requestAnimationFrame(() => textareaRef.current?.focus());
               }}
             >
@@ -419,7 +431,7 @@ export function NewChatLanding() {
               <ComposerMentionInput
                 textareaRef={textareaRef}
                 value={composerText}
-                setValue={setComposerText}
+                setValue={updateComposerText}
                 disabled={submitting}
                 placeholder="Message Cowork..."
                 catalog={mentionCatalog}
@@ -451,7 +463,7 @@ export function NewChatLanding() {
                     const end = textarea.selectionEnd;
                     const value = textarea.value;
                     const newValue = `${value.substring(0, start)}\n${value.substring(end)}`;
-                    setComposerText(newValue);
+                    updateComposerText(newValue);
                     requestAnimationFrame(() => {
                       textarea.selectionStart = textarea.selectionEnd = start + 1;
                     });
@@ -574,8 +586,7 @@ export function NewChatLanding() {
                       modelDisplayNames={modelDisplayNames}
                       disabled={submitting}
                       onChange={(selection) => {
-                        setModelTouched(true);
-                        setModelSelection(selection);
+                        setComposerDraftModel(selection.provider, selection.model);
                       }}
                     />
                     {reasoningConfig && reasoningEffort ? (
@@ -583,13 +594,7 @@ export function NewChatLanding() {
                         value={reasoningEffort}
                         options={reasoningConfig.availableEfforts}
                         disabled={submitting}
-                        onChange={(effort) => {
-                          setReasoningOverride({
-                            provider: modelSelection.provider,
-                            model: modelSelection.model,
-                            effort,
-                          });
-                        }}
+                        onChange={setComposerDraftReasoningEffort}
                       />
                     ) : null}
                   </>

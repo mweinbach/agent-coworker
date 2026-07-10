@@ -1,5 +1,10 @@
 import { saveState } from "../../lib/desktopCommands";
 import { getDesktopWindowMode } from "../../lib/windowMode";
+import {
+  pruneComposerDrafts,
+  resolveActiveComposerDraftKey,
+  serializeComposerDrafts,
+} from "../composerDrafts";
 import { saveDesktopStateCache } from "../localStateCache";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import { normalizePersistedProviderUiState } from "../providerUiState";
@@ -33,7 +38,10 @@ function buildPersistableThreads(state: AppStoreState) {
   return state.threads.filter((thread) => thread.draft !== true && !thread.taskId);
 }
 
-function buildPersistedState(state: AppStoreState): PersistedState {
+function buildPersistedState(
+  state: AppStoreState,
+  options: { includeDraftAttachmentData?: boolean } = {},
+): PersistedState {
   const providerState = normalizePersistedProviderState({
     statusByName: state.providerStatusByName,
     statusLastUpdatedAt: state.providerStatusLastUpdatedAt,
@@ -44,6 +52,21 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     ...workspace,
     wsProtocol: "jsonrpc" as const,
   }));
+  const prunedDrafts = pruneComposerDrafts(state.composerDraftsByKey ?? {}, {
+    validThreadIds: new Set(threads.map((thread) => thread.id)),
+    validProjectWorkspaceIds: new Set(
+      workspaces
+        .filter((workspace) => workspace.workspaceKind !== "oneOffChat")
+        .map((workspace) => workspace.id),
+    ),
+    activeKey: resolveActiveComposerDraftKey(state),
+  }).drafts;
+  const composerDrafts = serializeComposerDrafts(prunedDrafts);
+  if (options.includeDraftAttachmentData === false) {
+    for (const draft of Object.values(composerDrafts)) {
+      draft.attachments = [];
+    }
+  }
 
   return {
     version: 2,
@@ -59,6 +82,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     ...(providerState ? { providerState } : {}),
     providerUiState,
     onboarding: state.onboardingState,
+    composerDrafts,
   };
 }
 
@@ -82,6 +106,7 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
     contextSidebarWidth: state.contextSidebarWidth,
     canvasSidebarWidth: state.canvasSidebarWidth,
     messageBarHeight: state.messageBarHeight,
+    newChatLandingTarget: state.newChatLandingTarget,
   };
 }
 
@@ -92,7 +117,7 @@ function syncDesktopStateCacheState(state: AppStoreState): PersistedState {
   }
   saveDesktopStateCache({
     version: 2,
-    persistedState,
+    persistedState: buildPersistedState(state, { includeDraftAttachmentData: false }),
     ui: buildCachedDesktopUiState(state),
     sessionSnapshots: Object.fromEntries(RUNTIME.sessionSnapshots.entries()),
   });

@@ -259,11 +259,7 @@ export function Canvas({ path }: { path: string }) {
    */
   const applyFormat = (kind: MarkdownFormatKind) => {
     if (contentTruncated) return;
-    if (activeTab !== "edit") {
-      setActiveTab("edit");
-      requestAnimationFrame(() => sourceTextareaRef.current?.focus());
-      return;
-    }
+    if (activeTab !== "edit") return;
     const textarea = sourceTextareaRef.current;
     if (!textarea) return;
     const start = textarea.selectionStart;
@@ -616,23 +612,25 @@ export function Canvas({ path }: { path: string }) {
                     </>
                   )}
 
-                  <DropdownMenuItem
-                    onClick={() => setShowFormattingBar(!showFormattingBar)}
-                    className="flex items-center justify-between cursor-pointer"
-                  >
-                    <span className="flex items-center">
-                      <BoldIcon className="mr-2 size-3.5" />
-                      Show Styling Bar
-                    </span>
-                    {showFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
-                  </DropdownMenuItem>
+                  {isMarkdown && activeTab === "edit" ? (
+                    <DropdownMenuItem
+                      onClick={() => setShowFormattingBar(!showFormattingBar)}
+                      className="flex items-center justify-between cursor-pointer"
+                    >
+                      <span className="flex items-center">
+                        <BoldIcon className="mr-2 size-3.5" />
+                        Show Styling Bar
+                      </span>
+                      {showFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
+                    </DropdownMenuItem>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             }
           />
         ) : null}
 
-        {showFormattingBar && isMarkdown && (
+        {showFormattingBar && isMarkdown && activeTab === "edit" && (
           <div className="flex items-center gap-0.5 px-2.5 py-1 border-b border-border/40 bg-muted/15 shrink-0 select-none">
             <Button
               type="button"
@@ -941,7 +939,7 @@ export function Canvas({ path }: { path: string }) {
               zIndex: 100,
             }}
           >
-            {showFormattingBar && isMarkdown && (
+            {showFormattingBar && isMarkdown && activeTab === "edit" && (
               <div className="flex items-center gap-1 border-b border-border/45 pb-1 px-1">
                 <Button
                   type="button"

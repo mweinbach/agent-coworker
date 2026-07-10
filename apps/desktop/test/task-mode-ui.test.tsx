@@ -573,6 +573,107 @@ describe("desktop task mode UI", () => {
     },
   );
 
+  test.serial(
+    "removes deleted work-item keys from remaining dependencies before submit",
+    async () => {
+      const harness = setupJsdom();
+      const startTask = mock(async () => null);
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+        const root = createRoot(container);
+        resetStore(null);
+        useAppStore.setState({ startTask } as never);
+
+        await act(async () => root.render(createElement(NewTaskLanding)));
+        await act(async () => {
+          changeValue(
+            harness,
+            container.querySelector("#new-task-title") as HTMLInputElement | null,
+            "Ship a dependency-safe plan",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-objective") as HTMLTextAreaElement | null,
+            "Submit a valid graph after deleting an intermediate step.",
+          );
+          const showAdvanced = container.querySelector(
+            'button[aria-expanded="false"]',
+          ) as HTMLButtonElement | null;
+          showAdvanced?.click();
+          await Promise.resolve();
+        });
+
+        const addStep = () =>
+          Array.from(container.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Add step",
+          ) as HTMLButtonElement | undefined;
+        await act(async () => {
+          addStep()?.click();
+          await Promise.resolve();
+          addStep()?.click();
+          await Promise.resolve();
+        });
+
+        const titleInputs = Array.from(
+          container.querySelectorAll('input[id^="work-item-title-"]'),
+        ) as HTMLInputElement[];
+        const dependencyInputs = Array.from(
+          container.querySelectorAll('input[id^="work-item-dependencies-"]'),
+        ) as HTMLInputElement[];
+        const outputInputs = Array.from(
+          container.querySelectorAll('textarea[id^="work-item-outputs-"]'),
+        ) as HTMLTextAreaElement[];
+        expect(titleInputs).toHaveLength(3);
+        expect(dependencyInputs).toHaveLength(3);
+
+        await act(async () => {
+          changeValue(harness, titleInputs[0] ?? null, "Prepare");
+          changeValue(harness, titleInputs[1] ?? null, "Discarded intermediate");
+          changeValue(harness, titleInputs[2] ?? null, "Deliver");
+          changeValue(harness, outputInputs[0] ?? null, "Prepared input");
+          changeValue(harness, outputInputs[1] ?? null, "Temporary output");
+          changeValue(harness, outputInputs[2] ?? null, "Final output");
+          changeValue(harness, dependencyInputs[2] ?? null, "step-1, step-2");
+          await Promise.resolve();
+        });
+
+        const removeSecondStep = container.querySelector(
+          'button[aria-label="Remove step 2"]',
+        ) as HTMLButtonElement | null;
+        await act(async () => {
+          removeSecondStep?.click();
+          await Promise.resolve();
+        });
+
+        const remainingDependencies = Array.from(
+          container.querySelectorAll('input[id^="work-item-dependencies-"]'),
+        ) as HTMLInputElement[];
+        expect(remainingDependencies).toHaveLength(2);
+        expect(remainingDependencies[1]?.value).toBe("step-1");
+
+        await act(async () => {
+          submitForm(harness, container.querySelector("form"));
+          await Promise.resolve();
+        });
+        expect(startTask).toHaveBeenCalledWith({
+          workspaceId: "ws-1",
+          task: expect.objectContaining({
+            workItems: [
+              expect.objectContaining({ key: "step-1", dependsOn: [] }),
+              expect.objectContaining({ key: "step-3", dependsOn: ["step-1"] }),
+            ],
+          }),
+        });
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("retargets repeated new-task requests for the same project", async () => {
     const harness = setupJsdom();
     const startTask = mock(async () => null);

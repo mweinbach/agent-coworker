@@ -218,7 +218,7 @@ describe("Canvas hooks stability across file-type switches", () => {
   });
 
   test.serial(
-    "preview formatting controls switch to source without rewriting the document",
+    "shows markdown formatting only in source mode where it edits the selection",
     async () => {
       const harness = setupJsdom({ includeAnimationFrame: true });
       const mdPath = "/Users/mweinbach/Projects/preview-workspace/notes.md";
@@ -244,6 +244,26 @@ describe("Canvas hooks stability across file-type switches", () => {
         }
         expect(harness.dom.window.document.body.textContent).not.toContain("Reading file...");
 
+        expect(harness.dom.window.document.querySelector("button[title='Bold']")).toBeNull();
+        await act(async () => {
+          useAppStore.getState().setCanvasActiveTab("edit");
+          await flushUi();
+        });
+
+        expect(useAppStore.getState().canvasActiveTab).toBe("edit");
+        let sourceTextarea = harness.dom.window.document.querySelector<HTMLTextAreaElement>(
+          '[data-slot="tabs-content"][data-state="active"] textarea',
+        );
+        for (let attempt = 0; attempt < 10 && !sourceTextarea; attempt += 1) {
+          await act(async () => {
+            await flushUi();
+          });
+          sourceTextarea = harness.dom.window.document.querySelector<HTMLTextAreaElement>(
+            '[data-slot="tabs-content"][data-state="active"] textarea',
+          );
+        }
+        expect(sourceTextarea?.value).toBe("# Heading\n\n1. one\n2. two\n");
+        sourceTextarea?.setSelectionRange(2, 9);
         const boldButton = harness.dom.window.document.querySelector(
           "button[title='Bold']",
         ) as HTMLButtonElement | null;
@@ -252,20 +272,7 @@ describe("Canvas hooks stability across file-type switches", () => {
           boldButton?.click();
           await flushUi();
         });
-
-        expect(useAppStore.getState().canvasActiveTab).toBe("edit");
-        let sourceTextarea = harness.dom.window.document.querySelector(
-          '[data-slot="tabs-content"][data-state="active"] textarea',
-        );
-        for (let attempt = 0; attempt < 10 && !sourceTextarea; attempt += 1) {
-          await act(async () => {
-            await flushUi();
-          });
-          sourceTextarea = harness.dom.window.document.querySelector(
-            '[data-slot="tabs-content"][data-state="active"] textarea',
-          );
-        }
-        expect(sourceTextarea?.value).toBe("# Heading\n\n1. one\n2. two\n");
+        expect(sourceTextarea?.value).toBe("# **Heading**\n\n1. one\n2. two\n");
         expect(writeFileMock).not.toHaveBeenCalled();
       } finally {
         if (root) {

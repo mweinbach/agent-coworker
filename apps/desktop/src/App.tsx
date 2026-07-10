@@ -266,6 +266,12 @@ const ChatShell = memo(function ChatShell({
   const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
   const canvasIsMarkdown = canvasKind === "markdown";
   const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
+  const terminalTaskConversation =
+    effectiveView === "task" &&
+    selectedTask !== null &&
+    (selectedTask.status === "completed" ||
+      selectedTask.status === "cancelled" ||
+      selectedTask.status === "failed");
   const showReconnectBanner = shouldShowReconnectBanner({
     conversationVisible: isConversationView,
     threadId: selectedThreadId,
@@ -280,6 +286,7 @@ const ChatShell = memo(function ChatShell({
         activeThread !== null &&
         !selectedRuntimeExists),
     workspaceStarting: workspaceStartupProgress !== null,
+    terminalTaskConversation,
   });
   useEffect(() => {
     const documentBody = document.body;
@@ -350,7 +357,11 @@ const ChatShell = memo(function ChatShell({
         canvasActiveTab={canvasActiveTab}
         onSetCanvasActiveTab={setCanvasActiveTab}
         canvasShowFormattingBar={canvasShowFormattingBar}
-        onToggleCanvasFormattingBar={() => setCanvasShowFormattingBar(!canvasShowFormattingBar)}
+        onToggleCanvasFormattingBar={
+          canvasIsMarkdown && canvasActiveTab === "edit"
+            ? () => setCanvasShowFormattingBar(!canvasShowFormattingBar)
+            : undefined
+        }
         canvasMaximized={isCanvasMaximized}
         onToggleCanvasMaximized={
           showCanvasInTopBar ? () => setCanvasMaximized(!isCanvasMaximized) : undefined

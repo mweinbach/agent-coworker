@@ -148,6 +148,7 @@ export class ResearchFileStore {
     researchId: string;
     files: ResearchInputFile[];
     currentStoreName?: string | null;
+    signal?: AbortSignal;
   }): Promise<{ files: ResearchInputFile[]; fileSearchStoreName?: string }> {
     if (opts.files.length === 0) {
       return { files: [] };
@@ -180,6 +181,7 @@ export class ResearchFileStore {
         fileSearchStoreName = await createResearchFileSearchStore({
           apiKey: opts.apiKey,
           displayName: `Research ${opts.researchId}`,
+          signal: opts.signal,
         });
         createdStoreName = fileSearchStoreName;
       }
@@ -197,6 +199,7 @@ export class ResearchFileStore {
           filePath: file.path,
           mimeType: file.mimeType,
           displayName: file.filename,
+          signal: opts.signal,
         });
         uploadedFiles.push({
           ...file,

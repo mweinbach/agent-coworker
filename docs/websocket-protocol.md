@@ -649,8 +649,8 @@ Requests:
   - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
 - `research/delete`
   - permanently removes a research row, local artifacts under `~/.cowork/research/<id>/`, and best-effort remote file-search stores
-  - tombstones active runs, requests cancellation, and waits for their stream to terminate before deleting
-  - direct follow-ups remain available and are reparented to the research root
+  - tombstones active runs, aborts local setup/stream work immediately, requests remote cancellation when an interaction id is available, and bounds stream settlement waiting to five seconds before deleting; late persistence and notifications remain suppressed after that bound
+  - direct follow-ups remain available and are reparented to the research root; live child runtime state is updated before it can persist again
   - result: `{ researchId, deleted }`
   - broadcasts `research/deleted` to sockets subscribed to that research id
 - `research/followup`

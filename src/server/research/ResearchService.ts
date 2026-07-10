@@ -38,6 +38,7 @@ type ResearchRuntimeState = {
   ringBuffer: BufferedResearchNotification[];
   persistTimer: ReturnType<typeof setTimeout> | null;
   streamPromise: Promise<void> | null;
+  streamAbortController: AbortController;
   cancelRequested: boolean;
   planExecutionMode: boolean;
 };
@@ -49,6 +50,7 @@ type ResearchServiceOptions = {
   getConfig: () => AgentConfig;
   sendJsonRpc: (ws: StartServerSocket, payload: unknown) => void;
   maxBufferedEvents?: number;
+  deleteStreamSettleTimeoutMs?: number;
 };
 
 type StartResearchParams = {
@@ -251,8 +253,10 @@ export class ResearchService {
   private readonly sendJsonRpc: (ws: StartServerSocket, payload: unknown) => void;
   private readonly fileStore: ResearchFileStore;
   private readonly maxBufferedEvents: number;
+  private readonly deleteStreamSettleTimeoutMs: number;
   private readonly states = new Map<string, ResearchRuntimeState>();
   private readonly deletingIds = new Set<string>();
+  private readonly deletedIds = new Set<string>();
   private initPromise: Promise<void> | null = null;
 
   constructor(opts: ResearchServiceOptions) {
@@ -262,6 +266,7 @@ export class ResearchService {
     this.sendJsonRpc = opts.sendJsonRpc;
     this.fileStore = new ResearchFileStore({ rootDir: opts.rootDir });
     this.maxBufferedEvents = opts.maxBufferedEvents ?? 500;
+    this.deleteStreamSettleTimeoutMs = Math.max(0, opts.deleteStreamSettleTimeoutMs ?? 5_000);
   }
 
   async init(): Promise<void> {
@@ -278,11 +283,11 @@ export class ResearchService {
     const persisted = this.sessionDb.listResearch({ workspacePath: this.workspacePath });
     const byId = new Map(persisted.map((record) => [record.id, record]));
     for (const [id, state] of this.states) {
-      if (!this.deletingIds.has(id) && this.recordBelongsToWorkspace(state.record)) {
+      if (!this.isPersistenceSuppressed(id) && this.recordBelongsToWorkspace(state.record)) {
         byId.set(id, state.record);
       }
     }
-    for (const id of this.deletingIds) {
+    for (const id of [...this.deletingIds, ...this.deletedIds]) {
       byId.delete(id);
     }
     const resolved = await Promise.all(
@@ -293,7 +298,7 @@ export class ResearchService {
 
   async get(id: string): Promise<ResearchRecord | null> {
     await this.init();
-    if (this.deletingIds.has(id)) {
+    if (this.isPersistenceSuppressed(id)) {
       return null;
     }
     const activeState = this.states.get(id);
@@ -459,6 +464,7 @@ export class ResearchService {
     const subscribers = [...state.subscribers.values()];
     this.deletingIds.add(id);
     state.cancelRequested = true;
+    state.streamAbortController.abort();
     this.updateRecord(state, {
       status: "cancelled",
       error: "cancelled",
@@ -467,6 +473,8 @@ export class ResearchService {
     });
 
     try {
+      await this.reparentLiveChildren(id);
+
       if (state.record.interactionId) {
         try {
           await cancelResearchInteraction({
@@ -480,7 +488,7 @@ export class ResearchService {
 
       const activeStream = state.streamPromise;
       if (activeStream) {
-        await activeStream;
+        await this.waitForStreamSettlement(activeStream);
       }
 
       await this.clearTerminalFileSearchStore(state);
@@ -504,6 +512,7 @@ export class ResearchService {
         workspacePath: this.workspacePath,
       });
       if (deleted) {
+        this.deletedIds.add(id);
         for (const socket of subscribers) {
           this.sendJsonRpc(socket, {
             method: "research/deleted",
@@ -533,6 +542,7 @@ export class ResearchService {
       return state.record;
     }
     state.cancelRequested = true;
+    state.streamAbortController.abort();
 
     if (state.record.interactionId) {
       try {
@@ -751,6 +761,7 @@ export class ResearchService {
           researchId: state.record.id,
           files: opts.attachedFiles,
           currentStoreName: state.record.inputs.fileSearchStoreName ?? null,
+          signal: state.streamAbortController.signal,
         });
         if (state.cancelRequested || state.record.status === "cancelled") {
           this.updateRecord(state, {
@@ -807,6 +818,7 @@ export class ResearchService {
         thinkingSummaries: state.record.settings.thinkingSummaries,
         visualization: state.record.settings.visualization,
         collaborativePlanning: opts.collaborativePlanning,
+        signal: state.streamAbortController.signal,
       });
       await this.consumeInteractionStream(state, stream);
     } catch (error) {
@@ -859,7 +871,7 @@ export class ResearchService {
     state: ResearchRuntimeState,
     event: ResearchInteractionStreamEvent,
   ): Promise<void> {
-    if (this.deletingIds.has(state.record.id)) {
+    if (this.isPersistenceSuppressed(state.record.id)) {
       return;
     }
     if (state.cancelRequested && (isContentStartEvent(event) || isContentDeltaEvent(event))) {
@@ -1389,6 +1401,7 @@ export class ResearchService {
       ringBuffer: [],
       persistTimer: null,
       streamPromise: null,
+      streamAbortController: new AbortController(),
       cancelRequested: false,
       planExecutionMode: false,
     };
@@ -1412,7 +1425,7 @@ export class ResearchService {
     }
     if (await this.clearTerminalFileSearchStore(state)) {
       try {
-        if (!this.deletingIds.has(state.record.id)) {
+        if (!this.isPersistenceSuppressed(state.record.id)) {
           await this.sessionDb.upsertResearch(state.record);
         }
       } catch {
@@ -1451,7 +1464,7 @@ export class ResearchService {
   }
 
   private schedulePersist(state: ResearchRuntimeState): void {
-    if (this.deletingIds.has(state.record.id)) {
+    if (this.isPersistenceSuppressed(state.record.id)) {
       return;
     }
     if (state.persistTimer) {
@@ -1469,7 +1482,7 @@ export class ResearchService {
       clearTimeout(state.persistTimer);
       state.persistTimer = null;
     }
-    if (this.deletingIds.has(state.record.id)) {
+    if (this.isPersistenceSuppressed(state.record.id)) {
       return;
     }
     await this.sessionDb.upsertResearch(state.record);
@@ -1482,13 +1495,61 @@ export class ResearchService {
     });
   }
 
+  private isPersistenceSuppressed(researchId: string): boolean {
+    return this.deletingIds.has(researchId) || this.deletedIds.has(researchId);
+  }
+
+  private async reparentLiveChildren(parentResearchId: string): Promise<void> {
+    const childStates = [...this.states.values()].filter(
+      (candidate) =>
+        candidate.record.parentResearchId === parentResearchId &&
+        !this.isPersistenceSuppressed(candidate.record.id),
+    );
+    if (childStates.length === 0) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    for (const childState of childStates) {
+      this.updateRecord(childState, {
+        parentResearchId: null,
+        updatedAt,
+      });
+    }
+    await Promise.all(
+      childStates.map(async (childState) => await this.flushPersistNow(childState)),
+    );
+    for (const childState of childStates) {
+      this.broadcast(
+        childState,
+        "research/updated",
+        { research: childState.record },
+        childState.record.lastEventId,
+      );
+    }
+  }
+
+  private async waitForStreamSettlement(streamPromise: Promise<void>): Promise<void> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<void>((resolve) => {
+      timeoutHandle = setTimeout(resolve, this.deleteStreamSettleTimeoutMs);
+    });
+    try {
+      await Promise.race([streamPromise.catch(() => {}), timeout]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
   private broadcast(
     state: ResearchRuntimeState,
     method: string,
     params: unknown,
     eventId: string | null,
   ): void {
-    if (this.deletingIds.has(state.record.id)) {
+    if (this.isPersistenceSuppressed(state.record.id)) {
       return;
     }
     state.ringBuffer.push({ method, params, eventId });
@@ -1585,6 +1646,7 @@ export class ResearchService {
             apiKey: this.resolveGoogleApiKey(),
             interactionId: record.interactionId,
             lastEventId: record.lastEventId,
+            signal: state.streamAbortController.signal,
           });
           state.streamPromise = this.consumeInteractionStream(state, stream)
             .catch(async (error) => {

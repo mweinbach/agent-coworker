@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 import {
-  clearJsonRpcSocketOverride,
-  NoopJsonRpcSocket,
-  setJsonRpcSocketOverride,
-} from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+  createDesktopApiMock,
+  createDesktopCommandsBridgeMock,
+} from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
@@ -42,68 +42,68 @@ let bootstrapStartWorkspaceServerCalls = 0;
 let bootstrapSelectThreadCalls = 0;
 let bootstrapLoadedState: unknown = { version: 2, workspaces: [], threads: [] };
 let bootstrapLoadStateImplementation: () => Promise<unknown> = async () => bootstrapLoadedState;
+let bootstrapStartWorkspaceServerImplementation: () => Promise<{ url: string }> = async () => ({
+  url: "ws://mock",
+});
 
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    appendTranscriptBatch: async () => {},
-    appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {
-      bootstrapDeleteTranscriptCalls += 1;
-    },
-    listDirectory: async () => [],
-    loadState: async () => {
-      bootstrapLoadStateCalls += 1;
-      return await bootstrapLoadStateImplementation();
-    },
-    pickWorkspaceDirectory: async () => null,
-    readTranscript: async () => [],
-    saveState: async () => {
-      bootstrapSaveStateCalls += 1;
-    },
-    startWorkspaceServer: async () => {
-      bootstrapStartWorkspaceServerCalls += 1;
-      return { url: "ws://mock" };
-    },
-    stopWorkspaceServer: async () => {},
-    showContextMenu: async () => null,
-    windowMinimize: async () => {},
-    windowMaximize: async () => {},
-    windowClose: async () => {},
-    getPlatform: async () => "linux",
-    readFile: async () => "",
-    previewOSFile: async () => {},
-    openPath: async () => {},
-    openExternalUrl: async () => {},
-    revealPath: async () => {},
-    copyPath: async () => {},
-    createDirectory: async () => {},
-    renamePath: async () => {},
-    trashPath: async () => {},
-    confirmAction: async () => true,
-    showNotification: async () => true,
-    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => {
-      bootstrapUpdateStateCalls += 1;
-      return MOCK_UPDATE_STATE;
-    },
-    checkForUpdates: async () => {},
-    quitAndInstallUpdate: async () => {},
-    onSystemAppearanceChanged: () => () => {},
-    onMenuCommand: () => () => {},
-    onUpdateStateChanged: () => () => {},
-    onWorkspaceServerExited: () => {
-      workspaceServerExitedSubscriptions += 1;
-      return () => {
-        workspaceServerExitedSubscriptions -= 1;
-      };
-    },
-  }),
-);
+const desktopApiMock = createDesktopApiMock({
+  appendTranscriptBatch: async () => {},
+  appendTranscriptEvent: async () => {},
+  deleteTranscript: async () => {
+    bootstrapDeleteTranscriptCalls += 1;
+  },
+  listDirectory: async () => [],
+  loadState: async () => {
+    bootstrapLoadStateCalls += 1;
+    return await bootstrapLoadStateImplementation();
+  },
+  pickWorkspaceDirectory: async () => null,
+  readTranscript: async () => [],
+  saveState: async () => {
+    bootstrapSaveStateCalls += 1;
+  },
+  startWorkspaceServer: async () => {
+    bootstrapStartWorkspaceServerCalls += 1;
+    return await bootstrapStartWorkspaceServerImplementation();
+  },
+  stopWorkspaceServer: async () => {},
+  showContextMenu: async () => null,
+  windowMinimize: async () => {},
+  windowMaximize: async () => {},
+  windowClose: async () => {},
+  getPlatform: async () => "linux",
+  readFile: async () => "",
+  previewOSFile: async () => {},
+  openPath: async () => {},
+  openExternalUrl: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
+  confirmAction: async () => true,
+  showNotification: async () => true,
+  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getUpdateState: async () => {
+    bootstrapUpdateStateCalls += 1;
+    return MOCK_UPDATE_STATE;
+  },
+  checkForUpdates: async () => {},
+  quitAndInstallUpdate: async () => {},
+  onSystemAppearanceChanged: () => () => {},
+  onMenuCommand: () => () => {},
+  onUpdateStateChanged: () => () => {},
+  onWorkspaceServerExited: () => {
+    workspaceServerExitedSubscriptions += 1;
+    return () => {
+      workspaceServerExitedSubscriptions -= 1;
+    };
+  },
+});
 
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: NoopJsonRpcSocket,
-}));
+(globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsBridgeMock());
 
 const { useAppStore } = await import("../src/app/store");
 const App = (await import("../src/App")).default;
@@ -124,6 +124,9 @@ const defaultStoreState = useAppStore.getState();
 
 class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
+  static requestImplementation:
+    | ((method: string, params?: unknown) => unknown | Promise<unknown>)
+    | null = null;
   readonly readyPromise = Promise.resolve();
   closed = false;
 
@@ -144,6 +147,9 @@ class MockJsonRpcSocket {
   }
 
   async request(method: string, params?: any) {
+    if (MockJsonRpcSocket.requestImplementation) {
+      return await MockJsonRpcSocket.requestImplementation(method, params);
+    }
     if (method === "thread/resume" || method === "thread/start") {
       const sessionId = typeof params?.threadId === "string" ? params.threadId : "session-1";
       return {
@@ -244,7 +250,10 @@ function seedWorkspaceState() {
   return { workspaceId, threadId };
 }
 
-function setupAppJsdom() {
+function setupAppJsdom(
+  requestAnimationFrame: (callback: FrameRequestCallback) => number = (callback) =>
+    setTimeout(() => callback(Date.now()), 0) as unknown as number,
+) {
   class MockResizeObserver {
     observe() {}
     unobserve() {}
@@ -253,8 +262,7 @@ function setupAppJsdom() {
 
   return setupJsdom({
     includeAnimationFrame: {
-      requestAnimationFrame: (callback: FrameRequestCallback) =>
-        setTimeout(() => callback(Date.now()), 0) as unknown as number,
+      requestAnimationFrame,
       cancelAnimationFrame: (id: number) => clearTimeout(id),
     },
     extraGlobals: {
@@ -269,6 +277,16 @@ function setupAppJsdom() {
       }
     },
   });
+}
+
+async function runNextPaint(paintCallbacks: FrameRequestCallback[]): Promise<void> {
+  await waitForCondition(() => paintCallbacks.length > 0);
+  const callback = paintCallbacks.shift();
+  if (!callback) {
+    throw new Error("Expected a pending paint callback");
+  }
+  callback(Date.now());
+  await flushAsyncWork();
 }
 
 async function flushAsyncWork() {
@@ -299,8 +317,10 @@ function createDeferred<T>() {
 
 describe("App JSON-RPC shutdown disposal", () => {
   beforeEach(() => {
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     MockJsonRpcSocket.instances.length = 0;
+    MockJsonRpcSocket.requestImplementation = null;
     jsonRpcSocketInternal.reset();
     __controlSocketInternal.reset();
     __threadEventReducerInternal.reset();
@@ -318,12 +338,16 @@ describe("App JSON-RPC shutdown disposal", () => {
     bootstrapSelectThreadCalls = 0;
     bootstrapLoadedState = { version: 2, workspaces: [], threads: [] };
     bootstrapLoadStateImplementation = async () => bootstrapLoadedState;
+    bootstrapStartWorkspaceServerImplementation = async () => ({ url: "ws://mock" });
     useAppStore.setState(defaultStoreState);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await useAppStore.getState().drainBootstrap();
     disposeAllJsonRpcState();
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
     clearJsonRpcSocketOverride();
+    MockJsonRpcSocket.requestImplementation = null;
     jsonRpcSocketInternal.reset();
     __controlSocketInternal.reset();
     __threadEventReducerInternal.reset();
@@ -602,6 +626,226 @@ describe("App JSON-RPC shutdown disposal", () => {
       expect(useAppStore.getState().selectedThreadId).toBe(expectedSelectedThreadId);
       expect(useAppStore.getState().ready).toBe(false);
     } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("window unload aborts deferred startup selection before it can restore JSON-RPC state", async () => {
+    const paintCallbacks: FrameRequestCallback[] = [];
+    const harness = setupAppJsdom((callback) => {
+      paintCallbacks.push(callback);
+      return paintCallbacks.length;
+    });
+    const deferredServerStart = createDeferred<{ url: string }>();
+    let root: ReturnType<typeof createRoot> | null = null;
+    const workspaceId = "ws-deferred-selection";
+
+    try {
+      bootstrapLoadedState = {
+        version: 2,
+        workspaces: [
+          {
+            id: workspaceId,
+            name: "Deferred selection workspace",
+            path: "/tmp/deferred-selection",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            lastOpenedAt: "2026-01-01T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        threads: [
+          {
+            id: "thread-deferred-selection",
+            workspaceId,
+            title: "Deferred selection thread",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            lastMessageAt: "2026-01-02T00:00:00.000Z",
+            status: "active",
+            sessionId: "session-deferred-selection",
+            messageCount: 1,
+            lastEventSeq: 1,
+          },
+        ],
+      };
+      bootstrapStartWorkspaceServerImplementation = () => deferredServerStart.promise;
+      useAppStore.setState({
+        ...defaultStoreState,
+        ready: false,
+        bootstrapPhase: "idle",
+        startupError: null,
+        view: "chat",
+        lastNonSettingsView: "chat",
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(App)));
+      });
+      await act(async () => {
+        await waitForCondition(() => useAppStore.getState().bootstrapPhase === "ready");
+        await runNextPaint(paintCallbacks);
+        await runNextPaint(paintCallbacks);
+        await waitForCondition(() => bootstrapStartWorkspaceServerCalls === 1);
+      });
+
+      expect(bootstrapStartWorkspaceServerCalls).toBe(1);
+      expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.starting).toBe(true);
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            [workspaceId]: {
+              ...state.workspaceRuntimeById[workspaceId],
+              serverUrl: "ws://existing",
+            },
+          },
+        }));
+        ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+        ensureThreadSocket(
+          useAppStore.getState as any,
+          useAppStore.setState as any,
+          "session-deferred-selection",
+          "ws://existing",
+        );
+        await flushAsyncWork();
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            [workspaceId]: {
+              ...state.workspaceRuntimeById[workspaceId],
+              serverUrl: null,
+            },
+          },
+        }));
+      });
+      expect(MockJsonRpcSocket.instances).toHaveLength(1);
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        deferredServerStart.resolve({ url: "ws://late-server" });
+        await useAppStore.getState().drainBootstrap();
+      });
+
+      expect(bootstrapStartWorkspaceServerCalls).toBe(1);
+      expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.serverUrl).toBeNull();
+      expect(RUNTIME.jsonRpcSockets.size).toBe(0);
+      expect(MockJsonRpcSocket.instances).toHaveLength(1);
+      expect(MockJsonRpcSocket.instances[0]?.closed).toBe(true);
+      expect(jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).isDisposed).toBe(true);
+      expect(__controlSocketInternal.getWorkspaceStateSnapshot(workspaceId).isDisposed).toBe(true);
+      expect(__threadEventReducerInternal.getWorkspaceStateSnapshot(workspaceId).isDisposed).toBe(
+        true,
+      );
+    } finally {
+      deferredServerStart.resolve({ url: "ws://cleanup" });
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("window unload rejects a deferred startup session refresh before it can write", async () => {
+    const paintCallbacks: FrameRequestCallback[] = [];
+    const harness = setupAppJsdom((callback) => {
+      paintCallbacks.push(callback);
+      return paintCallbacks.length;
+    });
+    const deferredThreadList = createDeferred<unknown>();
+    let threadListRequests = 0;
+    let root: ReturnType<typeof createRoot> | null = null;
+    const workspaceId = "ws-deferred-sessions";
+
+    try {
+      bootstrapLoadedState = {
+        version: 2,
+        workspaces: [
+          {
+            id: workspaceId,
+            name: "Deferred sessions workspace",
+            path: "/tmp/deferred-sessions",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            lastOpenedAt: "2026-01-02T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        threads: [],
+      };
+      MockJsonRpcSocket.requestImplementation = async (method) => {
+        if (method === "thread/list") {
+          threadListRequests += 1;
+          return await deferredThreadList.promise;
+        }
+        return {};
+      };
+      useAppStore.setState({
+        ...defaultStoreState,
+        ready: false,
+        bootstrapPhase: "idle",
+        startupError: null,
+        view: "chat",
+        lastNonSettingsView: "chat",
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(App)));
+      });
+      await act(async () => {
+        await waitForCondition(() => useAppStore.getState().bootstrapPhase === "ready");
+        await runNextPaint(paintCallbacks);
+        await waitForCondition(() => threadListRequests > 0);
+      });
+
+      expect(bootstrapStartWorkspaceServerCalls).toBe(1);
+      expect(threadListRequests).toBeGreaterThan(0);
+      expect(MockJsonRpcSocket.instances).toHaveLength(1);
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        deferredThreadList.resolve({
+          threads: [
+            {
+              id: "late-session",
+              title: "Late session",
+              modelProvider: "openai",
+              model: "gpt-5.2",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-02T00:00:00.000Z",
+            },
+          ],
+        });
+        await useAppStore.getState().drainBootstrap();
+      });
+
+      expect(useAppStore.getState().threads).toEqual([]);
+      expect(bootstrapStartWorkspaceServerCalls).toBe(1);
+      expect(RUNTIME.jsonRpcSockets.size).toBe(0);
+      expect(MockJsonRpcSocket.instances).toHaveLength(1);
+      expect(MockJsonRpcSocket.instances[0]?.closed).toBe(true);
+      expect(jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).isDisposed).toBe(true);
+      expect(__controlSocketInternal.getWorkspaceStateSnapshot(workspaceId).isDisposed).toBe(true);
+    } finally {
+      deferredThreadList.resolve({ threads: [] });
       if (root) {
         await act(async () => {
           root.unmount();

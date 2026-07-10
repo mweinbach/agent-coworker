@@ -201,6 +201,9 @@ export type TaskLifecycleRequest = {
 };
 
 export type BootstrapPhase = "idle" | "loading" | "ready" | "error";
+export type AbortableActionOptions = {
+  signal?: AbortSignal;
+};
 
 export type AppStoreState = {
   ready: boolean;
@@ -295,6 +298,7 @@ export type AppStoreState = {
   messageBarHeight: number;
   init: () => Promise<void>;
   invalidateBootstrap: () => void;
+  drainBootstrap: () => Promise<void>;
 
   openSettings: (page?: SettingsPageId) => void;
   closeSettings: () => void;
@@ -302,7 +306,7 @@ export type AppStoreState = {
 
   addWorkspace: () => Promise<void>;
   removeWorkspace: (workspaceId: string) => Promise<void>;
-  selectWorkspace: (workspaceId: string) => Promise<void>;
+  selectWorkspace: (workspaceId: string, options?: AbortableActionOptions) => Promise<void>;
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
   setWorkspacesOrder: (orderedIds: string[]) => Promise<void>;
 
@@ -328,7 +332,7 @@ export type AppStoreState = {
   archiveThread: (threadId: string) => Promise<void>;
   restoreThread: (threadId: string) => Promise<void>;
   deleteThreadHistory: (threadId: string) => Promise<void>;
-  selectThread: (threadId: string) => Promise<void>;
+  selectThread: (threadId: string, options?: AbortableActionOptions) => Promise<void>;
   reconnectThread: (
     threadId: string,
     firstMessage?: string,
@@ -338,6 +342,7 @@ export type AppStoreState = {
       attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
       references?: import("../lib/wsProtocol").TurnReference[];
       refreshSnapshot?: boolean;
+      signal?: AbortSignal;
     },
   ) => Promise<boolean>;
   renameThread: (threadId: string, newTitle: string) => void;
@@ -430,9 +435,12 @@ export type AppStoreState = {
     createdWorkspaces: Array<{ workspaceId: string; path: string; name: string }>;
   }>;
   openNewTask: (workspaceId?: string) => Promise<void>;
-  refreshTasks: (workspaceId?: string) => Promise<void>;
+  refreshTasks: (workspaceId?: string, options?: AbortableActionOptions) => Promise<void>;
   startTask: (opts: { workspaceId: string; task: TaskCreationInput }) => Promise<TaskRecord | null>;
-  selectTask: (taskId: string, options?: { preserveView?: boolean }) => Promise<void>;
+  selectTask: (
+    taskId: string,
+    options?: AbortableActionOptions & { preserveView?: boolean },
+  ) => Promise<void>;
   selectTaskThread: (taskId: string, taskThreadId: string) => Promise<void>;
   createTaskThread: (taskId: string, title: string, workItemId?: string) => Promise<void>;
   updateTaskBrief: (
@@ -1011,7 +1019,10 @@ function reactivateWorkspaceJsonRpcState(workspaceId: string) {
   reactivateWorkspaceJsonRpcSocketState(workspaceId);
 }
 
+let jsonRpcLifecycleGeneration = 0;
+
 function disposeAllJsonRpcState() {
+  jsonRpcLifecycleGeneration += 1;
   for (const socket of [...RUNTIME.jsonRpcSockets.values()]) {
     try {
       socket.close?.();
@@ -1028,15 +1039,27 @@ function disposeAllJsonRpcState() {
   disposeAllJsonRpcSocketState();
 }
 
-async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, workspaceId: string) {
+async function ensureServerRunning(
+  get: () => AppStoreState,
+  set: StoreSet,
+  workspaceId: string,
+  options: AbortableActionOptions = {},
+) {
+  const lifecycleGeneration = jsonRpcLifecycleGeneration;
+  const isCurrent = () =>
+    options.signal?.aborted !== true && jsonRpcLifecycleGeneration === lifecycleGeneration;
+  if (!isCurrent()) return;
   const ws = get().workspaces.find((workspace) => workspace.id === workspaceId);
   if (!ws) return;
+  if (!isCurrent()) return;
   ensureWorkspaceRuntime(get, set, workspaceId);
+  if (!isCurrent()) return;
   reactivateWorkspaceJsonRpcState(workspaceId);
   const rt = get().workspaceRuntimeById[workspaceId];
   if (!rt) return;
   let forceRestart = false;
   if (rt.serverUrl && !rt.error) {
+    if (!isCurrent()) return;
     const status = await getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
       workspaceId,
       running: false as const,
@@ -1044,8 +1067,10 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
       reason: "health_failed" as const,
       error: error instanceof Error ? error.message : String(error),
     }));
+    if (!isCurrent()) return;
     if (status.running) {
       syncWorkspaceServerRunningUrl(get, set, workspaceId, status.url);
+      if (!isCurrent()) return;
       scheduleWorkspaceServerRestartBackoffReset(workspaceId);
       return;
     }
@@ -1059,17 +1084,22 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
     markWorkspaceServerStale(get, set, workspaceId, message);
     bumpWorkspaceStartGeneration(workspaceId);
     if (status.reason === "health_failed") {
+      if (!isCurrent()) return;
       try {
         await stopWorkspaceServer({ workspaceId });
       } catch {
         // ignore; startup below will surface persistent failures
       }
+      if (!isCurrent()) return;
     }
+    if (!isCurrent()) return;
     await waitForWorkspaceServerRestartBackoff(workspaceId);
+    if (!isCurrent()) return;
     reactivateWorkspaceJsonRpcState(workspaceId);
     forceRestart = status.reason === "health_failed";
   }
 
+  if (!isCurrent()) return;
   const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
   const generation = getWorkspaceStartGeneration(workspaceId);
   if (inFlight && inFlight.generation === generation) {
@@ -1077,6 +1107,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
     return;
   }
 
+  if (!isCurrent()) return;
   set((s) => ({
     workspaceRuntimeById: {
       ...s.workspaceRuntimeById,
@@ -1091,6 +1122,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
 
   const startPromise = (async () => {
     try {
+      if (!isCurrent()) return;
       const res = await startWorkspaceServer({
         workspaceId,
         workspacePath: ws.path,
@@ -1100,7 +1132,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
         featureFlags: get().desktopFeatureFlags,
         privacyTelemetrySettings: get().privacyTelemetrySettings,
       });
-      if (getWorkspaceStartGeneration(workspaceId) !== generation) {
+      if (!isCurrent() || getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;
       }
       set((s) => ({
@@ -1115,9 +1147,10 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
           },
         },
       }));
+      if (!isCurrent()) return;
       scheduleWorkspaceServerRestartBackoffReset(workspaceId);
     } catch (err) {
-      if (getWorkspaceStartGeneration(workspaceId) !== generation) {
+      if (!isCurrent() || getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
@@ -1142,6 +1175,10 @@ async function ensureServerRunning(get: () => AppStoreState, set: StoreSet, work
     }
   })();
 
+  if (!isCurrent()) {
+    await startPromise;
+    return;
+  }
   RUNTIME.workspaceStartPromises.set(workspaceId, { generation, promise: startPromise });
   try {
     await startPromise;

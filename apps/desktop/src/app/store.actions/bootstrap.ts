@@ -763,6 +763,7 @@ export function createBootstrapActions(
   AppStoreActions,
   | "init"
   | "invalidateBootstrap"
+  | "drainBootstrap"
   | "openSettings"
   | "closeSettings"
   | "setSettingsPage"
@@ -790,10 +791,13 @@ export function createBootstrapActions(
   async function completeStartupSelection(
     ui: ReturnType<typeof buildResolvedDesktopUiState>,
     isCurrent: BootstrapRunContext["isCurrent"],
+    signal: AbortSignal,
   ): Promise<void> {
+    if (!isCurrent()) return;
     const startupSelectionContext = getThreadSelectionContext(ui.view, ui.lastNonSettingsView);
 
     if (ui.selectedThreadId && ui.view === "chat") {
+      if (!isCurrent()) return;
       set((state) => ({
         threadRuntimeById: {
           ...state.threadRuntimeById,
@@ -812,7 +816,7 @@ export function createBootstrapActions(
       if (current.selectedThreadId !== ui.selectedThreadId || current.view !== "chat") {
         return;
       }
-      await current.selectThread(ui.selectedThreadId);
+      await current.selectThread(ui.selectedThreadId, { signal });
       return;
     }
 
@@ -826,7 +830,7 @@ export function createBootstrapActions(
       if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
         return;
       }
-      await current.selectWorkspace(selectedWorkspaceId);
+      await current.selectWorkspace(selectedWorkspaceId, { signal });
       return;
     }
 
@@ -849,7 +853,7 @@ export function createBootstrapActions(
     ) {
       return;
     }
-    await current.refreshTasks(startupWorkspaceId);
+    await current.refreshTasks(startupWorkspaceId, { signal });
     if (!isCurrent()) {
       return;
     }
@@ -868,7 +872,10 @@ export function createBootstrapActions(
       (task) => task.id === startupTaskId,
     );
     if (taskExists) {
-      await refreshed.selectTask(startupTaskId, { preserveView: preserveStartupView });
+      await refreshed.selectTask(startupTaskId, {
+        preserveView: preserveStartupView,
+        signal,
+      });
       return;
     }
     set({ selectedTaskId: null, selectedThreadId: null });
@@ -880,8 +887,10 @@ export function createBootstrapActions(
       bootstrapCoordinator.invalidate();
     },
 
+    drainBootstrap: () => bootstrapCoordinator.drain(),
+
     init: () =>
-      bootstrapCoordinator.run(async ({ isCurrent, waitUntil }) => {
+      bootstrapCoordinator.run(async ({ isCurrent, signal, waitUntil }) => {
         set({ startupError: null, bootstrapPhase: "loading" });
         try {
           const state = hydratePersistedDesktopState(await loadState());
@@ -1025,7 +1034,7 @@ export function createBootstrapActions(
             return;
           }
 
-          waitUntil(completeStartupSelection(ui, isCurrent));
+          waitUntil(completeStartupSelection(ui, isCurrent, signal));
           return;
         } catch (error) {
           if (!isCurrent()) {

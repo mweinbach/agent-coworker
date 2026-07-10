@@ -645,7 +645,8 @@ describe("desktop bootstrap cache", () => {
     resetStoreToCachedSeed();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await useAppStore.getState().drainBootstrap();
     restoreTaskHydrationActions();
   });
 
@@ -1262,8 +1263,7 @@ describe("desktop bootstrap cache", () => {
     expect(useAppStore.getState().init()).toBe(first);
 
     selection.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await useAppStore.getState().drainBootstrap();
 
     const second = useAppStore.getState().init();
     expect(second).not.toBe(first);
@@ -1373,8 +1373,7 @@ describe("desktop bootstrap cache", () => {
     expect(useAppStore.getState().init()).toBe(initPromise);
 
     selection.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await useAppStore.getState().drainBootstrap();
 
     expect(settled).toBe(true);
     expect(refreshCalls).toBe(1);

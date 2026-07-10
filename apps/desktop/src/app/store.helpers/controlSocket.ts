@@ -3,7 +3,7 @@ import {
   mergeWorkspaceProviderOptionsPreservingSearchSettings,
   normalizeWorkspaceProviderOptions,
 } from "../openaiCompatibleProviderOptions";
-import type { StoreGet, StoreSet } from "../store.helpers";
+import type { AbortableActionOptions, StoreGet, StoreSet } from "../store.helpers";
 import { isStandardChatThread, isTaskOwnedThread } from "../threadFilters";
 import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
@@ -619,21 +619,23 @@ export function createControlSocketHelpers(
     get: StoreGet,
     set: StoreSet,
     workspaceId: string,
+    options: AbortableActionOptions = {},
   ): Promise<Extract<SessionEvent, { type: "sessions" }>["sessions"] | null> {
-    if (isWorkspaceDisposed(workspaceId)) {
+    const isCurrent = () => options.signal?.aborted !== true && !isWorkspaceDisposed(workspaceId);
+    if (!isCurrent()) {
       return null;
     }
     return await withPendingWaiterCount(workspaceSessionWaiters, async () => {
-      if (isWorkspaceDisposed(workspaceId)) {
+      if (!isCurrent()) {
         return null;
       }
       const socket =
         RUNTIME.jsonRpcSockets.get(workspaceId) ?? ensureControlSocket(get, set, workspaceId);
-      if (!socket) {
+      if (!socket || !isCurrent()) {
         return null;
       }
       await waitForReady(socket);
-      if (isWorkspaceDisposed(workspaceId)) {
+      if (!isCurrent()) {
         return null;
       }
       let threads: Awaited<ReturnType<typeof requestJsonRpcThreadList>> = [];
@@ -642,7 +644,7 @@ export function createControlSocketHelpers(
       } catch {
         return null;
       }
-      if (isWorkspaceDisposed(workspaceId)) {
+      if (!isCurrent()) {
         return null;
       }
       const sessions = threads.flatMap((thread) => {
@@ -681,6 +683,9 @@ export function createControlSocketHelpers(
       });
       let removedSessionSnapshotIds: string[] = [];
       set((s) => {
+        if (!isCurrent()) {
+          return {};
+        }
         removedSessionSnapshotIds = pruneRemovedWorkspaceSessionSnapshots(
           s.threads,
           s.threadRuntimeById,
@@ -709,7 +714,13 @@ export function createControlSocketHelpers(
         };
       });
       for (const sessionId of removedSessionSnapshotIds) {
+        if (!isCurrent()) {
+          return null;
+        }
         RUNTIME.sessionSnapshots.delete(sessionId);
+      }
+      if (!isCurrent()) {
+        return null;
       }
       void deps.persist(get);
       return sessions;

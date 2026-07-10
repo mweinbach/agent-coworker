@@ -13,6 +13,7 @@ import {
 } from "../openaiCompatibleProviderOptions";
 import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
+  type AbortableActionOptions,
   type AppStoreActions,
   type AppStoreState,
   appendThreadTranscript,
@@ -69,7 +70,7 @@ type HydrateThreadSelectionOptions = {
   preserveView?: boolean;
   reconnectAfterHydration?: boolean;
   skipWorkspaceSelectOnReconnect?: boolean;
-};
+} & AbortableActionOptions;
 
 /**
  * Queue the first message of a brand-new chat AND render its user bubble
@@ -164,11 +165,14 @@ export async function hydrateThreadSelection(
   threadId: string,
   options: HydrateThreadSelectionOptions = {},
 ): Promise<void> {
+  const isOperationCurrent = () => options.signal?.aborted !== true;
   const isSelectionCurrent = (requestId: number) =>
-    get().selectedThreadId === threadId && isCurrentThreadSelectionRequest(threadId, requestId);
+    isOperationCurrent() &&
+    get().selectedThreadId === threadId &&
+    isCurrentThreadSelectionRequest(threadId, requestId);
 
   const clearThreadHydrationIfCurrent = (requestId: number) => {
-    if (!isCurrentThreadSelectionRequest(threadId, requestId)) {
+    if (!isOperationCurrent() || !isCurrentThreadSelectionRequest(threadId, requestId)) {
       return;
     }
     set((state) => {
@@ -188,6 +192,7 @@ export async function hydrateThreadSelection(
     clearThreadSelectionRequest(threadId, requestId);
   };
 
+  if (!isOperationCurrent()) return;
   const thread = get().threads.find((candidate) => candidate.id === threadId);
   if (!thread) return;
   const selectedTaskIdForThread = (candidate: ThreadRecord): string | null => {
@@ -212,6 +217,7 @@ export async function hydrateThreadSelection(
     left.lastEventSeq === right.lastEventSeq;
 
   const cacheSessionSnapshot = (snapshot: SessionSnapshot) => {
+    if (!isOperationCurrent()) return;
     RUNTIME.sessionSnapshots.set(snapshot.sessionId, {
       fingerprint: {
         updatedAt: snapshot.updatedAt,
@@ -228,6 +234,7 @@ export async function hydrateThreadSelection(
     sessionId: string,
     snapshot: SessionSnapshot,
   ) => {
+    if (!isOperationCurrent()) return;
     set((state) => {
       const nextThreads = state.threads.map((candidate) =>
         candidate.id === selectedThreadId
@@ -310,21 +317,25 @@ export async function hydrateThreadSelection(
   };
 
   const hydrateLegacyTranscript = async (candidate: ThreadRecord) => {
+    if (!isOperationCurrent()) return null;
     const transcriptIds = transcriptIdsForThread(candidate);
     if (transcriptIds.length === 0) return null;
 
     if (transcriptIds.length === 1 && typeof desktopCommands.hydrateTranscript === "function") {
       const firstTranscriptId = transcriptIds[0];
       if (!firstTranscriptId) return null;
-      return await desktopCommands.hydrateTranscript({ threadId: firstTranscriptId });
+      const snapshot = await desktopCommands.hydrateTranscript({ threadId: firstTranscriptId });
+      return isOperationCurrent() ? snapshot : null;
     }
 
     const transcript: TranscriptEvent[] = [];
     let successfulReads = 0;
     let firstError: unknown = null;
     for (const transcriptId of transcriptIds) {
+      if (!isOperationCurrent()) return null;
       try {
         transcript.push(...(await desktopCommands.readTranscript({ threadId: transcriptId })));
+        if (!isOperationCurrent()) return null;
         successfulReads += 1;
       } catch (error) {
         firstError ??= error;
@@ -339,8 +350,10 @@ export async function hydrateThreadSelection(
     return hydrateTranscriptSnapshot(transcript);
   };
 
+  if (!isOperationCurrent()) return;
   ensureThreadRuntime(get, set, threadId);
   if (thread.draft) {
+    if (!isOperationCurrent()) return;
     const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedThreadId: threadId,
@@ -362,6 +375,7 @@ export async function hydrateThreadSelection(
 
   const rt = get().threadRuntimeById[threadId];
   if (get().selectedThreadId === threadId && RUNTIME.threadSelectionRequests.has(threadId)) {
+    if (!isOperationCurrent()) return;
     const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
@@ -372,6 +386,7 @@ export async function hydrateThreadSelection(
     return;
   }
   if (get().selectedThreadId === threadId && rt?.connected) {
+    if (!isOperationCurrent()) return;
     const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => ({
       selectedWorkspaceId: thread.workspaceId,
@@ -380,14 +395,20 @@ export async function hydrateThreadSelection(
     }));
     syncDesktopStateCache(get);
     if (options.reconnectAfterHydration) {
-      void get()
-        .reconnectThread(threadId, undefined, {
-          skipWorkspaceSelect: options.skipWorkspaceSelectOnReconnect,
-          refreshSnapshot: false,
-        })
-        .catch(() => {
+      const reconnect = get().reconnectThread(threadId, undefined, {
+        skipWorkspaceSelect: options.skipWorkspaceSelectOnReconnect,
+        refreshSnapshot: false,
+        signal: options.signal,
+      });
+      if (options.signal) {
+        await reconnect.catch(() => {
           // The next socket reconnect or thread selection will re-assert the live subscription.
         });
+      } else {
+        void reconnect.catch(() => {
+          // The next socket reconnect or thread selection will re-assert the live subscription.
+        });
+      }
     }
     return;
   }
@@ -415,8 +436,10 @@ export async function hydrateThreadSelection(
     !skipHarnessSnapshotFetch &&
     (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
 
+  if (!isOperationCurrent()) return;
   const requestId = beginThreadSelectionRequest(threadId);
   const selectedTaskId = selectedTaskIdForThread(thread);
+  if (!isOperationCurrent()) return;
   set((state) => ({
     selectedThreadId: threadId,
     selectedWorkspaceId: thread.workspaceId,
@@ -435,6 +458,7 @@ export async function hydrateThreadSelection(
 
   let appliedCachedSnapshot = false;
   if (matchingCachedSnapshot && sessionId) {
+    if (!isOperationCurrent()) return;
     applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
     appliedCachedSnapshot = true;
   }
@@ -457,14 +481,23 @@ export async function hydrateThreadSelection(
     try {
       let loadedFromHarness = false;
       if (sessionId && shouldFetchHarnessSnapshot) {
-        await ensureServerRunning(get, set, thread.workspaceId);
+        await ensureServerRunning(get, set, thread.workspaceId, { signal: options.signal });
+        if (!isSelectionCurrent(requestId)) {
+          clearThreadHydrationIfCurrent(requestId);
+          return;
+        }
         ensureControlSocket(get, set, thread.workspaceId);
+        if (!isSelectionCurrent(requestId)) {
+          clearThreadHydrationIfCurrent(requestId);
+          return;
+        }
         const snapshot = await requestSessionSnapshot(get, set, thread.workspaceId, sessionId);
         if (!isSelectionCurrent(requestId)) {
           clearThreadHydrationIfCurrent(requestId);
           return;
         }
         if (snapshot) {
+          if (!isSelectionCurrent(requestId)) return;
           applySessionSnapshot(threadId, sessionId, snapshot);
           cacheSessionSnapshot(snapshot);
           loadedFromHarness = true;
@@ -529,6 +562,7 @@ export async function hydrateThreadSelection(
   }
 
   if (stayTranscriptOnly) {
+    if (!isOperationCurrent()) return;
     set((state) => ({
       threadRuntimeById: {
         ...state.threadRuntimeById,
@@ -543,6 +577,7 @@ export async function hydrateThreadSelection(
     return;
   }
 
+  if (!isOperationCurrent()) return;
   set((state) => ({
     threadRuntimeById: {
       ...state.threadRuntimeById,
@@ -554,8 +589,10 @@ export async function hydrateThreadSelection(
     await get().reconnectThread(threadId, undefined, {
       selectionRequestId: requestId,
       skipWorkspaceSelect: options.skipWorkspaceSelectOnReconnect,
+      signal: options.signal,
     });
   }
+  if (!isOperationCurrent()) return;
   clearThreadSelectionRequest(threadId, requestId);
 }
 
@@ -1050,11 +1087,14 @@ export function createThreadActions(
       syncDesktopStateCache(get);
     },
 
-    selectThread: async (threadId: string) => {
+    selectThread: async (threadId: string, options = {}) => {
+      if (options.signal?.aborted) return;
       set({ newChatLandingTarget: null });
+      if (options.signal?.aborted) return;
       await hydrateThreadSelection(get, set, threadId, {
         reconnectAfterHydration: true,
         skipWorkspaceSelectOnReconnect: true,
+        signal: options.signal,
       });
     },
 
@@ -1067,13 +1107,16 @@ export function createThreadActions(
         attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[];
         references?: import("../../lib/wsProtocol").TurnReference[];
         refreshSnapshot?: boolean;
+        signal?: AbortSignal;
       },
     ) => {
       const isReconnectCurrent = () =>
-        opts?.selectionRequestId === undefined ||
-        (get().selectedThreadId === threadId &&
-          isCurrentThreadSelectionRequest(threadId, opts.selectionRequestId));
+        opts?.signal?.aborted !== true &&
+        (opts?.selectionRequestId === undefined ||
+          (get().selectedThreadId === threadId &&
+            isCurrentThreadSelectionRequest(threadId, opts.selectionRequestId)));
 
+      if (!isReconnectCurrent()) return false;
       ensureThreadRuntime(get, set, threadId);
 
       const thread = get().threads.find((t) => t.id === threadId);
@@ -1085,15 +1128,16 @@ export function createThreadActions(
       }
 
       if (!opts?.skipWorkspaceSelect) {
-        await get().selectWorkspace(thread.workspaceId);
+        await get().selectWorkspace(thread.workspaceId, { signal: opts?.signal });
         if (!isReconnectCurrent()) return false;
       }
-      await ensureServerRunning(get, set, thread.workspaceId);
+      await ensureServerRunning(get, set, thread.workspaceId, { signal: opts?.signal });
       if (!isReconnectCurrent()) return false;
       ensureControlSocket(get, set, thread.workspaceId);
 
       const url = get().workspaceRuntimeById[thread.workspaceId]?.serverUrl;
       if (!url) {
+        if (!isReconnectCurrent()) return false;
         set((s) => ({
           notifications: pushNotification(s.notifications, {
             id: makeId(),
@@ -1109,6 +1153,7 @@ export function createThreadActions(
 
       const hasFirstMessage = firstMessage?.trim();
       if (hasFirstMessage || hasQueuedAttachments) {
+        if (!isReconnectCurrent()) return false;
         queuePendingThreadMessage(
           threadId,
           firstMessage ?? "",
@@ -1116,6 +1161,7 @@ export function createThreadActions(
           opts?.references,
         );
       }
+      if (!isReconnectCurrent()) return false;
       ensureThreadSocket(
         get,
         set,

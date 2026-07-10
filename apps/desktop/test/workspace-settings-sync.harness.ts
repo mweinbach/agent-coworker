@@ -677,11 +677,7 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
   });
 
   afterEach(async () => {
-    // Bootstrap keeps post-paint selection inside its generation. Let that
-    // owned follow-up settle before the next test replaces the singleton store.
-    for (let pass = 0; pass < 4; pass += 1) {
-      await flushAsyncWork();
-    }
+    await useAppStore.getState().drainBootstrap();
     clearJsonRpcSocketOverride();
   });
 }

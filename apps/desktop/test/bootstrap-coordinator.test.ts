@@ -47,9 +47,7 @@ describe("bootstrap coordinator", () => {
     expect(runs).toBe(1);
 
     followUp.resolve();
-    await followUp.promise;
-    await Promise.resolve();
-    await Promise.resolve();
+    await coordinator.drain();
 
     const second = coordinator.run(async () => {
       runs += 1;
@@ -57,6 +55,26 @@ describe("bootstrap coordinator", () => {
     expect(second).not.toBe(first);
     await second;
     expect(runs).toBe(2);
+  });
+
+  test("drains all work owned by the current generation", async () => {
+    const coordinator = createBootstrapCoordinator();
+    const followUp = createDeferred<void>();
+    let drained = false;
+
+    const run = coordinator.run(async ({ waitUntil }) => {
+      waitUntil(followUp.promise);
+    });
+    const drain = coordinator.drain().then(() => {
+      drained = true;
+    });
+
+    await run;
+    expect(drained).toBe(false);
+
+    followUp.resolve();
+    await drain;
+    expect(drained).toBe(true);
   });
 
   test("publishes the in-flight promise before task side effects can reenter", async () => {
@@ -118,6 +136,24 @@ describe("bootstrap coordinator", () => {
       }
     });
     expect(value).toBe("second");
+  });
+
+  test("invalidation aborts the active generation signal", async () => {
+    const coordinator = createBootstrapCoordinator();
+    const deferred = createDeferred<void>();
+    let signal: AbortSignal | null = null;
+
+    const run = coordinator.run(async (context) => {
+      signal = context.signal;
+      await deferred.promise;
+    });
+
+    expect(signal?.aborted).toBe(false);
+    coordinator.invalidate();
+    expect(signal?.aborted).toBe(true);
+
+    deferred.resolve();
+    await run;
   });
 
   test("rejects deferred writes from an older generation", async () => {

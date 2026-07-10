@@ -161,6 +161,45 @@ export type TranscriptBatchInput = {
   payload: unknown;
 };
 
+export type TranscriptCaptureResult =
+  | {
+      accepted: true;
+      batchId: string;
+      pendingEvents: number;
+      pendingBytes: number;
+    }
+  | {
+      accepted: false;
+      recoveryId: string;
+      reason: "overflow" | "batch_too_large" | "capability_absent" | "persistence" | "closed";
+      pendingEvents: number;
+      pendingBytes: number;
+    };
+
+export type TranscriptDeliveryFailure = {
+  batchId: string | null;
+  recoveryId: string | null;
+  reason:
+    | "permanent"
+    | "retries_exhausted"
+    | "persistence"
+    | "overflow"
+    | "capability_absent"
+    | "malformed";
+  pendingEvents: number;
+  pendingBytes: number;
+  limits: {
+    maxBatches: number;
+    maxEvents: number;
+    maxBytes: number;
+    maxBatchEvents: number;
+    maxBatchBytes: number;
+  };
+  canRetry: boolean;
+  canDiscard: boolean;
+  message: string;
+};
+
 export type ContextMenuItem = {
   id: string;
   label: string;
@@ -531,7 +570,11 @@ export interface DesktopApi {
   readTranscript(opts: ReadTranscriptInput): Promise<TranscriptEvent[]>;
   hydrateTranscript(opts: ReadTranscriptInput): Promise<HydratedTranscriptSnapshot>;
   appendTranscriptEvent(opts: TranscriptBatchInput): Promise<void>;
+  captureTranscriptEvent?(event: TranscriptBatchInput): Promise<TranscriptCaptureResult>;
   appendTranscriptBatch(events: TranscriptBatchInput[]): Promise<void>;
+  onTranscriptDeliveryFailure?(listener: (failure: TranscriptDeliveryFailure) => void): () => void;
+  retryTranscriptDelivery?(batchId?: string): Promise<void>;
+  discardTranscriptBatch?(batchId: string): Promise<void>;
   deleteTranscript(opts: DeleteTranscriptInput): Promise<void>;
   pickWorkspaceDirectory(): Promise<string | null>;
   pickDirectory(opts?: PickDirectoryInput): Promise<string | null>;

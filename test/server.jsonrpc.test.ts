@@ -240,13 +240,14 @@ describe("server JSON-RPC websocket mode", () => {
         method: "OPTIONS",
         headers: {
           Origin: "http://localhost:5173",
-          "Access-Control-Request-Headers": "X-Cowork-Browser-Token",
+          "Access-Control-Request-Headers": "Idempotency-Key, X-Cowork-Browser-Token",
         },
       });
       expect(preflight.status).toBe(204);
       expect(preflight.headers.get("access-control-allow-headers")).toContain(
         "X-Cowork-Browser-Token",
       );
+      expect(preflight.headers.get("access-control-allow-headers")).toContain("Idempotency-Key");
 
       const unauthorized = await fetch(`${httpBase}/cowork/workspaces`, {
         headers: { Origin: "http://localhost:5173" },

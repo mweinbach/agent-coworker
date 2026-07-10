@@ -27,6 +27,9 @@ import type {
   SystemAppearance,
   TelemetryStatusInput,
   TelemetryStatusSnapshot,
+  TranscriptBatchInput,
+  TranscriptCaptureResult,
+  TranscriptDeliveryFailure,
   UpdaterState,
   UploadDiagnosticsBundleOutput,
   WorkspaceServerExitedEvent,
@@ -159,6 +162,30 @@ export async function appendTranscriptBatch(
   }[],
 ): Promise<void> {
   await requireDesktopApi().appendTranscriptBatch(events);
+}
+
+export function captureTranscriptEvent(
+  event: TranscriptBatchInput,
+): Promise<TranscriptCaptureResult> | null {
+  const capture = getDesktopApi()?.captureTranscriptEvent;
+  if (!capture) {
+    return null;
+  }
+  return capture(event);
+}
+
+export function onTranscriptDeliveryFailure(
+  listener: (failure: TranscriptDeliveryFailure) => void,
+): () => void {
+  return getDesktopApi()?.onTranscriptDeliveryFailure?.(listener) ?? noopUnsubscribe;
+}
+
+export async function retryTranscriptDelivery(batchId?: string): Promise<void> {
+  await getDesktopApi()?.retryTranscriptDelivery?.(batchId);
+}
+
+export async function discardTranscriptBatch(batchId: string): Promise<void> {
+  await getDesktopApi()?.discardTranscriptBatch?.(batchId);
 }
 
 export async function deleteTranscript(opts: { threadId: string }): Promise<void> {

@@ -5,28 +5,27 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { TranscriptDeliveryFailure } from "@/lib/desktopApi";
 import {
-  appendTranscriptBatch,
   discardTranscriptBatch,
   onTranscriptDeliveryFailure,
   retryTranscriptDelivery,
 } from "@/lib/desktopCommands";
 
 function failureKey(failure: TranscriptDeliveryFailure): string {
-  return failure.batchId ?? `${failure.reason}:${failure.message}`;
+  return failure.recoveryId ?? failure.batchId ?? `${failure.reason}:${failure.message}`;
 }
 
 export function TranscriptDeliveryRecovery() {
   const [failures, setFailures] = useState<TranscriptDeliveryFailure[]>([]);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(
     () =>
       onTranscriptDeliveryFailure((failure) => {
         const key = failureKey(failure);
-        setFailures((current) => [
-          ...current.filter((candidate) => failureKey(candidate) !== key),
-          failure,
-        ]);
+        setFailures((current) =>
+          [...current.filter((candidate) => failureKey(candidate) !== key), failure].slice(-64),
+        );
       }),
     [],
   );
@@ -43,28 +42,33 @@ export function TranscriptDeliveryRecovery() {
 
   const retry = async (): Promise<void> => {
     setBusy(true);
+    setActionError(null);
     try {
-      if (failure.batchId) {
-        await retryTranscriptDelivery(failure.batchId);
-      } else if (failure.recoverableEvents?.length) {
-        await appendTranscriptBatch(failure.recoverableEvents);
-      } else {
-        await retryTranscriptDelivery();
-      }
+      await retryTranscriptDelivery(failure.recoveryId ?? failure.batchId ?? undefined);
       removeCurrent();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Unable to retry transcript delivery",
+      );
     } finally {
       setBusy(false);
     }
   };
 
   const discard = async (): Promise<void> => {
-    if (!failure.batchId) {
+    const actionId = failure.recoveryId ?? failure.batchId;
+    if (!actionId) {
       return;
     }
     setBusy(true);
+    setActionError(null);
     try {
-      await discardTranscriptBatch(failure.batchId);
+      await discardTranscriptBatch(actionId);
       removeCurrent();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Unable to discard transcript delivery",
+      );
     } finally {
       setBusy(false);
     }
@@ -77,10 +81,13 @@ export function TranscriptDeliveryRecovery() {
           <AlertTriangle className="size-4" aria-hidden="true" />
           Transcript sync needs attention
         </CardTitle>
-        <CardDescription>{failure.message}</CardDescription>
+        <CardDescription>
+          {failure.message}
+          {actionError ? ` ${actionError}` : ""}
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex justify-end gap-2 px-4">
-        {failure.canDiscard && failure.batchId ? (
+        {failure.canDiscard && (failure.recoveryId || failure.batchId) ? (
           <Button variant="outline" size="sm" disabled={busy} onClick={() => void discard()}>
             <Trash2 data-icon="inline-start" />
             Discard

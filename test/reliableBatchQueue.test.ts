@@ -74,6 +74,7 @@ type SharedStoreState = {
 
 class MemoryStore implements ReliableBatchStore<TestItem> {
   readonly state: SharedStoreState;
+  headOverride: unknown | null = null;
 
   constructor(
     state: SharedStoreState = {
@@ -94,6 +95,7 @@ class MemoryStore implements ReliableBatchStore<TestItem> {
     if (this.state.capabilityAbsent) {
       return {
         accepted: false,
+        recoveryId: batch.id,
         reason: "capability_absent",
         items: batch.items,
         bytes: batch.bytes,
@@ -113,6 +115,7 @@ class MemoryStore implements ReliableBatchStore<TestItem> {
     ) {
       return {
         accepted: false,
+        recoveryId: batch.id,
         reason: "overflow",
         items: batch.items,
         bytes: batch.bytes,
@@ -125,6 +128,9 @@ class MemoryStore implements ReliableBatchStore<TestItem> {
   }
 
   async getHead(scope: string): Promise<ReliableBatchEnvelope<TestItem> | null> {
+    if (this.headOverride !== null) {
+      return structuredClone(this.headOverride) as ReliableBatchEnvelope<TestItem>;
+    }
     return structuredClone(
       this.state.batches
         .filter((batch) => batch.scope === scope)
@@ -257,6 +263,17 @@ class MemoryStore implements ReliableBatchStore<TestItem> {
         message: "Malformed transcript outbox record was quarantined",
       }));
     this.state.malformed = this.state.malformed.filter(validate);
+    if (this.headOverride !== null && !validate(this.headOverride)) {
+      const value = this.headOverride;
+      malformed.push({
+        id:
+          value && typeof value === "object" && "id" in value
+            ? String((value as { id?: unknown }).id)
+            : null,
+        message: "Malformed transcript outbox record was quarantined",
+      });
+      this.headOverride = null;
+    }
     return malformed;
   }
 }
@@ -439,6 +456,77 @@ describe("ReliableBatchQueue", () => {
       }),
     );
     expect(store.state.malformed).toEqual([]);
+    await queue.close();
+  });
+
+  test("validates a malformed head inserted by another owner after the initial scan", async () => {
+    const clock = new ManualClock();
+    const store = new MemoryStore();
+    const failures: ReliableBatchFailure<TestItem>[] = [];
+    const queue = createQueue({
+      store,
+      clock,
+      failures,
+      send: async () => {
+        throw new Error("Malformed heads must never be delivered");
+      },
+    });
+    await clock.advance(0);
+
+    store.headOverride = {
+      id: "late-broken",
+      scope: "scope-a",
+      createdAt: clock.now,
+      items: "not-an-array",
+    };
+    queue.wake();
+    await clock.advance(0);
+
+    expect(store.headOverride).toBeNull();
+    expect(failures).toContainEqual(
+      expect.objectContaining({
+        batchId: "late-broken",
+        reason: "malformed",
+      }),
+    );
+    await queue.close();
+  });
+
+  test("reports lease storage errors and reschedules instead of going dormant", async () => {
+    const clock = new ManualClock();
+    const store = new MemoryStore();
+    const acquireLease = store.tryAcquireLease.bind(store);
+    let leaseAttempts = 0;
+    store.tryAcquireLease = async (...args) => {
+      leaseAttempts += 1;
+      if (leaseAttempts === 1) {
+        throw new Error("IndexedDB lease failed");
+      }
+      return await acquireLease(...args);
+    };
+    const delivered: number[] = [];
+    const failures: ReliableBatchFailure<TestItem>[] = [];
+    const queue = createQueue({
+      store,
+      clock,
+      failures,
+      send: async (batch) => {
+        delivered.push(batch.items[0]?.order ?? -1);
+      },
+    });
+    await queue.enqueue([{ order: 1 }]);
+    await clock.advance(0);
+
+    expect(failures).toContainEqual(
+      expect.objectContaining({
+        reason: "persistence",
+        error: expect.objectContaining({ message: "IndexedDB lease failed" }),
+      }),
+    );
+    expect(delivered).toEqual([]);
+
+    await clock.advance(50);
+    expect(delivered).toEqual([1]);
     await queue.close();
   });
 

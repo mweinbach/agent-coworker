@@ -49,22 +49,27 @@ are indexed and bounded to 10,000 batches or 30 days; delivery ids in retained J
 continue to suppress identical older replays. The legacy array-only body remains accepted for
 older clients but receives only a server-generated idempotency key.
 
-The web client commits each captured event as a transactional IndexedDB batch before the desktop
-debounce path can run. Every record binds the full collision-safe `(server URL, workspace path)`
-scope and immutable destination URL. A renewable IndexedDB lease permits one sender per scope;
-other tabs may enqueue but cannot acknowledge or erase the owner's batch. Replacing or closing a
-sender cancels its scheduler and active request, releases only its lease, and leaves every
-unacknowledged record available to the next owner.
+The web client keeps its capture-buffer copy until the transactional IndexedDB enqueue resolves.
+Only a durable commit or an acknowledged bounded recovery record releases that copy; generation
+read or persistence errors therefore cannot silently drop the event. Every outbox record binds the
+full collision-safe `(server URL, workspace path)` scope and immutable destination URL. A renewable
+IndexedDB lease permits one sender per scope; other tabs may enqueue but cannot acknowledge or
+erase the owner's batch. Replacing or closing a sender cancels its scheduler and active request,
+releases only its lease, and leaves every unacknowledged record available to the next owner.
 
 The outbox is bounded to 512 batches, 4,096 events, 4 MiB total, 100 events per request, and 240 KiB
-per serialized client request. Capacity or quota failures produce a recoverable rejected-event
-result and visible Retry guidance instead of silently evicting old data. Retry attempts,
-blocked state, and `nextAttemptAt` are persisted. Transient network, timeout, `408`, `425`, `429`,
+per serialized client request. Capacity, generation, or quota failures receive unique recovery
+ids and visible Retry/Discard guidance instead of silently deduplicating or evicting failures.
+Rejected payload fallback is separately bounded to 32 records, 256 events, and 1 MiB and expires
+after five minutes; failure notifications carry metadata, not transcript payloads. Retry attempts,
+blocked state, and `nextAttemptAt` are persisted. Storage and lease exceptions are reported and
+rescheduled rather than leaving the queue dormant. Transient network, timeout, `408`, `425`, `429`,
 and `5xx` failures retry in order with bounded backoff; a valid `Retry-After` delta or HTTP date
 sets the minimum delay. Permanent and retry-exhausted heads block later delivery until the user
-chooses Retry or Discard. Malformed IndexedDB records are quarantined and reported. A `404`
-marks the endpoint capability absent, clears that scope, and suppresses capture for 60 seconds
-before probing again, so older servers do not accumulate failures while upgrades can recover.
+chooses Retry or Discard. Every selected IndexedDB head is revalidated, and malformed records are
+quarantined and reported even when another tab inserts them after an earlier scan. A `404` marks
+the endpoint capability absent, clears that scope, and suppresses capture for 60 seconds before
+probing again, so older servers do not accumulate failures while upgrades can recover.
 
 `pagehide`/`beforeunload` first waits for already-started capture transactions, then performs one
 best-effort authenticated `keepalive` send for the ordered head. Retained data is rehydrated with

@@ -5,6 +5,7 @@ export type ReliableBatchFailureReason =
   | "retries_exhausted"
   | "persistence"
   | "overflow"
+  | "capability_absent"
   | "malformed";
 
 export type ReliableBatchEnvelope<T> = {
@@ -43,6 +44,7 @@ export type ReliableBatchEnqueueResult<T> =
     }
   | {
       accepted: false;
+      recoveryId: string;
       reason: "overflow" | "batch_too_large" | "capability_absent" | "persistence" | "closed";
       items: T[];
       bytes: number;
@@ -52,6 +54,7 @@ export type ReliableBatchEnqueueResult<T> =
 
 export type ReliableBatchFailure<T> = {
   batchId: string | null;
+  recoveryId: string | null;
   items: T[];
   reason: ReliableBatchFailureReason;
   attempts: number;
@@ -235,7 +238,6 @@ export class ReliableBatchQueue<T> {
   private activeController: AbortController | null = null;
   private closed = false;
   private shutdownFlushing = false;
-  private malformedChecked = false;
 
   constructor(options: ReliableBatchQueueOptions<T>) {
     this.scope = options.scope;
@@ -307,32 +309,38 @@ export class ReliableBatchQueue<T> {
     if (this.running) {
       await this.running;
     }
-    const now = this.clock.now();
-    const ownsLease = await this.store.tryAcquireLease(
-      this.scope,
-      this.ownerId,
-      now,
-      now + this.leaseMs,
-    );
-    if (!ownsLease) {
-      this.shutdownFlushing = false;
-      return;
-    }
-    const batch = await this.store.getHead(this.scope);
-    if (!batch || batch.status === "blocked") {
-      this.shutdownFlushing = false;
-      return;
-    }
-    const controller = new AbortController();
     try {
+      const now = this.clock.now();
+      const ownsLease = await this.store.tryAcquireLease(
+        this.scope,
+        this.ownerId,
+        now,
+        now + this.leaseMs,
+      );
+      if (!ownsLease) {
+        return;
+      }
+      const batch = await this.store.getHead(this.scope);
+      if (
+        !batch ||
+        !isReliableBatchEnvelope(batch, this.validateItem) ||
+        batch.status === "blocked"
+      ) {
+        if (batch && !isReliableBatchEnvelope(batch, this.validateItem)) {
+          await this.scanMalformed();
+        }
+        return;
+      }
+      const controller = new AbortController();
       await this.sendBatch(cloneBatch(batch), {
         keepalive: true,
         signal: controller.signal,
         abort: (reason) => controller.abort(reason),
       });
       await this.store.acknowledge(this.scope, batch.id, this.ownerId);
-    } catch {
+    } catch (error) {
       // The transactional outbox remains authoritative for the next owner.
+      await this.reportStorageFailure(error);
     } finally {
       this.shutdownFlushing = false;
     }
@@ -358,9 +366,11 @@ export class ReliableBatchQueue<T> {
   private async enqueueInternal(items: T[]): Promise<ReliableBatchEnqueueResult<T>> {
     const clonedItems = structuredClone(items);
     const bytes = this.measureItems(clonedItems);
+    const recoveryId = this.createId();
     if (this.closed) {
       return {
         accepted: false,
+        recoveryId,
         reason: "closed",
         items: clonedItems,
         bytes,
@@ -370,7 +380,7 @@ export class ReliableBatchQueue<T> {
     }
     const now = this.clock.now();
     const draft: ReliableBatchEnvelope<T> = {
-      id: this.createId(),
+      id: recoveryId,
       scope: this.scope,
       destination: this.destination,
       createdAt: now,
@@ -383,6 +393,7 @@ export class ReliableBatchQueue<T> {
     if (items.length > this.limits.maxBatchEvents || bytes > this.limits.maxBatchBytes) {
       const rejected: ReliableBatchEnqueueResult<T> = {
         accepted: false,
+        recoveryId,
         reason: "batch_too_large",
         items: clonedItems,
         bytes,
@@ -396,14 +407,15 @@ export class ReliableBatchQueue<T> {
       const result = await this.store.enqueue(draft, this.limits);
       if (result.accepted) {
         this.wake();
-      } else if (result.reason !== "capability_absent") {
+      } else {
         this.reportRejected(result);
       }
       return result;
     } catch (error) {
       const stats = await this.safeStats();
       this.reportFailure({
-        batchId: draft.id,
+        batchId: null,
+        recoveryId,
         items: clonedItems,
         reason: "persistence",
         attempts: 0,
@@ -413,6 +425,7 @@ export class ReliableBatchQueue<T> {
       });
       return {
         accepted: false,
+        recoveryId,
         reason: "persistence",
         items: clonedItems,
         bytes,
@@ -427,13 +440,16 @@ export class ReliableBatchQueue<T> {
   ): void {
     this.reportFailure({
       batchId: null,
+      recoveryId: result.recoveryId,
       items: structuredClone(result.items),
-      reason: "overflow",
+      reason: result.reason === "capability_absent" ? "capability_absent" : "overflow",
       attempts: 0,
       error: new Error(
         result.reason === "batch_too_large"
           ? "Transcript batch exceeds the per-request outbox limit"
-          : "Transcript outbox capacity reached",
+          : result.reason === "capability_absent"
+            ? "Transcript batching is unavailable on this server"
+            : "Transcript outbox capacity reached",
       ),
       stats: result.stats,
       limits: result.limits,
@@ -453,9 +469,14 @@ export class ReliableBatchQueue<T> {
     const delay = Math.max(0, at - this.clock.now());
     const handle = this.scheduler.schedule(delay, () => {
       this.scheduled = null;
-      this.running ??= this.run().finally(() => {
-        this.running = null;
-      });
+      this.running ??= this.run()
+        .catch(async (error: unknown) => {
+          await this.reportStorageFailure(error);
+          this.scheduleAt(this.clock.now() + this.ownerRetryMs);
+        })
+        .finally(() => {
+          this.running = null;
+        });
     });
     this.scheduled = { handle, at };
   }
@@ -475,24 +496,9 @@ export class ReliableBatchQueue<T> {
       this.scheduleAt(now + this.ownerRetryMs);
       return;
     }
-    if (!this.malformedChecked) {
-      this.malformedChecked = true;
-      const malformed = await this.store.quarantineMalformed(this.scope, (value) =>
-        isReliableBatchEnvelope(value, this.validateItem),
-      );
-      for (const record of malformed) {
-        this.reportFailure({
-          batchId: record.id,
-          items: [],
-          reason: "malformed",
-          attempts: 0,
-          error: new Error(record.message),
-          stats: await this.safeStats(),
-          limits: this.limits,
-        });
-      }
-    }
+    await this.scanMalformed();
     if (await this.store.isCapabilityAbsent(this.scope)) {
+      this.scheduleAt(now + this.ownerRetryMs);
       return;
     }
 
@@ -511,6 +517,11 @@ export class ReliableBatchQueue<T> {
       const batch = await this.store.getHead(this.scope);
       if (!batch) {
         this.scheduleAt(currentTime + Math.floor(this.leaseMs / 3));
+        return;
+      }
+      if (!isReliableBatchEnvelope(batch, this.validateItem)) {
+        await this.scanMalformed();
+        this.scheduleAt(currentTime);
         return;
       }
       if (batch.status === "blocked") {
@@ -560,6 +571,7 @@ export class ReliableBatchQueue<T> {
           });
           this.reportFailure({
             batchId: batch.id,
+            recoveryId: null,
             items: batch.items,
             reason,
             attempts,
@@ -601,6 +613,7 @@ export class ReliableBatchQueue<T> {
     this.reportedFailures.add(batch.id);
     this.reportFailure({
       batchId: batch.id,
+      recoveryId: null,
       items: batch.items,
       reason: batch.failureReason ?? "permanent",
       attempts: batch.attempts,
@@ -616,6 +629,37 @@ export class ReliableBatchQueue<T> {
     } catch {
       return EMPTY_STATS;
     }
+  }
+
+  private async scanMalformed(): Promise<void> {
+    const malformed = await this.store.quarantineMalformed(this.scope, (value) =>
+      isReliableBatchEnvelope(value, this.validateItem),
+    );
+    for (const record of malformed) {
+      this.reportFailure({
+        batchId: record.id,
+        recoveryId: null,
+        items: [],
+        reason: "malformed",
+        attempts: 0,
+        error: new Error(record.message),
+        stats: await this.safeStats(),
+        limits: this.limits,
+      });
+    }
+  }
+
+  private async reportStorageFailure(error: unknown): Promise<void> {
+    this.reportFailure({
+      batchId: null,
+      recoveryId: null,
+      items: [],
+      reason: "persistence",
+      attempts: 0,
+      error: toError(error),
+      stats: await this.safeStats(),
+      limits: this.limits,
+    });
   }
 
   private reportFailure(failure: ReliableBatchFailure<T>): void {

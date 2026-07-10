@@ -153,7 +153,7 @@ export function createDesktopCommandsMock(
     }),
     appendTranscriptEvent: async () => {},
     appendTranscriptBatch: async () => {},
-    captureTranscriptEvent: () => false,
+    captureTranscriptEvent: () => null,
     onTranscriptDeliveryFailure: () => () => {},
     retryTranscriptDelivery: async () => {},
     discardTranscriptBatch: async () => {},

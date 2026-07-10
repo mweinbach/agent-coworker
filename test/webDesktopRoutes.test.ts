@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -808,6 +809,63 @@ describe("web desktop routes", () => {
         deliveryId: "multi-service-batch:0",
       },
     ]);
+  });
+
+  test("keeps the transcript inbox directory and SQLite files private", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-private-inbox-");
+    const userDataDir = path.join(workspace, "user-data");
+    await fs.mkdir(userDataDir, { recursive: true, mode: 0o777 });
+    await fs.chmod(userDataDir, 0o777);
+    const inbox = new TranscriptInbox({ userDataDir });
+    const databasePath = path.join(userDataDir, "transcript-inbox.sqlite");
+    const holdingConnection = new Database(databasePath);
+    try {
+      holdingConnection.exec("PRAGMA journal_mode = WAL");
+      holdingConnection.query("SELECT COUNT(*) FROM transcript_batches").get();
+      inbox.appendBatch(
+        [
+          {
+            ts: "2026-07-10T07:00:00.000Z",
+            threadId: "thread-private",
+            direction: "server",
+            payload: { text: "private" },
+          },
+        ],
+        "private-batch",
+      );
+
+      expect((await fs.stat(userDataDir)).mode & 0o777).toBe(0o700);
+      for (const filePath of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+        expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      holdingConnection.close(false);
+    }
+  });
+
+  test("rejects invalid thread ids before they consume inbox capacity", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-invalid-thread-");
+    const userDataDir = path.join(workspace, "user-data");
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      maxBatches: 1,
+      retentionMs: Number.MAX_SAFE_INTEGER,
+    });
+    const event = {
+      ts: "2026-07-10T07:00:00.000Z",
+      direction: "server" as const,
+      payload: { text: "event" },
+    };
+
+    expect(() =>
+      inbox.appendBatch([{ ...event, threadId: "../invalid" }], "invalid-thread-batch"),
+    ).toThrow("threadId contains invalid characters");
+    expect(() =>
+      inbox.appendBatch([{ ...event, threadId: "thread-valid" }], "valid-thread-batch"),
+    ).not.toThrow();
+
+    const service = new WebDesktopService({ userDataDir });
+    await expect(service.readTranscript("thread-valid")).resolves.toHaveLength(1);
   });
 
   test("uses generation tombstones to prevent a deleted transcript from being resurrected", async () => {

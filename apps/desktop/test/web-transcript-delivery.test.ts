@@ -405,6 +405,100 @@ describe("web transcript IndexedDB delivery", () => {
         canRetry: true,
       }),
     );
+    expect(JSON.stringify(failures)).not.toContain("durable");
+    await delivery.close();
+  });
+
+  test("turns generation read failures into acknowledged bounded recovery", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const store = createStore(factory, "generation-read-failure", clock);
+    store.getGeneration = async () => {
+      throw new DOMException("generation unavailable", "UnknownError");
+    };
+    const failures: TranscriptDeliveryFailure[] = [];
+    const delivery = createWebTranscriptDelivery({
+      scope: "generation-read-scope",
+      destination: "http://server/transcript",
+      accessHeaders: () => ({}),
+      fetch: async () => new Response(null, { status: 204 }),
+      indexedDB: factory,
+      createId: createIds("generation-read"),
+      now: () => clock.now,
+      schedule: clock.schedule,
+      cancelScheduled: clock.cancel,
+      store,
+    });
+    delivery.onFailure((failure) => failures.push(failure));
+
+    const result = await delivery.capture(EVENT);
+
+    expect(result).toMatchObject({
+      accepted: false,
+      reason: "persistence",
+    });
+    expect(result.accepted ? null : result.recoveryId).toBeString();
+    expect(failures).toContainEqual(
+      expect.objectContaining({
+        recoveryId: result.accepted ? null : result.recoveryId,
+        reason: "persistence",
+        canRetry: true,
+        canDiscard: true,
+      }),
+    );
+    await delivery.close();
+  });
+
+  test("bounds rejected payload recovery without deduplicating failure records", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const store = createStore(factory, "bounded-rejected-recovery", clock);
+    store.enqueue = async () => {
+      throw new DOMException("quota reached", "QuotaExceededError");
+    };
+    const failures: TranscriptDeliveryFailure[] = [];
+    const delivery = createWebTranscriptDelivery({
+      scope: "bounded-recovery-scope",
+      destination: "http://server/transcript",
+      accessHeaders: () => ({}),
+      fetch: async () => new Response(null, { status: 204 }),
+      indexedDB: factory,
+      createId: createIds("bounded-recovery"),
+      now: () => clock.now,
+      schedule: clock.schedule,
+      cancelScheduled: clock.cancel,
+      store,
+      rejectedRecoveryLimits: {
+        maxRecords: 1,
+        maxEvents: 1,
+        maxBytes: 10_000,
+        retentionMs: 100,
+      },
+    });
+    delivery.onFailure((failure) => failures.push(failure));
+
+    const first = await delivery.capture({
+      ...EVENT,
+      payload: { secret: "first-sensitive-value" },
+    });
+    const second = await delivery.capture({
+      ...EVENT,
+      ts: "2026-07-10T07:00:01.000Z",
+      payload: { secret: "second-sensitive-value" },
+    });
+
+    expect(first.accepted).toBe(false);
+    expect(second.accepted).toBe(false);
+    expect(failures).toHaveLength(2);
+    expect(failures[0]).toMatchObject({ canRetry: true, canDiscard: true });
+    expect(failures[1]).toMatchObject({ canRetry: false, canDiscard: true });
+    expect(failures[0]?.recoveryId).not.toBe(failures[1]?.recoveryId);
+    expect(JSON.stringify(failures)).not.toContain("sensitive-value");
+
+    await clock.advance(100);
+    if (!first.accepted) {
+      await expect(delivery.retry(first.recoveryId)).rejects.toThrow("sensitive payload");
+    }
     await delivery.close();
   });
 

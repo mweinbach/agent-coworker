@@ -28,6 +28,7 @@ import type {
   TelemetryStatusInput,
   TelemetryStatusSnapshot,
   TranscriptBatchInput,
+  TranscriptCaptureResult,
   TranscriptDeliveryFailure,
   UpdaterState,
   UploadDiagnosticsBundleOutput,
@@ -163,13 +164,14 @@ export async function appendTranscriptBatch(
   await requireDesktopApi().appendTranscriptBatch(events);
 }
 
-export function captureTranscriptEvent(event: TranscriptBatchInput): boolean {
+export function captureTranscriptEvent(
+  event: TranscriptBatchInput,
+): Promise<TranscriptCaptureResult> | null {
   const capture = getDesktopApi()?.captureTranscriptEvent;
   if (!capture) {
-    return false;
+    return null;
   }
-  void capture(event);
-  return true;
+  return capture(event);
 }
 
 export function onTranscriptDeliveryFailure(

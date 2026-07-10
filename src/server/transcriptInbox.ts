@@ -56,6 +56,16 @@ function errorCode(error: unknown): string {
     : "";
 }
 
+function chmodIfPresent(filePath: string, mode: number): void {
+  try {
+    fs.chmodSync(filePath, mode);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
 function sql(lines: readonly string[]): string {
   return lines.join("\n");
 }
@@ -148,6 +158,10 @@ export class TranscriptInbox {
     this.maxBatches = Math.max(1, options.maxBatches ?? TRANSCRIPT_DEDUPE_MAX_BATCHES);
     this.retentionMs = Math.max(0, options.retentionMs ?? TRANSCRIPT_DEDUPE_RETENTION_MS);
     fs.mkdirSync(options.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+    fs.chmodSync(options.userDataDir, PRIVATE_DIR_MODE);
+    const databaseHandle = fs.openSync(this.databasePath, "a", PRIVATE_FILE_MODE);
+    fs.closeSync(databaseHandle);
+    fs.chmodSync(this.databasePath, PRIVATE_FILE_MODE);
     this.withDatabase(() => {});
   }
 
@@ -160,6 +174,11 @@ export class TranscriptInbox {
         `Transcript batches must contain 1-${TRANSCRIPT_REQUEST_MAX_EVENTS} events`,
         413,
       );
+    }
+    for (const event of events) {
+      if (!SAFE_THREAD_ID.test(event.threadId)) {
+        throw new TranscriptInboxError("threadId contains invalid characters", 400);
+      }
     }
     const serializedEvents = JSON.stringify(events);
     const byteCount = Buffer.byteLength(serializedEvents);
@@ -404,10 +423,21 @@ export class TranscriptInbox {
     const database = new Database(this.databasePath, { create: true, strict: false });
     try {
       ensureSchema(database);
-      return operation(database);
+      this.enforcePrivateDatabasePermissions();
+      const result = operation(database);
+      this.enforcePrivateDatabasePermissions();
+      return result;
     } finally {
       database.close(false);
+      this.enforcePrivateDatabasePermissions();
     }
+  }
+
+  private enforcePrivateDatabasePermissions(): void {
+    fs.chmodSync(path.dirname(this.databasePath), PRIVATE_DIR_MODE);
+    chmodIfPresent(this.databasePath, PRIVATE_FILE_MODE);
+    chmodIfPresent(`${this.databasePath}-wal`, PRIVATE_FILE_MODE);
+    chmodIfPresent(`${this.databasePath}-shm`, PRIVATE_FILE_MODE);
   }
 
   private withImmediateTransaction<T>(operation: (database: Database) => T): T {

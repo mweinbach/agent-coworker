@@ -8,7 +8,7 @@ describe("transcript buffer host adapters", () => {
     let scheduled: (() => void) | null = null;
     const buffer = createTranscriptBuffer({
       nowIso: () => "2026-07-10T07:00:00.000Z",
-      captureEvent: () => false,
+      captureEvent: () => null,
       appendBatch: async (events) => {
         appended.push(events);
       },
@@ -44,14 +44,23 @@ describe("transcript buffer host adapters", () => {
     ]);
   });
 
-  test("hands web events to durable capture without scheduling the debounce buffer", () => {
+  test("retains a web event until durable capture acknowledges its IndexedDB commit", async () => {
     const captured: unknown[] = [];
     let scheduled = false;
+    let acknowledge: (() => void) | null = null;
     const buffer = createTranscriptBuffer({
       nowIso: () => "2026-07-10T07:00:00.000Z",
       captureEvent: (event) => {
         captured.push(event);
-        return true;
+        return new Promise((resolve) => {
+          acknowledge = () =>
+            resolve({
+              accepted: true,
+              batchId: "durable-batch",
+              pendingEvents: 1,
+              pendingBytes: 100,
+            });
+        });
       },
       appendBatch: async () => {
         throw new Error("Web capture must bypass the in-memory batch");
@@ -64,6 +73,7 @@ describe("transcript buffer host adapters", () => {
 
     buffer.appendThreadTranscript("thread-web", "server", { text: "durable" });
 
+    expect(buffer.pendingCount()).toBe(1);
     expect(captured).toEqual([
       {
         ts: "2026-07-10T07:00:00.000Z",
@@ -73,5 +83,45 @@ describe("transcript buffer host adapters", () => {
       },
     ]);
     expect(scheduled).toBe(false);
+    acknowledge?.();
+    await Promise.resolve();
+    expect(buffer.pendingCount()).toBe(0);
+  });
+
+  test("falls back to Electron batching when capture rejects unexpectedly", async () => {
+    const appended: unknown[][] = [];
+    let scheduled: (() => void) | null = null;
+    const buffer = createTranscriptBuffer({
+      nowIso: () => "2026-07-10T07:00:00.000Z",
+      captureEvent: async () => {
+        throw new Error("bridge replaced");
+      },
+      appendBatch: async (events) => {
+        appended.push(events);
+      },
+      schedule: (callback) => {
+        scheduled = callback;
+        return 1;
+      },
+    });
+
+    buffer.appendThreadTranscript("thread-fallback", "client", { text: "retained" });
+    expect(buffer.pendingCount()).toBe(1);
+    await Promise.resolve();
+    const flush = scheduled as (() => void) | null;
+    flush?.();
+    await Promise.resolve();
+
+    expect(buffer.pendingCount()).toBe(0);
+    expect(appended).toEqual([
+      [
+        {
+          ts: "2026-07-10T07:00:00.000Z",
+          threadId: "thread-fallback",
+          direction: "client",
+          payload: { text: "retained" },
+        },
+      ],
+    ]);
   });
 });

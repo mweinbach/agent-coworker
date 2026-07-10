@@ -101,7 +101,7 @@ function configureUniqueWorkspace(): void {
   workspaceSequence += 1;
   configureWebAdapter(
     "ws://127.0.0.1:7337/ws",
-    `/tmp/web-transcript-workspace-${workspaceSequence}`,
+    `/tmp/web-transcript-workspace-${workspaceSequence}-${crypto.randomUUID()}`,
   );
 }
 
@@ -184,10 +184,7 @@ describe("webAdapter transcript reliability", () => {
       const { createTranscriptBuffer } = await import("../src/app/store.helpers/transcriptBuffer");
       const buffer = createTranscriptBuffer({
         nowIso: () => transcriptEvent.ts,
-        captureEvent: (event) => {
-          void adapter.captureTranscriptEvent?.(event);
-          return true;
-        },
+        captureEvent: (event) => adapter.captureTranscriptEvent?.(event) ?? null,
       });
       buffer.appendThreadTranscript(
         transcriptEvent.threadId,

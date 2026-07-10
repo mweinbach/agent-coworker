@@ -18,6 +18,13 @@ export const WEB_TRANSCRIPT_LIMITS: ReliableBatchLimits = {
 
 const TRANSCRIPT_REQUEST_TIMEOUT_MS = 10_000;
 const TRANSIENT_RESPONSE_STATUSES = new Set([408, 425, 429]);
+const MAX_VISIBLE_FAILURES = 64;
+const DEFAULT_REJECTED_RECOVERY_LIMITS = {
+  maxRecords: 32,
+  maxEvents: 256,
+  maxBytes: 1024 * 1024,
+  retentionMs: 5 * 60_000,
+} as const;
 
 export type WebTranscriptBatchInput = TranscriptBatchInput & {
   generation: number;
@@ -49,6 +56,12 @@ type WebTranscriptDeliveryOptions = {
   limits?: ReliableBatchLimits;
   store?: IndexedDbReliableBatchStore<WebTranscriptBatchInput>;
   wakeChannel?: WakeChannel;
+  rejectedRecoveryLimits?: {
+    maxRecords: number;
+    maxEvents: number;
+    maxBytes: number;
+    retentionMs: number;
+  };
 };
 
 export type WebTranscriptDelivery = {
@@ -123,8 +136,9 @@ async function responseErrorMessage(response: Response): Promise<string> {
 
 function failureDetail(
   failure: ReliableBatchFailure<WebTranscriptBatchInput>,
+  recoveryRetained: boolean,
 ): TranscriptDeliveryFailure {
-  const batchId = failure.reason === "persistence" ? null : failure.batchId;
+  const batchId = failure.batchId;
   const retained =
     failure.stats.events === 1
       ? "1 pending transcript event"
@@ -135,6 +149,7 @@ function failureDetail(
     retries_exhausted: `Delivery paused after ${failure.attempts} attempts.`,
     persistence: "Browser persistence failed; refresh recovery cannot be guaranteed.",
     overflow: "The transcript outbox reached its configured capacity.",
+    capability_absent: "Transcript batching is unavailable on this server.",
     malformed: "A malformed persisted transcript batch was quarantined.",
   };
   const recovery =
@@ -142,19 +157,27 @@ function failureDetail(
       ? "Wait for pending sync to drain, then retry the rejected event."
       : failure.reason === "malformed"
         ? "Discard the quarantined batch after reviewing this warning."
-        : failure.reason === "persistence"
-          ? "Keep this page open and retry after freeing browser storage."
-          : `${retained} ${retentionVerb} recoverable. Retry after correcting the server or authentication issue, or discard the blocked batch.`;
+        : failure.reason === "capability_absent"
+          ? "This event was not queued while the compatibility probe cools down."
+          : failure.reason === "persistence"
+            ? "Keep this page open and retry after freeing browser storage."
+            : `${retained} ${retentionVerb} recoverable. Retry after correcting the server or authentication issue, or discard the blocked batch.`;
   return {
     batchId,
+    recoveryId: failure.recoveryId,
     reason: failure.reason,
     pendingEvents: failure.stats.events,
     pendingBytes: failure.stats.bytes,
     limits: failure.limits,
-    canRetry: failure.reason !== "malformed",
-    canDiscard: batchId !== null,
-    recoverableEvents: failure.items.map(({ generation: _generation, ...event }) => event),
-    message: `${messages[failure.reason]} ${recovery} ${failure.error.message}`,
+    canRetry:
+      failure.reason !== "malformed" &&
+      (batchId !== null || (failure.recoveryId !== null && recoveryRetained)),
+    canDiscard: batchId !== null || failure.recoveryId !== null,
+    message: `${messages[failure.reason]} ${recovery}${
+      failure.recoveryId && !recoveryRetained
+        ? " The bounded recovery buffer is full, so the payload was not retained."
+        : ""
+    } ${failure.error.message}`,
   };
 }
 
@@ -180,10 +203,81 @@ export function createWebTranscriptDelivery(
       now,
     });
   const requestTimeoutMs = options.requestTimeoutMs ?? TRANSCRIPT_REQUEST_TIMEOUT_MS;
+  const createId = options.createId ?? createBatchId;
+  const recoveryLimits = options.rejectedRecoveryLimits ?? DEFAULT_REJECTED_RECOVERY_LIMITS;
+  const rejectedRecoveries = new Map<
+    string,
+    {
+      events: TranscriptBatchInput[];
+      bytes: number;
+      expiryHandle: unknown;
+    }
+  >();
+  const expiredRecoveryIds = new Set<string>();
+  let rejectedRecoveryEvents = 0;
+  let rejectedRecoveryBytes = 0;
+
+  const removeRejectedRecovery = (recoveryId: string): TranscriptBatchInput[] | null => {
+    const recovery = rejectedRecoveries.get(recoveryId);
+    if (!recovery) {
+      return null;
+    }
+    rejectedRecoveries.delete(recoveryId);
+    rejectedRecoveryEvents = Math.max(0, rejectedRecoveryEvents - recovery.events.length);
+    rejectedRecoveryBytes = Math.max(0, rejectedRecoveryBytes - recovery.bytes);
+    cancelScheduled(recovery.expiryHandle);
+    return recovery.events;
+  };
+
+  const retainRejectedRecovery = (
+    recoveryId: string | null,
+    items: WebTranscriptBatchInput[],
+  ): boolean => {
+    if (!recoveryId || items.length === 0) {
+      return false;
+    }
+    const events = items.map(({ generation: _generation, ...event }) => event);
+    const bytes = measureJsonBytes(events);
+    if (
+      rejectedRecoveries.size >= recoveryLimits.maxRecords ||
+      rejectedRecoveryEvents + events.length > recoveryLimits.maxEvents ||
+      rejectedRecoveryBytes + bytes > recoveryLimits.maxBytes
+    ) {
+      return false;
+    }
+    const expiryHandle = schedule(recoveryLimits.retentionMs, () => {
+      removeRejectedRecovery(recoveryId);
+      expiredRecoveryIds.add(recoveryId);
+      while (expiredRecoveryIds.size > MAX_VISIBLE_FAILURES) {
+        const oldest = expiredRecoveryIds.values().next().value;
+        if (typeof oldest !== "string") {
+          break;
+        }
+        expiredRecoveryIds.delete(oldest);
+      }
+    });
+    rejectedRecoveries.set(recoveryId, {
+      events: structuredClone(events),
+      bytes,
+      expiryHandle,
+    });
+    rejectedRecoveryEvents += events.length;
+    rejectedRecoveryBytes += bytes;
+    return true;
+  };
 
   const reportFailure = (failure: ReliableBatchFailure<WebTranscriptBatchInput>): void => {
-    const detail = failureDetail(failure);
-    lastFailures.set(detail.batchId ?? `${detail.reason}:${lastFailures.size}`, detail);
+    const recoveryRetained = retainRejectedRecovery(failure.recoveryId, failure.items);
+    const detail = failureDetail(failure, recoveryRetained);
+    const key = detail.recoveryId ?? detail.batchId ?? `${detail.reason}:${createId()}`;
+    lastFailures.set(key, detail);
+    while (lastFailures.size > MAX_VISIBLE_FAILURES) {
+      const oldest = lastFailures.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      lastFailures.delete(oldest);
+    }
     for (const listener of listeners) {
       listener(detail);
     }
@@ -193,7 +287,7 @@ export function createWebTranscriptDelivery(
     scope: options.scope,
     destination: options.destination,
     store,
-    createId: options.createId ?? createBatchId,
+    createId,
     measureItems: measureJsonBytes,
     validateItem: isTranscriptBatchInput,
     clock: { now },
@@ -276,12 +370,14 @@ export function createWebTranscriptDelivery(
     events: TranscriptBatchInput[],
   ): Promise<ReliableBatchEnqueueResult<WebTranscriptBatchInput>> => {
     if (closed) {
+      const recoveryId = createId();
       const items = events.map((event) => ({
         ...structuredClone(event),
         generation: 0,
       }));
       return {
         accepted: false,
+        recoveryId,
         reason: "closed",
         items,
         bytes: measureJsonBytes(items),
@@ -295,11 +391,44 @@ export function createWebTranscriptDelivery(
     }
     return await serialize(async () => {
       const withGenerations: WebTranscriptBatchInput[] = [];
-      for (const event of events) {
-        withGenerations.push({
+      try {
+        for (const event of events) {
+          withGenerations.push({
+            ...structuredClone(event),
+            generation: await store.getGeneration(options.scope, event.threadId),
+          });
+        }
+      } catch (error) {
+        const recoveryId = createId();
+        const items = events.map((event) => ({
           ...structuredClone(event),
-          generation: await store.getGeneration(options.scope, event.threadId),
+          generation: 0,
+        }));
+        let stats = { batches: 0, events: 0, bytes: 0 };
+        try {
+          stats = await store.stats(options.scope);
+        } catch {
+          // The recovery result remains actionable even if stats are unavailable.
+        }
+        reportFailure({
+          batchId: null,
+          recoveryId,
+          items,
+          reason: "persistence",
+          attempts: 0,
+          error: error instanceof Error ? error : new Error(String(error)),
+          stats,
+          limits,
         });
+        return {
+          accepted: false,
+          recoveryId,
+          reason: "persistence",
+          items,
+          bytes: measureJsonBytes(items),
+          stats,
+          limits,
+        };
       }
       const result = await queue.enqueue(withGenerations);
       if (result.accepted && !closed) {
@@ -326,20 +455,55 @@ export function createWebTranscriptDelivery(
   return {
     capture: async (event) => await append([event]),
     append,
-    retry: async (batchId) => {
-      await queue.retry(batchId);
+    retry: async (recoveryId) => {
+      if (recoveryId) {
+        const events = removeRejectedRecovery(recoveryId);
+        if (events) {
+          lastFailures.delete(recoveryId);
+          await append(events);
+          return;
+        }
+        if (expiredRecoveryIds.delete(recoveryId)) {
+          throw new Error("Transcript recovery expired; the sensitive payload was discarded");
+        }
+      }
+      await queue.retry(recoveryId);
+      if (recoveryId) {
+        lastFailures.delete(recoveryId);
+      }
     },
-    discard: async (batchId) => {
-      await queue.discard(batchId);
+    discard: async (recoveryId) => {
+      expiredRecoveryIds.delete(recoveryId);
+      if (removeRejectedRecovery(recoveryId)) {
+        lastFailures.delete(recoveryId);
+        return;
+      }
+      await queue.discard(recoveryId);
+      lastFailures.delete(recoveryId);
     },
     deleteThread: async (threadId) =>
       await serialize(async () => {
         queue.abortActive("Transcript deleted while delivery was in flight");
-        const result = await store.incrementGenerationAndCancel(
-          options.scope,
-          threadId,
-          (event) => event.threadId === threadId,
-        );
+        let result: Awaited<ReturnType<typeof store.incrementGenerationAndCancel>>;
+        try {
+          result = await store.incrementGenerationAndCancel(
+            options.scope,
+            threadId,
+            (event) => event.threadId === threadId,
+          );
+        } catch (error) {
+          reportFailure({
+            batchId: null,
+            recoveryId: null,
+            items: [],
+            reason: "persistence",
+            attempts: 0,
+            error: error instanceof Error ? error : new Error(String(error)),
+            stats: { batches: 0, events: 0, bytes: 0 },
+            limits,
+          });
+          throw error;
+        }
         queue.wake();
         options.wakeChannel?.postMessage({ type: "transcript-outbox-updated" });
         return result.generation;
@@ -366,6 +530,11 @@ export function createWebTranscriptDelivery(
       await operations;
       await queue.close();
       options.wakeChannel?.close();
+      for (const recoveryId of [...rejectedRecoveries.keys()]) {
+        removeRejectedRecovery(recoveryId);
+      }
+      lastFailures.clear();
+      expiredRecoveryIds.clear();
       await store.close();
       listeners.clear();
     },

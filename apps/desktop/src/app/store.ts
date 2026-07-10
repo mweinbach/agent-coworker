@@ -123,7 +123,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 }));
 
 onTranscriptDeliveryFailure((failure) => {
-  const notificationId = `transcript-delivery-${failure.batchId}`;
+  const notificationId = `transcript-delivery-${failure.recoveryId ?? failure.batchId ?? failure.reason}`;
   useAppStore.setState((state) => ({
     notifications: pushNotification(
       state.notifications.filter((notification) => notification.id !== notificationId),

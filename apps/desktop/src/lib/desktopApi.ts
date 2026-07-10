@@ -170,15 +170,22 @@ export type TranscriptCaptureResult =
     }
   | {
       accepted: false;
+      recoveryId: string;
       reason: "overflow" | "batch_too_large" | "capability_absent" | "persistence" | "closed";
       pendingEvents: number;
       pendingBytes: number;
-      recoverableEvents: TranscriptBatchInput[];
     };
 
 export type TranscriptDeliveryFailure = {
   batchId: string | null;
-  reason: "permanent" | "retries_exhausted" | "persistence" | "overflow" | "malformed";
+  recoveryId: string | null;
+  reason:
+    | "permanent"
+    | "retries_exhausted"
+    | "persistence"
+    | "overflow"
+    | "capability_absent"
+    | "malformed";
   pendingEvents: number;
   pendingBytes: number;
   limits: {
@@ -190,7 +197,6 @@ export type TranscriptDeliveryFailure = {
   };
   canRetry: boolean;
   canDiscard: boolean;
-  recoverableEvents?: TranscriptBatchInput[];
   message: string;
 };
 

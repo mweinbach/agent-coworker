@@ -313,10 +313,10 @@ function transcriptCaptureResult(
       }
     : {
         accepted: false,
+        recoveryId: result.recoveryId,
         reason: result.reason,
         pendingEvents: result.stats.events,
         pendingBytes: result.stats.bytes,
-        recoverableEvents: result.items.map(({ generation: _generation, ...event }) => event),
       };
 }
 

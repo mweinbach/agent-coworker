@@ -164,6 +164,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
       }
       return {
         accepted: false,
+        recoveryId: batch.id,
         reason: "capability_absent",
         items: structuredClone(batch.items),
         bytes: batch.bytes,
@@ -190,6 +191,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
       }
       return {
         accepted: false,
+        recoveryId: batch.id,
         reason: "overflow",
         items: structuredClone(batch.items),
         bytes: batch.bytes,

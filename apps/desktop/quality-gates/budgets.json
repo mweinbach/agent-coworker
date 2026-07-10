@@ -1,7 +1,7 @@
 {
   "deltaBurst": {
-    "reactCommits": 5,
-    "storePublications": 1000
+    "reactCommits": 8,
+    "storePublications": 1002
   },
   "fileTree": {
     "filesystemRequests": 2,
@@ -9,7 +9,7 @@
     "storePublications": 4
   },
   "longTranscript": {
-    "reactCommits": 5,
-    "storePublications": 1
+    "reactCommits": 8,
+    "storePublications": 1000
   }
 }

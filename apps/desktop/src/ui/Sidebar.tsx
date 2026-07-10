@@ -513,7 +513,7 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/75">
             Chats
           </span>
           <Button
@@ -601,7 +601,7 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/75">
             Projects
           </span>
           <Button

@@ -535,8 +535,6 @@ export type AppStoreState = {
   }) => Promise<ResearchCard | null>;
   cancelResearch: (researchId: string) => Promise<void>;
   renameResearch: (researchId: string, title: string) => Promise<void>;
-  archiveResearch: (researchId: string, archived: boolean) => Promise<void>;
-  deleteResearch: (researchId: string) => Promise<void>;
   sendResearchFollowUp: (opts: {
     parentResearchId: string;
     input: string;

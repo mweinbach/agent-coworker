@@ -68,13 +68,13 @@ export const ContextSidebar = memo(function ContextSidebar() {
   const agents = threadRuntime?.agents ?? [];
   const panelShellClassName = "app-context-sidebar__panel rounded-[14px] border";
   const sectionLabelClassName =
-    "text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase";
+    "text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/78 uppercase";
   const compactSectionClassName = cn("flex-none", panelShellClassName);
   const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
   const compactSectionBodyClassName = "px-3 pb-2.5 pt-0.5";
   const compactSectionScrollerClassName =
     "max-h-[10.5rem] overflow-y-auto overscroll-contain px-3 pb-2.5 pt-0.5";
-  const compactMutedCopyClassName = "text-[11px] leading-5 text-muted-foreground";
+  const compactMutedCopyClassName = "text-[11px] leading-5 text-muted-foreground/82";
 
   const hasActivity =
     (todos?.length ?? 0) > 0 ||

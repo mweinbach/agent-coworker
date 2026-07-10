@@ -224,10 +224,6 @@ export class ResearchFileStore {
     await deleteResearchFileSearchStore({ apiKey, fileSearchStoreName });
   }
 
-  async deleteResearchArtifacts(researchId: string): Promise<void> {
-    await fs.rm(this.researchDir(researchId), { force: true, recursive: true });
-  }
-
   async deletePendingUploads(files: ResearchInputFile[]): Promise<void> {
     await Promise.all(files.map((file) => this.deletePendingUpload(file)));
   }

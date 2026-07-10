@@ -50,7 +50,7 @@
     "desktop:web": "bun apps/desktop/scripts/start_web_dev.ts",
     "web:dev": "bun apps/desktop/scripts/start_web_dev.ts",
     "desktop:build": "cd apps/desktop && bun run build",
-    "desktop:quality:build": "bun run --cwd apps/desktop electron-vite -- build",
+    "desktop:quality:build": "bun run --cwd apps/desktop electron-vite -- build --config quality-gates/electron.vite.config.ts",
     "desktop:quality:test": "playwright test --config apps/desktop/quality-gates/playwright.config.ts",
     "desktop:quality": "bun run desktop:quality:build && bun run desktop:quality:test && bun run desktop:quality:screenshot:check",
     "desktop:quality:update": "bun run desktop:quality:build && bun run desktop:quality:test --update-snapshots && bun apps/desktop/quality-gates/syncProductScreenshot.ts",

@@ -10,6 +10,8 @@ const specPath = path.join(qualityGateRoot, "specs/failure-proofs.pw.ts");
 const proofRoot = path.join(qualityGateRoot, "proof-artifacts");
 
 type FailureProof = {
+  expectedFailureOutput: RegExp;
+  marker: string;
   name: "axe" | "renderer" | "visual";
   requiredArtifacts: Array<{ description: string; matches(path: string): boolean }>;
 };
@@ -17,15 +19,25 @@ type FailureProof = {
 const proofs: FailureProof[] = [
   {
     name: "renderer",
+    marker: "intentional-quality-gate-renderer-failure",
+    expectedFailureOutput: /intentional-quality-gate-renderer-failure/,
     requiredArtifacts: [
-      { description: "diagnostics JSON", matches: (entry) => entry.endsWith("diagnostics.json") },
-      { description: "Playwright trace", matches: (entry) => entry.endsWith("trace.zip") },
+      {
+        description: "diagnostics JSON",
+        matches: (entry) => path.basename(entry).startsWith("quality-gate-diagnostics"),
+      },
+      {
+        description: "Playwright trace",
+        matches: (entry) => path.basename(entry).startsWith("quality-gate-trace"),
+      },
       { description: "failure screenshot", matches: (entry) => entry.endsWith(".png") },
       { description: "failure video", matches: (entry) => entry.endsWith(".webm") },
     ],
   },
   {
     name: "visual",
+    marker: "intentional-quality-gate-visual-failure",
+    expectedFailureOutput: /Screenshot comparison failed|pixels \(ratio .*\) are different/i,
     requiredArtifacts: [
       { description: "pixel diff", matches: (entry) => entry.endsWith("-diff.png") },
       { description: "actual screenshot", matches: (entry) => entry.endsWith("-actual.png") },
@@ -33,12 +45,17 @@ const proofs: FailureProof[] = [
   },
   {
     name: "axe",
+    marker: "intentional-quality-gate-axe-failure",
+    expectedFailureOutput: /button-name: Buttons must have discernible text/,
     requiredArtifacts: [
       {
         description: "Axe result attachment",
         matches: (entry) => path.basename(entry).startsWith("axe-results"),
       },
-      { description: "diagnostics JSON", matches: (entry) => entry.endsWith("diagnostics.json") },
+      {
+        description: "diagnostics JSON",
+        matches: (entry) => path.basename(entry).startsWith("quality-gate-diagnostics"),
+      },
     ],
   },
 ];
@@ -106,6 +123,33 @@ for (const proof of proofs) {
   }
 
   const files = await listFiles(outputDir);
+  const markerPath = files.find((entry) =>
+    path.basename(entry).startsWith("intentional-failure-marker"),
+  );
+  if (!markerPath) {
+    throw new Error(
+      `Intentional ${proof.name} failure did not produce its proof marker. Files: ${files.join(", ")}`,
+    );
+  }
+  const markerDocument = JSON.parse(await fs.readFile(markerPath, "utf8")) as unknown;
+  if (
+    typeof markerDocument !== "object" ||
+    markerDocument === null ||
+    !("marker" in markerDocument) ||
+    markerDocument.marker !== proof.marker ||
+    !("proof" in markerDocument) ||
+    markerDocument.proof !== proof.name
+  ) {
+    throw new Error(
+      `Intentional ${proof.name} failure produced an invalid marker: ${JSON.stringify(markerDocument)}`,
+    );
+  }
+  const combinedOutput = `${result.stdout}${result.stderr}`;
+  if (!proof.expectedFailureOutput.test(combinedOutput)) {
+    throw new Error(
+      `Intentional ${proof.name} run failed for the wrong reason. Output did not match ${proof.expectedFailureOutput}.\n${combinedOutput}`,
+    );
+  }
   for (const required of proof.requiredArtifacts) {
     if (!files.some(required.matches)) {
       throw new Error(

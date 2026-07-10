@@ -1,10 +1,35 @@
+import { promises as fs } from "node:fs";
+
+import type { TestInfo } from "playwright";
+
 import { assertNoSeriousAxeViolations, settleQualityPage } from "../assertions";
 import { expect, test } from "../fixtures";
+
+async function attachIntentionalFailureMarker(
+  testInfo: TestInfo,
+  proof: "axe" | "renderer" | "visual",
+): Promise<void> {
+  const markerPath = testInfo.outputPath("intentional-failure-marker.json");
+  await fs.writeFile(
+    markerPath,
+    `${JSON.stringify({
+      marker: `intentional-quality-gate-${proof}-failure`,
+      proof,
+    })}\n`,
+    "utf8",
+  );
+  await testInfo.attach("intentional-failure-marker.json", {
+    path: markerPath,
+  });
+}
 
 test.describe("renderer failure proof", () => {
   test.skip(process.env.COWORK_QUALITY_PROOF !== "renderer", "opt-in failure proof");
 
-  test("proof:renderer captures trace, log, video, and screenshot", async ({ quality }) => {
+  test("proof:renderer captures trace, log, video, and screenshot", async ({
+    quality,
+  }, testInfo) => {
+    await attachIntentionalFailureMarker(testInfo, "renderer");
     await quality.page.evaluate(() => {
       setTimeout(() => {
         throw new Error("intentional-quality-gate-renderer-failure");
@@ -17,7 +42,10 @@ test.describe("renderer failure proof", () => {
 test.describe("visual failure proof", () => {
   test.skip(process.env.COWORK_QUALITY_PROOF !== "visual", "opt-in failure proof");
 
-  test("proof:visual rejects an intentional unapproved pixel change", async ({ quality }) => {
+  test("proof:visual rejects an intentional unapproved pixel change", async ({
+    quality,
+  }, testInfo) => {
+    await attachIntentionalFailureMarker(testInfo, "visual");
     await quality.page.evaluate(() => {
       const overlay = document.createElement("div");
       overlay.setAttribute("data-quality-gate-pixel-change", "true");
@@ -34,6 +62,7 @@ test.describe("Axe failure proof", () => {
   test.skip(process.env.COWORK_QUALITY_PROOF !== "axe", "opt-in failure proof");
 
   test("proof:axe rejects an intentional serious violation", async ({ quality }, testInfo) => {
+    await attachIntentionalFailureMarker(testInfo, "axe");
     await quality.page.evaluate(() => {
       const button = document.createElement("button");
       button.style.cssText =

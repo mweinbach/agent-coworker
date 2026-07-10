@@ -89,7 +89,6 @@ export const researchRecordSchema = z
     thoughtSummaries: z.array(researchThoughtSummarySchema),
     sources: z.array(researchSourceSchema),
     planPending: z.boolean().default(false),
-    archivedAt: isoTimestampSchema.nullable().default(null),
     createdAt: isoTimestampSchema,
     updatedAt: isoTimestampSchema,
     error: z.string().nullable(),

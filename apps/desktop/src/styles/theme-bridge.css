@@ -19,7 +19,7 @@
   --color-popover-foreground: var(--text-primary);
 
   --color-primary: var(--accent);
-  --color-primary-foreground: var(--primary-foreground-base);
+  --color-primary-foreground: var(--text-inverse);
 
   --color-secondary: var(--surface-secondary);
   --color-secondary-foreground: var(--text-primary);

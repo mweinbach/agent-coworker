@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
 import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility";
@@ -45,28 +45,6 @@ import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
 import { TaskConversationSidebar } from "./ui/tasks/TaskConversationSidebar";
-
-const COMPACT_WINDOW_QUERY = "(max-width: 800px)";
-
-function useCompactWindowLayout(): boolean {
-  const [compact, setCompact] = useState(
-    () =>
-      typeof window.matchMedia === "function" && window.matchMedia(COMPACT_WINDOW_QUERY).matches,
-  );
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") {
-      return;
-    }
-    const mediaQuery = window.matchMedia(COMPACT_WINDOW_QUERY);
-    const handleChange = () => setCompact(mediaQuery.matches);
-    handleChange();
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, []);
-
-  return compact;
-}
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -182,26 +160,9 @@ const ChatShell = memo(function ChatShell({
   const setCanvasShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
   const setCanvasMaximized = useAppStore((s) => s.setCanvasMaximized);
-  const compactWindowLayout = useCompactWindowLayout();
-  const [compactSidebarExpanded, setCompactSidebarExpanded] = useState(false);
   const hasAnimatedSidebarsRef = useRef(false);
-  const effectiveSidebarCollapsed = compactWindowLayout
-    ? !compactSidebarExpanded
-    : sidebarCollapsed;
-  useEffect(() => {
-    if (!compactWindowLayout) {
-      setCompactSidebarExpanded(false);
-    }
-  }, [compactWindowLayout]);
-  const handleToggleSidebar = useCallback(() => {
-    if (compactWindowLayout) {
-      setCompactSidebarExpanded((expanded) => !expanded);
-      return;
-    }
-    toggleSidebar();
-  }, [compactWindowLayout, toggleSidebar]);
   const previousSidebarStateRef = useRef({
-    sidebarCollapsed: effectiveSidebarCollapsed,
+    sidebarCollapsed,
     contextSidebarCollapsed,
   });
 
@@ -268,10 +229,10 @@ const ChatShell = memo(function ChatShell({
   const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
   useEffect(() => {
     const sidebarStateChanged =
-      previousSidebarStateRef.current.sidebarCollapsed !== effectiveSidebarCollapsed ||
+      previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
       previousSidebarStateRef.current.contextSidebarCollapsed !== contextSidebarCollapsed;
     previousSidebarStateRef.current = {
-      sidebarCollapsed: effectiveSidebarCollapsed,
+      sidebarCollapsed,
       contextSidebarCollapsed,
     };
 
@@ -290,7 +251,7 @@ const ChatShell = memo(function ChatShell({
       window.clearTimeout(timer);
       document.body.classList.remove("app-animating-sidebars");
     };
-  }, [contextSidebarCollapsed, effectiveSidebarCollapsed]);
+  }, [contextSidebarCollapsed, sidebarCollapsed]);
 
   return (
     <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
@@ -303,9 +264,9 @@ const ChatShell = memo(function ChatShell({
       <div className="app-window-drag-strip" aria-hidden="true" />
       <AppTopBar
         busy={isConversationView ? busy : false}
-        onToggleSidebar={handleToggleSidebar}
+        onToggleSidebar={toggleSidebar}
         onNewChat={() => void openNewChatLanding()}
-        sidebarCollapsed={effectiveSidebarCollapsed}
+        sidebarCollapsed={sidebarCollapsed}
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
         onToggleContextSidebar={toggleContextSidebar}
@@ -348,7 +309,7 @@ const ChatShell = memo(function ChatShell({
         onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
       <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
-        <LeftSidebarPane collapsed={effectiveSidebarCollapsed} />
+        <LeftSidebarPane collapsed={sidebarCollapsed} />
         <main
           id="main-content"
           tabIndex={-1}
@@ -364,10 +325,7 @@ const ChatShell = memo(function ChatShell({
           className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div
-              className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-              data-slot="primary-content-pane"
-            >
+            <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
               <PrimaryContent
                 init={init}
                 ready={ready}

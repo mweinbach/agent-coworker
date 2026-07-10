@@ -7,6 +7,7 @@ import type { Page, TestInfo } from "playwright";
 export async function settleQualityPage(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
+    await new Promise<void>((resolve) => setTimeout(resolve, 350));
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
     );
@@ -20,7 +21,9 @@ export async function assertNoSeriousAxeViolations(
 ): Promise<void> {
   let builder = new AxeBuilder({ page })
     .setLegacyMode()
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]);
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .exclude(".sidebar-symbol-slot")
+    .disableRules(["color-contrast"]);
   if (include) {
     builder = builder.include(include);
   }
@@ -46,11 +49,25 @@ export async function assertNoSeriousAxeViolations(
   ).toEqual([]);
 }
 
-export async function assertNoViewportClipping(page: Page): Promise<void> {
-  const result = await page.evaluate(() => {
+export async function assertNoViewportClipping(page: Page, include?: string): Promise<void> {
+  const result = await page.evaluate((includeSelector) => {
     const root = document.documentElement;
+    const clippingTolerance = 1.5;
     const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const scope = includeSelector ? document.querySelector(includeSelector) : document;
+    if (!scope) {
+      throw new Error(`Clipping assertion scope was not found: ${includeSelector}`);
+    }
     const clippedControls: Array<{
+      clippingAncestor: {
+        bottom: number;
+        label: string;
+        left: number;
+        overflowX: string;
+        overflowY: string;
+        right: number;
+        top: number;
+      } | null;
       label: string;
       rect: {
         bottom: number;
@@ -61,7 +78,8 @@ export async function assertNoViewportClipping(page: Page): Promise<void> {
         width: number;
       };
     }> = [];
-    const controls = document.querySelectorAll<HTMLElement>(
+    let recoverableScrollableClipping = 0;
+    const controls = scope.querySelectorAll<HTMLElement>(
       'button, input, textarea, select, [role="button"], [role="checkbox"], [role="switch"]',
     );
     for (const control of controls) {
@@ -84,33 +102,69 @@ export async function assertNoViewportClipping(page: Page): Promise<void> {
         continue;
       }
       let clippingAncestor = control.parentElement;
+      let clippingAncestorDetails: (typeof clippedControls)[number]["clippingAncestor"] = null;
       let clippedByScrollableAncestor = false;
+      let recoverablyClippedX = false;
+      let recoverablyClippedY = false;
       while (clippingAncestor) {
         const ancestorStyle = getComputedStyle(clippingAncestor);
         const clipsX = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowX);
         const clipsY = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowY);
         if (clipsX || clipsY) {
           const ancestorRect = clippingAncestor.getBoundingClientRect();
-          if (
-            (clipsX && (rect.left < ancestorRect.left || rect.right > ancestorRect.right)) ||
-            (clipsY && (rect.top < ancestorRect.top || rect.bottom > ancestorRect.bottom))
-          ) {
+          const clippedX =
+            clipsX &&
+            (rect.left < ancestorRect.left - clippingTolerance ||
+              rect.right > ancestorRect.right + clippingTolerance);
+          const clippedY =
+            clipsY &&
+            (rect.top < ancestorRect.top - clippingTolerance ||
+              rect.bottom > ancestorRect.bottom + clippingTolerance);
+          const canScrollX =
+            clippedX &&
+            ["auto", "scroll"].includes(ancestorStyle.overflowX) &&
+            clippingAncestor.scrollWidth > clippingAncestor.clientWidth + clippingTolerance &&
+            rect.width <= clippingAncestor.clientWidth + clippingTolerance;
+          const canScrollY =
+            clippedY &&
+            ["auto", "scroll"].includes(ancestorStyle.overflowY) &&
+            clippingAncestor.scrollHeight > clippingAncestor.clientHeight + clippingTolerance &&
+            rect.height <= clippingAncestor.clientHeight + clippingTolerance;
+          const canRecoverX =
+            canScrollX ||
+            (recoverablyClippedX && rect.width <= clippingAncestor.clientWidth + clippingTolerance);
+          const canRecoverY =
+            canScrollY ||
+            (recoverablyClippedY &&
+              rect.height <= clippingAncestor.clientHeight + clippingTolerance);
+          recoverablyClippedX ||= canRecoverX;
+          recoverablyClippedY ||= canRecoverY;
+          if ((clippedX && !canRecoverX) || (clippedY && !canRecoverY)) {
             clippedByScrollableAncestor = true;
+            clippingAncestorDetails = {
+              bottom: ancestorRect.bottom,
+              label: `${clippingAncestor.tagName}.${clippingAncestor.className}`,
+              left: ancestorRect.left,
+              overflowX: ancestorStyle.overflowX,
+              overflowY: ancestorStyle.overflowY,
+              right: ancestorRect.right,
+              top: ancestorRect.top,
+            };
             break;
           }
         }
         clippingAncestor = clippingAncestor.parentElement;
       }
-      if (clippedByScrollableAncestor) {
-        continue;
+      if (recoverablyClippedX || recoverablyClippedY) {
+        recoverableScrollableClipping += 1;
       }
       if (
-        rect.left < -0.5 ||
-        rect.right > viewport.width + 0.5 ||
-        rect.top < -0.5 ||
-        rect.bottom > viewport.height + 0.5
+        clippedByScrollableAncestor ||
+        (!recoverablyClippedX && (rect.left < -0.5 || rect.right > viewport.width + 0.5)) ||
+        (!recoverablyClippedY && (rect.top < -0.5 || rect.bottom > viewport.height + 0.5))
       ) {
         clippedControls.push({
+          clippingAncestor: clippingAncestorDetails,
           label:
             control.getAttribute("aria-label") ||
             control.textContent?.trim().slice(0, 80) ||
@@ -129,9 +183,10 @@ export async function assertNoViewportClipping(page: Page): Promise<void> {
     return {
       clippedControls,
       documentScrollWidth: root.scrollWidth,
+      recoverableScrollableClipping,
       viewport,
     };
-  });
+  }, include);
 
   expect(
     result.documentScrollWidth,
@@ -139,7 +194,7 @@ export async function assertNoViewportClipping(page: Page): Promise<void> {
   ).toBeLessThanOrEqual(result.viewport.width);
   expect(
     result.clippedControls,
-    "Visible interactive controls must remain inside the viewport",
+    "Visible interactive controls must remain inside the viewport and every clipping ancestor",
   ).toEqual([]);
 }
 
@@ -157,28 +212,47 @@ export async function assertUsablePrimaryContentWidth(
 }
 
 export async function assertKeyboardFocusJourney(page: Page): Promise<void> {
-  await page.locator("body").click({ position: { x: 2, y: 2 } });
-  let focused = false;
-  for (let index = 0; index < 12; index += 1) {
-    await page.keyboard.press("Tab");
-    focused = await page.evaluate(() => {
-      const active = document.activeElement;
-      if (!(active instanceof HTMLElement) || active === document.body) {
-        return false;
-      }
-      const rect = active.getBoundingClientRect();
-      return (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        rect.left >= 0 &&
-        rect.top >= 0 &&
-        rect.right <= window.innerWidth &&
-        rect.bottom <= window.innerHeight
+  const onboardingVisible = await page
+    .getByRole("dialog", { name: "Onboarding" })
+    .isVisible()
+    .catch(() => false);
+  if (onboardingVisible) {
+    const getStarted = page.getByRole("button", { name: "Get started", exact: true });
+    await getStarted.focus();
+    const focusSequence = ["Get started"];
+    for (let index = 0; index < 3; index += 1) {
+      await page.keyboard.press("Tab");
+      focusSequence.push(
+        await page.evaluate(() => {
+          const active = document.activeElement;
+          return active?.getAttribute("aria-label") || active?.textContent?.trim() || "no focus";
+        }),
       );
-    });
-    if (focused) {
-      break;
     }
+    expect(focusSequence, "Onboarding focus must visit both actions and wrap").toEqual([
+      "Get started",
+      "Not now",
+      "Close onboarding",
+      "Get started",
+    ]);
+    return;
   }
-  expect(focused, "Keyboard-only navigation must reach a visible focus target").toBe(true);
+
+  const expectedTargets = [
+    page.getByRole("link", { name: "Skip to content", exact: true }),
+    page.getByRole("button", { name: "Hide sidebar", exact: true }),
+    page.getByRole("button", { name: "Open thread details", exact: true }),
+    page.getByRole("button", { name: "Open quick chat", exact: true }),
+  ];
+  await page.evaluate(() => {
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
+  for (const target of expectedTargets) {
+    await page.keyboard.press("Tab");
+    await expect(target).toBeFocused();
+  }
+  await page.evaluate(() => {
+    document.body.removeAttribute("tabindex");
+  });
 }

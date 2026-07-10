@@ -30,7 +30,6 @@ const THREAD_CREATION_KEYS_MIGRATION = 25;
 const THREAD_JOURNAL_FAILURES_MIGRATION = 26;
 const EXTERNAL_CONVERSATION_IMPORTS_MIGRATION = 27;
 const THREAD_METADATA_MIGRATION = 28;
-const RESEARCH_ARCHIVED_AT_MIGRATION = 29;
 
 function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
@@ -57,7 +56,6 @@ type BootstrapSessionDbOptions = {
     | "addResearchTable"
     | "addResearchPlanColumns"
     | "addResearchWorkspaceColumn"
-    | "addResearchArchivedAtColumn"
     | "addAgentProfileMetadataColumn"
     | "addLastMemoryGeneratedIndexColumn"
     | "addTaskModeTables"
@@ -226,11 +224,6 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(THREAD_METADATA_MIGRATION)) {
     opts.repository.addThreadMetadataTable();
     opts.repository.markMigration(THREAD_METADATA_MIGRATION);
-  }
-
-  if (!appliedMigrations.has(RESEARCH_ARCHIVED_AT_MIGRATION)) {
-    opts.repository.addResearchArchivedAtColumn();
-    opts.repository.markMigration(RESEARCH_ARCHIVED_AT_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

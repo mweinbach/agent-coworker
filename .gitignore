@@ -50,6 +50,7 @@ __pycache__/
 # Desktop build outputs
 apps/desktop/release/
 apps/desktop/out/
+apps/desktop/out-quality/
 apps/desktop/out-web/
 apps/desktop/quality-gates/artifacts/
 apps/desktop/quality-gates/proof-artifacts/

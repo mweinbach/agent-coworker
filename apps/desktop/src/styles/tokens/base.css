@@ -20,8 +20,7 @@
   --text-base: #232a18;
   --canvas-highlight: rgba(139, 148, 114, 0.4);
   --muted-base: #556041;
-  --accent-base: #68793e;
-  --primary-foreground-base: #ffffff;
+  --accent-base: #6f8042;
   --danger-base: #bb3e3e;
   --danger-bg: rgba(187, 62, 62, 0.12);
   --inverse-text: #ffffff;
@@ -55,7 +54,6 @@
   --canvas-highlight: rgba(139, 148, 114, 0.6);
   --muted-base: #c7ceaf;
   --accent-base: #a8b963;
-  --primary-foreground-base: #121a10;
   --danger-base: #e86060;
   --danger-bg: rgba(232, 96, 96, 0.14);
   --inverse-text: #ffffff;
@@ -88,7 +86,6 @@
     --text-base: #eef0dc;
     --muted-base: #c7ceaf;
     --accent-base: #a8b963;
-    --primary-foreground-base: #121a10;
     --danger-base: #e86060;
     --danger-bg: rgba(232, 96, 96, 0.14);
     --inverse-text: #ffffff;

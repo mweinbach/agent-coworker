@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import { createServer, type Server as HttpServer } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -8,6 +8,7 @@ import type * as Electron from "electron";
 import type * as Ws from "ws";
 import { hostPlatform } from "../../../src/platform/host";
 import type { ResearchRecord } from "../../../src/server/research/types";
+import { createQualityTaskFixture, PROJECT_THREAD_ID } from "../quality-gates/fixtureData";
 import type { PersistedState } from "../src/app/types";
 import {
   createDefaultUpdaterState,
@@ -19,33 +20,53 @@ import {
 import { getPlatformChrome } from "./services/windowChrome/platformChrome";
 
 const nodeRequire = createRequire(import.meta.url);
-const { app, BrowserWindow, ipcMain } = nodeRequire("electron") as typeof Electron;
-const { WebSocketServer } = nodeRequire("ws") as typeof Ws;
+const { app, BrowserWindow, ipcMain, session } = nodeRequire("electron") as typeof Electron;
+const { WebSocket, WebSocketServer } = nodeRequire("ws") as typeof Ws;
 const qualityGateDir = path.dirname(fileURLToPath(import.meta.url));
 const FIXED_NOW = "2026-07-09T12:00:00.000Z";
 const PROJECT_WORKSPACE_ID = "quality-project";
-const PROJECT_THREAD_ID = "quality-thread";
 const QUICK_WORKSPACE_ID = "quality-quick";
 const QUICK_THREAD_ID = "quality-quick-thread";
 const qualityPlatform = hostPlatform();
+const EXTERNAL_NETWORK_PROOF_URL = "https://example.invalid/quality-gate-network-proof";
 
 type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
 type QualityScenario = "first-launch" | "product";
 
 type QualityMainMetrics = {
+  approvalResponses: number;
+  blockedRequests: string[];
+  clientRequestsByMethod: Record<string, number>;
   confirmationRequests: number;
   filesystemRequests: number;
+  missingAssetRequests: number;
   mobileForgetRequests: number;
   rendererLogEntries: number;
   stateSaves: number;
+  taskCancellationRequests: number;
+  turnInterruptRequests: number;
+  turnSteerRequests: number;
   websocketRequests: number;
 };
 
+type QualityLifecycle = {
+  captureReady: number;
+  firstLoadStarted: number;
+  firstWindowCreated: number;
+  networkGuardInstalled: number;
+};
+
 type QualityMainControl = {
+  emitCompletion(): void;
+  emitDeltaBurst(count: number, runId: number): string;
+  emitLongTranscript(count: number, runId: number): string;
+  emitStreamingActivity(): void;
+  getExternalNetworkProofUrl(): string;
+  getLifecycle(): QualityLifecycle;
   getMetrics(): QualityMainMetrics;
   getRendererLogs(): unknown[];
+  releaseBootstrap(): void;
   resetMetrics(): void;
-  setNextContextMenuResult(result: string | null): void;
 };
 
 declare global {
@@ -57,6 +78,8 @@ const qualityScenario = parseQualityScenario(process.env.COWORK_QUALITY_SCENARIO
 const contentWidth = parseDimension(process.env.COWORK_QUALITY_WIDTH, 1240);
 const contentHeight = parseDimension(process.env.COWORK_QUALITY_HEIGHT, 820);
 const startupDelayMs = parseDelay(process.env.COWORK_QUALITY_STARTUP_DELAY_MS);
+const holdBootstrap = process.env.COWORK_QUALITY_HOLD_BOOTSTRAP === "1";
+const captureReadyFile = process.env.COWORK_QUALITY_CAPTURE_READY_FILE?.trim() ?? "";
 const userDataPath =
   process.env.COWORK_QUALITY_USER_DATA?.trim() ||
   path.join(app.getPath("temp"), `cowork-quality-gate-${process.pid}`);
@@ -80,34 +103,74 @@ let mockServerUrl = "";
 let rendererServer: HttpServer | null = null;
 let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
-let nextContextMenuResult: string | null = null;
 const researchRecords = new Map<string, ResearchRecord>();
+const connectedSockets = new Set<Ws.WebSocket>();
+let lifecycleSequence = 0;
+let bootstrapReleased = !holdBootstrap;
+let resolveBootstrap: (() => void) | null = null;
+const bootstrapBarrier = new Promise<void>((resolve) => {
+  resolveBootstrap = resolve;
+});
+const lifecycle: QualityLifecycle = {
+  captureReady: 0,
+  firstLoadStarted: 0,
+  firstWindowCreated: 0,
+  networkGuardInstalled: 0,
+};
 let metrics: QualityMainMetrics = {
+  approvalResponses: 0,
+  blockedRequests: [],
+  clientRequestsByMethod: {},
   confirmationRequests: 0,
   filesystemRequests: 0,
+  missingAssetRequests: 0,
   mobileForgetRequests: 0,
   rendererLogEntries: 0,
   stateSaves: 0,
+  taskCancellationRequests: 0,
+  turnInterruptRequests: 0,
+  turnSteerRequests: 0,
   websocketRequests: 0,
 };
 
 globalThis.__coworkQualityGateMain = {
-  getMetrics: () => ({ ...metrics }),
+  emitCompletion: () => {
+    emitCompletion();
+  },
+  emitDeltaBurst: (count, runId) => emitDeltaBurst(count, runId),
+  emitLongTranscript: (count, runId) => emitLongTranscript(count, runId),
+  emitStreamingActivity: () => {
+    emitStreamingActivity();
+  },
+  getExternalNetworkProofUrl: () => EXTERNAL_NETWORK_PROOF_URL,
+  getLifecycle: () => ({ ...lifecycle }),
+  getMetrics: () => structuredClone(metrics),
   getRendererLogs: () => structuredClone(rendererLogs),
+  releaseBootstrap: () => {
+    if (bootstrapReleased) {
+      return;
+    }
+    bootstrapReleased = true;
+    resolveBootstrap?.();
+    resolveBootstrap = null;
+  },
   resetMetrics: () => {
     rendererLogs = [];
-    nextContextMenuResult = null;
     metrics = {
+      approvalResponses: 0,
+      blockedRequests: [],
+      clientRequestsByMethod: {},
       confirmationRequests: 0,
       filesystemRequests: 0,
+      missingAssetRequests: 0,
       mobileForgetRequests: 0,
       rendererLogEntries: 0,
       stateSaves: 0,
+      taskCancellationRequests: 0,
+      turnInterruptRequests: 0,
+      turnSteerRequests: 0,
       websocketRequests: 0,
     };
-  },
-  setNextContextMenuResult: (result) => {
-    nextContextMenuResult = result;
   },
 };
 
@@ -194,7 +257,7 @@ function createPersistedState(scenario: QualityScenario): PersistedState {
       {
         id: "quality-draft-thread",
         workspaceId: PROJECT_WORKSPACE_ID,
-        title: "Responsive layout draft",
+        title: "Controlled fixture draft",
         titleSource: "manual",
         createdAt: "2026-07-05T12:00:00.000Z",
         lastMessageAt: "2026-07-08T16:00:00.000Z",
@@ -310,7 +373,7 @@ const hydratedTranscript = {
       kind: "reasoning",
       mode: "summary",
       ts: "2026-07-09T11:56:00.000Z",
-      text: "Checking responsive layout, accessibility, and deterministic fixtures.",
+      text: "Checking window layout, accessibility, and deterministic fixtures.",
     },
     {
       id: "fixture-tool",
@@ -420,10 +483,206 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function inputText(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((entry) => {
+      const input = asRecord(entry);
+      return input.type === "text" && typeof input.text === "string" ? input.text : "";
+    })
+    .join("");
+}
+
+function sendServerMessage(message: Record<string, unknown>): void {
+  const serialized = JSON.stringify(message);
+  for (const socket of connectedSockets) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(serialized);
+    }
+  }
+}
+
+function sendNotification(method: string, params: Record<string, unknown>): void {
+  sendServerMessage({ method, params });
+}
+
+function sendProjectedItem(
+  method: "item/started" | "item/completed",
+  item: Record<string, unknown>,
+  turnId: string | null,
+): void {
+  sendNotification(method, {
+    threadId: PROJECT_THREAD_ID,
+    turnId,
+    item,
+  });
+}
+
+function emitStreamingActivity(): void {
+  const turnId = "quality-turn";
+  sendNotification("turn/started", {
+    threadId: PROJECT_THREAD_ID,
+    turn: { id: turnId, status: "inProgress" },
+  });
+  sendProjectedItem(
+    "item/completed",
+    {
+      id: "quality-user",
+      type: "userMessage",
+      content: [
+        {
+          type: "text",
+          text: "Audit the desktop experience and prepare a release-ready report.",
+        },
+      ],
+    },
+    turnId,
+  );
+  sendProjectedItem(
+    "item/completed",
+    {
+      id: "quality-reasoning",
+      type: "reasoning",
+      mode: "summary",
+      text: "Reviewing navigation, accessibility, and deterministic rendering.",
+    },
+    turnId,
+  );
+  sendProjectedItem(
+    "item/completed",
+    {
+      id: "quality-tool",
+      type: "toolCall",
+      toolName: "read",
+      state: "output-available",
+      args: { path: "docs/ui-quality-audit-2026-07.md" },
+      result: "Loaded the current audit and acceptance criteria.",
+    },
+    turnId,
+  );
+  sendProjectedItem(
+    "item/started",
+    {
+      id: "quality-assistant",
+      type: "agentMessage",
+      text: "",
+    },
+    turnId,
+  );
+  sendNotification("item/agentMessage/delta", {
+    threadId: PROJECT_THREAD_ID,
+    turnId,
+    itemId: "quality-assistant",
+    delta: "The quality review is in progress.",
+  });
+  sendServerMessage({
+    id: "approval-1",
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId: PROJECT_THREAD_ID,
+      command: "bun run desktop:quality",
+      detail: "The quality harness requested a controlled command.",
+      category: "filesystem",
+      reason: "sandbox_denied_escalation",
+    },
+  });
+}
+
+function emitCompletion(): void {
+  const text = "The desktop quality review is complete and ready for release.";
+  sendProjectedItem(
+    "item/completed",
+    {
+      id: "quality-assistant",
+      type: "agentMessage",
+      text,
+    },
+    "quality-turn",
+  );
+  sendNotification("turn/completed", {
+    threadId: PROJECT_THREAD_ID,
+    turn: { id: "quality-turn", status: "completed" },
+  });
+}
+
+function emitCancellation(): void {
+  sendProjectedItem(
+    "item/completed",
+    {
+      id: "quality-cancelled",
+      type: "error",
+      message: "Response stopped by the user.",
+      code: "internal_error",
+      source: "session",
+    },
+    "quality-turn",
+  );
+  sendNotification("turn/completed", {
+    threadId: PROJECT_THREAD_ID,
+    turn: { id: "quality-turn", status: "interrupted" },
+  });
+}
+
+function emitDeltaBurst(count: number, runId: number): string {
+  const boundedCount = Math.max(1, Math.min(10_000, Math.floor(count)));
+  const itemId = `quality-delta-${runId}`;
+  const marker = `[delta-burst-complete-${runId}]`;
+  sendProjectedItem(
+    "item/started",
+    {
+      id: itemId,
+      type: "agentMessage",
+      text: "",
+    },
+    "quality-performance-turn",
+  );
+  for (let index = 1; index < boundedCount; index += 1) {
+    sendNotification("item/agentMessage/delta", {
+      threadId: PROJECT_THREAD_ID,
+      turnId: "quality-performance-turn",
+      itemId,
+      delta: ".",
+    });
+  }
+  sendNotification("item/agentMessage/delta", {
+    threadId: PROJECT_THREAD_ID,
+    turnId: "quality-performance-turn",
+    itemId,
+    delta: marker,
+  });
+  return itemId;
+}
+
+function emitLongTranscript(count: number, runId: number): string {
+  const boundedCount = Math.max(1, Math.min(2_000, Math.floor(count)));
+  for (let index = 0; index < boundedCount; index += 1) {
+    sendProjectedItem(
+      "item/completed",
+      {
+        id: `quality-long-${runId}-${index}`,
+        type: index % 2 === 0 ? "userMessage" : "agentMessage",
+        ...(index % 2 === 0
+          ? {
+              content: [
+                {
+                  type: "text",
+                  text: `Deterministic transcript run ${runId} message ${index + 1}`,
+                },
+              ],
+            }
+          : { text: `Deterministic transcript run ${runId} message ${index + 1}` }),
+      },
+      null,
+    );
+  }
+  return `quality-long-${runId}-${boundedCount - 1}`;
+}
+
 function qualityResearchRecord(
   id: string,
   opts: {
-    archivedAt?: string | null;
     parentResearchId?: string | null;
     prompt?: string;
     status?: ResearchRecord["status"];
@@ -469,7 +728,6 @@ function qualityResearchRecord(
         ]
       : [],
     planPending: false,
-    archivedAt: opts.archivedAt ?? null,
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     error: null,
@@ -533,22 +791,32 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       researchRecords.set(record.id, record);
       return { research: record };
     }
-    case "research/archive": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      const existing =
-        researchRecords.get(researchId) ?? qualityResearchRecord(researchId || "quality-research");
-      const record = {
-        ...existing,
-        archivedAt: params.archived === true ? FIXED_NOW : null,
-      };
-      researchRecords.set(record.id, record);
-      return { research: record };
-    }
-    case "research/delete": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      const deleted = researchRecords.delete(researchId);
-      return { deleted: deleted || researchId.length > 0 };
-    }
+    case "task/list":
+      return { tasks: [createQualityTaskFixture()] };
+    case "task/read":
+      return { task: createQualityTaskFixture() };
+    case "task/cancel":
+      metrics.taskCancellationRequests += 1;
+      return { task: createQualityTaskFixture("cancelled") };
+    case "turn/interrupt":
+      metrics.turnInterruptRequests += 1;
+      queueMicrotask(emitCancellation);
+      return { status: "interrupting" };
+    case "turn/steer":
+      metrics.turnSteerRequests += 1;
+      queueMicrotask(() => {
+        sendNotification("cowork/session/steerAccepted", {
+          type: "steer_accepted",
+          threadId: PROJECT_THREAD_ID,
+          sessionId: PROJECT_THREAD_ID,
+          turnId: "quality-turn",
+          text: inputText(params.input),
+          ...(typeof params.clientMessageId === "string"
+            ? { clientMessageId: params.clientMessageId }
+            : {}),
+        });
+      });
+      return { accepted: true };
     default:
       return {};
   }
@@ -562,6 +830,10 @@ async function startMockServer(): Promise<void> {
       protocols.has("cowork.jsonrpc.v1") ? "cowork.jsonrpc.v1" : false,
   });
   mockServer.on("connection", (socket) => {
+    connectedSockets.add(socket);
+    socket.on("close", () => {
+      connectedSockets.delete(socket);
+    });
     socket.on("message", (raw) => {
       let message: unknown;
       try {
@@ -570,15 +842,27 @@ async function startMockServer(): Promise<void> {
         socket.close(1003, "invalid_json");
         return;
       }
+      if (typeof message !== "object" || message === null) {
+        return;
+      }
       if (
-        typeof message !== "object" ||
-        message === null ||
-        !("method" in message) ||
-        typeof message.method !== "string"
+        "id" in message &&
+        !("method" in message) &&
+        (typeof message.id === "string" || typeof message.id === "number")
       ) {
+        metrics.approvalResponses += 1;
+        sendNotification("serverRequest/resolved", {
+          threadId: PROJECT_THREAD_ID,
+          requestId: String(message.id),
+        });
+        return;
+      }
+      if (!("method" in message) || typeof message.method !== "string") {
         return;
       }
       metrics.websocketRequests += 1;
+      metrics.clientRequestsByMethod[message.method] =
+        (metrics.clientRequestsByMethod[message.method] ?? 0) + 1;
       if (
         !("id" in message) ||
         (typeof message.id !== "string" && typeof message.id !== "number")
@@ -627,7 +911,7 @@ function contentType(filePath: string): string {
 
 async function startRendererServer(): Promise<void> {
   const rendererRoot = path.resolve(qualityGateDir, "../renderer");
-  rendererServer = createServer((request, response) => {
+  rendererServer = createServer(async (request, response) => {
     let pathname: string;
     try {
       pathname = decodeURIComponent(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
@@ -643,17 +927,26 @@ async function startRendererServer(): Promise<void> {
       response.end("Forbidden");
       return;
     }
+    try {
+      const file = await fs.stat(filePath);
+      if (!file.isFile()) {
+        throw new Error("not a file");
+      }
+    } catch {
+      metrics.missingAssetRequests += 1;
+      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Not found");
+      return;
+    }
     response.writeHead(200, {
       "Cache-Control":
         relativePath === "index.html" ? "no-store" : "public, max-age=31536000, immutable",
       "Content-Type": contentType(filePath),
     });
     const stream = createReadStream(filePath);
-    stream.on("error", () => {
-      if (!response.headersSent) {
-        response.writeHead(404);
-      }
-      response.end("Not found");
+    stream.on("error", (error) => {
+      console.error("[quality-gate-main] renderer asset stream failed", error);
+      response.destroy(error);
     });
     stream.pipe(response);
   });
@@ -669,9 +962,67 @@ async function startRendererServer(): Promise<void> {
   rendererServerUrl = `http://127.0.0.1:${address.port}/index.html`;
 }
 
+function installNetworkGuard(): void {
+  const allowedOrigins = new Set([
+    new URL(rendererServerUrl).origin,
+    new URL(mockServerUrl).origin,
+  ]);
+  session.defaultSession.webRequest.onBeforeRequest(
+    { urls: ["<all_urls>"] },
+    (details, callback) => {
+      let allowed = false;
+      try {
+        const url = new URL(details.url);
+        allowed = allowedOrigins.has(url.origin);
+      } catch {
+        allowed = false;
+      }
+      if (!allowed) {
+        metrics.blockedRequests.push(details.url);
+      }
+      callback({ cancel: !allowed });
+    },
+  );
+  lifecycle.networkGuardInstalled = ++lifecycleSequence;
+}
+
+async function verifyCaptureReady(): Promise<void> {
+  if (!captureReadyFile) {
+    throw new Error("Quality-gate capture readiness file was not configured");
+  }
+  await fs.access(captureReadyFile);
+  lifecycle.captureReady = ++lifecycleSequence;
+}
+
+async function loadWindow(
+  win: Electron.BrowserWindow,
+  mode: "main" | "quick-chat" | "canvas",
+  options?: { threadId?: string; path?: string },
+): Promise<void> {
+  const isMain = mode === "main";
+  const query = {
+    qualityMode,
+    ...(mode === "main" ? {} : { window: mode }),
+    ...(options?.threadId ? { threadId: options.threadId } : {}),
+    ...(options?.path ? { path: options.path } : {}),
+  };
+  const rendererUrl = new URL(rendererServerUrl);
+  rendererUrl.search = new URLSearchParams(query).toString();
+  if (isMain) {
+    lifecycle.firstLoadStarted = ++lifecycleSequence;
+  }
+  await win.loadURL(rendererUrl.toString());
+  win.setContentSize(
+    isMain ? contentWidth : mode === "quick-chat" ? 337 : 800,
+    isMain ? contentHeight : mode === "quick-chat" ? 552 : 600,
+  );
+  win.show();
+}
+
 async function createWindow(
   mode: "main" | "quick-chat" | "canvas",
   options?: { threadId?: string; path?: string },
+  deferLoad = false,
 ): Promise<Electron.BrowserWindow> {
   const isMain = mode === "main";
   const win = new BrowserWindow({
@@ -680,7 +1031,7 @@ async function createWindow(
     width: isMain ? contentWidth : mode === "quick-chat" ? 337 : 800,
     height: isMain ? contentHeight : mode === "quick-chat" ? 552 : 600,
     useContentSize: true,
-    show: true,
+    show: false,
     frame: false,
     resizable: true,
     backgroundColor: qualityMode === "dark" ? "#1f1d1a" : "#f5f0e5",
@@ -703,24 +1054,21 @@ async function createWindow(
       event.preventDefault();
     }
   });
-  const query = {
-    ...(mode === "main" ? {} : { window: mode }),
-    ...(options?.threadId ? { threadId: options.threadId } : {}),
-    ...(options?.path ? { path: options.path } : {}),
-  };
-  const rendererUrl = new URL(rendererServerUrl);
-  rendererUrl.search = new URLSearchParams(query).toString();
-  await win.loadURL(rendererUrl.toString());
-  win.setContentSize(
-    isMain ? contentWidth : mode === "quick-chat" ? 337 : 800,
-    isMain ? contentHeight : mode === "quick-chat" ? 552 : 600,
-  );
+  if (isMain) {
+    lifecycle.firstWindowCreated = ++lifecycleSequence;
+  }
+  if (!deferLoad) {
+    await loadWindow(win, mode, options);
+  }
   return win;
 }
 
 async function handleIpc(channel: string, input: unknown): Promise<unknown> {
   switch (channel) {
     case DESKTOP_IPC_CHANNELS.loadState:
+      if (!bootstrapReleased) {
+        await bootstrapBarrier;
+      }
       await delay(startupDelayMs);
       return structuredClone(persistedState);
     case DESKTOP_IPC_CHANNELS.saveState:
@@ -790,11 +1138,8 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
     case DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory:
     case DESKTOP_IPC_CHANNELS.saveExportedFile:
       return null;
-    case DESKTOP_IPC_CHANNELS.showContextMenu: {
-      const result = nextContextMenuResult;
-      nextContextMenuResult = null;
-      return result;
-    }
+    case DESKTOP_IPC_CHANNELS.showContextMenu:
+      return null;
     case DESKTOP_IPC_CHANNELS.showNotification:
       return true;
     case DESKTOP_IPC_CHANNELS.createOneOffChatWorkspace:
@@ -868,7 +1213,10 @@ process.on("unhandledRejection", (error) => {
 void app.whenReady().then(async () => {
   await startRendererServer();
   await startMockServer();
-  mainWindow = await createWindow("main");
+  installNetworkGuard();
+  await verifyCaptureReady();
+  mainWindow = await createWindow("main", undefined, true);
+  await loadWindow(mainWindow, "main");
 });
 
 app.on("window-all-closed", () => {

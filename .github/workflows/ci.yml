@@ -73,7 +73,10 @@ jobs:
 
   electron-quality:
     name: Electron UI quality gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+      options: --ipc=host
     timeout-minutes: 20
     env:
       ANTHROPIC_API_KEY: ""
@@ -87,10 +90,17 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
-      - name: Deterministic Electron matrix
+      - name: Install Linux capture dependency
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends ffmpeg
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Complete deterministic Electron matrix
         run: xvfb-run --auto-servernum --server-args="-screen 0 1400x1000x24" bun run desktop:quality
 
       - name: Prove renderer, visual, and Axe failures
+        if: ${{ always() && !cancelled() }}
         run: xvfb-run --auto-servernum --server-args="-screen 0 1400x1000x24" bun run desktop:quality:proof
 
       - name: Upload Electron failure diagnostics
@@ -109,7 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-quality-failure-proofs-${{ github.run_attempt }}
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
           path: apps/desktop/quality-gates/proof-artifacts
 

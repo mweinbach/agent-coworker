@@ -1,67 +1,46 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
-import { pickPublicTelemetryEnv } from "./electron/services/publicTelemetryEnv";
 
-const appRoot = path.dirname(fileURLToPath(import.meta.url));
+const qualityGateRoot = path.dirname(fileURLToPath(import.meta.url));
+const appRoot = path.resolve(qualityGateRoot, "..");
 const repoRoot = path.resolve(appRoot, "../..");
 const coworkAlias = {
   "@cowork": path.resolve(repoRoot, "src"),
-};
-const defaultDesktopRendererPort = 1420;
-
-function resolveDesktopRendererPort(value: string | undefined): number {
-  const trimmed = value?.trim();
-  if (!trimmed || !/^\d+$/.test(trimmed)) {
-    return defaultDesktopRendererPort;
-  }
-
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
-    return defaultDesktopRendererPort;
-  }
-
-  return parsed;
-}
-
-const desktopRendererPort = resolveDesktopRendererPort(process.env.COWORK_DESKTOP_RENDERER_PORT);
-const safePublicTelemetryDefine = {
-  "globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__": JSON.stringify(pickPublicTelemetryEnv(process.env)),
 };
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     future: "warn",
-    define: safePublicTelemetryDefine,
     resolve: {
       alias: coworkAlias,
     },
     build: {
       sourcemap: false,
       reportCompressedSize: false,
-      outDir: "out/main",
+      outDir: path.resolve(appRoot, "out-quality/main"),
       rollupOptions: {
-        input: path.resolve(appRoot, "electron/main.ts"),
+        input: {
+          qualityGateMain: path.resolve(appRoot, "electron/qualityGateMain.ts"),
+        },
       },
     },
   },
   preload: {
     plugins: [externalizeDepsPlugin({ exclude: ["zod"] })],
     future: "warn",
-    define: safePublicTelemetryDefine,
     resolve: {
       alias: coworkAlias,
     },
     build: {
       sourcemap: false,
       reportCompressedSize: false,
-      // Sandboxed preloads cannot rely on arbitrary runtime requires from node_modules.
-      // Bundle preload deps so the desktop bridge stays available at startup.
       externalizeDeps: false,
-      outDir: "out/preload",
+      outDir: path.resolve(appRoot, "out-quality/preload"),
       rollupOptions: {
         input: path.resolve(appRoot, "electron/preload.ts"),
         output: {
@@ -72,7 +51,7 @@ export default defineConfig({
     },
   },
   renderer: {
-    root: appRoot,
+    root: qualityGateRoot,
     base: "./",
     plugins: [react(), tailwindcss()],
     future: "warn",
@@ -84,8 +63,6 @@ export default defineConfig({
       },
     },
     server: {
-      port: desktopRendererPort,
-      strictPort: true,
       fs: {
         allow: [repoRoot],
       },
@@ -93,9 +70,9 @@ export default defineConfig({
     build: {
       sourcemap: false,
       reportCompressedSize: false,
-      outDir: "out/renderer",
+      outDir: path.resolve(appRoot, "out-quality/renderer"),
       rollupOptions: {
-        input: path.resolve(appRoot, "index.html"),
+        input: path.resolve(qualityGateRoot, "index.html"),
       },
     },
   },

@@ -439,43 +439,6 @@ export class ResearchService {
     return state.record;
   }
 
-  async archive(id: string, archived: boolean): Promise<ResearchRecord | null> {
-    await this.init();
-    const existing = await this.get(id);
-    if (!existing) {
-      return null;
-    }
-    if (!isTerminalResearchStatus(existing.status) || existing.planPending) {
-      throw new Error("Running research cannot be archived.");
-    }
-    const state = this.getOrCreateState(existing);
-    this.updateRecord(state, {
-      archivedAt: archived ? new Date().toISOString() : null,
-      updatedAt: new Date().toISOString(),
-    });
-    await this.flushPersistNow(state);
-    this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
-    await this.cleanupTerminalState(state);
-    return state.record;
-  }
-
-  async delete(id: string): Promise<boolean> {
-    await this.init();
-    const existing = await this.get(id);
-    if (!existing) {
-      return false;
-    }
-    if (!isTerminalResearchStatus(existing.status) || existing.planPending) {
-      throw new Error("Running research cannot be deleted.");
-    }
-    const state = this.states.get(id);
-    if (state) {
-      await this.cleanupTerminalState(state);
-    }
-    await this.fileStore.deleteResearchArtifacts(id);
-    return await this.sessionDb.deleteResearch(id);
-  }
-
   async cancel(id: string): Promise<ResearchRecord | null> {
     const activeState = this.states.get(id);
     const existing =

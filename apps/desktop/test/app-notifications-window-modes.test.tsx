@@ -352,6 +352,68 @@ describe("app window-mode notification routing", () => {
     }
   });
 
+  test("leaves terminal task recovery to its Reopen action without a reconnect banner", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedTerminalTaskApprovalState(() => {});
+      useAppStore.setState({
+        sandboxApprovalsByThread: {},
+        threadRuntimeById: {
+          "task-session-1": {
+            wsUrl: null,
+            connected: false,
+            sessionId: "task-session-1",
+            config: null,
+            sessionConfig: null,
+            sessionKind: "chat",
+            parentSessionId: null,
+            role: null,
+            mode: null,
+            depth: 0,
+            nickname: null,
+            requestedModel: null,
+            effectiveModel: null,
+            requestedReasoningEffort: null,
+            effectiveReasoningEffort: null,
+            executionState: null,
+            lastMessagePreview: null,
+            agents: [],
+            sessionUsage: null,
+            lastTurnUsage: null,
+            enableMcp: null,
+            busy: false,
+            busySince: null,
+            activeTurnId: null,
+            pendingTurnStart: null,
+            pendingSteer: null,
+            feed: [],
+            hydrating: false,
+            transcriptOnly: false,
+          },
+        },
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(App));
+      });
+
+      expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(0);
+      expect(container.textContent).toContain("Reopen task");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("Escape dismisses pending sandbox approvals while settings overlays task", async () => {
     const harness = setupJsdom();
     const dismissPrompt = mock(() => {});

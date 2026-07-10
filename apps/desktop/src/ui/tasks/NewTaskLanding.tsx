@@ -55,6 +55,14 @@ function newWorkItem(key: string): DraftWorkItem {
   };
 }
 
+function removeDependency(dependencies: string, removedKey: string): string {
+  return dependencies
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0 && value !== removedKey)
+    .join(", ");
+}
+
 export function NewTaskLanding() {
   const workspaces = useAppStore((state) => state.workspaces);
   const selectedWorkspaceId = useAppStore((state) => state.selectedWorkspaceId);
@@ -353,7 +361,12 @@ export function NewTaskLanding() {
                             onClick={() => {
                               setWorkGraphCustomized(true);
                               setWorkItems((current) =>
-                                current.filter((entry) => entry.id !== item.id),
+                                current
+                                  .filter((entry) => entry.id !== item.id)
+                                  .map((entry) => ({
+                                    ...entry,
+                                    dependencies: removeDependency(entry.dependencies, item.key),
+                                  })),
                               );
                             }}
                           >

@@ -10,6 +10,7 @@ const disconnectedSession = {
   sessionId: "session-1",
   hydrating: false,
   workspaceStarting: false,
+  terminalTaskConversation: false,
 };
 
 describe("desktop reconnect banner", () => {
@@ -25,5 +26,8 @@ describe("desktop reconnect banner", () => {
     expect(shouldShowReconnectBanner({ ...disconnectedSession, workspaceStarting: true })).toBe(
       false,
     );
+    expect(
+      shouldShowReconnectBanner({ ...disconnectedSession, terminalTaskConversation: true }),
+    ).toBe(false);
   });
 });

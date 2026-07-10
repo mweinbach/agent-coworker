@@ -12,25 +12,6 @@ export function createStreamUpdateHandler(
   reasoning: ReasoningProjection,
   tools: ToolProjection,
 ) {
-  const resolveToolStateWithLineage = (
-    turnId: string,
-    key: string,
-    name: string,
-    retryOf?: string,
-    opts: { startNewOccurrence?: boolean } = {},
-  ) => {
-    const retryItemId = retryOf ? tools.resolveRetryItemId(turnId, retryOf) : undefined;
-    const resolved = tools.resolveToolState(turnId, key, name, opts);
-    if (retryItemId && retryItemId !== resolved.state.itemId) {
-      resolved.state.retryOf = retryItemId;
-    }
-    return resolved;
-  };
-  const hasTerminalToolState = (turnId: string, key: string): boolean => {
-    const currentState = state.toolByKey.get(`${turnId}:${key}`);
-    return currentState ? isTerminalProjectedToolState(currentState.state) : false;
-  };
-
   return (update: ModelStreamUpdate) => {
     if (reasoning.shouldCompleteReasoningBeforeStreamUpdate(update)) {
       reasoning.completeReasoningStateForTurn(update.turnId);
@@ -86,15 +67,9 @@ export function createStreamUpdateHandler(
 
     if (update.kind === "tool_input_start") {
       const currentState = state.toolByKey.get(`${update.turnId}:${update.key}`);
-      const { state: toolState } = resolveToolStateWithLineage(
-        update.turnId,
-        update.key,
-        update.name,
-        update.retryOf,
-        {
-          startNewOccurrence: Boolean(currentState),
-        },
-      );
+      const { state: toolState } = tools.resolveToolState(update.turnId, update.key, update.name, {
+        startNewOccurrence: Boolean(currentState),
+      });
       if (update.args !== undefined) {
         toolState.args = update.args;
       }
@@ -119,11 +94,10 @@ export function createStreamUpdateHandler(
     }
 
     if (update.kind === "tool_input_end") {
-      const { fullKey, state: toolState } = resolveToolStateWithLineage(
+      const { fullKey, state: toolState } = tools.resolveToolState(
         update.turnId,
         update.key,
         update.name,
-        update.retryOf,
       );
       if (isTerminalProjectedToolState(toolState.state)) {
         return;
@@ -145,12 +119,7 @@ export function createStreamUpdateHandler(
       if (currentState && isTerminalProjectedToolState(currentState.state)) {
         return;
       }
-      const { state: toolState } = resolveToolStateWithLineage(
-        update.turnId,
-        update.key,
-        update.name,
-        update.retryOf,
-      );
+      const { state: toolState } = tools.resolveToolState(update.turnId, update.key, update.name);
       if (update.args !== undefined) {
         toolState.args = update.args;
       }
@@ -162,13 +131,7 @@ export function createStreamUpdateHandler(
     }
 
     if (update.kind === "tool_result") {
-      if (hasTerminalToolState(update.turnId, update.key)) return;
-      const { state: toolState } = resolveToolStateWithLineage(
-        update.turnId,
-        update.key,
-        update.name,
-        update.retryOf,
-      );
+      const { state: toolState } = tools.resolveToolState(update.turnId, update.key, update.name);
       toolState.state = "output-available";
       toolState.result = update.result;
       tools.publishToolCompleted(update.turnId, toolState);
@@ -176,13 +139,7 @@ export function createStreamUpdateHandler(
     }
 
     if (update.kind === "tool_error") {
-      if (hasTerminalToolState(update.turnId, update.key)) return;
-      const { state: toolState } = resolveToolStateWithLineage(
-        update.turnId,
-        update.key,
-        update.name,
-        update.retryOf,
-      );
+      const { state: toolState } = tools.resolveToolState(update.turnId, update.key, update.name);
       toolState.state = "output-error";
       toolState.result = { error: update.error };
       tools.publishToolCompleted(update.turnId, toolState);
@@ -190,13 +147,7 @@ export function createStreamUpdateHandler(
     }
 
     if (update.kind === "tool_output_denied") {
-      if (hasTerminalToolState(update.turnId, update.key)) return;
-      const { state: toolState } = resolveToolStateWithLineage(
-        update.turnId,
-        update.key,
-        update.name,
-        update.retryOf,
-      );
+      const { state: toolState } = tools.resolveToolState(update.turnId, update.key, update.name);
       toolState.state = "output-denied";
       toolState.result = { denied: true, reason: update.reason };
       tools.publishToolCompleted(update.turnId, toolState);

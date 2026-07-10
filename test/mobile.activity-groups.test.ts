@@ -73,14 +73,15 @@ describe("mobile chat activity groups", () => {
     expect(summary.status).toBe("done");
   });
 
-  test("preserves unrelated failures and only recovers explicit retry lineage", () => {
-    const unresolved = summarizeActivityGroup([
+  test("preserves unrelated and repeated same-tool failures without retry lineage", () => {
+    const summary = summarizeActivityGroup([
       {
         id: "failed",
         kind: "tool",
         ts: "2024-01-01T00:00:01.000Z",
         name: "bash",
         state: "output-error",
+        args: { command: "bun test" },
         result: { error: "failed" },
       },
       {
@@ -91,33 +92,65 @@ describe("mobile chat activity groups", () => {
         state: "output-available",
         result: "ok",
       },
-    ]);
-    expect(unresolved.status).toBe("issue");
-    expect(unresolved.entries).toHaveLength(2);
-    expect(unresolved.entries[0]).not.toHaveProperty("recoveredById");
-
-    const recovered = summarizeActivityGroup([
       {
-        id: "failed",
+        id: "repeated",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        result: { exitCode: 0 },
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual([
+      "failed",
+      "unrelated",
+      "repeated",
+    ]);
+  });
+
+  test("coalesces lifecycle updates by stable call id and applies the final error", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "tool-call",
         kind: "tool",
         ts: "2024-01-01T00:00:01.000Z",
         name: "bash",
-        state: "output-error",
-        result: { error: "failed" },
+        state: "input-streaming",
+        args: { command: "bun test" },
       },
       {
-        id: "retry",
+        id: "tool-call",
         kind: "tool",
         ts: "2024-01-01T00:00:02.000Z",
         name: "bash",
         state: "output-available",
-        retryOf: "failed",
         result: { exitCode: 0 },
       },
+      {
+        id: "tool-call",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "provider rejected final output" },
+      },
     ]);
-    expect(recovered.status).toBe("done");
-    expect(recovered.entries).toHaveLength(2);
-    expect(recovered.entries[0]).toMatchObject({ recoveredById: "retry" });
+
+    expect(summary.status).toBe("issue");
+    expect(summary.entries).toHaveLength(1);
+    expect(summary.entries[0]).toMatchObject({
+      kind: "tool",
+      item: {
+        id: "tool-call",
+        state: "output-error",
+        args: { command: "bun test" },
+        result: { error: "provider rejected final output" },
+        sourceIds: ["tool-call"],
+      },
+    });
   });
 
   test("parseReasoningSections splits bold headings into collapsible sections", () => {

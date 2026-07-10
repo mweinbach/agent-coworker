@@ -114,7 +114,6 @@ export type SessionFeedItem =
       args?: unknown;
       result?: unknown;
       completedAt?: string;
-      retryOf?: string;
       approval?: {
         approvalId: string;
         reason?: ApprovalRiskCode | unknown;
@@ -211,7 +210,6 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
       args: z.unknown().optional(),
       result: z.unknown().optional(),
       completedAt: isoTimestampSchema.optional(),
-      retryOf: z.string().trim().min(1).optional(),
       approval: z
         .object({
           approvalId: z.string().trim().min(1),

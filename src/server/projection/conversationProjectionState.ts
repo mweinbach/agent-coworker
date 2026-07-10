@@ -25,7 +25,6 @@ export type ConversationProjectionState = {
   reasoningTextHistoryInTurn: string[];
   toolByKey: Map<string, BufferedToolState>;
   toolOccurrenceByKey: Map<string, number>;
-  toolItemIdByCallId: Map<string, string>;
   latestToolKeyByTurnAndName: Map<string, string>;
   toolInputByKey: Map<string, string>;
   replayRuntime: ModelStreamReplayRuntime;
@@ -48,7 +47,6 @@ export function createConversationProjectionState(
     reasoningTextHistoryInTurn: [],
     toolByKey: new Map(),
     toolOccurrenceByKey: new Map(),
-    toolItemIdByCallId: new Map(),
     latestToolKeyByTurnAndName: new Map(),
     toolInputByKey: new Map(),
     replayRuntime: createModelStreamReplayRuntime(),
@@ -120,7 +118,6 @@ export function clearTurnProjectionState(
     state.reasoningOccurrenceByKey.clear();
     state.toolByKey.clear();
     state.toolOccurrenceByKey.clear();
-    state.toolItemIdByCallId.clear();
     state.latestToolKeyByTurnAndName.clear();
     state.toolInputByKey.clear();
   }

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { isTerminalProjectedToolState } from "../shared/projectionPolicy";
 import { SERVER_ERROR_CODES, SERVER_ERROR_SOURCES, type TodoItem } from "../types";
 import { type SessionFeedItem, serverErrorDataSchema } from "./sessionSnapshot";
 
@@ -61,7 +60,6 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
       state: projectedToolStateSchema,
       args: z.unknown().optional(),
       result: z.unknown().optional(),
-      retryOf: nonEmptyStringSchema.optional(),
       approval: z
         .object({
           approvalId: nonEmptyStringSchema,
@@ -119,6 +117,8 @@ function existingTsOr(ts: string, existing?: SessionFeedItem): string {
   return existing?.ts ?? ts;
 }
 
+import { isTerminalProjectedToolState } from "../shared/projectionPolicy";
+
 function existingToolItem(
   existing?: SessionFeedItem,
 ): Extract<SessionFeedItem, { kind: "tool" }> | null {
@@ -163,30 +163,25 @@ function toFeedItem(
         ? isTerminalProjectedToolState(existingTool.state)
         : false;
       const incomingTerminal = isTerminalProjectedToolState(item.state);
-      const preserveExistingTerminal =
-        existingTool !== null &&
-        existingTerminal &&
-        (!incomingTerminal || existingTool.state !== item.state);
-      const nextState = preserveExistingTerminal && existingTool ? existingTool.state : item.state;
-      const nextName = preserveExistingTerminal && existingTool ? existingTool.name : item.toolName;
+      const nextState =
+        existingTerminal && !incomingTerminal && existingTool ? existingTool.state : item.state;
+      const nextName =
+        existingTerminal && !incomingTerminal && existingTool ? existingTool.name : item.toolName;
       const completedAt = isTerminalProjectedToolState(nextState)
         ? (existingTool?.completedAt ?? (opts.completed ? ts : undefined))
         : existingTool?.completedAt;
-      const args = preserveExistingTerminal
-        ? existingTool?.args
-        : item.args !== undefined
-          ? item.args
-          : undefined;
+      const args =
+        existingTerminal && !incomingTerminal
+          ? existingTool?.args
+          : item.args !== undefined
+            ? item.args
+            : undefined;
       const result =
-        preserveExistingTerminal || (existingTerminal && item.result === undefined)
-          ? existingTool?.result
-          : item.result;
-      const approval = preserveExistingTerminal
-        ? existingTool?.approval
-        : (item.approval ?? undefined);
-      const retryOf = preserveExistingTerminal
-        ? existingTool?.retryOf
-        : (item.retryOf ?? existingTool?.retryOf);
+        existingTerminal && item.result === undefined ? existingTool?.result : item.result;
+      const approval =
+        existingTerminal && !incomingTerminal
+          ? existingTool?.approval
+          : (item.approval ?? undefined);
       return {
         id: item.id,
         kind: "tool",
@@ -195,7 +190,6 @@ function toFeedItem(
         state: nextState,
         ...(args !== undefined ? { args } : {}),
         ...(result !== undefined ? { result } : {}),
-        ...(retryOf !== undefined ? { retryOf } : {}),
         ...(approval ? { approval } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
       };

@@ -267,7 +267,7 @@ describe("desktop chat activity groups", () => {
     expect(summary.statusLabel).toBe("Needs review");
   });
 
-  test("summary keeps an explicitly retried failure visible and marks it recovered", () => {
+  test("summary preserves a failure after later same-tool success without retry lineage", () => {
     const summary = summarizeActivityGroup([
       {
         id: "r1",
@@ -299,30 +299,23 @@ describe("desktop chat activity groups", () => {
         ts: "2024-01-01T00:00:04.000Z",
         name: "commandExecution",
         state: "output-available",
-        retryOf: "t-failed",
         args: { command: "python3 build_report.py" },
         result: { exitCode: 0 },
       },
     ]);
 
-    expect(summary.status).toBe("done");
-    expect(summary.statusLabel).toBe("Done");
-    expect(summary.entries).toHaveLength(4);
+    expect(summary.status).toBe("issue");
+    expect(summary.statusLabel).toBe("Issue");
     expect(summary.entries.map((entry) => entry.item.id)).toEqual([
       "r1",
       "t-failed",
       "t-edit",
       "t-success",
     ]);
-    expect(summary.entries[1]).toMatchObject({
-      kind: "tool",
-      item: { id: "t-failed", state: "output-error" },
-      recoveredById: "t-success",
-    });
     expect(summary.toolCount).toBe(3);
   });
 
-  test("summary preserves a failed skill lookup when an unrelated tool later succeeds", () => {
+  test("summary preserves a failed skill lookup when an unrelated tool succeeds", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t-skill",
@@ -380,71 +373,8 @@ describe("desktop chat activity groups", () => {
     );
   });
 
-  test("summary does not infer retry lineage from repeated tool names and arguments", () => {
+  test("summary keeps denied tools in issue state ahead of pending approval", () => {
     const summary = summarizeActivityGroup([
-      {
-        id: "t-failed",
-        kind: "tool",
-        ts: "2024-01-01T00:00:02.000Z",
-        name: "bash",
-        state: "output-error",
-        args: { command: "bun test" },
-        result: { error: "failed" },
-      },
-      {
-        id: "t-success",
-        kind: "tool",
-        ts: "2024-01-01T00:00:03.000Z",
-        name: "bash",
-        state: "output-available",
-        args: { command: "bun test" },
-        result: { exitCode: 0 },
-      },
-    ]);
-
-    expect(summary.status).toBe("issue");
-    expect(summary.entries).toHaveLength(2);
-    expect(summary.entries[0]).not.toHaveProperty("recoveredById");
-  });
-
-  test("summary does not rewrite a terminal failure from a conflicting same-id update", () => {
-    const summary = summarizeActivityGroup([
-      {
-        id: "t1",
-        kind: "tool",
-        ts: "2024-01-01T00:00:01.000Z",
-        name: "bash",
-        state: "output-error",
-        result: { error: "failed" },
-      },
-      {
-        id: "t1",
-        kind: "tool",
-        ts: "2024-01-01T00:00:02.000Z",
-        name: "bash",
-        state: "output-available",
-        result: { exitCode: 0 },
-      },
-    ]);
-
-    expect(summary.status).toBe("issue");
-    expect(summary.entries).toHaveLength(2);
-    expect(summary.entries.map((entry) => entry.kind === "tool" && entry.item.state)).toEqual([
-      "output-error",
-      "output-available",
-    ]);
-  });
-
-  test("summary keeps the group in issue state when only one of multiple failures is recovered", () => {
-    const summary = summarizeActivityGroup([
-      {
-        id: "t-error",
-        kind: "tool",
-        ts: "2024-01-01T00:00:01.000Z",
-        name: "read",
-        state: "output-error",
-        result: { error: "missing" },
-      },
       {
         id: "t-denied",
         kind: "tool",
@@ -454,36 +384,9 @@ describe("desktop chat activity groups", () => {
         result: { denied: true },
       },
       {
-        id: "t-error-retry",
-        kind: "tool",
-        ts: "2024-01-01T00:00:03.000Z",
-        name: "read",
-        state: "output-available",
-        retryOf: "t-error",
-        result: "ok",
-      },
-    ]);
-
-    expect(summary.status).toBe("issue");
-    expect(summary.entries).toHaveLength(3);
-    expect(summary.entries[0]).toMatchObject({ recoveredById: "t-error-retry" });
-    expect(summary.entries[1]).not.toHaveProperty("recoveredById");
-  });
-
-  test("summary keeps unresolved failures ahead of pending approval in group status", () => {
-    const summary = summarizeActivityGroup([
-      {
-        id: "t-error",
-        kind: "tool",
-        ts: "2024-01-01T00:00:01.000Z",
-        name: "read",
-        state: "output-error",
-        result: { error: "missing" },
-      },
-      {
         id: "t-approval",
         kind: "tool",
-        ts: "2024-01-01T00:00:02.000Z",
+        ts: "2024-01-01T00:00:03.000Z",
         name: "bash",
         state: "approval-requested",
       },
@@ -491,41 +394,7 @@ describe("desktop chat activity groups", () => {
 
     expect(summary.status).toBe("issue");
     expect(summary.statusLabel).toBe("Issue");
-  });
-
-  test("summary recovers denied and error states only after a successful retry chain", () => {
-    const summary = summarizeActivityGroup([
-      {
-        id: "t-denied",
-        kind: "tool",
-        ts: "2024-01-01T00:00:01.000Z",
-        name: "bash",
-        state: "output-denied",
-        result: { denied: true },
-      },
-      {
-        id: "t-retry-error",
-        kind: "tool",
-        ts: "2024-01-01T00:00:02.000Z",
-        name: "bash",
-        state: "output-error",
-        retryOf: "t-denied",
-        result: { error: "still blocked" },
-      },
-      {
-        id: "t-retry-success",
-        kind: "tool",
-        ts: "2024-01-01T00:00:03.000Z",
-        name: "bash",
-        state: "output-available",
-        retryOf: "t-retry-error",
-        result: { exitCode: 0 },
-      },
-    ]);
-
-    expect(summary.status).toBe("done");
-    expect(summary.entries[0]).toMatchObject({ recoveredById: "t-retry-success" });
-    expect(summary.entries[1]).toMatchObject({ recoveredById: "t-retry-success" });
+    expect(summary.entries).toHaveLength(2);
   });
 
   test("summary collapses adjacent tool lifecycle updates into one trace row", () => {
@@ -587,7 +456,7 @@ describe("desktop chat activity groups", () => {
     expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
   });
 
-  test("summary preserves repeated completed tool calls without lifecycle identity", () => {
+  test("summary preserves repeated completed tools without shared lifecycle identity", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t1",
@@ -614,7 +483,7 @@ describe("desktop chat activity groups", () => {
     expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
   });
 
-  test("summary merges a generic row with a richer lifecycle update for the same call id", () => {
+  test("summary preserves richer completed rows with distinct lifecycle identities", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t1",
@@ -624,7 +493,7 @@ describe("desktop chat activity groups", () => {
         state: "output-available",
       },
       {
-        id: "t1",
+        id: "t2",
         kind: "tool",
         ts: "2024-01-01T00:00:03.000Z",
         name: "todoWrite",
@@ -635,18 +504,11 @@ describe("desktop chat activity groups", () => {
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
-    expect(toolEntries).toHaveLength(1);
-    expect(toolEntries[0]?.item).toMatchObject({
-      id: "t1",
-      name: "todoWrite",
-      state: "output-available",
-      args: { count: 4 },
-      result: { count: 4 },
-      sourceIds: ["t1"],
-    });
+    expect(toolEntries).toHaveLength(2);
+    expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
   });
 
-  test("summary merges a verbose string result with a compact summary result for the same tool call", () => {
+  test("summary preserves compact completed rows with distinct lifecycle identities", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t1",
@@ -658,7 +520,7 @@ describe("desktop chat activity groups", () => {
         result: "line 1\nline 2\nline 3",
       },
       {
-        id: "t1",
+        id: "t2",
         kind: "tool",
         ts: "2024-01-01T00:00:03.000Z",
         name: "read",
@@ -669,14 +531,40 @@ describe("desktop chat activity groups", () => {
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
-    expect(toolEntries).toHaveLength(1);
-    expect(toolEntries[0]?.item).toMatchObject({
-      id: "t1",
-      name: "read",
-      state: "output-available",
-      args: { filePath: "model.py", offset: 1, limit: 20 },
-      result: { chars: 18 },
-      sourceIds: ["t1"],
+    expect(toolEntries).toHaveLength(2);
+    expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
+  });
+
+  test("summary applies an authoritative final error to the same stable call id", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-available",
+        result: { exitCode: 0 },
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "provider rejected final output" },
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.entries).toHaveLength(1);
+    expect(summary.entries[0]).toMatchObject({
+      kind: "tool",
+      item: {
+        id: "t1",
+        state: "output-error",
+        result: { error: "provider rejected final output" },
+        sourceIds: ["t1"],
+      },
     });
   });
 

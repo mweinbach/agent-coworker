@@ -61,48 +61,13 @@ export type ModelStreamUpdate =
       text: string;
     }
   | { kind: "reasoning_end"; turnId: string; streamId: string; mode: "reasoning" | "summary" }
-  | {
-      kind: "tool_input_start";
-      turnId: string;
-      key: string;
-      name: string;
-      args?: unknown;
-      retryOf?: string;
-    }
+  | { kind: "tool_input_start"; turnId: string; key: string; name: string; args?: unknown }
   | { kind: "tool_input_delta"; turnId: string; key: string; delta: string }
-  | { kind: "tool_input_end"; turnId: string; key: string; name: string; retryOf?: string }
-  | {
-      kind: "tool_call";
-      turnId: string;
-      key: string;
-      name: string;
-      args?: unknown;
-      retryOf?: string;
-    }
-  | {
-      kind: "tool_result";
-      turnId: string;
-      key: string;
-      name: string;
-      result: unknown;
-      retryOf?: string;
-    }
-  | {
-      kind: "tool_error";
-      turnId: string;
-      key: string;
-      name: string;
-      error: unknown;
-      retryOf?: string;
-    }
-  | {
-      kind: "tool_output_denied";
-      turnId: string;
-      key: string;
-      name: string;
-      reason?: unknown;
-      retryOf?: string;
-    }
+  | { kind: "tool_input_end"; turnId: string; key: string; name: string }
+  | { kind: "tool_call"; turnId: string; key: string; name: string; args?: unknown }
+  | { kind: "tool_result"; turnId: string; key: string; name: string; result: unknown }
+  | { kind: "tool_error"; turnId: string; key: string; name: string; error: unknown }
+  | { kind: "tool_output_denied"; turnId: string; key: string; name: string; reason?: unknown }
   | { kind: "tool_approval_request"; turnId: string; approvalId: string; toolCall: unknown }
   | { kind: "source"; turnId: string; source: unknown }
   | { kind: "file"; turnId: string; file: unknown }
@@ -174,11 +139,6 @@ function toolKey(evt: ModelStreamChunkEvent): string {
 function toolName(evt: ModelStreamChunkEvent): string {
   const part = asPartRecord(evt.part);
   return asString(part.toolName) ?? "tool";
-}
-
-function toolRetryOf(evt: ModelStreamChunkEvent): string | undefined {
-  const part = asPartRecord(evt.part);
-  return asIdString(part.retryOf) ?? asIdString(part.retry_of);
 }
 
 function rawProviderKey(part: Record<string, unknown>, fallback: string): string {
@@ -514,7 +474,6 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         key: toolKey(evt),
         name: toolName(evt),
         args: part,
-        ...(toolRetryOf(evt) ? { retryOf: toolRetryOf(evt) } : {}),
       };
     case "tool_input_delta": {
       const delta = asLooseText(part.delta);
@@ -539,7 +498,6 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         turnId: evt.turnId,
         key: toolKey(evt),
         name: toolName(evt),
-        ...(toolRetryOf(evt) ? { retryOf: toolRetryOf(evt) } : {}),
       };
     case "tool_call":
       return {
@@ -548,7 +506,6 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         key: toolKey(evt),
         name: toolName(evt),
         args: part.input,
-        ...(toolRetryOf(evt) ? { retryOf: toolRetryOf(evt) } : {}),
       };
     case "tool_result":
       return {
@@ -557,7 +514,6 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         key: toolKey(evt),
         name: toolName(evt),
         result: part.output,
-        ...(toolRetryOf(evt) ? { retryOf: toolRetryOf(evt) } : {}),
       };
     case "tool_error":
       return {
@@ -566,7 +522,6 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         key: toolKey(evt),
         name: toolName(evt),
         error: part.error,
-        ...(toolRetryOf(evt) ? { retryOf: toolRetryOf(evt) } : {}),
       };
     case "tool_output_denied":
       return {
@@ -575,7 +530,6 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         key: toolKey(evt),
         name: toolName(evt),
         reason: part.reason,
-        ...(toolRetryOf(evt) ? { retryOf: toolRetryOf(evt) } : {}),
       };
     case "tool_approval_request":
       return {

@@ -22,7 +22,6 @@ export type BufferedToolState = {
   started: boolean;
   state: ProjectedToolState;
   result?: unknown;
-  retryOf?: string;
   approval?: {
     approvalId: string;
     reason?: unknown;

@@ -17,16 +17,6 @@ export function createToolProjection(state: ConversationProjectionState) {
     state.latestToolKeyByTurnAndName.set(toolTurnNameKey(turnId, name), fullKey);
   };
 
-  const rememberToolItemId = (turnId: string, key: string, itemId: string) => {
-    state.toolItemIdByCallId.set(`${turnId}:${key}`, itemId);
-    state.toolItemIdByCallId.set(key, itemId);
-  };
-
-  const resolveRetryItemId = (turnId: string, retryOf: string): string | undefined =>
-    state.toolItemIdByCallId.get(`${turnId}:${retryOf}`) ??
-    state.toolItemIdByCallId.get(retryOf) ??
-    (retryOf.startsWith("toolCall:") ? retryOf : undefined);
-
   const createToolState = (turnId: string, key: string, name: string) => {
     const fullKey = `${turnId}:${key}`;
     const nextOccurrence = (state.toolOccurrenceByKey.get(fullKey) ?? 0) + 1;
@@ -39,7 +29,6 @@ export function createToolProjection(state: ConversationProjectionState) {
       state: "input-streaming",
     };
     state.toolByKey.set(fullKey, next);
-    rememberToolItemId(turnId, key, next.itemId);
     state.toolInputByKey.delete(fullKey);
     rememberLatestToolKey(turnId, name, fullKey);
     return { fullKey, state: next };
@@ -55,7 +44,6 @@ export function createToolProjection(state: ConversationProjectionState) {
     const directState = state.toolByKey.get(fullKey);
     if (directState && !resolveOpts.startNewOccurrence) {
       directState.name = name;
-      rememberToolItemId(turnId, key, directState.itemId);
       rememberLatestToolKey(turnId, name, fullKey);
       return { fullKey, state: directState };
     }
@@ -79,7 +67,6 @@ export function createToolProjection(state: ConversationProjectionState) {
             latestState.inputText = latestInput;
           }
           latestState.name = name;
-          rememberToolItemId(turnId, key, latestState.itemId);
           rememberLatestToolKey(turnId, name, fullKey);
           return { fullKey, state: latestState };
         }
@@ -95,7 +82,6 @@ export function createToolProjection(state: ConversationProjectionState) {
     state: toolState.state,
     ...(toolState.args !== undefined ? { args: toolState.args } : {}),
     ...(toolState.result !== undefined ? { result: toolState.result } : {}),
-    ...(toolState.retryOf !== undefined ? { retryOf: toolState.retryOf } : {}),
     ...(toolState.approval ? { approval: toolState.approval } : {}),
   });
 
@@ -130,7 +116,6 @@ export function createToolProjection(state: ConversationProjectionState) {
 
   return {
     resolveToolState,
-    resolveRetryItemId,
     publishToolStartedOrCompleted,
     publishToolCompleted,
     failActiveToolStreamsForTurn,

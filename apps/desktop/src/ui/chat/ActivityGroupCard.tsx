@@ -291,10 +291,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
         );
 
         return (
-          <div
-            key={`${entry.item.id}:${entry.item.ts}:${entry.item.state}`}
-            data-activity-entry-kind="tool"
-          >
+          <div key={entry.item.id} data-activity-entry-kind="tool">
             <TimelineNode
               icon={
                 <TimelineToolIcon
@@ -310,14 +307,6 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
                     {formatting.title}
                   </span>
                   <ToolStateIndicator state={entry.item.state} />
-                  {entry.recoveredById ? (
-                    <span
-                      data-tool-recovery="retry"
-                      className="text-[10px] font-medium text-muted-foreground"
-                    >
-                      Recovered after retry
-                    </span>
-                  ) : null}
                 </div>
                 {formatting.subtitle && (
                   <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">

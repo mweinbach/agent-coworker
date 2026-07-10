@@ -227,7 +227,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
 
         return (
           <TimelineNode
-            key={`${entry.item.id}:${entry.item.ts}:${entry.item.state}`}
+            key={entry.item.id}
             iconName={toolIconName(formatting.title)}
             isLast={isLast}
           >
@@ -245,11 +245,6 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
                   {formatting.title}
                 </Text>
                 <ToolStateIndicator state={entry.item.state} />
-                {entry.recoveredById ? (
-                  <Text style={{ color: theme.success, fontSize: 11, fontWeight: "600" }}>
-                    Recovered after retry
-                  </Text>
-                ) : null}
               </View>
               {formatting.subtitle ? (
                 <Text

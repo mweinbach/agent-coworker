@@ -816,12 +816,6 @@ direct JSON-RPC errors, so clients that render only `item/*` notifications or hy
 `thread/read.coworkSnapshot` items can still distinguish terminal task-thread locks from active
 source-chat locks.
 
-Projected `toolCall` items may include `retryOf`, containing the projected item id of the tool call
-that this call explicitly retries. Clients may use only this lineage to present an earlier error or
-denial as recovered after a successful descendant retry. Matching tool names, arguments, or
-adjacency are not retry evidence; when `retryOf` is absent, clients must preserve prior failures as
-unresolved history.
-
 Ask/approval prompts still arrive as server requests, but the harness also emits matching projected `system` feed items so snapshots and live feeds stay aligned.
 
 `item/completed` should be treated as the latest snapshot for that projected item id. For long-lived items, especially `toolCall`, the harness may emit multiple `item/completed` notifications for the same id as the projected state advances.

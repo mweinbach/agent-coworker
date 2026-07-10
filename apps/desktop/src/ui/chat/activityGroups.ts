@@ -8,7 +8,7 @@ export type ActivityFeedItem = Extract<FeedItem, { kind: "reasoning" | "tool" }>
 type ToolTraceItem = Extract<FeedItem, { kind: "tool" }> & { sourceIds: string[] };
 type ActivityTraceEntry =
   | { kind: "reasoning"; item: Extract<FeedItem, { kind: "reasoning" }> }
-  | { kind: "tool"; item: ToolTraceItem; recoveredById?: string };
+  | { kind: "tool"; item: ToolTraceItem };
 
 export type ChatRenderItem =
   | { kind: "feed-item"; item: FeedItem }
@@ -66,10 +66,7 @@ function shouldMergeToolTraceItems(
   previous: ToolTraceItem,
   next: Extract<FeedItem, { kind: "tool" }>,
 ): boolean {
-  if (!previous.sourceIds.includes(next.id)) return false;
-  const previousState = effectiveToolState(previous);
-  const nextState = effectiveToolState(next);
-  return !isTerminalToolState(previousState) || previousState === nextState;
+  return previous.sourceIds.includes(next.id);
 }
 
 function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntry[] {
@@ -109,7 +106,6 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
           result: toolItem.result ?? previous.item.result,
           approval: toolItem.approval ?? previous.item.approval,
           completedAt: toolItem.completedAt ?? previous.item.completedAt,
-          retryOf: toolItem.retryOf ?? previous.item.retryOf,
           sourceIds: previous.item.sourceIds,
         },
       };
@@ -119,75 +115,16 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
     entries.push({ kind: "tool", item: { ...toolItem, sourceIds: [toolItem.id] } });
   }
 
-  const visibleEntries = markRecoveredToolFailures(entries);
-
-  if (visibleEntries.length === 0 && firstBlankReasoning) {
+  if (entries.length === 0 && firstBlankReasoning) {
     return [{ kind: "reasoning", item: firstBlankReasoning }];
   }
 
-  return visibleEntries;
+  return entries;
 }
 
-function markRecoveredToolFailures(entries: ActivityTraceEntry[]): ActivityTraceEntry[] {
-  const sourceIndex = new Map<string, number>();
-  const parentIndex = new Map<number, number>();
-
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    if (entry?.kind !== "tool") continue;
-    if (entry.item.retryOf) {
-      const parent = sourceIndex.get(entry.item.retryOf);
-      if (parent !== undefined) parentIndex.set(index, parent);
-    }
-    for (const sourceId of entry.item.sourceIds) {
-      sourceIndex.set(sourceId, index);
-    }
-  }
-
-  const recoveredByIndex = new Map<number, string>();
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    if (entry?.kind !== "tool" || effectiveToolState(entry.item) !== "output-available") {
-      continue;
-    }
-
-    const visited = new Set<number>();
-    let ancestor = parentIndex.get(index);
-    while (ancestor !== undefined && !visited.has(ancestor)) {
-      visited.add(ancestor);
-      const ancestorEntry = entries[ancestor];
-      if (
-        ancestorEntry?.kind === "tool" &&
-        (effectiveToolState(ancestorEntry.item) === "output-error" ||
-          effectiveToolState(ancestorEntry.item) === "output-denied")
-      ) {
-        recoveredByIndex.set(ancestor, entry.item.id);
-      }
-      ancestor = parentIndex.get(ancestor);
-    }
-  }
-
-  return entries.map((entry, index) => {
-    if (entry.kind !== "tool") return entry;
-    const recoveredById = recoveredByIndex.get(index);
-    return recoveredById ? { ...entry, recoveredById } : entry;
-  });
-}
-
-function deriveStatus(
-  toolEntries: Extract<ActivityTraceEntry, { kind: "tool" }>[],
-): ActivityGroupStatus {
-  const states = new Set<ToolFeedState>(toolEntries.map((entry) => effectiveToolState(entry.item)));
-  if (
-    toolEntries.some(
-      (entry) =>
-        entry.recoveredById === undefined &&
-        (effectiveToolState(entry.item) === "output-error" ||
-          effectiveToolState(entry.item) === "output-denied"),
-    )
-  ) {
-    return "issue";
-  }
+function deriveStatus(toolItems: ToolTraceItem[]): ActivityGroupStatus {
+  const states = new Set<ToolFeedState>(toolItems.map((item) => effectiveToolState(item)));
+  if (states.has("output-error") || states.has("output-denied")) return "issue";
   if (states.has("approval-requested")) return "approval";
   if (states.has("input-streaming") || states.has("input-available")) return "running";
   return "done";
@@ -309,10 +246,11 @@ export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroup
         entry.kind === "reasoning",
     )
     .map((entry) => entry.item);
-  const toolEntries = entries.filter(
-    (entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> => entry.kind === "tool",
-  );
-  const toolItems = toolEntries.map((entry) => entry.item);
+  const toolItems = entries
+    .filter(
+      (entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> => entry.kind === "tool",
+    )
+    .map((entry) => entry.item);
   const primaryReasoning =
     [...reasoningItems].reverse().find((item) => item.mode === "summary") ??
     reasoningItems[reasoningItems.length - 1];
@@ -325,7 +263,7 @@ export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroup
         ? formatToolCard(latestTool.name, latestTool.args, latestTool.result, latestTool.state)
             .subtitle
         : "Reasoning and tool activity";
-  const status = hasPendingReasoning ? "running" : deriveStatus(toolEntries);
+  const status = hasPendingReasoning ? "running" : deriveStatus(toolItems);
 
   return {
     elapsedLabel: activityElapsedLabel(items),

@@ -641,32 +641,6 @@ describe("normalizeModelStreamPart branches", () => {
       expect(result.part.toolCallId).toBe("id-1");
     });
 
-    test("preserves explicit retry lineage", () => {
-      const camelCase = normalizeModelStreamPart(
-        {
-          type: "tool-result",
-          toolCallId: "retry-1",
-          toolName: "bash",
-          retryOf: "failed-1",
-          output: "ok",
-        },
-        defaultOpts,
-      );
-      const snakeCase = normalizeModelStreamPart(
-        {
-          type: "tool-error",
-          toolCallId: "retry-2",
-          toolName: "bash",
-          retry_of: "failed-2",
-          error: "failed again",
-        },
-        defaultOpts,
-      );
-
-      expect(camelCase.part.retryOf).toBe("failed-1");
-      expect(snakeCase.part.retryOf).toBe("failed-2");
-    });
-
     test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-result", toolName: "read", output: "ok" },

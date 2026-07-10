@@ -130,6 +130,20 @@ function orderResearchIds(byId: Record<string, ResearchRecord>): string[] {
     .map((research) => research.id);
 }
 
+function removeResearchAndReparentChildren(
+  byId: Record<string, ResearchRecord>,
+  researchId: string,
+): Record<string, ResearchRecord> {
+  const next = { ...byId };
+  delete next[researchId];
+  for (const [id, research] of Object.entries(next)) {
+    if (research.parentResearchId === researchId) {
+      next[id] = { ...research, parentResearchId: null };
+    }
+  }
+  return next;
+}
+
 function normalizeSelectedResearchId(
   selectedResearchId: string | null,
   researchOrder: string[],
@@ -214,6 +228,7 @@ export function createResearchActions(
   | "startResearch"
   | "cancelResearch"
   | "renameResearch"
+  | "deleteResearch"
   | "sendResearchFollowUp"
   | "setResearchDraftSettings"
   | "exportResearch"
@@ -458,6 +473,25 @@ export function createResearchActions(
               researchById,
               researchOrder: orderResearchIds(researchById),
               researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
+            };
+          });
+          return;
+        }
+
+        if (message.method === "research/deleted") {
+          set((s) => {
+            if (!(researchId in s.researchById) && !s.researchOrder.includes(researchId)) {
+              return {
+                researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
+              };
+            }
+            const researchById = removeResearchAndReparentChildren(s.researchById, researchId);
+            const researchOrder = orderResearchIds(researchById);
+            return {
+              researchById,
+              researchOrder,
+              researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
+              selectedResearchId: s.selectedResearchId === researchId ? null : s.selectedResearchId,
             };
           });
         }
@@ -897,6 +931,68 @@ export function createResearchActions(
           "Unable to rename research",
           error instanceof Error ? error.message : String(error),
         );
+      }
+    },
+
+    deleteResearch: async (researchId) => {
+      const previous = get().researchById[researchId];
+      const previousChildren = Object.values(get().researchById).filter(
+        (research) => research.parentResearchId === researchId,
+      );
+      const restoreOptimisticDelete = () => {
+        if (!previous) return;
+        set((s) => {
+          const researchById = {
+            ...s.researchById,
+            [previous.id]: previous,
+          };
+          for (const child of previousChildren) {
+            const current = researchById[child.id];
+            if (current) {
+              researchById[child.id] = {
+                ...current,
+                parentResearchId: researchId,
+              };
+            }
+          }
+          return {
+            researchById,
+            researchOrder: orderResearchIds(researchById),
+          };
+        });
+      };
+      // Optimistic remove from list.
+      set((s) => {
+        const researchById = removeResearchAndReparentChildren(s.researchById, researchId);
+        const researchOrder = orderResearchIds(researchById);
+        return {
+          researchById,
+          researchOrder,
+          selectedResearchId: s.selectedResearchId === researchId ? null : s.selectedResearchId,
+        };
+      });
+      try {
+        const workspaceId = await ensureResearchTransportWorkspace();
+        if (!workspaceId) {
+          restoreOptimisticDelete();
+          return false;
+        }
+        const result = await requestResearchResult(deps, get, set, workspaceId, "research/delete", {
+          researchId,
+        });
+        if (!result.deleted && previous) {
+          restoreOptimisticDelete();
+          return false;
+        }
+        return result.deleted === true;
+      } catch (error) {
+        restoreOptimisticDelete();
+        notify(
+          "error",
+          "Unable to delete research",
+          error instanceof Error ? error.message : String(error),
+        );
+        return false;
       }
     },
 

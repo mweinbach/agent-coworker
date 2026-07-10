@@ -54,12 +54,12 @@ describe("desktop sidebar helpers", () => {
     ).toEqual([draftChat, activeChat]);
   });
 
-  test("caps visible threads at 10 by default and reports hidden overflow", () => {
+  test("caps visible threads at 5 by default and reports hidden overflow", () => {
     const threads = Array.from({ length: 12 }, (_, index) => ({ id: `thread-${index}` }));
 
     expect(getVisibleSidebarThreads(threads, false)).toEqual({
-      visibleThreads: threads.slice(0, 10),
-      hiddenThreadCount: 2,
+      visibleThreads: threads.slice(0, 5),
+      hiddenThreadCount: 7,
     });
   });
 

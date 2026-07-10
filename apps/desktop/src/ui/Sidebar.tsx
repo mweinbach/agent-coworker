@@ -30,21 +30,24 @@ import {
   type WorkspaceRecord,
 } from "../app/types";
 import { Button } from "../components/ui/button";
-import { confirmAction, isPackagedDesktopApp, showContextMenu } from "../lib/desktopCommands";
+import { Input } from "../components/ui/input";
+import {
+  confirmAction,
+  isPackagedDesktopApp,
+  showContextMenu,
+  showNotification,
+} from "../lib/desktopCommands";
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
 import { SidebarOneOffChatItem } from "./sidebar/SidebarOneOffChatItem";
 import { SidebarSectionFrame } from "./sidebar/SidebarSectionFrame";
-import {
-  MAX_VISIBLE_THREADS,
-  SidebarWorkspaceItem,
-  type WorkspaceMoveDirection,
-} from "./sidebar/SidebarWorkspaceItem";
+import { SidebarWorkspaceItem, type WorkspaceMoveDirection } from "./sidebar/SidebarWorkspaceItem";
 import { useSidebarPersistence } from "./sidebar/useSidebarPersistence";
 import {
   getVisibleSidebarThreads,
   groupStandardChatThreadsByWorkspace,
+  MAX_VISIBLE_SIDEBAR_ITEMS,
   shouldEmphasizeWorkspaceRow,
   swapSidebarItemsById,
 } from "./sidebarHelpers";
@@ -71,7 +74,6 @@ export const Sidebar = memo(function Sidebar() {
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const setWorkspacesOrder = useAppStore((s) => s.setWorkspacesOrder);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
-  const newThread = useAppStore((s) => s.newThread);
   const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const openNewTask = useAppStore((s) => s.openNewTask);
   const selectTask = useAppStore((s) => s.selectTask);
@@ -79,6 +81,7 @@ export const Sidebar = memo(function Sidebar() {
   const generateAdvancedMemoryForThread = useAppStore((s) => s.generateAdvancedMemoryForThread);
   const selectThread = useAppStore((s) => s.selectThread);
   const renameThread = useAppStore((s) => s.renameThread);
+  const archiveThread = useAppStore((s) => s.archiveThread);
   const openSkills = useAppStore((s) => s.openSkills);
   const openResearch = useAppStore((s) => s.openResearch);
   const openSettings = useAppStore((s) => s.openSettings);
@@ -86,6 +89,7 @@ export const Sidebar = memo(function Sidebar() {
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [threadSearch, setThreadSearch] = useState("");
   const {
     expandedWorkspaceSections,
     setExpandedWorkspaceSections,
@@ -199,12 +203,22 @@ export const Sidebar = memo(function Sidebar() {
     return groupStandardChatThreadsByWorkspace(threads);
   }, [threads]);
 
+  const threadSearchQuery = threadSearch.trim().toLowerCase();
+  const threadMatchesSearch = useCallback(
+    (title: string | undefined) => {
+      if (!threadSearchQuery) return true;
+      return (title || "New chat").toLowerCase().includes(threadSearchQuery);
+    },
+    [threadSearchQuery],
+  );
+
   const oneOffChatThreads = useMemo(
     () =>
       chatWorkspaces
         .flatMap((workspace) => threadsByWorkspaceId.get(workspace.id) ?? [])
+        .filter((thread) => threadMatchesSearch(thread.title))
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
-    [chatWorkspaces, threadsByWorkspaceId],
+    [chatWorkspaces, threadMatchesSearch, threadsByWorkspaceId],
   );
   const orderedSectionKeys = useMemo(
     () => normalizeSidebarSectionOrder(sidebarSectionOrder),
@@ -346,7 +360,7 @@ export const Sidebar = memo(function Sidebar() {
     ]);
 
     if (result === "new_project_chat") {
-      void newThread({ workspaceId: wsId, scope: "project" });
+      void openNewChatLanding({ target: { kind: "project", workspaceId: wsId } });
     } else if (result === "new_project_task") {
       void openNewTask(wsId);
     } else if (result === "select") {
@@ -413,6 +427,27 @@ export const Sidebar = memo(function Sidebar() {
     [deleteThreadHistory],
   );
 
+  const archiveThreadWithConfirm = useCallback(
+    async (tId: string, tTitle: string) => {
+      const confirmed = await confirmAction({
+        title: "Archive chat",
+        message: `Archive "${tTitle}"?`,
+        detail: "You can restore it later from Settings → Chats.",
+        confirmLabel: "Archive",
+        cancelLabel: "Cancel",
+        kind: "warning",
+        defaultAction: "cancel",
+      });
+      if (!confirmed) return;
+      await archiveThread(tId);
+      void showNotification({
+        title: "Chat archived",
+        body: `"${tTitle}" was archived. Restore it anytime from Settings → Chats.`,
+      }).catch(() => {});
+    },
+    [archiveThread],
+  );
+
   const displayTitleForThread = useCallback(
     (tId: string): string => {
       const thread = threads.find((entry) => entry.id === tId);
@@ -430,6 +465,8 @@ export const Sidebar = memo(function Sidebar() {
     e.stopPropagation();
 
     const result = await showContextMenu([
+      { id: "rename", label: "Rename" },
+      { id: "archive", label: "Archive" },
       ...(!isPackagedDesktopApp()
         ? [
             {
@@ -442,7 +479,11 @@ export const Sidebar = memo(function Sidebar() {
       { id: "delete_history", label: "Delete session history" },
     ]);
 
-    if (result === "generate_memory") {
+    if (result === "rename") {
+      startEditing(tId, tTitle);
+    } else if (result === "archive") {
+      void archiveThreadWithConfirm(tId, tTitle);
+    } else if (result === "generate_memory") {
       generateMemoryForThread(tId);
     } else if (result === "delete_history") {
       void deleteThreadHistoryWithConfirm(tId, tTitle);
@@ -452,18 +493,20 @@ export const Sidebar = memo(function Sidebar() {
   const workspaceItems = visibleProjectWorkspaces.map((workspace) => {
     const active = workspace.id === activeProjectWorkspaceId;
     const expanded = expandedWorkspaceSections[workspace.id] ?? false;
-    const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
+    const workspaceThreads = (threadsByWorkspaceId.get(workspace.id) ?? []).filter((thread) =>
+      threadMatchesSearch(thread.title),
+    );
     const workspaceTasks = taskSummariesByWorkspaceId[workspace.id] ?? [];
     const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
       active,
       sidebarSelectedThreadId,
       workspaceThreads.map((thread) => thread.id),
     );
-    const showAllThreads = expandedThreadLists[workspace.id] === true;
+    const showAllThreads = threadSearchQuery ? true : expandedThreadLists[workspace.id] === true;
     const { visibleThreads, hiddenThreadCount } = getVisibleSidebarThreads(
       workspaceThreads,
       showAllThreads,
-      MAX_VISIBLE_THREADS,
+      MAX_VISIBLE_SIDEBAR_ITEMS,
     );
 
     return (
@@ -502,6 +545,7 @@ export const Sidebar = memo(function Sidebar() {
         canGenerateMemoryForThread={canGenerateMemoryForThread}
         onGenerateMemoryForThread={generateMemoryForThread}
         onDeleteHistoryForThread={(tId, tTitle) => void deleteThreadHistoryWithConfirm(tId, tTitle)}
+        onArchiveThread={(tId, tTitle) => void archiveThreadWithConfirm(tId, tTitle)}
       />
     );
   });
@@ -555,7 +599,10 @@ export const Sidebar = memo(function Sidebar() {
                 showAllChats && "sidebar-chats-scroll-container pr-1",
               )}
             >
-              {(showAllChats ? oneOffChatThreads : oneOffChatThreads.slice(0, 5)).map((thread) => (
+              {(showAllChats || threadSearchQuery
+                ? oneOffChatThreads
+                : oneOffChatThreads.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS)
+              ).map((thread) => (
                 <SidebarOneOffChatItem
                   key={thread.id}
                   editInputRef={editInputRef}
@@ -566,6 +613,7 @@ export const Sidebar = memo(function Sidebar() {
                   onEditingTitleChange={setEditingTitle}
                   onStartEditing={startEditing}
                   onThreadContextMenu={handleThreadContextMenu}
+                  onArchive={(tId, tTitle) => void archiveThreadWithConfirm(tId, tTitle)}
                   selectedThreadId={sidebarSelectedThreadId}
                   selectThread={handleSelectThread}
                   thread={thread}
@@ -578,14 +626,16 @@ export const Sidebar = memo(function Sidebar() {
                 />
               ))}
             </div>
-            {oneOffChatThreads.length > 5 ? (
+            {!threadSearchQuery && oneOffChatThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
               <Button
                 className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
                 onClick={() => setShowAllChats((prev) => !prev)}
                 type="button"
                 variant="ghost"
               >
-                {showAllChats ? "Show less" : `Show ${oneOffChatThreads.length - 5} more`}
+                {showAllChats
+                  ? "Show less"
+                  : `Show ${oneOffChatThreads.length - MAX_VISIBLE_SIDEBAR_ITEMS} more`}
               </Button>
             ) : null}
           </div>
@@ -687,10 +737,11 @@ export const Sidebar = memo(function Sidebar() {
             <Button
               variant="ghost"
               size="sm"
-              aria-current={view === "settings" ? "page" : undefined}
+              aria-current={isOnNewChatLanding ? "page" : undefined}
               className={cn(
                 "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
                 "hover:bg-foreground/[0.045] hover:text-foreground",
+                isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
               )}
               onClick={() => void openNewChatLanding()}
             >
@@ -704,9 +755,11 @@ export const Sidebar = memo(function Sidebar() {
         <Button
           variant="ghost"
           size="sm"
+          aria-current={isOnNewChatLanding ? "page" : undefined}
           className={cn(
             "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
             "hover:bg-foreground/[0.045] hover:text-foreground",
+            isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
           )}
           onClick={() => void openNewChatLanding()}
         >
@@ -714,6 +767,15 @@ export const Sidebar = memo(function Sidebar() {
           New Chat
         </Button>
       ) : null}
+      <div className="px-0.5 pb-0.5">
+        <Input
+          value={threadSearch}
+          onChange={(event) => setThreadSearch(event.target.value)}
+          placeholder="Search chats"
+          aria-label="Search chats"
+          className="h-8 rounded-lg border-border/55 bg-foreground/[0.03] px-2.5 text-[13px] shadow-none"
+        />
+      </div>
       {tasksEnabled ? (
         <Button
           variant="ghost"

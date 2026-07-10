@@ -97,6 +97,7 @@ type ThreadStoreState = {
   setComposerDraft(threadId: string, text: string): void;
   submitComposer(threadId: string): void;
   appendOptimisticUserMessage(threadId: string, text: string, clientMessageId: string): void;
+  removeOptimisticUserMessage(threadId: string, clientMessageId: string): void;
   interruptThread(threadId: string): void;
   clearAll(): void;
   syncRemoteThreads(
@@ -567,6 +568,26 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       const nextSnapshot = {
         ...snapshot,
         feed: [...snapshot.feed, userItem],
+      };
+      return {
+        snapshots: {
+          ...current.snapshots,
+          [threadId]: nextSnapshot,
+        },
+        threads: updateThreadList(current, threadId, nextSnapshot),
+      };
+    });
+    scheduleThreadCachePersist(get);
+  },
+  removeOptimisticUserMessage(threadId, clientMessageId) {
+    set((current) => {
+      const snapshot = current.snapshots[threadId];
+      if (!snapshot?.feed.some((item) => item.id === clientMessageId)) {
+        return current;
+      }
+      const nextSnapshot = {
+        ...snapshot,
+        feed: snapshot.feed.filter((item) => item.id !== clientMessageId),
       };
       return {
         snapshots: {

@@ -47,8 +47,15 @@ function resolveVariant({
 
 function StartingContent() {
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="text-lg font-semibold text-foreground">Starting...</div>
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+      <div
+        className="size-10 rounded-2xl border border-border/60 bg-primary/15 shadow-sm"
+        aria-hidden
+      />
+      <div className="text-lg font-semibold tracking-tight text-foreground">Starting Cowork</div>
+      <div className="max-w-sm text-sm text-muted-foreground">
+        Loading your workspace shell and reconnecting sessions.
+      </div>
     </div>
   );
 }
@@ -56,7 +63,7 @@ function StartingContent() {
 function ErrorContent({ startupError, init }: { startupError: string; init: () => Promise<void> }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <div className="text-xl font-semibold text-foreground">Recovered</div>
+      <div className="text-xl font-semibold text-foreground">Couldn&apos;t start</div>
       <div className="max-w-xl text-sm text-muted-foreground">{startupError}</div>
       <Button variant="outline" type="button" onClick={() => void init()}>
         Retry

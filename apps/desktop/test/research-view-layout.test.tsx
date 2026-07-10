@@ -9,6 +9,7 @@ const noop = () => {};
 const { useAppStore } = await import("../src/app/store");
 const { DEFAULT_RESEARCH_SETTINGS } = await import("../src/app/types");
 const { ResearchView } = await import("../src/ui/ResearchView");
+const { collectResearchSubtreeIds } = await import("../src/ui/research/ResearchCardGrid");
 
 function resetAppStore(overrides: Record<string, unknown> = {}) {
   const state = useAppStore.getInitialState();
@@ -186,6 +187,101 @@ describe("research view layout", () => {
         root.unmount();
       });
     } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
+  test("defines hide behavior over the complete research follow-up subtree", () => {
+    const parent = {
+      id: "research-parent",
+      parentResearchId: null,
+    };
+    const child = {
+      id: "research-child",
+      parentResearchId: parent.id,
+    };
+    const grandchild = {
+      id: "research-grandchild",
+      parentResearchId: child.id,
+    };
+    const sibling = {
+      id: "research-sibling",
+      parentResearchId: null,
+    };
+
+    expect(
+      collectResearchSubtreeIds([parent, child, grandchild, sibling] as never, parent.id),
+    ).toEqual(new Set([parent.id, child.id, grandchild.id]));
+  });
+
+  test("restores hidden research and its follow-ups from the empty state", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+      const parent = {
+        id: "research-hidden-parent",
+        parentResearchId: null,
+        title: "Hidden parent",
+        prompt: "Parent prompt",
+        status: "completed",
+        interactionId: "interaction-parent",
+        lastEventId: null,
+        inputs: { files: [] },
+        settings: DEFAULT_RESEARCH_SETTINGS,
+        outputsMarkdown: "",
+        thoughtSummaries: [],
+        sources: [],
+        createdAt: "2026-04-21T21:00:00.000Z",
+        updatedAt: "2026-04-21T21:10:00.000Z",
+        error: null,
+      };
+      const child = {
+        ...parent,
+        id: "research-hidden-child",
+        parentResearchId: parent.id,
+        title: "Hidden follow-up",
+        updatedAt: "2026-04-21T21:12:00.000Z",
+      };
+      harness.dom.window.localStorage.setItem(
+        "cowork.research.hiddenIds",
+        JSON.stringify([parent.id, child.id]),
+      );
+      resetAppStore({
+        researchById: { [parent.id]: parent, [child.id]: child },
+        researchOrder: [child.id, parent.id],
+      });
+
+      await act(async () => {
+        root?.render(createElement(ResearchView));
+      });
+
+      expect(container.querySelectorAll('[role="option"]')).toHaveLength(0);
+      const restoreButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Restore hidden research (2)"),
+      );
+      expect(restoreButton).toBeDefined();
+
+      await act(async () => {
+        restoreButton?.click();
+      });
+
+      expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
+      expect(container.textContent).toContain("Hidden parent");
+      expect(container.textContent).toContain("Hidden follow-up");
+      expect(harness.dom.window.localStorage.getItem("cowork.research.hiddenIds")).toBe("[]");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       resetAppStore();
       harness.restore();
     }

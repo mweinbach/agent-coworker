@@ -159,6 +159,50 @@ function findLatestSandboxApprovalPrompt(
   return latest;
 }
 
+/** Draft map key for New Chat landing (`selectedThreadId === null`). */
+const LANDING_COMPOSER_DRAFT_KEY = "__landing__";
+
+function composerDraftKey(threadId: string | null | undefined): string {
+  return threadId ?? LANDING_COMPOSER_DRAFT_KEY;
+}
+
+/** Save active composer draft for fromThreadId and restore toThreadId's draft. */
+function swapComposerDraft(
+  state: { composerText: string; composerTextByThreadId?: Record<string, string> },
+  fromThreadId: string | null | undefined,
+  toThreadId: string | null | undefined,
+): { composerText: string; composerTextByThreadId: Record<string, string> } {
+  const nextById = { ...(state.composerTextByThreadId ?? {}) };
+  const fromKey = composerDraftKey(fromThreadId);
+  const toKey = composerDraftKey(toThreadId);
+  if (fromKey !== toKey) {
+    const trimmed = state.composerText ?? "";
+    if (trimmed.length > 0) nextById[fromKey] = trimmed;
+    else delete nextById[fromKey];
+  }
+  const restored = typeof nextById[toKey] === "string" ? nextById[toKey] : "";
+  return { composerText: restored, composerTextByThreadId: nextById };
+}
+
+function clearComposerDraftForThread(
+  state: {
+    composerText: string;
+    composerTextByThreadId?: Record<string, string>;
+    selectedThreadId?: string | null;
+  },
+  threadId: string | null | undefined,
+): { composerText: string; composerTextByThreadId: Record<string, string> } {
+  const base = state.composerTextByThreadId ?? {};
+  if (!threadId) return { composerText: "", composerTextByThreadId: base };
+  const nextById = { ...base };
+  delete nextById[threadId];
+  // Only blank the live composer when it still belongs to the sent thread.
+  // If the user switched chats while send awaited network work, keep the new
+  // thread's draft in `composerText` and only drop the sender's stored draft.
+  const composerText = state.selectedThreadId === threadId ? "" : (state.composerText ?? "");
+  return { composerText, composerTextByThreadId: nextById };
+}
+
 export async function hydrateThreadSelection(
   get: StoreGet,
   set: StoreSet,
@@ -355,20 +399,25 @@ export async function hydrateThreadSelection(
   if (thread.draft) {
     if (!isOperationCurrent()) return;
     const selectedTaskId = selectedTaskIdForThread(thread);
-    set((state) => ({
-      selectedThreadId: threadId,
-      selectedWorkspaceId: thread.workspaceId,
-      selectedTaskId,
-      view: options.preserveView ? state.view : "chat",
-      threadRuntimeById: {
-        ...state.threadRuntimeById,
-        [threadId]: {
-          ...state.threadRuntimeById[threadId],
-          hydrating: false,
-          transcriptOnly: false,
+    set((state) => {
+      const draft = swapComposerDraft(state, state.selectedThreadId, threadId);
+      return {
+        selectedThreadId: threadId,
+        selectedWorkspaceId: thread.workspaceId,
+        selectedTaskId,
+        view: options.preserveView ? state.view : "chat",
+        composerText: draft.composerText,
+        composerTextByThreadId: draft.composerTextByThreadId,
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId],
+            hydrating: false,
+            transcriptOnly: false,
+          },
         },
-      },
-    }));
+      };
+    });
     syncDesktopStateCache(get);
     return;
   }
@@ -440,20 +489,27 @@ export async function hydrateThreadSelection(
   const requestId = beginThreadSelectionRequest(threadId);
   const selectedTaskId = selectedTaskIdForThread(thread);
   if (!isOperationCurrent()) return;
-  set((state) => ({
-    selectedThreadId: threadId,
-    selectedWorkspaceId: thread.workspaceId,
-    selectedTaskId,
-    view: options.preserveView ? state.view : "chat",
-    threadRuntimeById: {
-      ...state.threadRuntimeById,
-      [threadId]: {
-        ...state.threadRuntimeById[threadId],
-        hydrating: !alreadyLoaded && !matchingCachedSnapshot,
-        transcriptOnly: false,
+  set((state) => {
+    if (!isOperationCurrent()) return {};
+    const draft = swapComposerDraft(state, state.selectedThreadId, threadId);
+    return {
+      selectedThreadId: threadId,
+      selectedWorkspaceId: thread.workspaceId,
+      selectedTaskId,
+      view: options.preserveView ? state.view : "chat",
+      composerText: draft.composerText,
+      composerTextByThreadId: draft.composerTextByThreadId,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          hydrating: !alreadyLoaded && !matchingCachedSnapshot,
+          transcriptOnly: false,
+        },
       },
-    },
-  }));
+    };
+  });
+  if (!isOperationCurrent()) return;
   syncDesktopStateCache(get);
 
   let appliedCachedSnapshot = false;
@@ -977,7 +1033,7 @@ export function createThreadActions(
 
       const threadId = makeId();
       const createdAt = nowIso();
-      const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New thread";
+      const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New chat";
 
       const thread: ThreadRecord = {
         id: threadId,
@@ -993,14 +1049,21 @@ export function createThreadActions(
         draft: !createSessionImmediately,
       };
 
-      set((s) => ({
-        threads: [thread, ...s.threads],
-        selectedThreadId: threadId,
-        selectedTaskId: null,
-        view: "chat",
-        composerText: "",
-        newChatLandingTarget: null,
-      }));
+      set((s) => {
+        const draft = swapComposerDraft(s, s.selectedThreadId, threadId);
+        return {
+          threads: [thread, ...s.threads],
+          selectedThreadId: threadId,
+          selectedTaskId: null,
+          view: "chat",
+          composerText: "",
+          composerTextByThreadId: {
+            ...draft.composerTextByThreadId,
+            // New thread starts empty even if draft map had a stale id collision.
+          },
+          newChatLandingTarget: null,
+        };
+      });
       ensureThreadRuntime(get, set, threadId);
       set((s) => ({
         threadRuntimeById: {
@@ -1071,12 +1134,16 @@ export function createThreadActions(
         (opts?.defaultTargetKind === "oneOff"
           ? { kind: "oneOff" }
           : resolveDefaultNewChatTarget(state.workspaces, state.selectedWorkspaceId));
-      set({
-        selectedThreadId: null,
-        selectedTaskId: null,
-        view: "chat",
-        composerText: "",
-        newChatLandingTarget: landingTarget,
+      set((s) => {
+        const draft = swapComposerDraft(s, s.selectedThreadId, null);
+        return {
+          selectedThreadId: null,
+          selectedTaskId: null,
+          view: "chat",
+          composerText: draft.composerText,
+          composerTextByThreadId: draft.composerTextByThreadId,
+          newChatLandingTarget: landingTarget,
+        };
       });
       syncDesktopStateCache(get);
       await persistNow(get);
@@ -1209,7 +1276,7 @@ export function createThreadActions(
             arguments: taskCommand[1]?.trim() ?? "",
             clientMessageId: makeId(),
           });
-          set({ composerText: "" });
+          set((state) => clearComposerDraftForThread(state, activeThreadId));
           return true;
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -1239,7 +1306,7 @@ export function createThreadActions(
           references,
         });
         if (!started) return false;
-        set({ composerText: "" });
+        set((state) => clearComposerDraftForThread(state, activeThreadId));
         return true;
       }
 
@@ -1251,7 +1318,7 @@ export function createThreadActions(
           references,
         });
         if (!reconnected) return false;
-        set({ composerText: "" });
+        set((state) => clearComposerDraftForThread(state, activeThreadId));
         return true;
       }
 
@@ -1267,7 +1334,7 @@ export function createThreadActions(
       if (!accepted) return false;
       if (busyPolicy === "steer" && rt?.busy) return true;
 
-      set({ composerText: "" });
+      set((state) => clearComposerDraftForThread(state, activeThreadId));
       return true;
     },
 
@@ -1429,7 +1496,14 @@ export function createThreadActions(
       }
     },
 
-    setComposerText: (text) => set({ composerText: text }),
+    setComposerText: (text) =>
+      set((state) => {
+        const draftKey = composerDraftKey(state.selectedThreadId);
+        const nextById = { ...(state.composerTextByThreadId ?? {}) };
+        if (text.length > 0) nextById[draftKey] = text;
+        else delete nextById[draftKey];
+        return { composerText: text, composerTextByThreadId: nextById };
+      }),
 
     setInjectContext: (v) => set({ injectContext: v }),
 
@@ -1462,7 +1536,7 @@ export function createThreadActions(
         approved,
       }));
       if (!sent) {
-        return;
+        return false;
       }
       appendThreadTranscript(threadId, "client", {
         type: "approval_response",
@@ -1487,6 +1561,7 @@ export function createThreadActions(
         else delete nextSandbox[threadId];
         return { promptModal, sandboxApprovalsByThread: nextSandbox };
       });
+      return true;
     },
 
     dismissPrompt: () => {

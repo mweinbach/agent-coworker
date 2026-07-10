@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -92,10 +92,6 @@ async function flushUi() {
 }
 
 describe("canvas window lifecycle", () => {
-  afterAll(() => {
-    mock.restore();
-  });
-
   beforeEach(() => {
     canvasMounts = 0;
     canvasUnmounts = 0;
@@ -171,7 +167,7 @@ describe("canvas window lifecycle", () => {
         });
 
         expect(
-          harness.dom.window.document.querySelector('[aria-label="Open canvas in window"]'),
+          harness.dom.window.document.querySelector('button[aria-label="Open canvas in window"]'),
         ).toBeNull();
         expect(showCanvasWindowMock).not.toHaveBeenCalled();
         expect(useAppStore.getState().filePreview).toEqual({
@@ -207,7 +203,7 @@ describe("canvas window lifecycle", () => {
         await flushUi();
       });
       const popOut = harness.dom.window.document.querySelector(
-        '[aria-label="Open canvas in window"]',
+        'button[aria-label="Open canvas in window"]',
       );
       if (!(popOut instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing pop-out button");

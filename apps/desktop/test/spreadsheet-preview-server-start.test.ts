@@ -66,7 +66,9 @@ describe("spreadsheet workbook workspace startup", () => {
   });
 
   test("starts the workspace server before requesting workbook data", async () => {
+    let serverUrlAtRequest: string | null | undefined;
     const requestMock = mock(async (method: string, params?: Record<string, unknown>) => {
+      serverUrlAtRequest = useAppStore.getState().workspaceRuntimeById["ws-popup"]?.serverUrl;
       expect(method).toBe("cowork/workspace/spreadsheet/workbook");
       expect(params?.cwd).toBe("/Users/mweinbach/Projects/preview-workspace");
       return {
@@ -99,6 +101,7 @@ describe("spreadsheet workbook workspace startup", () => {
     const result = await useAppStore.getState().loadSpreadsheetWorkbook(PATH);
 
     expect(result.ok).toBe(true);
+    expect(serverUrlAtRequest).toBeTruthy();
     expect(startWorkspaceServerMock).toHaveBeenCalledTimes(1);
     expect(startWorkspaceServerMock.mock.calls[0]?.[0]).toMatchObject({
       workspaceId: "ws-popup",

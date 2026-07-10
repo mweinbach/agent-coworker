@@ -1,5 +1,9 @@
 import {
+  CheckCircle2Icon,
   CheckIcon,
+  CircleDashedIcon,
+  CircleIcon,
+  ClipboardListIcon,
   CopyIcon,
   FileAudioIcon,
   FileIcon,
@@ -9,7 +13,7 @@ import {
   FileVideoIcon,
   Table2Icon,
 } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import { extractCitationUrlsFromAnnotations } from "../../../../../src/shared/displayCitationMarkers";
 import type { FeedItem } from "../../app/types";
@@ -25,7 +29,12 @@ import { Bubble, BubbleContent } from "../../components/ui/bubble";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Marker, MarkerContent } from "../../components/ui/marker";
-import { Message, MessageContent, MessageFooter } from "../../components/ui/message";
+import { Message, MessageContent } from "../../components/ui/message";
+import {
+  encodeDesktopMediaUrl,
+  isAbsoluteDesktopPath,
+  isDesktopMediaImagePath,
+} from "../../lib/mediaProtocol";
 import { openExternalSource } from "../../lib/openExternalSource";
 import { cn } from "../../lib/utils";
 import { DesktopMarkdown } from "../markdown";
@@ -40,13 +49,26 @@ import {
 import { MentionText } from "./MentionText";
 import { ToolCard } from "./toolCards/ToolCard";
 
-function MessageCopyAction(props: { text: string }) {
+function MessageCopyAction(props: { text: string; className?: string }) {
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(props.text);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
       // Clipboard may be unavailable (permissions, non-secure context). Fail silently.
     }
@@ -58,7 +80,10 @@ function MessageCopyAction(props: { text: string }) {
       size="xs"
       onClick={handleCopy}
       aria-label={copied ? "Copied" : "Copy message"}
-      className="opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100"
+      className={cn(
+        "bg-background/90 shadow-sm backdrop-blur-sm opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
+        props.className,
+      )}
     >
       {copied ? (
         <CheckIcon data-icon="inline-start" className="text-success" />
@@ -73,17 +98,30 @@ function MessageCopyAction(props: { text: string }) {
 function ErrorFeedRow(props: { message: string }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(props.message);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
       // Clipboard unavailable — fail silently.
     }
   };
   return (
-    <Card className="w-full min-w-0 max-w-3xl overflow-hidden border-destructive/40 bg-destructive/10">
+    <Card className="w-full min-w-0 overflow-hidden border-destructive/40 bg-destructive/10">
       <CardContent className="select-text p-3 text-sm">
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="font-semibold uppercase tracking-wide text-destructive">Error</div>
@@ -181,6 +219,13 @@ function attachmentTypeForFilename(fileName: string): string {
   return extension && extension !== fileName ? extension.toUpperCase() : "FILE";
 }
 
+function attachmentPreviewSrc(fileName: string): string | null {
+  if (!isAbsoluteDesktopPath(fileName) || !isDesktopMediaImagePath(fileName)) {
+    return null;
+  }
+  return encodeDesktopMediaUrl(fileName);
+}
+
 function keyedAttachmentFileNames(fileNames: readonly string[]) {
   const occurrences = new Map<string, number>();
   return fileNames.map((fileName) => {
@@ -190,11 +235,93 @@ function keyedAttachmentFileNames(fileNames: readonly string[]) {
   });
 }
 
+function UserAttachmentGroup(props: { fileNames: readonly string[] }) {
+  if (props.fileNames.length === 0) return null;
+  return (
+    <AttachmentGroup className="max-w-full">
+      {keyedAttachmentFileNames(props.fileNames).map(({ fileName, key }) => {
+        const previewSrc = attachmentPreviewSrc(fileName);
+        const IconComponent = attachmentIconForFilename(fileName);
+        return (
+          <Attachment key={key} size="sm">
+            <AttachmentMedia variant={previewSrc ? "image" : "icon"}>
+              {previewSrc ? (
+                <img src={previewSrc} alt="" className="size-full object-cover" draggable={false} />
+              ) : (
+                <IconComponent />
+              )}
+            </AttachmentMedia>
+            <AttachmentContent>
+              <AttachmentTitle title={fileName}>{fileName}</AttachmentTitle>
+              <AttachmentDescription>{attachmentTypeForFilename(fileName)}</AttachmentDescription>
+            </AttachmentContent>
+          </Attachment>
+        );
+      })}
+    </AttachmentGroup>
+  );
+}
+
+function resolveUserCopyText(opts: {
+  canvasRequest: CanvasRequest | null;
+  cleanText: string;
+  rawText: string;
+}): string {
+  if (opts.canvasRequest) {
+    return opts.canvasRequest.userRequest || opts.cleanText || opts.rawText;
+  }
+  return opts.cleanText || opts.rawText;
+}
+
+function FeedTodosCard(props: { todos: Extract<FeedItem, { kind: "todos" }>["todos"] }) {
+  const todos = props.todos;
+  if (todos.length === 0) return null;
+  const completed = todos.filter((todo) => todo.status === "completed").length;
+  return (
+    <Card className="max-w-3xl gap-0 rounded-xl border border-border/45 bg-muted/[0.08] p-0 shadow-none">
+      <CardContent className="flex flex-col gap-2 p-3">
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          <ClipboardListIcon className="size-3.5" />
+          <span>Plan</span>
+          <span className="font-medium normal-case tracking-normal text-muted-foreground/80">
+            {completed}/{todos.length}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {todos.map((todo) => (
+            <div
+              key={`${todo.status}:${todo.content}`}
+              className="flex items-start gap-2 text-[12.5px]"
+            >
+              {todo.status === "completed" ? (
+                <CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0 text-success" />
+              ) : todo.status === "in_progress" ? (
+                <CircleDashedIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
+              ) : (
+                <CircleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span
+                className={cn(
+                  "leading-5 text-foreground",
+                  todo.status === "completed" && "text-muted-foreground line-through",
+                )}
+              >
+                {todo.content}
+              </span>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export const FeedRow = memo(function FeedRow(props: {
   item: FeedItem;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
   citationSources?: CitationSource[];
   desktopBasePath?: string | null;
+  isStreaming?: boolean;
 }) {
   const { developerMode, mentionCatalog } = useChatViewContext();
   const item = props.item;
@@ -211,61 +338,70 @@ export const FeedRow = memo(function FeedRow(props: {
 
     const userMessage = item.role === "user" ? parseUserMessageAttachments(item.text) : null;
     const canvasRequest = userMessage ? parseCanvasRequest(userMessage.cleanText) : null;
+    const copyText =
+      item.role === "user" && userMessage
+        ? resolveUserCopyText({
+            canvasRequest,
+            cleanText: userMessage.cleanText,
+            rawText: item.text,
+          })
+        : item.text;
+    const isStreamingAssistant = item.role === "assistant" && props.isStreaming === true;
 
     return (
       <Message align={item.role === "user" ? "end" : "start"}>
-        <MessageContent>
+        <MessageContent className="relative">
           {item.role === "assistant" ? (
             <Bubble variant="ghost" align="start">
               <BubbleContent>
-                <DesktopMarkdown
-                  citationAnnotations={item.annotations}
-                  citationSources={props.citationSources}
-                  citationUrlsByIndex={props.citationUrlsByIndex}
-                  desktopBasePath={props.desktopBasePath}
-                  normalizeDisplayCitations
-                  fallbackToSourcesFooter={!hasSources}
-                >
-                  {item.text}
-                </DesktopMarkdown>
+                {isStreamingAssistant ? (
+                  // Lightweight path while tokens stream: avoid full Streamdown reparse
+                  // every delta. Swap to DesktopMarkdown once the item is complete.
+                  <div
+                    data-slot="streaming-markdown"
+                    className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-7 text-foreground"
+                  >
+                    {item.text}
+                    <span
+                      aria-hidden
+                      data-slot="streaming-caret"
+                      className="ml-0.5 inline-block h-[1.05em] w-[0.45em] translate-y-[0.1em] rounded-[1px] bg-foreground/70 align-baseline animate-pulse"
+                    />
+                  </div>
+                ) : (
+                  <DesktopMarkdown
+                    citationAnnotations={item.annotations}
+                    citationSources={props.citationSources}
+                    citationUrlsByIndex={props.citationUrlsByIndex}
+                    desktopBasePath={props.desktopBasePath}
+                    normalizeDisplayCitations
+                    fallbackToSourcesFooter={!hasSources}
+                  >
+                    {item.text}
+                  </DesktopMarkdown>
+                )}
               </BubbleContent>
             </Bubble>
-          ) : userMessage?.cleanText ? (
+          ) : (
             <Bubble
               variant="tinted"
               align="end"
               className="*:data-[slot=bubble-content]:border-primary/20 *:data-[slot=bubble-content]:bg-primary/[0.08] dark:*:data-[slot=bubble-content]:border-primary/25 dark:*:data-[slot=bubble-content]:bg-primary/[0.12]"
             >
               <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 shadow-[var(--shadow-surface-base)] whitespace-pre-wrap selection:bg-primary/20">
-                {canvasRequest ? (
-                  <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />
-                ) : (
-                  <MentionText text={userMessage.cleanText} catalog={mentionCatalog} />
-                )}
+                <div className="flex flex-col gap-2">
+                  {canvasRequest ? (
+                    <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />
+                  ) : userMessage?.cleanText ? (
+                    <MentionText text={userMessage.cleanText} catalog={mentionCatalog} />
+                  ) : null}
+                  {userMessage && userMessage.fileNames.length > 0 ? (
+                    <UserAttachmentGroup fileNames={userMessage.fileNames} />
+                  ) : null}
+                </div>
               </BubbleContent>
             </Bubble>
-          ) : null}
-
-          {userMessage && userMessage.fileNames.length > 0 ? (
-            <AttachmentGroup className="max-w-full">
-              {keyedAttachmentFileNames(userMessage.fileNames).map(({ fileName, key }) => {
-                const IconComponent = attachmentIconForFilename(fileName);
-                return (
-                  <Attachment key={key} size="sm">
-                    <AttachmentMedia>
-                      <IconComponent />
-                    </AttachmentMedia>
-                    <AttachmentContent>
-                      <AttachmentTitle title={fileName}>{fileName}</AttachmentTitle>
-                      <AttachmentDescription>
-                        {attachmentTypeForFilename(fileName)}
-                      </AttachmentDescription>
-                    </AttachmentContent>
-                  </Attachment>
-                );
-              })}
-            </AttachmentGroup>
-          ) : null}
+          )}
 
           {hasSources && !hasInlineCitationChip && props.citationSources ? (
             <CitationSourcesCarousel
@@ -274,9 +410,16 @@ export const FeedRow = memo(function FeedRow(props: {
             />
           ) : null}
 
-          <MessageFooter>
-            <MessageCopyAction text={item.text} />
-          </MessageFooter>
+          <div
+            className={cn(
+              "pointer-events-none absolute top-1 z-10 flex items-center",
+              item.role === "user" ? "left-1" : "right-1",
+            )}
+          >
+            <div className="pointer-events-auto">
+              <MessageCopyAction text={copyText} />
+            </div>
+          </div>
         </MessageContent>
       </Message>
     );
@@ -287,7 +430,7 @@ export const FeedRow = memo(function FeedRow(props: {
   }
 
   if (item.kind === "todos") {
-    return null;
+    return <FeedTodosCard todos={item.todos} />;
   }
 
   if (item.kind === "tool") {
@@ -305,7 +448,7 @@ export const FeedRow = memo(function FeedRow(props: {
   if (item.kind === "log") {
     if (!developerMode) return null;
     return (
-      <Marker variant="border" className="max-w-3xl select-text items-start">
+      <Marker variant="border" className="select-text items-start">
         <MarkerContent className="flex flex-col gap-1 text-xs">
           <span className="font-semibold uppercase tracking-wide text-primary">Log</span>
           <span className="whitespace-pre-wrap">{item.line}</span>
@@ -320,7 +463,7 @@ export const FeedRow = memo(function FeedRow(props: {
 
   if (item.kind === "system") {
     return (
-      <Marker variant="border" className="max-w-3xl select-text items-start">
+      <Marker variant="border" className="select-text items-start">
         <MarkerContent className="flex flex-col gap-1 text-xs">
           <span className="font-semibold uppercase tracking-wide text-primary">System</span>
           <span className="whitespace-pre-wrap">{item.line}</span>

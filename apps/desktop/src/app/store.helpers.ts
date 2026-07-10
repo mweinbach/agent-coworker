@@ -264,6 +264,8 @@ export type AppStoreState = {
   providerUiState: PersistedProviderUiState;
 
   composerText: string;
+  /** Drafts keyed by thread id; active draft is mirrored in composerText. */
+  composerTextByThreadId: Record<string, string>;
   newChatLandingTarget: NewChatLandingTarget | null;
   injectContext: boolean;
   developerMode: boolean;
@@ -546,6 +548,7 @@ export type AppStoreState = {
   }) => Promise<ResearchCard | null>;
   cancelResearch: (researchId: string) => Promise<void>;
   renameResearch: (researchId: string, title: string) => Promise<void>;
+  deleteResearch: (researchId: string) => Promise<boolean>;
   sendResearchFollowUp: (opts: {
     parentResearchId: string;
     input: string;
@@ -783,7 +786,7 @@ export type AppStoreState = {
   loadAllThreadUsage: () => Promise<void>;
 
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
-  answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
+  answerApproval: (threadId: string, requestId: string, approved: boolean) => boolean;
   dismissPrompt: () => void;
 
   startOnboarding: () => void;

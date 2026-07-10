@@ -2,6 +2,7 @@ import { AlertTriangleIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
+import { cn } from "../lib/utils";
 
 type SlidePreviewProps = {
   path: string;
@@ -24,6 +25,8 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const [refreshKey, setRefreshKey] = useState(0);
   const previousRefreshTrigger = useRef(refreshTrigger);
 
+  const fileName = useMemo(() => path.replace(/\\/g, "/").split("/").pop() || path, [path]);
+
   const loadSlide = useCallback(async () => {
     if (!selectedWorkspaceId || !hasActiveWorkspace) {
       setError("No active workspace found.");
@@ -42,7 +45,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
       if (response?.ok && response.slides && response.slides.length > 0) {
         setSlide(response.slides[0]);
       } else if (response && !response.ok && response.error) {
-        setError(response.error.message || "Failed to render slide module.");
+        setError(response.error.message || "Failed to render slide.");
       } else {
         setError("Invalid response received from rendering engine.");
       }
@@ -64,54 +67,48 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   }, [loadSlide]);
 
   return (
-    <div className="flex flex-col h-full bg-background text-foreground font-sans p-6 overflow-hidden">
-      {/* Header toolbar */}
-      <div className="flex items-center justify-between border-b border-border pb-4 mb-6">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-foreground">Slide Canvas</h2>
-          <p className="text-xs text-muted-foreground">
-            Live preview of presentation slide component
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 pb-2">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-semibold text-foreground" title={fileName}>
+            {fileName}
           </p>
+          <p className="text-[11px] text-muted-foreground">Slide preview</p>
         </div>
         <Button
           variant="outline"
           size="sm"
           onClick={() => setRefreshKey((k) => k + 1)}
           disabled={loading}
-          className="border-border bg-muted/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          className="h-7 shrink-0 gap-1.5 px-2.5 text-xs"
         >
-          <RefreshCwIcon className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          <RefreshCwIcon className={cn("size-3.5", loading && "animate-spin")} />
           Refresh
         </Button>
       </div>
 
-      {/* Render Area */}
-      <div className="flex-1 flex items-center justify-center relative bg-muted/20 border border-border/60 rounded-2xl overflow-auto p-4 min-h-[300px]">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border border-border/50 bg-muted/15 p-3">
         {loading ? (
-          <div className="flex flex-col items-center justify-center gap-3">
-            <Loader2Icon className="h-8 w-8 text-primary animate-spin" />
-            <p className="text-sm text-muted-foreground font-medium">
-              Compiling slide component...
-            </p>
+          <div className="flex flex-col items-center gap-2">
+            <Loader2Icon className="size-6 text-muted-foreground animate-spin" />
+            <p className="text-xs text-muted-foreground">Rendering slide…</p>
           </div>
         ) : error ? (
-          <div className="flex flex-col items-center justify-center text-center p-6 max-w-md bg-muted/35 border border-border rounded-xl">
-            <AlertTriangleIcon className="h-10 w-10 text-destructive mb-3" />
-            <h3 className="text-md font-medium text-foreground mb-2">Rendering Error</h3>
-            <pre className="text-xs text-destructive bg-destructive/10 border border-destructive/20 p-4 rounded-lg overflow-x-auto text-left w-full max-h-[250px] font-mono leading-relaxed">
+          <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 text-center">
+            <AlertTriangleIcon className="size-6 text-destructive" />
+            <h3 className="text-sm font-medium text-foreground">Couldn’t render slide</h3>
+            <pre className="max-h-48 w-full overflow-auto rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left font-mono text-[11px] leading-relaxed text-destructive">
               {error}
             </pre>
           </div>
         ) : slide ? (
-          <div className="relative shadow-2xl rounded-lg border border-border/80 max-w-full max-h-full overflow-hidden transition-all duration-300 hover:scale-[1.01]">
-            <img
-              src={slide.pngBase64}
-              alt="Slide Preview"
-              className="object-contain max-w-full max-h-[70vh] aspect-[16/9] select-none"
-            />
-          </div>
+          <img
+            src={slide.pngBase64}
+            alt="Slide preview"
+            className="max-h-full max-w-full select-none object-contain"
+          />
         ) : (
-          <p className="text-sm text-muted-foreground/85">No preview generated.</p>
+          <p className="text-xs text-muted-foreground">No preview generated.</p>
         )}
       </div>
     </div>

@@ -120,6 +120,7 @@ export function shouldShowReconnectBanner(opts: {
   sessionId: string | null;
   hydrating: boolean;
   workspaceStarting: boolean;
+  terminalTaskConversation: boolean;
 }): boolean {
   return (
     opts.conversationVisible &&
@@ -129,7 +130,8 @@ export function shouldShowReconnectBanner(opts: {
     !opts.connected &&
     Boolean(opts.sessionId) &&
     !opts.hydrating &&
-    !opts.workspaceStarting
+    !opts.workspaceStarting &&
+    !opts.terminalTaskConversation
   );
 }
 

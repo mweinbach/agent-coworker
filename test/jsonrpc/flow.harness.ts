@@ -21,6 +21,7 @@ export type JsonRpcConnection = {
 
 export const JSONRPC_REPLAY_TEST_TIMEOUT_MS = 45_000;
 export const JSONRPC_REPLAY_WAIT_TIMEOUT_MS = 30_000;
+export const JSONRPC_WAIT_TIMEOUT_MS = 15_000;
 
 export async function connectJsonRpc(
   url: string,
@@ -59,7 +60,7 @@ export async function connectJsonRpc(
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error("Timed out waiting for websocket open")),
-      5_000,
+      JSONRPC_WAIT_TIMEOUT_MS,
     );
     ws.onopen = () => {
       clearTimeout(timer);
@@ -71,7 +72,10 @@ export async function connectJsonRpc(
     };
   });
 
-  const waitFor = async (predicate: (message: any) => boolean, timeoutMs = 5_000): Promise<any> => {
+  const waitFor = async (
+    predicate: (message: any) => boolean,
+    timeoutMs = JSONRPC_WAIT_TIMEOUT_MS,
+  ): Promise<any> => {
     const existingIndex = queue.findIndex(predicate);
     if (existingIndex >= 0) {
       return queue.splice(existingIndex, 1)[0];

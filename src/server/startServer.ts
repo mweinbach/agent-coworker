@@ -127,7 +127,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
               ...corsHeaders,
               "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
               "Access-Control-Allow-Headers":
-                "Authorization, Content-Type, Sec-WebSocket-Protocol, X-Cowork-Browser-Token",
+                "Authorization, Content-Type, Idempotency-Key, Sec-WebSocket-Protocol, X-Cowork-Browser-Token",
               "Access-Control-Max-Age": "86400",
             },
           });

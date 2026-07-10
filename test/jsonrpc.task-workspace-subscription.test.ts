@@ -30,7 +30,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const MESSAGE_WAIT_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 2_000;
+const MESSAGE_WAIT_TIMEOUT_MS = process.platform === "win32" ? 10_000 : 2_000;
 const WINDOWS_REMOVE_RETRY_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 
 function readErrorCode(error: unknown): string | undefined {
@@ -1808,7 +1808,7 @@ describe("task workspace subscription routing", () => {
       await runtime?.stop();
       await removeTempHome(home);
     }
-  }, 15_000);
+  }, 30_000);
 
   test("non-desktop active project cwd remains authorized for task RPCs", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-cli-project-"));

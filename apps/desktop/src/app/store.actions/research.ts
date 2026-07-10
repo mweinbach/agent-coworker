@@ -130,6 +130,20 @@ function orderResearchIds(byId: Record<string, ResearchRecord>): string[] {
     .map((research) => research.id);
 }
 
+function removeResearchAndReparentChildren(
+  byId: Record<string, ResearchRecord>,
+  researchId: string,
+): Record<string, ResearchRecord> {
+  const next = { ...byId };
+  delete next[researchId];
+  for (const [id, research] of Object.entries(next)) {
+    if (research.parentResearchId === researchId) {
+      next[id] = { ...research, parentResearchId: null };
+    }
+  }
+  return next;
+}
+
 function normalizeSelectedResearchId(
   selectedResearchId: string | null,
   researchOrder: string[],
@@ -471,9 +485,8 @@ export function createResearchActions(
                 researchSubscribedIds: s.researchSubscribedIds.filter((id) => id !== researchId),
               };
             }
-            const researchById = { ...s.researchById };
-            delete researchById[researchId];
-            const researchOrder = s.researchOrder.filter((id) => id !== researchId);
+            const researchById = removeResearchAndReparentChildren(s.researchById, researchId);
+            const researchOrder = orderResearchIds(researchById);
             return {
               researchById,
               researchOrder,
@@ -923,11 +936,35 @@ export function createResearchActions(
 
     deleteResearch: async (researchId) => {
       const previous = get().researchById[researchId];
+      const previousChildren = Object.values(get().researchById).filter(
+        (research) => research.parentResearchId === researchId,
+      );
+      const restoreOptimisticDelete = () => {
+        if (!previous) return;
+        set((s) => {
+          const researchById = {
+            ...s.researchById,
+            [previous.id]: previous,
+          };
+          for (const child of previousChildren) {
+            const current = researchById[child.id];
+            if (current) {
+              researchById[child.id] = {
+                ...current,
+                parentResearchId: researchId,
+              };
+            }
+          }
+          return {
+            researchById,
+            researchOrder: orderResearchIds(researchById),
+          };
+        });
+      };
       // Optimistic remove from list.
       set((s) => {
-        const researchById = { ...s.researchById };
-        delete researchById[researchId];
-        const researchOrder = s.researchOrder.filter((id) => id !== researchId);
+        const researchById = removeResearchAndReparentChildren(s.researchById, researchId);
+        const researchOrder = orderResearchIds(researchById);
         return {
           researchById,
           researchOrder,
@@ -937,19 +974,19 @@ export function createResearchActions(
       try {
         const workspaceId = await ensureResearchTransportWorkspace();
         if (!workspaceId) {
-          if (previous) applyResearchRecord(previous);
+          restoreOptimisticDelete();
           return false;
         }
         const result = await requestResearchResult(deps, get, set, workspaceId, "research/delete", {
           researchId,
         });
         if (!result.deleted && previous) {
-          applyResearchRecord(previous);
+          restoreOptimisticDelete();
           return false;
         }
         return result.deleted === true;
       } catch (error) {
-        if (previous) applyResearchRecord(previous);
+        restoreOptimisticDelete();
         notify(
           "error",
           "Unable to delete research",

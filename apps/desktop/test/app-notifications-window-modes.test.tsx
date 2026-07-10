@@ -53,6 +53,8 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
     ready: true,
     bootstrapPending: false,
     startupError: null,
+    onboardingVisible: false,
+    promptModal: null,
     view: "task",
     workspaces: [
       {

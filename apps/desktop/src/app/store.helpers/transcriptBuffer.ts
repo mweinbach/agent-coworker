@@ -1,4 +1,4 @@
-import { appendTranscriptBatch } from "../../lib/desktopCommands";
+import { appendTranscriptBatch, captureTranscriptEvent } from "../../lib/desktopCommands";
 
 type PendingTranscriptEntry = {
   ts: string;
@@ -11,11 +11,17 @@ const TRANSCRIPT_BATCH_MS = 200;
 
 type TranscriptBufferDeps = {
   nowIso: () => string;
+  captureEvent?: (event: PendingTranscriptEntry) => boolean;
+  appendBatch?: (events: PendingTranscriptEntry[]) => Promise<void>;
+  schedule?: (callback: () => void, delayMs: number) => unknown;
 };
 
 export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
   let transcriptBuffer: PendingTranscriptEntry[] = [];
-  let transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+  let transcriptTimer: unknown = null;
+  const captureEvent = deps.captureEvent ?? captureTranscriptEvent;
+  const appendBatch = deps.appendBatch ?? appendTranscriptBatch;
+  const schedule = deps.schedule ?? globalThis.setTimeout;
 
   function flushTranscriptBuffer() {
     if (transcriptBuffer.length === 0) return;
@@ -24,7 +30,7 @@ export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
     transcriptTimer = null;
     // Session snapshots are the long-term history source, but transcript JSONL
     // still backs compatibility paths like offline fallback hydration and usage.
-    void appendTranscriptBatch(batch);
+    void appendBatch(batch);
   }
 
   function appendThreadTranscript(
@@ -32,9 +38,13 @@ export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
     direction: "server" | "client",
     payload: unknown,
   ) {
-    transcriptBuffer.push({ ts: deps.nowIso(), threadId, direction, payload });
+    const event = { ts: deps.nowIso(), threadId, direction, payload };
+    if (captureEvent(event)) {
+      return;
+    }
+    transcriptBuffer.push(event);
     if (!transcriptTimer) {
-      transcriptTimer = setTimeout(flushTranscriptBuffer, TRANSCRIPT_BATCH_MS);
+      transcriptTimer = schedule(flushTranscriptBuffer, TRANSCRIPT_BATCH_MS);
     }
   }
 

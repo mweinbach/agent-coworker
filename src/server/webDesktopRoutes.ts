@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-
+import { TRANSCRIPT_REQUEST_MAX_BYTES, TRANSCRIPT_REQUEST_MAX_EVENTS } from "./transcriptInbox";
 import { TRANSCRIPT_BATCH_ID_PATTERN, type WebDesktopServiceLike } from "./webDesktopService";
 
 type ExplorerEntryPayload = {
@@ -15,6 +15,7 @@ type ExplorerEntryPayload = {
 
 const DEFAULT_TEXT_READ_BYTES = 256 * 1024;
 const DEFAULT_PREVIEW_MAX_BYTES = 15 * 1024 * 1024;
+const TRANSCRIPT_REQUEST_BODY_MAX_BYTES = TRANSCRIPT_REQUEST_MAX_BYTES + 16 * 1024;
 const ACTIVE_FILE_PREVIEW_MIME_TYPES = new Set([
   "application/xhtml+xml",
   "application/xml",
@@ -350,6 +351,13 @@ function textResponse(message: string, status: number): Response {
 }
 
 function normalizeErrorStatus(error: unknown): number {
+  const status =
+    typeof error === "object" && error !== null && "status" in error
+      ? Number((error as { status?: unknown }).status)
+      : Number.NaN;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    return status;
+  }
   const code =
     typeof error === "object" && error !== null && "code" in error
       ? String((error as { code?: unknown }).code)
@@ -364,6 +372,28 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
     throw new Error("Expected a JSON object body");
   }
   return body as Record<string, unknown>;
+}
+
+async function readTranscriptBatchBody(req: Request): Promise<unknown> {
+  const declaredLength = Number(req.headers.get("Content-Length"));
+  if (Number.isFinite(declaredLength) && declaredLength > TRANSCRIPT_REQUEST_BODY_MAX_BYTES) {
+    throw Object.assign(new Error("Transcript request body exceeds the byte limit"), {
+      status: 413,
+    });
+  }
+  const text = await req.text();
+  if (new TextEncoder().encode(text).byteLength > TRANSCRIPT_REQUEST_BODY_MAX_BYTES) {
+    throw Object.assign(new Error("Transcript request body exceeds the byte limit"), {
+      status: 413,
+    });
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw Object.assign(new Error("Transcript request body must be valid JSON"), {
+      status: 400,
+    });
+  }
 }
 
 function readRequiredStringParam(params: URLSearchParams, key: string): string {
@@ -508,7 +538,7 @@ export async function handleWebDesktopRoute(
       }
 
       if (url.pathname === "/cowork/desktop/transcript/batch" && req.method === "POST") {
-        const rawBody = (await req.json()) as unknown;
+        const rawBody = await readTranscriptBatchBody(req);
         let rawEvents: unknown;
         let bodyBatchId: string | null = null;
         if (Array.isArray(rawBody)) {
@@ -522,6 +552,12 @@ export async function handleWebDesktopRoute(
         }
         if (!Array.isArray(rawEvents)) {
           throw new Error("events must be a JSON array");
+        }
+        if (rawEvents.length === 0 || rawEvents.length > TRANSCRIPT_REQUEST_MAX_EVENTS) {
+          throw Object.assign(
+            new Error(`events must contain 1-${TRANSCRIPT_REQUEST_MAX_EVENTS} entries`),
+            { status: 413 },
+          );
         }
         const headerBatchId = req.headers.get("Idempotency-Key")?.trim() || null;
         if (headerBatchId && bodyBatchId && headerBatchId !== bodyBatchId) {
@@ -542,11 +578,19 @@ export async function handleWebDesktopRoute(
           if (direction !== "server" && direction !== "client") {
             throw new Error("direction must be 'server' or 'client'");
           }
+          const generation = record.generation;
+          if (
+            generation !== undefined &&
+            (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0)
+          ) {
+            throw new Error("generation must be a non-negative integer");
+          }
           return {
             threadId,
             ts,
             direction,
             payload: record.payload,
+            generation,
           } as const;
         });
         await opts.desktopService.appendTranscriptBatch(events, batchId ? { batchId } : undefined);
@@ -555,7 +599,21 @@ export async function handleWebDesktopRoute(
 
       if (url.pathname === "/cowork/desktop/transcript" && req.method === "DELETE") {
         const threadId = readRequiredStringParam(url.searchParams, "threadId");
-        await opts.desktopService.deleteTranscript(threadId);
+        const generationValue = url.searchParams.get("generation");
+        const generation =
+          generationValue === null ? undefined : Number.parseInt(generationValue, 10);
+        if (
+          generation !== undefined &&
+          (!Number.isSafeInteger(generation) ||
+            generation < 1 ||
+            String(generation) !== generationValue)
+        ) {
+          throw new Error("generation must be a positive integer");
+        }
+        await opts.desktopService.deleteTranscript(
+          threadId,
+          generation === undefined ? undefined : { generation },
+        );
         return new Response(null, { status: 204 });
       }
     }

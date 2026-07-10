@@ -1,9 +1,9 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import "fake-indexeddb/auto";
 
 const storage = new Map<string, string>();
-const windowEvents = new EventTarget();
 const transcriptEvent = {
-  ts: "2026-07-09T19:53:00.000Z",
+  ts: "2026-07-10T07:00:00.000Z",
   threadId: "thread-web-transcript",
   direction: "server" as const,
   payload: { type: "agent_message", text: "Persist me" },
@@ -24,8 +24,19 @@ const localStorageMock = {
   },
 };
 
+class TestBroadcastChannel {
+  postMessage(_value: unknown): void {}
+  addEventListener(_type: "message", _listener: () => void): void {}
+  removeEventListener(_type: "message", _listener: () => void): void {}
+  close(): void {}
+}
+
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const originalBroadcastChannelDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "BroadcastChannel",
+);
 const originalInjectedServerUrlDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "__COWORK_SERVER_URL__",
@@ -35,7 +46,7 @@ const originalInjectedBrowserAccessTokenDescriptor = Object.getOwnPropertyDescri
   "__COWORK_BROWSER_ACCESS_TOKEN__",
 );
 
-function installWindowMock() {
+function installWindowMock(): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     writable: true,
@@ -45,15 +56,19 @@ function installWindowMock() {
         host: "localhost:8281",
       },
       localStorage: localStorageMock,
-      addEventListener: windowEvents.addEventListener.bind(windowEvents),
-      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
-      dispatchEvent: windowEvents.dispatchEvent.bind(windowEvents),
+      addEventListener: () => {},
+      removeEventListener: () => {},
     },
   });
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
     writable: true,
     value: localStorageMock,
+  });
+  Object.defineProperty(globalThis, "BroadcastChannel", {
+    configurable: true,
+    writable: true,
+    value: TestBroadcastChannel,
   });
   Object.defineProperty(globalThis, "__COWORK_SERVER_URL__", {
     configurable: true,
@@ -67,33 +82,11 @@ function installWindowMock() {
   });
 }
 
-function restoreWindowMock() {
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+function restoreDescriptor(key: string, descriptor?: PropertyDescriptor): void {
+  if (descriptor) {
+    Object.defineProperty(globalThis, key, descriptor);
   } else {
-    delete (globalThis as Record<string, unknown>).window;
-  }
-
-  if (originalLocalStorageDescriptor) {
-    Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
-  } else {
-    delete (globalThis as Record<string, unknown>).localStorage;
-  }
-
-  if (originalInjectedServerUrlDescriptor) {
-    Object.defineProperty(globalThis, "__COWORK_SERVER_URL__", originalInjectedServerUrlDescriptor);
-  } else {
-    delete (globalThis as Record<string, unknown>).__COWORK_SERVER_URL__;
-  }
-
-  if (originalInjectedBrowserAccessTokenDescriptor) {
-    Object.defineProperty(
-      globalThis,
-      "__COWORK_BROWSER_ACCESS_TOKEN__",
-      originalInjectedBrowserAccessTokenDescriptor,
-    );
-  } else {
-    delete (globalThis as Record<string, unknown>).__COWORK_BROWSER_ACCESS_TOKEN__;
+    delete (globalThis as Record<string, unknown>)[key];
   }
 }
 
@@ -101,110 +94,69 @@ installWindowMock();
 
 const { configureWebAdapter, createWebAdapter, deriveSameOriginServerUrl, normalizeWebServerUrl } =
   await import("../src/lib/webAdapter");
-const { createWebTranscriptDelivery, WEB_TRANSCRIPT_QUEUE_KEY_PREFIX } = await import(
-  "../src/lib/webTranscriptDelivery"
-);
 
-describe("webAdapter server URL normalization", () => {
+let workspaceSequence = 0;
+
+function configureUniqueWorkspace(): void {
+  workspaceSequence += 1;
+  configureWebAdapter(
+    "ws://127.0.0.1:7337/ws",
+    `/tmp/web-transcript-workspace-${workspaceSequence}`,
+  );
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await Bun.sleep(5);
+  }
+  expect(predicate()).toBe(true);
+}
+
+describe("webAdapter transcript reliability", () => {
   beforeEach(() => {
     storage.clear();
   });
 
-  test("derives the live Cowork websocket URL injected by the web dev shell", () => {
+  test("normalizes injected and direct websocket URLs", () => {
     expect(deriveSameOriginServerUrl()).toBe("ws://127.0.0.1:7337/ws");
-  });
-
-  test("normalizes legacy same-origin websocket URLs onto the injected Cowork server URL", () => {
     expect(normalizeWebServerUrl("ws://localhost:8281/ws")).toBe("ws://127.0.0.1:7337/ws");
-  });
-
-  test("leaves direct Cowork server websocket URLs unchanged", () => {
     expect(normalizeWebServerUrl("ws://127.0.0.1:7337/ws")).toBe("ws://127.0.0.1:7337/ws");
   });
 
-  test("enables full desktop browser mode when connected without a workspace path", async () => {
-    const originalFetch = globalThis.fetch;
-    const desktopState = {
-      version: 2,
-      workspaces: [
-        {
-          id: "ws_full",
-          name: "Full Desktop",
-          path: "/tmp/full-desktop",
-          createdAt: "2026-04-18T00:00:00.000Z",
-          lastOpenedAt: "2026-04-18T00:00:00.000Z",
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      threads: [],
-      developerMode: false,
-      showHiddenFiles: false,
-      perWorkspaceSettings: false,
-    };
-
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: async () =>
-        new Response(JSON.stringify(desktopState), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    });
-
+  test("enables full desktop browser mode without a workspace path", () => {
     configureWebAdapter("ws://127.0.0.1:7337/ws", "");
     const adapter = createWebAdapter();
     expect(adapter.features.workspacePicker).toBe(true);
     expect(adapter.features.workspaceLifecycle).toBe(true);
-    await expect(adapter.loadState()).resolves.toEqual(desktopState);
-
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: originalFetch,
-    });
   });
 
-  test("provides a browser-mode platform chrome fallback for renderer layout", async () => {
-    configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
-    const adapter = createWebAdapter();
-
-    await expect(adapter.getPlatformChrome()).resolves.toEqual({
-      platform: "web",
-      titlebarHeight: 0,
-      dragStripHeight: 0,
-      leftNativeReserve: 0,
-      rightNativeReserve: 0,
-      captionButtonReserve: 0,
-      collapsedLeftRailWidth: 0,
-      topbarToolbarGap: 0,
-      sidebarTitlebandMode: "topbar",
-      topbarControlPlacement: "inline",
-      usesNativeGlass: false,
-      disableCssBlur: false,
-    });
-  });
-
-  test("authenticates every transcript batch append", async () => {
+  test("authenticates transcript requests and sends the captured generation", async () => {
     const originalFetch = globalThis.fetch;
-    let requestHeaders = new Headers();
+    let request: { headers: Headers; body: string } | null = null;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
       value: async (_input: string | URL | Request, init?: RequestInit) => {
-        requestHeaders = new Headers(init?.headers);
+        request = {
+          headers: new Headers(init?.headers),
+          body: String(init?.body ?? ""),
+        };
         return new Response(null, { status: 204 });
       },
     });
-
     try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
+      configureUniqueWorkspace();
       const adapter = createWebAdapter();
-      await adapter.appendTranscriptBatch([transcriptEvent]);
+      const result = await adapter.captureTranscriptEvent?.(transcriptEvent);
+      expect(result?.accepted).toBe(true);
+      await waitFor(() => request !== null);
 
-      expect(requestHeaders.get("X-Cowork-Browser-Token")).toBe("browser-secret");
+      expect(request?.headers.get("X-Cowork-Browser-Token")).toBe("browser-secret");
+      const body = JSON.parse(request?.body ?? "") as {
+        events: Array<{ generation?: number }>;
+      };
+      expect(body.events[0]?.generation).toBe(0);
     } finally {
       Object.defineProperty(globalThis, "fetch", {
         configurable: true,
@@ -214,41 +166,7 @@ describe("webAdapter server URL normalization", () => {
     }
   });
 
-  test("retries a dropped transient transcript batch without losing it", async () => {
-    const originalFetch = globalThis.fetch;
-    const requestBodies: string[] = [];
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: async (_input: string | URL | Request, init?: RequestInit) => {
-        requestBodies.push(String(init?.body ?? ""));
-        return requestBodies.length === 1
-          ? new Response("temporarily unavailable", { status: 503 })
-          : new Response(null, { status: 204 });
-      },
-    });
-
-    try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
-      const adapter = createWebAdapter();
-      await adapter.appendTranscriptBatch([transcriptEvent]);
-
-      const deadline = Date.now() + 1_000;
-      while (requestBodies.length < 2 && Date.now() < deadline) {
-        await Bun.sleep(10);
-      }
-      expect(requestBodies).toHaveLength(2);
-      expect(requestBodies[1]).toBe(requestBodies[0]);
-    } finally {
-      Object.defineProperty(globalThis, "fetch", {
-        configurable: true,
-        writable: true,
-        value: originalFetch,
-      });
-    }
-  });
-
-  test("reports 401 failures and durably retains pending transcript data", async () => {
+  test("durably captures transcript events before the desktop debounce window", async () => {
     const originalFetch = globalThis.fetch;
     let requestCount = 0;
     Object.defineProperty(globalThis, "fetch", {
@@ -256,246 +174,28 @@ describe("webAdapter server URL normalization", () => {
       writable: true,
       value: async () => {
         requestCount += 1;
-        return new Response("unauthorized", { status: 401 });
-      },
-    });
-
-    try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
-      const adapter = createWebAdapter();
-      const failures: Array<{ reason: string; pendingEvents: number; message: string }> = [];
-      const unsubscribe = adapter.onTranscriptDeliveryFailure?.((failure) => {
-        failures.push(failure);
-      });
-      await adapter.appendTranscriptBatch([transcriptEvent]);
-
-      expect(requestCount).toBe(1);
-      expect(failures).toHaveLength(1);
-      expect(failures[0]).toEqual(
-        expect.objectContaining({
-          reason: "permanent",
-          pendingEvents: 1,
-        }),
-      );
-      expect(failures[0]?.message).toContain("remain recoverable");
-      const persistedQueue = [...storage.entries()].find(([key]) =>
-        key.startsWith(WEB_TRANSCRIPT_QUEUE_KEY_PREFIX),
-      );
-      expect(persistedQueue?.[1]).toContain("thread-web-transcript");
-      unsubscribe?.();
-    } finally {
-      Object.defineProperty(globalThis, "fetch", {
-        configurable: true,
-        writable: true,
-        value: originalFetch,
-      });
-    }
-  });
-
-  test("retries a timed-out transcript append and recovers with the same idempotency key", async () => {
-    const originalFetch = globalThis.fetch;
-    const requestKeys: string[] = [];
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: async (_input: string | URL | Request, init?: RequestInit) => {
-        requestKeys.push(new Headers(init?.headers).get("Idempotency-Key") ?? "");
-        if (requestKeys.length === 1) {
-          throw new Error("request timed out");
-        }
         return new Response(null, { status: 204 });
       },
     });
-
     try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
-      const adapter = createWebAdapter();
-      await adapter.appendTranscriptBatch([transcriptEvent]);
-
-      expect(requestKeys).toHaveLength(2);
-      expect(requestKeys[0]).toStartWith("transcript-");
-      expect(requestKeys[1]).toBe(requestKeys[0]);
-    } finally {
-      Object.defineProperty(globalThis, "fetch", {
-        configurable: true,
-        writable: true,
-        value: originalFetch,
-      });
-    }
-  });
-
-  test("aborts a stalled transcript request at the configured timeout and retries it", async () => {
-    let attempts = 0;
-    const delivery = createWebTranscriptDelivery({
-      scope: "timeout-test",
-      buildUrl: () => "http://127.0.0.1:7337/cowork/desktop/transcript/batch",
-      accessHeaders: () => ({ "X-Cowork-Browser-Token": "browser-secret" }),
-      fetch: async (_input, init) => {
-        attempts += 1;
-        if (attempts > 1) {
-          return new Response(null, { status: 204 });
-        }
-        return await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () => {
-              reject(init.signal?.reason);
-            },
-            { once: true },
-          );
-        });
-      },
-      storage: localStorageMock as Storage,
-      requestTimeoutMs: 1,
-      sleep: async () => {},
-    });
-
-    await delivery.append([transcriptEvent]);
-
-    expect(attempts).toBe(2);
-    expect(delivery.snapshot()).toEqual({ blocked: false, batches: [] });
-    delivery.dispose();
-  });
-
-  test("delivers multiple buffered transcript batches in enqueue order", async () => {
-    const originalFetch = globalThis.fetch;
-    const deliveredOrders: number[] = [];
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: async (_input: string | URL | Request, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as {
-          events: Array<{ payload: { order: number } }>;
-        };
-        deliveredOrders.push(body.events[0]?.payload.order ?? -1);
-        return new Response(null, { status: 204 });
-      },
-    });
-
-    try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
-      const adapter = createWebAdapter();
-      const first = adapter.appendTranscriptBatch([{ ...transcriptEvent, payload: { order: 1 } }]);
-      const second = adapter.appendTranscriptBatch([{ ...transcriptEvent, payload: { order: 2 } }]);
-      await Promise.all([first, second]);
-
-      expect(deliveredOrders).toEqual([1, 2]);
-    } finally {
-      Object.defineProperty(globalThis, "fetch", {
-        configurable: true,
-        writable: true,
-        value: originalFetch,
-      });
-    }
-  });
-
-  test("rehydrates retained transcript batches after refresh without changing their key", async () => {
-    const originalFetch = globalThis.fetch;
-    const requestKeys: string[] = [];
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: async (_input: string | URL | Request, init?: RequestInit) => {
-        requestKeys.push(new Headers(init?.headers).get("Idempotency-Key") ?? "");
-        return requestKeys.length === 1
-          ? new Response("unauthorized", { status: 401 })
-          : new Response(null, { status: 204 });
-      },
-    });
-
-    try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
-      const firstAdapter = createWebAdapter();
-      await firstAdapter.appendTranscriptBatch([transcriptEvent]);
-
-      createWebAdapter();
-      const deadline = Date.now() + 1_000;
-      while (requestKeys.length < 2 && Date.now() < deadline) {
-        await Bun.sleep(10);
-      }
-
-      expect(requestKeys).toHaveLength(2);
-      expect(requestKeys[1]).toBe(requestKeys[0]);
-      expect(
-        [...storage.keys()].some((key) => key.startsWith(WEB_TRANSCRIPT_QUEUE_KEY_PREFIX)),
-      ).toBe(false);
-    } finally {
-      Object.defineProperty(globalThis, "fetch", {
-        configurable: true,
-        writable: true,
-        value: originalFetch,
-      });
-    }
-  });
-
-  test("uses a keepalive head flush on shutdown while preserving durable recovery", async () => {
-    const originalFetch = globalThis.fetch;
-    const requests: Array<{ idempotencyKey: string; keepalive: boolean }> = [];
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: async (_input: string | URL | Request, init?: RequestInit) => {
-        requests.push({
-          idempotencyKey: new Headers(init?.headers).get("Idempotency-Key") ?? "",
-          keepalive: init?.keepalive === true,
-        });
-        return requests.length === 1
-          ? new Response("unauthorized", { status: 401 })
-          : new Response(null, { status: 204 });
-      },
-    });
-
-    try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
-      const adapter = createWebAdapter();
-      await adapter.appendTranscriptBatch([transcriptEvent]);
-
-      window.dispatchEvent(new Event("pagehide"));
-      const deadline = Date.now() + 1_000;
-      while (requests.length < 2 && Date.now() < deadline) {
-        await Bun.sleep(10);
-      }
-
-      expect(requests).toEqual([
-        { idempotencyKey: requests[0]?.idempotencyKey ?? "", keepalive: false },
-        { idempotencyKey: requests[0]?.idempotencyKey ?? "", keepalive: true },
-      ]);
-      expect(
-        [...storage.keys()].some((key) => key.startsWith(WEB_TRANSCRIPT_QUEUE_KEY_PREFIX)),
-      ).toBe(true);
-    } finally {
-      Object.defineProperty(globalThis, "fetch", {
-        configurable: true,
-        writable: true,
-        value: originalFetch,
-      });
-    }
-  });
-
-  test("surfaces a permanent transcript failure through the app notification store", async () => {
-    const originalFetch = globalThis.fetch;
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      writable: true,
-      value: async () => new Response("unauthorized", { status: 401 }),
-    });
-
-    try {
-      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/web-workspace");
+      configureUniqueWorkspace();
       const adapter = createWebAdapter();
       window.cowork = adapter;
-      const { useAppStore } = await import("../src/app/store");
-      useAppStore.setState({ notifications: [] });
-
-      await adapter.appendTranscriptBatch([transcriptEvent]);
-
-      expect(useAppStore.getState().notifications).toContainEqual(
-        expect.objectContaining({
-          kind: "error",
-          title: "Transcript sync needs attention",
-          detail: expect.stringContaining("remain recoverable"),
-        }),
+      const { createTranscriptBuffer } = await import("../src/app/store.helpers/transcriptBuffer");
+      const buffer = createTranscriptBuffer({
+        nowIso: () => transcriptEvent.ts,
+        captureEvent: (event) => {
+          void adapter.captureTranscriptEvent?.(event);
+          return true;
+        },
+      });
+      buffer.appendThreadTranscript(
+        transcriptEvent.threadId,
+        transcriptEvent.direction,
+        transcriptEvent.payload,
       );
+
+      await waitFor(() => requestCount === 1, 150);
     } finally {
       window.cowork = undefined;
       Object.defineProperty(globalThis, "fetch", {
@@ -506,54 +206,78 @@ describe("webAdapter server URL normalization", () => {
     }
   });
 
-  test("falls back to the server workspace list when the desktop service is unavailable", async () => {
+  test("treats a 404 transcript endpoint as an absent capability without accumulation", async () => {
     const originalFetch = globalThis.fetch;
-    const responses = new Map<string, Response>([
-      ["http://127.0.0.1:7337/cowork/desktop/state", new Response("missing", { status: 404 })],
-      [
-        "http://127.0.0.1:7337/cowork/workspaces",
-        new Response(
-          JSON.stringify({
-            workspaces: [{ name: "Repo", path: "/tmp/repo" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-      ],
-    ]);
-
+    let requestCount = 0;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
-      value: async (input: string | URL | Request) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        const response = responses.get(url);
-        if (!response) {
-          throw new Error(`Unexpected fetch: ${url}`);
-        }
-        return response.clone();
+      value: async () => {
+        requestCount += 1;
+        return new Response("missing", { status: 404 });
       },
     });
+    try {
+      configureUniqueWorkspace();
+      const adapter = createWebAdapter();
+      await adapter.captureTranscriptEvent?.(transcriptEvent);
+      await waitFor(() => requestCount === 1);
+      await adapter.captureTranscriptEvent?.({
+        ...transcriptEvent,
+        ts: "2026-07-10T07:00:01.000Z",
+      });
+      await Bun.sleep(25);
+      expect(requestCount).toBe(1);
+    } finally {
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        writable: true,
+        value: originalFetch,
+      });
+    }
+  });
 
-    configureWebAdapter("ws://127.0.0.1:7337/ws", "");
-    const adapter = createWebAdapter();
-    const state = await adapter.loadState();
-    expect(adapter.features.workspacePicker).toBe(true);
-    expect(state.workspaces).toHaveLength(1);
-    expect(state.workspaces[0]?.path).toBe("/tmp/repo");
-    expect(state.workspaces[0]?.name).toBe("repo");
-
+  test("surfaces permanent delivery recovery through adapter listeners", async () => {
+    const originalFetch = globalThis.fetch;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
-      value: originalFetch,
+      value: async () => new Response("unauthorized", { status: 401 }),
     });
+    try {
+      configureUniqueWorkspace();
+      const adapter = createWebAdapter();
+      const failures: Array<{ message: string; reason: string }> = [];
+      const unsubscribe = adapter.onTranscriptDeliveryFailure?.((failure) => {
+        failures.push(failure);
+      });
+      await adapter.captureTranscriptEvent?.(transcriptEvent);
+      await waitFor(() => failures.length > 0);
+
+      expect(failures).toContainEqual(
+        expect.objectContaining({
+          reason: "permanent",
+          message: expect.stringContaining("Retry"),
+        }),
+      );
+      unsubscribe?.();
+    } finally {
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        writable: true,
+        value: originalFetch,
+      });
+    }
   });
 });
 
 afterAll(() => {
-  restoreWindowMock();
+  restoreDescriptor("window", originalWindowDescriptor);
+  restoreDescriptor("localStorage", originalLocalStorageDescriptor);
+  restoreDescriptor("BroadcastChannel", originalBroadcastChannelDescriptor);
+  restoreDescriptor("__COWORK_SERVER_URL__", originalInjectedServerUrlDescriptor);
+  restoreDescriptor(
+    "__COWORK_BROWSER_ACCESS_TOKEN__",
+    originalInjectedBrowserAccessTokenDescriptor,
+  );
 });

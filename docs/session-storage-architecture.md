@@ -88,8 +88,12 @@ When connecting with `resumeSessionId`:
 - Task coordinator: owns task lifecycle, validates work-graph and completion invariants, persists durable user questions and provisional defaults, resumes the primary thread after the final blocking answer, versions artifact bytes, checkpoints meaningful phases, and attaches each task thread to an ordinary persisted session without exposing it in chat listings.
 - CLI/TUI/desktop: list/resume/history operations go through server APIs (`list_sessions`, `get_messages`, etc.).
 - Desktop transcript JSONL remains a cache for fast local rendering, not an authority. The web
-  renderer durably queues unacknowledged compatibility-cache batches in scoped browser storage,
-  retries them in order, and reuses stable batch ids so ambiguous HTTP responses cannot duplicate
-  JSONL entries. Electron continues to append through its existing IPC persistence path.
+  renderer transactionally captures bounded per-batch outbox records in IndexedDB, with immutable
+  destination binding, a one-owner-per-scope lease, persisted retry scheduling, deletion
+  generations, and stable delivery ids. The desktop service first commits accepted web batches to
+  `transcript-inbox.sqlite`; JSONL is a recoverable projection produced under the same
+  process-safe transaction lock. Indexed and bounded inbox receipts plus projection delivery ids
+  make ambiguous responses safe across service restarts and independent instances. Electron
+  continues to append through its existing IPC persistence path.
 - Imported external conversations are normal persisted sessions. Their `session_snapshots.feed` stores the reconstructed visible replay, while `session_state.messages_json` stores only sanitized model-facing handoff context and `provider_state_json` stays null.
 - Desktop thread removal sends `session_close` only; explicit "Delete session history" sends `delete_session`.

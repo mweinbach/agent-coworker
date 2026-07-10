@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { TRANSCRIPT_REQUEST_MAX_EVENTS, TranscriptInbox } from "../src/server/transcriptInbox";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
@@ -27,6 +28,33 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
     await Bun.sleep(10);
   }
   throw new Error("Timed out waiting for condition");
+}
+
+async function appendTranscriptBatchInProcess(
+  userDataDir: string,
+  event: {
+    ts: string;
+    threadId: string;
+    direction: "server" | "client";
+    payload: unknown;
+    generation: number;
+  },
+  batchId: string,
+): Promise<void> {
+  const moduleUrl = new URL("../src/server/transcriptInbox.ts", import.meta.url).href;
+  const source = `
+    import { TranscriptInbox } from ${JSON.stringify(moduleUrl)};
+    const inbox = new TranscriptInbox({ userDataDir: ${JSON.stringify(userDataDir)} });
+    inbox.appendBatch([${JSON.stringify(event)}], ${JSON.stringify(batchId)});
+  `;
+  const child = Bun.spawn([process.execPath, "-e", source], {
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || `Transcript inbox worker exited with code ${exitCode}`);
+  }
 }
 
 function createMockStream() {
@@ -711,7 +739,7 @@ describe("web desktop routes", () => {
     });
 
     expect(first?.status).toBe(204);
-    expect(collision?.status).toBe(400);
+    expect(collision?.status).toBe(409);
     await expect(service.readTranscript("thread-collision")).resolves.toHaveLength(1);
   });
 
@@ -749,9 +777,110 @@ describe("web desktop routes", () => {
     });
 
     expect(first?.status).toBe(204);
-    expect(collision?.status).toBe(400);
+    expect(collision?.status).toBe(409);
     await expect(restartedService.readTranscript("thread-original")).resolves.toHaveLength(1);
     await expect(restartedService.readTranscript("thread-moved")).resolves.toEqual([]);
+  });
+
+  test("deduplicates response-loss retries across independent service processes", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-multi-service-");
+    const userDataDir = path.join(workspace, "user-data");
+    const event = {
+      ts: "2026-07-10T07:00:00.000Z",
+      threadId: "thread-multi-service",
+      direction: "server" as const,
+      payload: { type: "agent_message", text: "once" },
+      generation: 0,
+    };
+
+    await Promise.all([
+      appendTranscriptBatchInProcess(userDataDir, event, "multi-service-batch"),
+      appendTranscriptBatchInProcess(userDataDir, event, "multi-service-batch"),
+    ]);
+
+    const restartedService = new WebDesktopService({ userDataDir });
+    await expect(restartedService.readTranscript(event.threadId)).resolves.toEqual([
+      {
+        ts: event.ts,
+        threadId: event.threadId,
+        direction: event.direction,
+        payload: event.payload,
+        deliveryId: "multi-service-batch:0",
+      },
+    ]);
+  });
+
+  test("uses generation tombstones to prevent a deleted transcript from being resurrected", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-tombstone-");
+    const userDataDir = path.join(workspace, "user-data");
+    const firstService = new WebDesktopService({ userDataDir });
+    const secondService = new WebDesktopService({ userDataDir });
+    const event = {
+      ts: "2026-07-10T07:00:00.000Z",
+      threadId: "thread-deleted",
+      direction: "client" as const,
+      payload: { type: "user_message", text: "remove me" },
+      generation: 0,
+    };
+    await firstService.appendTranscriptBatch([event], { batchId: "before-delete" });
+    await firstService.deleteTranscript(event.threadId, { generation: 1 });
+
+    await secondService.appendTranscriptBatch([event], { batchId: "stale-after-delete" });
+    await secondService.appendTranscriptBatch([event], { batchId: "before-delete" });
+
+    await expect(secondService.readTranscript(event.threadId)).resolves.toEqual([]);
+  });
+
+  test("keeps bounded dedupe receipts while projection IDs prevent replay duplicates", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-bounded-dedupe-");
+    const userDataDir = path.join(workspace, "user-data");
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      maxBatches: 2,
+      retentionMs: Number.MAX_SAFE_INTEGER,
+      now: () => 1_000,
+    });
+    const createEvent = (index: number) => ({
+      ts: `2026-07-10T07:00:0${index}.000Z`,
+      threadId: "thread-bounded",
+      direction: "server" as const,
+      payload: { index },
+      generation: 0,
+    });
+    inbox.appendBatch([createEvent(1)], "bounded-1");
+    inbox.appendBatch([createEvent(2)], "bounded-2");
+    inbox.appendBatch([createEvent(3)], "bounded-3");
+    inbox.appendBatch([createEvent(1)], "bounded-1");
+
+    const service = new WebDesktopService({ userDataDir });
+    const events = await service.readTranscript("thread-bounded");
+    expect(events).toHaveLength(3);
+    expect(new Set(events.map((event) => event.deliveryId)).size).toBe(3);
+  });
+
+  test("rejects transcript requests above the explicit event limit", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-request-limit-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const response = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchId: "oversized-batch",
+          events: Array.from({ length: TRANSCRIPT_REQUEST_MAX_EVENTS + 1 }, (_, index) => ({
+            ts: "2026-07-10T07:00:00.000Z",
+            threadId: "thread-request-limit",
+            direction: "server",
+            payload: { index },
+          })),
+        }),
+      }),
+      { cwd: workspace, desktopService: service },
+    );
+
+    expect(response?.status).toBe(413);
   });
 
   test("serves active-content files as attachments while keeping plain text inline", async () => {

@@ -32,23 +32,47 @@ the `Idempotency-Key` header and this JSON body:
       "ts": "2026-07-09T20:00:00.000Z",
       "threadId": "thread-123",
       "direction": "server",
-      "payload": { "type": "agent_message", "text": "Hello" }
+      "payload": { "type": "agent_message", "text": "Hello" },
+      "generation": 0
     }
   ]
 }
 ```
 
-The server returns `204` after the full batch is appended. Replaying an acknowledged or
-ambiguously completed batch with the same id and identical events also returns `204` without
-duplicating transcript lines. Reusing an id with different event data is rejected. The legacy
-array-only request body remains accepted for older clients but has no idempotency guarantee.
+The server accepts at most 100 events and 256 KiB of serialized event data per batch; oversized
+bodies return `413`. It transactionally commits the batch id, digest, unique delivery ids, and
+captured transcript generation to a process-safe SQLite inbox before updating JSONL. JSONL is only
+a compatibility projection. Replaying an acknowledged or ambiguously completed batch with the same
+id and identical events returns `204` without duplicate lines, including when another service
+instance handles the replay. Reusing an id with different event data returns `409`. Dedupe receipts
+are indexed and bounded to 10,000 batches or 30 days; delivery ids in retained JSONL projections
+continue to suppress identical older replays. The legacy array-only body remains accepted for
+older clients but receives only a server-generated idempotency key.
 
-The web client persists unacknowledged batches before sending, retries transient network,
-timeout, `408`, `425`, `429`, and `5xx` failures in order with a bounded backoff, and stops at the
-first permanent or retry-exhausted failure. Pending data remains in browser storage and the
-operation feedback surface reports the failure. `pagehide`/`beforeunload` performs one best-effort
-authenticated `keepalive` send for only the ordered head batch; retained data is rehydrated with
-the same idempotency key after refresh.
+The web client commits each captured event as a transactional IndexedDB batch before the desktop
+debounce path can run. Every record binds the full collision-safe `(server URL, workspace path)`
+scope and immutable destination URL. A renewable IndexedDB lease permits one sender per scope;
+other tabs may enqueue but cannot acknowledge or erase the owner's batch. Replacing or closing a
+sender cancels its scheduler and active request, releases only its lease, and leaves every
+unacknowledged record available to the next owner.
+
+The outbox is bounded to 512 batches, 4,096 events, 4 MiB total, 100 events per request, and 240 KiB
+per serialized client request. Capacity or quota failures produce a recoverable rejected-event
+result and visible Retry guidance instead of silently evicting old data. Retry attempts,
+blocked state, and `nextAttemptAt` are persisted. Transient network, timeout, `408`, `425`, `429`,
+and `5xx` failures retry in order with bounded backoff; a valid `Retry-After` delta or HTTP date
+sets the minimum delay. Permanent and retry-exhausted heads block later delivery until the user
+chooses Retry or Discard. Malformed IndexedDB records are quarantined and reported. A `404`
+marks the endpoint capability absent, clears that scope, and suppresses capture for 60 seconds
+before probing again, so older servers do not accumulate failures while upgrades can recover.
+
+`pagehide`/`beforeunload` first waits for already-started capture transactions, then performs one
+best-effort authenticated `keepalive` send for the ordered head. Retained data is rehydrated with
+the same idempotency key after refresh. `DELETE /cowork/desktop/transcript?threadId=<id>&generation=N`
+persists generation `N` as a deletion tombstone. The browser increments the same generation and
+transactionally cancels matching outbox batches before sending DELETE; stale in-flight or replayed
+events carry the older generation and are acknowledged without projection, so they cannot
+resurrect a deleted transcript.
 
 ## Mobile direct HTTP/3 transport
 

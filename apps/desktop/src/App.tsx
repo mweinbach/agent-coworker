@@ -44,6 +44,7 @@ import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
+import { TranscriptDeliveryRecovery } from "./ui/TranscriptDeliveryRecovery";
 import { TaskConversationSidebar } from "./ui/tasks/TaskConversationSidebar";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
@@ -643,6 +644,7 @@ export default function App() {
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       ) : null}
       {windowMode === "main" ? <DesktopOnboarding /> : null}
+      {windowMode === "main" ? <TranscriptDeliveryRecovery /> : null}
     </>
   );
 }

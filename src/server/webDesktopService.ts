@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -28,9 +27,11 @@ import {
   spawnStreamingSubprocess,
   subscribeLines,
 } from "../utils/subprocess";
+import { TranscriptInbox, type TranscriptInboxEvent } from "./transcriptInbox";
+
+export { TRANSCRIPT_BATCH_ID_PATTERN } from "./transcriptInbox";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
-export const TRANSCRIPT_BATCH_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIR_MODE = 0o700;
 const SERVER_STARTUP_TIMEOUT_MS = 15_000;
@@ -85,11 +86,7 @@ export type DesktopPersistedState = {
   onboarding?: unknown;
 };
 
-export type DesktopTranscriptEvent = {
-  ts: string;
-  threadId: string;
-  direction: "server" | "client";
-  payload: unknown;
+export type DesktopTranscriptEvent = TranscriptInboxEvent & {
   deliveryId?: string;
 };
 
@@ -97,9 +94,8 @@ export type TranscriptAppendOptions = {
   batchId?: string;
 };
 
-type TranscriptBatchLedgerEntry = {
-  batchId: string;
-  digest: string;
+export type TranscriptDeleteOptions = {
+  generation?: number;
 };
 
 export type WebDesktopServiceLike = {
@@ -122,7 +118,7 @@ export type WebDesktopServiceLike = {
     events: DesktopTranscriptEvent[],
     options?: TranscriptAppendOptions,
   ): Promise<void>;
-  deleteTranscript(threadId: string): Promise<void>;
+  deleteTranscript(threadId: string, options?: TranscriptDeleteOptions): Promise<void>;
   stopAll(): Promise<void>;
 };
 
@@ -163,6 +159,7 @@ const transcriptEventSchema = z
     threadId: z.string().trim().min(1),
     direction: z.enum(["server", "client"]),
     payload: z.unknown(),
+    generation: z.number().int().nonnegative().optional(),
     deliveryId: z.string().trim().min(1).optional(),
   })
   .passthrough();
@@ -813,8 +810,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
   private stateWatcher: fsSync.FSWatcher | null = null;
   private stateWatcherDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private stateWatcherLastSignature: string | null = null;
-  private transcriptWriteQueue: Promise<void> = Promise.resolve();
-  private transcriptBatchDigests: Map<string, string> | null = null;
+  private readonly transcriptInbox: TranscriptInbox;
 
   constructor(
     opts: {
@@ -822,6 +818,8 @@ export class WebDesktopService implements WebDesktopServiceLike {
       homedir?: string;
       serverManager?: SourceWorkspaceServerManager;
       serverManagerFactory?: () => SourceWorkspaceServerManager;
+      transcriptInbox?: TranscriptInbox;
+      now?: () => number;
     } = {},
   ) {
     this.userDataDir = resolveDesktopUserDataDir(opts.userDataDir, opts.homedir);
@@ -829,6 +827,12 @@ export class WebDesktopService implements WebDesktopServiceLike {
     this.serverManager = opts.serverManager ?? null;
     this.serverManagerFactory =
       opts.serverManagerFactory ?? (() => new SourceWorkspaceServerManager());
+    this.transcriptInbox =
+      opts.transcriptInbox ??
+      new TranscriptInbox({
+        userDataDir: this.userDataDir,
+        now: opts.now,
+      });
   }
 
   private get stateFilePath(): string {
@@ -837,10 +841,6 @@ export class WebDesktopService implements WebDesktopServiceLike {
 
   private get transcriptsDir(): string {
     return path.join(this.userDataDir, "transcripts");
-  }
-
-  private get transcriptBatchLedgerPath(): string {
-    return path.join(this.transcriptsDir, ".batch-idempotency.jsonl");
   }
 
   private transcriptFilePath(threadId: string): string {
@@ -1018,6 +1018,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
   }
 
   async readTranscript(threadId: string): Promise<DesktopTranscriptEvent[]> {
+    this.transcriptInbox.projectPending(threadId);
     let raw = "";
     try {
       raw = await fs.readFile(this.transcriptFilePath(threadId), "utf8");
@@ -1050,87 +1051,6 @@ export class WebDesktopService implements WebDesktopServiceLike {
     return events;
   }
 
-  private async loadTranscriptBatchDigests(): Promise<Map<string, string>> {
-    if (this.transcriptBatchDigests) {
-      return this.transcriptBatchDigests;
-    }
-
-    const digests = new Map<string, string>();
-    let raw = "";
-    try {
-      raw = await fs.readFile(this.transcriptBatchLedgerPath, "utf8");
-    } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : "";
-      if (code !== "ENOENT") {
-        throw error;
-      }
-    }
-
-    for (const line of raw.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(trimmed) as unknown;
-      } catch {
-        // Ignore malformed ledger lines and salvage intact batch identities.
-        continue;
-      }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        continue;
-      }
-      const record = parsed as Partial<TranscriptBatchLedgerEntry>;
-      if (
-        typeof record.batchId !== "string" ||
-        !TRANSCRIPT_BATCH_ID_PATTERN.test(record.batchId) ||
-        typeof record.digest !== "string" ||
-        !/^[a-f0-9]{64}$/.test(record.digest)
-      ) {
-        continue;
-      }
-      const existing = digests.get(record.batchId);
-      if (existing && existing !== record.digest) {
-        throw new Error("Transcript idempotency ledger contains conflicting entries");
-      }
-      digests.set(record.batchId, record.digest);
-    }
-
-    this.transcriptBatchDigests = digests;
-    return digests;
-  }
-
-  private async ensureTranscriptBatchIdentity(
-    batchId: string,
-    events: DesktopTranscriptEvent[],
-  ): Promise<void> {
-    if (!TRANSCRIPT_BATCH_ID_PATTERN.test(batchId)) {
-      throw new Error("batchId contains invalid characters");
-    }
-    const digest = createHash("sha256").update(JSON.stringify(events)).digest("hex");
-    const digests = await this.loadTranscriptBatchDigests();
-    const existing = digests.get(batchId);
-    if (existing) {
-      if (existing !== digest) {
-        throw new Error("Idempotency key was reused with different transcript data");
-      }
-      await fs.chmod(this.transcriptBatchLedgerPath, PRIVATE_FILE_MODE);
-      return;
-    }
-
-    const entry: TranscriptBatchLedgerEntry = { batchId, digest };
-    await fs.appendFile(this.transcriptBatchLedgerPath, `${JSON.stringify(entry)}\n`, {
-      encoding: "utf8",
-      mode: PRIVATE_FILE_MODE,
-    });
-    digests.set(batchId, digest);
-    await fs.chmod(this.transcriptBatchLedgerPath, PRIVATE_FILE_MODE);
-  }
-
   async appendTranscriptEvent(event: DesktopTranscriptEvent): Promise<void> {
     await this.appendTranscriptBatch([event]);
   }
@@ -1139,25 +1059,9 @@ export class WebDesktopService implements WebDesktopServiceLike {
     events: DesktopTranscriptEvent[],
     options: TranscriptAppendOptions = {},
   ): Promise<void> {
-    const write = this.transcriptWriteQueue
-      .catch(() => {
-        // A failed append must not poison later independent writes.
-      })
-      .then(async () => {
-        await this.appendTranscriptBatchOrdered(events, options);
-      });
-    this.transcriptWriteQueue = write;
-    await write;
-  }
-
-  private async appendTranscriptBatchOrdered(
-    events: DesktopTranscriptEvent[],
-    options: TranscriptAppendOptions,
-  ): Promise<void> {
     if (events.length === 0) {
       return;
     }
-
     const parsedEvents = events.map((event) => {
       const parsed = transcriptEventSchema.safeParse(event);
       if (!parsed.success) {
@@ -1165,76 +1069,20 @@ export class WebDesktopService implements WebDesktopServiceLike {
       }
       return parsed.data;
     });
-
-    await fs.mkdir(this.transcriptsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-    if (options.batchId) {
-      await this.ensureTranscriptBatchIdentity(options.batchId, parsedEvents);
-    }
-    const normalizedEvents = parsedEvents.map((event, index) =>
-      options.batchId ? { ...event, deliveryId: `${options.batchId}:${index}` } : event,
+    this.transcriptInbox.appendBatch(
+      parsedEvents,
+      options.batchId ?? `legacy-${globalThis.crypto.randomUUID()}`,
     );
-    const buckets = new Map<string, DesktopTranscriptEvent[]>();
-    for (const event of normalizedEvents) {
-      const existing = buckets.get(event.threadId);
-      if (existing) {
-        existing.push(event);
-      } else {
-        buckets.set(event.threadId, [event]);
-      }
-    }
-
-    for (const [threadId, bucket] of buckets) {
-      const existingByDeliveryId = new Map(
-        (await this.readTranscript(threadId))
-          .filter(
-            (
-              event,
-            ): event is DesktopTranscriptEvent & {
-              deliveryId: string;
-            } => typeof event.deliveryId === "string",
-          )
-          .map((event) => [event.deliveryId, event]),
-      );
-      const pending = bucket.filter((event) => {
-        if (!event.deliveryId) {
-          return true;
-        }
-        const existing = existingByDeliveryId.get(event.deliveryId);
-        if (!existing) {
-          return true;
-        }
-        if (JSON.stringify(existing) !== JSON.stringify(event)) {
-          throw new Error("Idempotency key was reused with different transcript data");
-        }
-        return false;
-      });
-      if (pending.length === 0) {
-        continue;
-      }
-      const filePath = this.transcriptFilePath(threadId);
-      const payload = `${pending.map((event) => JSON.stringify(event)).join("\n")}\n`;
-      await fs.appendFile(filePath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-      await fs.chmod(filePath, PRIVATE_FILE_MODE);
-    }
   }
 
-  async deleteTranscript(threadId: string): Promise<void> {
-    try {
-      await fs.unlink(this.transcriptFilePath(threadId));
-    } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : "";
-      if (code !== "ENOENT") {
-        throw error;
-      }
-    }
+  async deleteTranscript(threadId: string, options: TranscriptDeleteOptions = {}): Promise<void> {
+    this.transcriptInbox.deleteThread(threadId, options.generation);
   }
 
   async stopAll(): Promise<void> {
     this.closeStateWatcher();
     this.stateChangeListeners.clear();
+    this.transcriptInbox.close();
     await this.serverManager?.stopAll();
   }
 

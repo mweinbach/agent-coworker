@@ -20,7 +20,7 @@ describe("desktop application menu", () => {
     expect(template[0]?.role).toBe("appMenu");
     const fileMenu = template.find((item: any) => item.label === "File");
     const appMenu = template[0];
-    expect(fileMenu?.submenu?.some((entry: any) => entry.label === "New Thread")).toBe(true);
+    expect(fileMenu?.submenu?.some((entry: any) => entry.label === "New Chat")).toBe(true);
     expect(appMenu?.submenu?.some((entry: any) => entry.label === "Check for Updates…")).toBe(true);
     const updateEntry = appMenu?.submenu?.find(
       (entry: any) => entry.label === "Check for Updates…",
@@ -90,5 +90,26 @@ describe("desktop application menu", () => {
     expect(quickChatEntry).toBeTruthy();
     quickChatEntry?.click?.();
     expect(openedQuickChat).toBe(1);
+  });
+
+  test("includes command palette entry with accelerator", () => {
+    const commands: string[] = [];
+    const template = buildDesktopMenuTemplate(
+      {
+        includeDevTools: false,
+        openExternal: () => {},
+        openQuickChat: () => {},
+        sendCommand: (command) => {
+          commands.push(command);
+        },
+      },
+      "darwin",
+    );
+    const fileMenu = template.find((item: any) => item.label === "File");
+    const palette = fileMenu?.submenu?.find((entry: any) => entry.label === "Command Palette");
+    expect(palette).toBeTruthy();
+    expect(palette?.accelerator).toBe("CmdOrCtrl+K");
+    palette?.click?.();
+    expect(commands).toContain("openCommandPalette");
   });
 });

@@ -217,6 +217,76 @@ describe("Canvas hooks stability across file-type switches", () => {
     }
   });
 
+  test.serial(
+    "shows markdown formatting only in source mode where it edits the selection",
+    async () => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      const mdPath = "/Users/mweinbach/Projects/preview-workspace/notes.md";
+      useAppStore.setState({ canvasShowFormattingBar: true } as Partial<AppStoreState>);
+      let root: ReturnType<typeof createRoot> | null = null;
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+
+        await act(async () => {
+          root!.render(createElement(Canvas, { path: mdPath }));
+          await flushUi();
+        });
+        for (
+          let attempt = 0;
+          attempt < 10 && harness.dom.window.document.body.textContent?.includes("Reading file...");
+          attempt += 1
+        ) {
+          await act(async () => {
+            await flushUi();
+          });
+        }
+        expect(harness.dom.window.document.body.textContent).not.toContain("Reading file...");
+
+        expect(harness.dom.window.document.querySelector("button[title='Bold']")).toBeNull();
+        await act(async () => {
+          useAppStore.getState().setCanvasActiveTab("edit");
+          await flushUi();
+        });
+
+        expect(useAppStore.getState().canvasActiveTab).toBe("edit");
+        let sourceTextarea = harness.dom.window.document.querySelector<HTMLTextAreaElement>(
+          '[data-slot="tabs-content"][data-state="active"] textarea',
+        );
+        for (let attempt = 0; attempt < 10 && !sourceTextarea; attempt += 1) {
+          await act(async () => {
+            await flushUi();
+          });
+          sourceTextarea = harness.dom.window.document.querySelector<HTMLTextAreaElement>(
+            '[data-slot="tabs-content"][data-state="active"] textarea',
+          );
+        }
+        expect(sourceTextarea?.value).toBe("# Heading\n\n1. one\n2. two\n");
+        sourceTextarea?.setSelectionRange(2, 9);
+        const boldButton = harness.dom.window.document.querySelector(
+          "button[title='Bold']",
+        ) as HTMLButtonElement | null;
+        expect(boldButton).not.toBeNull();
+        await act(async () => {
+          boldButton?.click();
+          await flushUi();
+        });
+        expect(sourceTextarea?.value).toBe("# **Heading**\n\n1. one\n2. two\n");
+        expect(writeFileMock).not.toHaveBeenCalled();
+      } finally {
+        if (root) {
+          try {
+            await act(async () => {
+              root!.unmount();
+            });
+          } catch {}
+        }
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("explains truncated previews and keeps markdown editing read-only", async () => {
     previewResult = makePreviewResult("# Large file preview\n\nVisible prefix only.\n", true);
     const harness = setupJsdom({ includeAnimationFrame: true });
@@ -238,8 +308,9 @@ describe("Canvas hooks stability across file-type switches", () => {
       expect(text).toContain(
         "Editing is disabled to avoid overwriting the full file with partial content.",
       );
-      const previewEditor = harness.dom.window.document.querySelector('[role="textbox"]');
-      expect(previewEditor?.getAttribute("contenteditable")).toBe("false");
+      // Preview is read-only rendered markdown; source edit is a Textarea that
+      // must be read-only when the preview is truncated.
+      expect(harness.dom.window.document.querySelector("[contenteditable]")).toBeNull();
 
       await act(async () => {
         root!.unmount();

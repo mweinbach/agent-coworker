@@ -8,6 +8,8 @@ import {
   withBrowserAccessToken,
 } from "../lib/webAdapter";
 import { getSavedServerUrl } from "../lib/webWorkspaceState";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 
 type ConnectPageProps = {
   onConnect: () => void;
@@ -62,7 +64,9 @@ function probeWebSocket(url: string, timeoutMs = 4000): Promise<void> {
       settled = true;
       try {
         ws.close();
-      } catch {}
+      } catch {
+        // ignore close races after timeout
+      }
       reject(new Error(`Timed out after ${timeoutMs}ms connecting to ${url}`));
     }, timeoutMs);
     ws.addEventListener("open", () => {
@@ -71,7 +75,9 @@ function probeWebSocket(url: string, timeoutMs = 4000): Promise<void> {
       clearTimeout(timer);
       try {
         ws.close();
-      } catch {}
+      } catch {
+        // ignore close races after open
+      }
       resolve();
     });
     ws.addEventListener("error", () => {
@@ -187,185 +193,80 @@ export function ConnectPage({
   };
 
   return (
-    <div
-      style={{
-        height: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "var(--surface-window)",
-        color: "var(--text-primary)",
-        fontFamily: "var(--font-sans)",
-      }}
-    >
-      <div
-        style={{
-          width: 420,
-          padding: 32,
-          borderRadius: 12,
-          background: "var(--surface-base)",
-          border: "1px solid var(--border-default)",
-        }}
-      >
-        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0, marginBottom: 4 }}>Cowork</h1>
-        <p
-          style={{
-            fontSize: 13,
-            color: "var(--text-secondary)",
-            margin: 0,
-            marginBottom: 20,
-          }}
-        >
-          Connect to a running Cowork server
-        </p>
+    <div className="flex h-screen items-center justify-center bg-background text-foreground">
+      <div className="w-[420px] rounded-xl border border-border bg-card p-8 shadow-sm">
+        <h1 className="m-0 mb-1 text-xl font-semibold tracking-tight">Cowork</h1>
+        <p className="mb-5 text-[13px] text-muted-foreground">Connect to a running Cowork server</p>
 
         {discovered.length > 1 ? (
           <>
-            <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, marginBottom: 8 }}>
-              Select a workspace:
-            </p>
-            <div style={{ marginBottom: 16 }}>
+            <p className="mb-2 text-xs text-muted-foreground">Select a workspace:</p>
+            <div className="mb-4 flex flex-col gap-1">
               {discovered.map((ws) => (
-                <button
+                <Button
                   type="button"
                   key={ws.path}
+                  variant="outline"
                   onClick={() => void connectWithPath(serverUrl, ws.path)}
                   disabled={busy}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "8px 12px",
-                    borderRadius: 6,
-                    border: "1px solid var(--border-default)",
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    fontSize: 13,
-                    marginBottom: 4,
-                    cursor: busy ? "not-allowed" : "pointer",
-                  }}
+                  className="h-auto w-full flex-col items-start justify-start gap-0.5 px-3 py-2 text-left whitespace-normal"
                 >
-                  <strong>{ws.name}</strong>
-                  <span
-                    style={{
-                      display: "block",
-                      fontSize: 11,
-                      color: "var(--text-tertiary)",
-                    }}
-                  >
-                    {ws.path}
-                  </span>
-                </button>
+                  <span className="text-[13px] font-semibold text-foreground">{ws.name}</span>
+                  <span className="text-[11px] font-normal text-muted-foreground">{ws.path}</span>
+                </Button>
               ))}
             </div>
           </>
         ) : null}
 
-        <button
+        <Button
           type="button"
           onClick={handleConnect}
           disabled={busy || !serverUrl}
-          style={{
-            width: "100%",
-            padding: "10px 16px",
-            borderRadius: 6,
-            border: "none",
-            background: busy ? "var(--border-default)" : "var(--accent)",
-            color: "var(--text-inverse)",
-            fontSize: 13,
-            fontWeight: 500,
-            cursor: busy ? "not-allowed" : "pointer",
-            opacity: busy ? 0.7 : 1,
-            marginBottom: 12,
-          }}
+          className="mb-3 w-full"
         >
           {busy ? (status ?? "Connecting…") : "Connect"}
-        </button>
+        </Button>
 
-        {status && !error ? (
-          <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, marginBottom: 12 }}>
-            {status}
-          </p>
-        ) : null}
+        {status && !error ? <p className="mb-3 text-xs text-muted-foreground">{status}</p> : null}
 
-        {error ? (
-          <p style={{ fontSize: 12, color: "var(--danger)", margin: 0, marginBottom: 12 }}>
-            {error}
-          </p>
-        ) : null}
+        {error ? <p className="mb-3 text-xs text-destructive">{error}</p> : null}
 
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
-          style={{
-            fontSize: 11,
-            color: "var(--text-tertiary)",
-            background: "transparent",
-            border: "none",
-            padding: 0,
-            cursor: "pointer",
-            marginBottom: showAdvanced ? 12 : 0,
-          }}
+          className={`bg-transparent p-0 text-[11px] text-muted-foreground hover:text-foreground ${
+            showAdvanced ? "mb-3" : ""
+          }`}
         >
           {showAdvanced ? "Hide advanced" : "Advanced…"}
         </button>
 
         {showAdvanced ? (
-          <>
+          <div className="flex flex-col gap-2">
             <label
               htmlFor="connect-server-url"
-              style={{
-                display: "block",
-                fontSize: 12,
-                fontWeight: 500,
-                marginBottom: 6,
-                color: "var(--text-secondary)",
-              }}
+              className="text-xs font-medium text-muted-foreground"
             >
               Server URL
             </label>
-            <input
+            <Input
               id="connect-server-url"
               type="text"
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="ws://127.0.0.1:7337/ws"
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                padding: "8px 12px",
-                borderRadius: 6,
-                border: "1px solid var(--border-default)",
-                background: "var(--surface-base)",
-                color: "var(--text-primary)",
-                fontSize: 13,
-                marginBottom: 8,
-                outline: "none",
-              }}
             />
-            <p
-              style={{
-                fontSize: 11,
-                color: "var(--text-tertiary)",
-                margin: 0,
-              }}
-            >
+            <p className="m-0 text-[11px] text-muted-foreground">
               Defaults to same-origin via the Vite dev proxy. Override to point at a different
               Cowork server.
             </p>
-          </>
+          </div>
         ) : null}
 
-        <p
-          style={{
-            fontSize: 11,
-            color: "var(--text-tertiary)",
-            marginTop: 16,
-            marginBottom: 0,
-          }}
-        >
-          Tip: <code style={{ fontSize: 11 }}>bun run desktop:web -- --dir /path/to/project</code>
+        <p className="mt-4 mb-0 text-[11px] text-muted-foreground">
+          Tip: <code className="text-[11px]">bun run desktop:web -- --dir /path/to/project</code>
         </p>
       </div>
     </div>

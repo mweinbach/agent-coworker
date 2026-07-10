@@ -5,7 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
-import { canonicalizeRoot } from "../src/platform/sandbox/policy";
+import { canonicalizeRoot, tmpScratchRoots } from "../src/platform/sandbox/policy";
 import {
   type CodexAppServerClient,
   type CodexAppServerJsonRpcNotification,
@@ -1039,9 +1039,10 @@ rl.on("line", (line) => {
       process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
       try {
-        const runtime = createRuntime(makeConfig(dir));
+        const config = makeConfig(dir);
+        const runtime = createRuntime(config);
         await runtime.runTurn({
-          config: makeConfig(dir),
+          config,
           system: "You are a no-project-write child agent.",
           messages: [{ role: "user", content: "Inspect only" }],
           tools: {},
@@ -1064,11 +1065,11 @@ rl.on("line", (line) => {
         });
         const sandboxPolicy = requests.find((entry) => entry.method === "turn/start")?.params
           ?.sandboxPolicy;
-        const expectedScratchRoots =
-          process.platform === "win32" ? [canonicalizeRoot(os.tmpdir())] : ["/tmp", "/private/tmp"];
-        for (const root of expectedScratchRoots) {
-          expect(sandboxPolicy?.writableRoots).toContain(root);
-        }
+        const expectedScratchRoots = tmpScratchRoots(
+          [config.workingDirectory, path.dirname(config.projectCoworkDir)],
+          process.platform === "win32" ? [os.tmpdir()] : ["/tmp", "/private/tmp"],
+        );
+        expect(sandboxPolicy?.writableRoots).toEqual(expectedScratchRoots);
         if (process.platform === "win32") {
           expect(sandboxPolicy?.writableRoots).not.toContain("/tmp");
           expect(sandboxPolicy?.writableRoots).not.toContain("/private/tmp");

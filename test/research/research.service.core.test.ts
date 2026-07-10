@@ -608,4 +608,211 @@ describe("research service", () => {
       await fs.rm(paths.home, { recursive: true, force: true });
     }
   });
+
+  test("reparents a live descendant before it completes after parent deletion", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const childStarted = deferred();
+    const completeChild = deferred();
+
+    await sessionDb.upsertResearch(
+      makeResearchRecord({
+        id: "research-parent-for-live-child",
+        status: "completed",
+        interactionId: "interaction-parent-for-live-child",
+      }),
+    );
+    researchRuntimeImpls.createResearchInteractionStream = async () =>
+      (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-child-start",
+          interaction: { id: "interaction-live-child", status: "running" },
+        };
+        childStarted.resolve();
+        await completeChild.promise;
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-child-content",
+          delta: { type: "text", text: "Child completed after its parent was deleted." },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-child-complete",
+          interaction: { id: "interaction-live-child", status: "completed" },
+        };
+      })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const child = await service.followUp("research-parent-for-live-child", {
+        input: "Continue this research after deleting the parent.",
+      });
+      await childStarted.promise;
+
+      await expect(service.delete("research-parent-for-live-child")).resolves.toEqual({
+        researchId: "research-parent-for-live-child",
+        deleted: true,
+      });
+      expect((await service.get(child.id))?.parentResearchId).toBeNull();
+
+      completeChild.resolve();
+      const completed = await waitFor(
+        () => sessionDb.getResearch(child.id),
+        (value) => value?.status === "completed",
+      );
+      expect(completed?.parentResearchId).toBeNull();
+      expect(completed?.outputsMarkdown).toContain("Child completed after its parent was deleted.");
+    } finally {
+      completeChild.resolve();
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("aborts early deletion and bounds settlement before an interaction id exists", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const createStarted = deferred();
+    const releaseCreate = deferred();
+    const sent: Array<Record<string, unknown>> = [];
+    let streamSignal: AbortSignal | null = null;
+
+    researchRuntimeImpls.createResearchInteractionStream = async (opts) => {
+      streamSignal = (opts as { signal?: AbortSignal } | undefined)?.signal ?? null;
+      createStarted.resolve();
+      await releaseCreate.promise;
+      return (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-too-late-start",
+          interaction: { id: "interaction-too-late", status: "running" },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-too-late-complete",
+          interaction: { id: "interaction-too-late", status: "completed" },
+        };
+      })();
+    };
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: (_ws, payload) => {
+        sent.push(payload as Record<string, unknown>);
+      },
+      deleteStreamSettleTimeoutMs: 25,
+    });
+
+    try {
+      const research = await service.start({ input: "Delete before Google returns an id." });
+      await createStarted.promise;
+      await service.subscribe(
+        { data: { connectionId: "early-delete-subscriber" } } as never,
+        research.id,
+      );
+
+      await expect(service.delete(research.id)).resolves.toEqual({
+        researchId: research.id,
+        deleted: true,
+      });
+      expect(streamSignal?.aborted).toBe(true);
+      expect(cancelResearchInteractionMock).not.toHaveBeenCalled();
+      expect(sessionDb.getResearch(research.id)).toBeNull();
+
+      releaseCreate.resolve();
+      await Bun.sleep(100);
+      expect(sessionDb.getResearch(research.id)).toBeNull();
+      expect(sent.filter((payload) => payload.method === "research/deleted")).toHaveLength(1);
+      expect(sent.some((payload) => payload.method === "research/updated")).toBe(false);
+    } finally {
+      releaseCreate.resolve();
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("tombstones active research and waits for its deferred stream before deleting", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const streamPaused = deferred();
+    const releaseStream = deferred();
+    const sent: Array<Record<string, unknown>> = [];
+
+    researchRuntimeImpls.createResearchInteractionStream = async () =>
+      (async function* () {
+        yield {
+          event_type: "interaction.start",
+          event_id: "evt-delete-start",
+          interaction: { id: "interaction-delete-active", status: "running" },
+        };
+        streamPaused.resolve();
+        await releaseStream.promise;
+        yield {
+          event_type: "content.delta",
+          event_id: "evt-delete-late-delta",
+          delta: { type: "text", text: "late content must not recreate the record" },
+        };
+        yield {
+          event_type: "interaction.complete",
+          event_id: "evt-delete-complete",
+          interaction: { id: "interaction-delete-active", status: "completed" },
+        };
+      })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as any,
+      sendJsonRpc: (_ws, payload) => {
+        sent.push(payload as Record<string, unknown>);
+      },
+    });
+
+    try {
+      const research = await service.start({ input: "Delete this active research." });
+      await streamPaused.promise;
+      await service.subscribe(
+        { data: { connectionId: "delete-subscriber" } } as never,
+        research.id,
+      );
+
+      let deletionSettled = false;
+      const deletion = service.delete(research.id).then((result) => {
+        deletionSettled = true;
+        return result;
+      });
+      await waitFor(
+        () => cancelResearchInteractionMock.mock.calls.length,
+        (callCount) => callCount === 1,
+      );
+
+      expect(deletionSettled).toBe(false);
+      expect(await service.get(research.id)).toBeNull();
+
+      releaseStream.resolve();
+      await expect(deletion).resolves.toEqual({ researchId: research.id, deleted: true });
+      await Bun.sleep(200);
+
+      expect(sessionDb.getResearch(research.id)).toBeNull();
+      expect(sent.filter((payload) => payload.method === "research/deleted")).toEqual([
+        {
+          method: "research/deleted",
+          params: { researchId: research.id },
+        },
+      ]);
+    } finally {
+      releaseStream.resolve();
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
 });

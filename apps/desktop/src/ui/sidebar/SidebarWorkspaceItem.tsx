@@ -23,10 +23,12 @@ import { Collapsible, CollapsibleTrigger } from "../../components/ui/collapsible
 import { Input } from "../../components/ui/input";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
-import { formatSidebarRelativeAge } from "../sidebarHelpers";
+import { formatSidebarRelativeAge, MAX_VISIBLE_SIDEBAR_ITEMS } from "../sidebarHelpers";
 import { ThreadOverflowMenu } from "./ThreadOverflowMenu";
 
-export const MAX_VISIBLE_THREADS = 5;
+/** @deprecated Prefer MAX_VISIBLE_SIDEBAR_ITEMS */
+export const MAX_VISIBLE_THREADS = MAX_VISIBLE_SIDEBAR_ITEMS;
+
 const EMPTY_TASK_SUMMARIES: TaskSummary[] = [];
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item min-w-0 [&:not(:last-child)]:mb-3";
 /** Matches `.sidebar-thread-region` transition duration in styles.css (fallback when transitionend does not fire). */
@@ -82,7 +84,14 @@ export type SidebarWorkspaceItemProps = {
   canGenerateMemoryForThread: (threadId: string) => boolean;
   onGenerateMemoryForThread: (threadId: string) => void;
   onDeleteHistoryForThread: (threadId: string, title: string) => void;
+  onArchiveThread: (threadId: string, title: string) => void;
 };
+
+function overflowTriggerVisibilityClassName(isActive: boolean): string {
+  return isActive
+    ? "opacity-100 pointer-events-auto scale-100"
+    : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100";
+}
 
 export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   active,
@@ -118,6 +127,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   canGenerateMemoryForThread,
   onGenerateMemoryForThread,
   onDeleteHistoryForThread,
+  onArchiveThread,
 }: SidebarWorkspaceItemProps) {
   const controls = useDragControls();
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -125,7 +135,6 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   const prevExpandedRef = useRef(expanded);
   const [renderThreadRegion, setRenderThreadRegion] = useState(expanded);
   const [threadRegionOpen, setThreadRegionOpen] = useState(expanded);
-  const archiveThread = useAppStore((s) => s.archiveThread);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags?.tasks === true);
   const visibleTasks = tasksEnabled ? tasks : EMPTY_TASK_SUMMARIES;
 
@@ -333,95 +342,108 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       Chats
                     </div>
                   ) : null}
-                  {visibleThreads.map((thread) => {
-                    const runtime = threadRuntimeById[thread.id];
-                    const busy = runtime?.busy === true;
-                    const isActive = thread.id === selectedThreadId;
-                    const isEditing = editingThreadId === thread.id;
-                    const displayTitle = thread.title || "New thread";
-                    const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
+                  <div
+                    className={
+                      showAllThreads && workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS
+                        ? "sidebar-chats-scroll-container pr-1"
+                        : undefined
+                    }
+                  >
+                    {visibleThreads.map((thread) => {
+                      const runtime = threadRuntimeById[thread.id];
+                      const busy = runtime?.busy === true;
+                      const isActive = thread.id === selectedThreadId;
+                      const isEditing = editingThreadId === thread.id;
+                      const displayTitle = thread.title || "New chat";
+                      const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
 
-                    return isEditing ? (
-                      <div
-                        key={thread.id}
-                        className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground"
-                      >
-                        <Input
-                          ref={editInputRef}
-                          className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
-                          value={editingTitle}
-                          onBlur={() => onCommitRename(thread.id, editingTitle)}
-                          onChange={(event) => onEditingTitleChange(event.target.value)}
-                          onClick={(event) => event.stopPropagation()}
-                          onDoubleClick={(event) => event.stopPropagation()}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              onCommitRename(thread.id, editingTitle);
-                            } else if (event.key === "Escape") {
-                              event.preventDefault();
-                              onCancelRename();
-                            }
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div key={thread.id} className="relative group min-w-0">
-                        <Button
-                          className={cn(
-                            "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
-                            isActive
-                              ? "border-border/45 bg-foreground/[0.05] text-foreground"
-                              : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
-                          )}
-                          onClick={() => selectThread(thread.id)}
-                          onContextMenu={(event) =>
-                            onThreadContextMenu(event, thread.id, displayTitle)
-                          }
-                          onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
-                          title={displayTitle}
-                          type="button"
-                          variant="ghost"
+                      return isEditing ? (
+                        <div
+                          key={thread.id}
+                          className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground"
                         >
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
-                              {displayTitle}
-                            </span>
-                          </span>
-
-                          <span className="relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end">
-                            {busy ? (
-                              <span
-                                className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
-                                aria-hidden="true"
-                              />
-                            ) : ageLabel ? (
-                              <span className="text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none">
-                                {ageLabel}
+                          <Input
+                            ref={editInputRef}
+                            className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
+                            value={editingTitle}
+                            onBlur={() => onCommitRename(thread.id, editingTitle)}
+                            onChange={(event) => onEditingTitleChange(event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onDoubleClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                onCommitRename(thread.id, editingTitle);
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                onCancelRename();
+                              }
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div key={thread.id} className="relative group min-w-0">
+                          <Button
+                            className={cn(
+                              "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
+                              isActive
+                                ? "border-border/45 bg-foreground/[0.05] text-foreground"
+                                : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+                            )}
+                            onClick={() => selectThread(thread.id)}
+                            onContextMenu={(event) =>
+                              onThreadContextMenu(event, thread.id, displayTitle)
+                            }
+                            onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
+                            title={displayTitle}
+                            type="button"
+                            variant="ghost"
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+                                {displayTitle}
                               </span>
-                            ) : null}
-                          </span>
-                        </Button>
-                        {!busy ? (
+                            </span>
+
+                            <span className="relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end">
+                              {busy ? (
+                                <span
+                                  className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+                                  aria-hidden="true"
+                                />
+                              ) : ageLabel ? (
+                                <span
+                                  className={cn(
+                                    "text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
+                                    isActive && "opacity-0 pointer-events-none",
+                                  )}
+                                >
+                                  {ageLabel}
+                                </span>
+                              ) : null}
+                            </span>
+                          </Button>
                           <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 pointer-events-none">
                             <ThreadOverflowMenu
                               canGenerateMemory={canGenerateMemoryForThread(thread.id)}
                               ariaLabelSuffix={displayTitle}
-                              triggerVisibilityClassName="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100"
+                              triggerVisibilityClassName={overflowTriggerVisibilityClassName(
+                                isActive,
+                              )}
                               onRename={() => onStartEditing(thread.id, displayTitle)}
-                              onArchive={() => void archiveThread(thread.id)}
+                              onArchive={() => onArchiveThread(thread.id, displayTitle)}
                               onGenerateMemory={() => onGenerateMemoryForThread(thread.id)}
                               onDeleteHistory={() =>
                                 onDeleteHistoryForThread(thread.id, displayTitle)
                               }
                             />
                           </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                        </div>
+                      );
+                    })}
+                  </div>
 
-                  {workspaceThreads.length > MAX_VISIBLE_THREADS ? (
+                  {workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
                     <Button
                       className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
                       onClick={() => onToggleThreadList(workspace.id)}
@@ -438,7 +460,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
                         Tasks
                       </div>
-                      {visibleTasks.slice(0, MAX_VISIBLE_THREADS).map((task) => (
+                      {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (
                         <Button
                           key={task.id}
                           type="button"

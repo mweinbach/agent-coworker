@@ -8,6 +8,7 @@ import type {
   RefObject,
 } from "react";
 import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
+import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
 import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
@@ -99,6 +100,7 @@ export function ChatComposer(props: {
     preparingAttachments,
     onStop,
   } = props;
+  const developerMode = useAppStore((s) => s.developerMode);
 
   return (
     <div
@@ -108,7 +110,7 @@ export function ChatComposer(props: {
       style={{ minHeight: composerOverlayMinHeight }}
     >
       <div className="relative mx-auto w-full max-w-[56rem] pointer-events-auto">
-        <MessageBarResizer />
+        {developerMode ? <MessageBarResizer /> : null}
         <MessageComposerRoot
           className="w-full max-w-full rounded-[28px] border border-border/55 bg-background/95 app-shadow-overlay backdrop-blur-md"
           style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
@@ -142,6 +144,7 @@ export function ChatComposer(props: {
           <MessageComposerForm
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
+              if (composerSubmitState.disabled || preparingAttachments) return;
               submitComposer(resolveComposerBusyPolicy(busy));
             }}
           >
@@ -160,6 +163,7 @@ export function ChatComposer(props: {
                 value={composerText}
                 setValue={setComposerText}
                 onKeyDown={onComposerKeyDown}
+                onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 disabled={inputDisabled}
                 placeholder={placeholder}
                 catalog={mentionCatalog}
@@ -207,6 +211,14 @@ export function ChatComposer(props: {
                 ) : null}
               </MessageComposerTools>
               <div className="flex shrink-0 items-center gap-2">
+                {/* Always expose Stop while a run is active, even when typing a steer. */}
+                {busy && onStop && composerSubmitState.status !== "streaming" ? (
+                  <MessageComposerSubmit
+                    status="streaming"
+                    disabled={inputDisabled || !onStop}
+                    onStop={onStop}
+                  />
+                ) : null}
                 <MessageComposerSubmit
                   mode={composerSubmitState.mode}
                   status={composerSubmitState.status}

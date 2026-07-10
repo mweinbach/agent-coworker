@@ -62,6 +62,39 @@ describe("mobile thread store offline draft preservation", () => {
     expect(remainingThreads[0].id).toBe(draftId);
   });
 
+  test("removes a rejected optimistic message by client id", () => {
+    useThreadStore.getState().hydrate({
+      sessionId: "remote-send",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 1,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+
+    const store = useThreadStore.getState();
+    store.appendOptimisticUserMessage("remote-send", "Retry me", "client-message-1");
+    expect(store.currentFeed("remote-send").map((item) => item.id)).toContain("client-message-1");
+
+    useThreadStore.getState().removeOptimisticUserMessage("remote-send", "client-message-1");
+
+    expect(
+      useThreadStore
+        .getState()
+        .currentFeed("remote-send")
+        .map((item) => item.id),
+    ).not.toContain("client-message-1");
+  });
+
   test("syncRemoteThreads preserves composerDraft, local drafts, and existing feeds", () => {
     const store = useThreadStore.getState();
 

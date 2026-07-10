@@ -170,7 +170,7 @@ export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="app-shadow-surface absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100"
+            className="app-shadow-surface absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
             onClick={() => scrollBy(-180)}
           >
             <svg
@@ -197,7 +197,7 @@ export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="app-shadow-surface absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100"
+            className="app-shadow-surface absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
             onClick={() => scrollBy(180)}
           >
             <svg

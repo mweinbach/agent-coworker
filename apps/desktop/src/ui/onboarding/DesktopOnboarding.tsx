@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
+import { confirmAction } from "../../lib/desktopCommands";
 import {
   availableProvidersFromCatalog,
   type CatalogVisibilityOptions,
@@ -1020,6 +1021,32 @@ export function DesktopOnboarding() {
   const step = useAppStore((s) => s.onboardingStep);
   const setStep = useAppStore((s) => s.setOnboardingStep);
   const dismiss = useAppStore((s) => s.dismissOnboarding);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const providerConnected = useAppStore((s) => s.providerConnected);
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+
+  const requestDismiss = useCallback(async () => {
+    const hasConnectedProvider =
+      providerConnected.length > 0 ||
+      Object.values(providerStatusByName).some(
+        (status) => status?.authorized === true || status?.verified === true,
+      );
+    const incompleteSetup = workspaces.length === 0 || !hasConnectedProvider;
+    if (incompleteSetup) {
+      const confirmed = await confirmAction({
+        title: "Skip setup?",
+        message: "You have not finished connecting a provider or adding a workspace yet.",
+        detail:
+          "You can reopen setup later from Settings, but Cowork may feel incomplete until then.",
+        confirmLabel: "Skip for now",
+        cancelLabel: "Continue setup",
+        kind: "warning",
+        defaultAction: "cancel",
+      });
+      if (!confirmed) return;
+    }
+    dismiss();
+  }, [dismiss, providerConnected.length, providerStatusByName, workspaces.length]);
   const complete = useAppStore((s) => s.completeOnboarding);
   const newThread = useAppStore((s) => s.newThread);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -1027,23 +1054,8 @@ export function DesktopOnboarding() {
 
   useFocusTrap(cardRef, visible);
 
-  // Escape dismisses the overlay, unless a sub-surface (Select listbox /
-  // radix Dialog) is open and should swallow Escape first.
-  useEffect(() => {
-    if (!visible) return;
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      if (event.defaultPrevented) return;
-      const openOverlay = document.querySelector(
-        '[role="listbox"][data-state="open"], [role="dialog"][data-state="open"]',
-      );
-      if (openOverlay) return;
-      event.preventDefault();
-      dismiss();
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [visible, dismiss]);
+  // Escape is owned by App.tsx so incomplete first-run setup can confirm
+  // before dismiss. Keep local close affordances (X button) for explicit skip.
 
   const goTo = useCallback((next: OnboardingStep) => setStep(next), [setStep]);
 
@@ -1102,7 +1114,7 @@ export function DesktopOnboarding() {
           type="button"
           aria-label="Close onboarding"
           className="absolute right-3 top-3 z-20 flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={dismiss}
+          onClick={() => void requestDismiss()}
         >
           <span aria-hidden="true" className="text-lg leading-none">
             ×

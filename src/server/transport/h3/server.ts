@@ -357,6 +357,8 @@ function getRequiredH3Permission(
   // content require the workspace-settings permission:
   //   - `cowork/workspace/presentation/preview` imports and runs a workspace
   //     slide module (`slide-N.mjs`) on the host (code execution), and
+  //   - `cowork/workspace/document/*` reads or mutates caller-selected files
+  //     through revision-aware Canvas document sessions, and
   //   - `cowork/workspace/spreadsheet/*` reads bounded CSV/XLSX content from a
   //     caller-selected cwd that is NOT confined to the active workspace, so it
   //     can disclose any .csv/.xlsx readable by the desktop user.
@@ -364,6 +366,7 @@ function getRequiredH3Permission(
   // added back to ALWAYS_ALLOWED_H3_RPC_METHODS.
   if (
     method === "cowork/workspace/presentation/preview" ||
+    method.startsWith("cowork/workspace/document/") ||
     method.startsWith("cowork/workspace/spreadsheet/")
   ) {
     return "workspaceSettings";

@@ -733,6 +733,12 @@ export function createWebAdapter(): DesktopApi {
       openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.sourcePath }));
       return opts.sourcePath;
     },
+    async pickCanvasSavePath(opts): Promise<string | null> {
+      const extension = /(\.[^./\\]+)$/.exec(opts.sourcePath)?.[1] ?? "";
+      const basePath = extension ? opts.sourcePath.slice(0, -extension.length) : opts.sourcePath;
+      const selected = window.prompt("Save Canvas document as", `${basePath} copy${extension}`);
+      return selected?.trim() || null;
+    },
     async openExternalUrl(opts): Promise<void> {
       window.open(opts.url, "_blank", "noopener");
     },

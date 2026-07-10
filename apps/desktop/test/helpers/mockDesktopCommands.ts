@@ -183,6 +183,7 @@ export function createDesktopCommandsMock(
     previewOSFile: async () => {},
     openPath: async () => {},
     saveExportedFile: async () => null,
+    pickCanvasSavePath: async () => null,
     openExternalUrl: async () => {},
     revealPath: async () => {},
     copyPath: async () => {},

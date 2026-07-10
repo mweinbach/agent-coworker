@@ -20,6 +20,7 @@ import type {
   DesktopMenuCommand,
   DesktopNotificationInput,
   ExplorerEntry,
+  PickCanvasSavePathInput,
   PlatformChromeInfo,
   ReadFileForPreviewOutput,
   SetWindowAppearanceInput,
@@ -266,6 +267,10 @@ export async function saveExportedFile(opts: {
   defaultFileName: string;
 }): Promise<string | null> {
   return await requireDesktopApi().saveExportedFile(opts);
+}
+
+export async function pickCanvasSavePath(opts: PickCanvasSavePathInput): Promise<string | null> {
+  return await requireDesktopApi().pickCanvasSavePath(opts);
 }
 
 export async function openExternalUrl(opts: { url: string }): Promise<void> {

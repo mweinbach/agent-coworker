@@ -42,6 +42,7 @@ import type {
   MobileRelayUpdateTrustedPhonePermissionsInput,
   OpenExternalUrlInput,
   OpenPathInput,
+  PickCanvasSavePathInput,
   PickDirectoryInput,
   PlatformChromeInfo,
   PreferredFileAppInput,
@@ -459,6 +460,11 @@ export const saveExportedFileInputSchema: z.ZodType<SaveExportedFileInput> = z.o
   sourcePath: nonEmptyStringSchema,
   defaultFileName: validatedSegmentSchema,
 });
+export const pickCanvasSavePathInputSchema: z.ZodType<PickCanvasSavePathInput> = z
+  .object({
+    sourcePath: nonEmptyStringSchema,
+  })
+  .strict();
 export const preferredFileAppInputSchema: z.ZodType<PreferredFileAppInput> = sharedPathSchema;
 export const openExternalUrlInputSchema: z.ZodType<OpenExternalUrlInput> = z.object({
   url: nonEmptyStringSchema.refine((value) => {

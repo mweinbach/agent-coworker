@@ -34,6 +34,7 @@ import {
   type MobileRelayUpdateTrustedPhonePermissionsInput,
   type OpenExternalUrlInput,
   type OpenPathInput,
+  type PickCanvasSavePathInput,
   type PickDirectoryInput,
   type PlatformChromeInfo,
   type PreferredFileAppInput,
@@ -84,6 +85,7 @@ import {
   openExternalUrlInputSchema,
   openPathInputSchema,
   persistedStateInputSchema,
+  pickCanvasSavePathInputSchema,
   pickDirectoryInputSchema,
   platformChromeInfoSchema,
   preferredFileAppInputSchema,
@@ -201,6 +203,10 @@ function assertOpenPathInput(opts: OpenPathInput): void {
 
 function assertSaveExportedFileInput(opts: SaveExportedFileInput): void {
   parseWithSchema(saveExportedFileInputSchema, opts, "saveExportedFile options");
+}
+
+function assertPickCanvasSavePathInput(opts: PickCanvasSavePathInput): void {
+  parseWithSchema(pickCanvasSavePathInputSchema, opts, "pickCanvasSavePath options");
 }
 
 function assertPreferredFileAppInput(opts: PreferredFileAppInput): void {
@@ -623,6 +629,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   saveExportedFile: (opts: SaveExportedFileInput) => {
     assertSaveExportedFileInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveExportedFile, opts);
+  },
+
+  pickCanvasSavePath: (opts: PickCanvasSavePathInput) => {
+    assertPickCanvasSavePathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickCanvasSavePath, opts);
   },
 
   openExternalUrl: (opts: OpenExternalUrlInput) => {

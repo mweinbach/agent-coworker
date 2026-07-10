@@ -6,6 +6,12 @@ import type {
   AgentProfileUpsertInput,
 } from "../../../../src/shared/agentProfiles";
 import type {
+  CanvasDocumentCloseResult,
+  CanvasDocumentOpenResult,
+  CanvasDocumentRevisionResult,
+  CanvasDocumentSaveResult,
+} from "../../../../src/shared/canvasDocument";
+import type {
   DesktopFeatureFlagId,
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
@@ -815,11 +821,47 @@ export type AppStoreState = {
   renameWorkspacePath: (workspaceId: string, path: string, newName: string) => Promise<void>;
   trashWorkspacePath: (workspaceId: string, path: string) => Promise<void>;
 
-  openFilePreview: (opts: { path: string }) => void;
-  closeFilePreview: () => void;
+  openFilePreview: (opts: { path: string }) => Promise<boolean>;
+  closeFilePreview: () => Promise<boolean>;
   setCanvasActiveTab: (tab: "preview" | "edit") => void;
   setCanvasShowFormattingBar: (show: boolean) => void;
   setCanvasMaximized: (maximized: boolean) => void;
+  openCanvasDocument: (
+    workspaceId: string,
+    input: {
+      path: string;
+      documentId: string;
+      generation: number;
+      maxBytes?: number;
+    },
+  ) => Promise<CanvasDocumentOpenResult>;
+  readCanvasDocumentRevision: (
+    workspaceId: string,
+    input: { documentId: string; generation: number },
+  ) => Promise<CanvasDocumentRevisionResult>;
+  saveCanvasDocument: (
+    workspaceId: string,
+    input: {
+      documentId: string;
+      generation: number;
+      editRevision: number;
+      content: string;
+    },
+  ) => Promise<CanvasDocumentSaveResult>;
+  saveCanvasDocumentAs: (
+    workspaceId: string,
+    input: {
+      documentId: string;
+      generation: number;
+      editRevision: number;
+      content: string;
+      path: string;
+    },
+  ) => Promise<CanvasDocumentSaveResult>;
+  closeCanvasDocument: (
+    workspaceId: string,
+    input: { documentId: string; generation: number },
+  ) => Promise<CanvasDocumentCloseResult>;
   loadSpreadsheetWorkbook: (
     path: string,
     opts?: {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
 import type {
   JsonRpcLiteError,
   JsonRpcLiteId,
@@ -178,6 +179,25 @@ async function invokeWorkspacePresentationPreview(
   return {};
 }
 
+async function invokeWorkspaceDocument(
+  handlers: JsonRpcRequestHandlerMap,
+  method:
+    | "cowork/workspace/document/open"
+    | "cowork/workspace/document/save"
+    | "cowork/workspace/document/close",
+  params: unknown,
+): Promise<void> {
+  const handler = handlers[method];
+  if (!handler) {
+    throw new Error(`${method} handler was not registered`);
+  }
+  await handler({} as never, {
+    id: 1,
+    method,
+    params,
+  } satisfies JsonRpcLiteRequest);
+}
+
 async function invokeWorkspaceSpreadsheetPatch(
   handlers: JsonRpcRequestHandlerMap,
   params: unknown,
@@ -264,6 +284,62 @@ describe("workspace JSON-RPC route", () => {
     expect(harness.results).toEqual([]);
     expect(harness.errors).toHaveLength(1);
     expect(harness.errors[0]?.error.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+  });
+
+  test("Canvas document methods preserve the typed session-bound write contract", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-document-route-"));
+    try {
+      const filePath = path.join(dir, "notes.md");
+      await fs.writeFile(filePath, "original", "utf8");
+      const harness = createWorkspaceRouteHarness();
+      harness.context.canvasDocuments = new CanvasDocumentPersistenceService();
+      const handlers = createWorkspaceRouteHandlers(harness.context);
+
+      await invokeWorkspaceDocument(handlers, "cowork/workspace/document/open", {
+        cwd: dir,
+        path: filePath,
+        documentId: "canvas-route-test",
+        generation: 1,
+      });
+      const opened = jsonRpcWorkspaceResultSchemas["cowork/workspace/document/open"].parse(
+        harness.results[0]?.result,
+      );
+      expect(opened.ok).toBe(true);
+      if (opened.ok) {
+        expect(opened.document.content).toBe("original");
+        expect(opened.document.revision.fingerprint).toStartWith("sha256:");
+      }
+
+      await invokeWorkspaceDocument(handlers, "cowork/workspace/document/save", {
+        cwd: dir,
+        documentId: "canvas-route-test",
+        generation: 1,
+        editRevision: 1,
+        content: "saved through JSON-RPC",
+      });
+      const saved = jsonRpcWorkspaceResultSchemas["cowork/workspace/document/save"].parse(
+        harness.results[1]?.result,
+      );
+      expect(saved.ok).toBe(true);
+      expect(await fs.readFile(filePath, "utf8")).toBe("saved through JSON-RPC");
+
+      await invokeWorkspaceDocument(handlers, "cowork/workspace/document/close", {
+        cwd: dir,
+        documentId: "canvas-route-test",
+        generation: 1,
+      });
+      const closed = jsonRpcWorkspaceResultSchemas["cowork/workspace/document/close"].parse(
+        harness.results[2]?.result,
+      );
+      expect(closed).toEqual({
+        ok: true,
+        documentId: "canvas-route-test",
+        generation: 1,
+      });
+      expect(harness.errors).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("spreadsheet/patch writes a cell and returns ok", async () => {

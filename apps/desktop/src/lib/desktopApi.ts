@@ -238,6 +238,10 @@ export type SaveExportedFileInput = {
   defaultFileName: string;
 };
 
+export type PickCanvasSavePathInput = {
+  sourcePath: string;
+};
+
 export type PickDirectoryInput = {
   title?: string;
 };
@@ -598,6 +602,7 @@ export interface DesktopApi {
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
   saveExportedFile(opts: SaveExportedFileInput): Promise<string | null>;
+  pickCanvasSavePath(opts: PickCanvasSavePathInput): Promise<string | null>;
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
@@ -678,6 +683,7 @@ export const DESKTOP_IPC_CHANNELS = {
   previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
   saveExportedFile: "desktop:saveExportedFile",
+  pickCanvasSavePath: "desktop:pickCanvasSavePath",
   openExternalUrl: "desktop:openExternalUrl",
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CANVAS_DOCUMENT_MAX_BYTES } from "../../shared/canvasDocument";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 import { jsonRpcThreadSchema } from "./schema.threadTurn";
 
@@ -50,6 +51,117 @@ const spreadsheetFileVersionSchema = z
     changeTimeMs: z.number().nonnegative(),
     size: z.number().int().nonnegative(),
     fingerprint: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const canvasDocumentRevisionSchema = z
+  .object({
+    modifiedAtMs: z.number().nonnegative(),
+    changeTimeMs: z.number().nonnegative(),
+    size: z.number().int().nonnegative(),
+    fingerprint: nonEmptyTrimmedStringSchema,
+  })
+  .strict();
+
+const canvasDocumentSessionRefSchema = z
+  .object({
+    documentId: nonEmptyTrimmedStringSchema,
+    generation: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const canvasDocumentOpenResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      document: z
+        .object({
+          documentId: nonEmptyTrimmedStringSchema,
+          generation: z.number().int().nonnegative(),
+          path: nonEmptyTrimmedStringSchema,
+          content: z.string(),
+          truncated: z.boolean(),
+          revision: canvasDocumentRevisionSchema,
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      path: nonEmptyTrimmedStringSchema,
+      error: z
+        .object({
+          kind: z.enum(["not_found", "outside_workspace", "read_error"]),
+          message: z.string(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+const canvasDocumentRevisionResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      path: nonEmptyTrimmedStringSchema,
+      revision: canvasDocumentRevisionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      error: z
+        .object({
+          kind: z.enum(["session_not_found", "outside_workspace", "read_error"]),
+          message: z.string(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+const canvasDocumentSaveResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      editRevision: z.number().int().nonnegative(),
+      path: nonEmptyTrimmedStringSchema,
+      revision: canvasDocumentRevisionSchema,
+      status: z.enum(["saved", "superseded"]),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      editRevision: z.number().int().nonnegative(),
+      path: nonEmptyTrimmedStringSchema.optional(),
+      currentRevision: canvasDocumentRevisionSchema.optional(),
+      error: z
+        .object({
+          kind: z.enum(["session_not_found", "conflict", "write_error"]),
+          message: z.string(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+const canvasDocumentCloseResultSchema = z
+  .object({
+    ok: z.literal(true),
+    documentId: nonEmptyTrimmedStringSchema,
+    generation: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -290,6 +402,46 @@ export const jsonRpcWorkspaceRequestSchemas = {
       cwd: nonEmptyTrimmedStringSchema.optional(),
     })
     .strict(),
+  "cowork/workspace/document/open": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      path: nonEmptyTrimmedStringSchema,
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      maxBytes: z.number().int().positive().max(CANVAS_DOCUMENT_MAX_BYTES).optional(),
+    })
+    .strict(),
+  "cowork/workspace/document/revision": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+    })
+    .strict(),
+  "cowork/workspace/document/save": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      editRevision: z.number().int().nonnegative(),
+      content: z.string().max(CANVAS_DOCUMENT_MAX_BYTES),
+    })
+    .strict(),
+  "cowork/workspace/document/saveAs": z
+    .object({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+      documentId: nonEmptyTrimmedStringSchema,
+      generation: z.number().int().nonnegative(),
+      editRevision: z.number().int().nonnegative(),
+      content: z.string().max(CANVAS_DOCUMENT_MAX_BYTES),
+      path: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
+  "cowork/workspace/document/close": canvasDocumentSessionRefSchema
+    .extend({
+      cwd: nonEmptyTrimmedStringSchema.optional(),
+    })
+    .strict(),
   "cowork/workspace/spreadsheet/workbook": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),
@@ -339,6 +491,11 @@ export const jsonRpcWorkspaceResultSchemas = {
       state: z.array(z.unknown()),
     })
     .strict(),
+  "cowork/workspace/document/open": canvasDocumentOpenResultSchema,
+  "cowork/workspace/document/revision": canvasDocumentRevisionResultSchema,
+  "cowork/workspace/document/save": canvasDocumentSaveResultSchema,
+  "cowork/workspace/document/saveAs": canvasDocumentSaveResultSchema,
+  "cowork/workspace/document/close": canvasDocumentCloseResultSchema,
   "cowork/workspace/spreadsheet/workbook": spreadsheetWorkbookSnapshotResultSchema,
   "cowork/workspace/spreadsheet/version": spreadsheetFileVersionResultSchema,
   "cowork/workspace/spreadsheet/patch": spreadsheetEditResultSchema,

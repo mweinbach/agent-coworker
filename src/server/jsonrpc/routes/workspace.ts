@@ -1,3 +1,4 @@
+import { canvasDocumentPersistence } from "../../canvasDocumentPersistence";
 import { previewPresentationFile } from "../../presentationPreview";
 import { patchSpreadsheetBatch } from "../../spreadsheetEdit";
 import {
@@ -12,6 +13,7 @@ import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 export function createWorkspaceRouteHandlers(
   context: JsonRpcRouteContext,
 ): JsonRpcRequestHandlerMap {
+  const canvasDocuments = context.canvasDocuments ?? canvasDocumentPersistence;
   return {
     "workspace/list": async (ws, message) => {
       const parsed = jsonRpcWorkspaceRequestSchemas["workspace/list"].safeParse(
@@ -102,6 +104,126 @@ export function createWorkspaceRouteHandlers(
         ),
         state,
       });
+    },
+
+    "cowork/workspace/document/open": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/document/open"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await canvasDocuments.open({ ...parsed.data, cwd });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    "cowork/workspace/document/revision": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/document/revision"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await canvasDocuments.revision({ ...parsed.data, cwd });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    "cowork/workspace/document/save": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/document/save"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await canvasDocuments.save({ ...parsed.data, cwd });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    "cowork/workspace/document/saveAs": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/document/saveAs"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await canvasDocuments.saveAs({ ...parsed.data, cwd });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    "cowork/workspace/document/close": async (ws, message) => {
+      const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/document/close"].safeParse(
+        message.params,
+      );
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      try {
+        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
+        const result = await canvasDocuments.close({ ...parsed.data, cwd });
+        context.jsonrpc.sendResult(ws, message.id, result);
+      } catch (error) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
 
     "cowork/workspace/spreadsheet/workbook": async (ws, message) => {

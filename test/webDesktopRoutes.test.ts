@@ -1,9 +1,18 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { TRANSCRIPT_REQUEST_MAX_EVENTS, TranscriptInbox } from "../src/server/transcriptInbox";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
+import {
+  measureTranscriptEventsBytes,
+  measureUtf8Bytes,
+  serializeTranscriptBatchRequest,
+  TRANSCRIPT_EVENTS_MAX_BYTES,
+  TRANSCRIPT_REQUEST_BODY_MAX_BYTES,
+} from "../src/shared/transcriptBatchProtocol";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 
 const cleanupPaths = new Set<string>();
@@ -27,6 +36,33 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
     await Bun.sleep(10);
   }
   throw new Error("Timed out waiting for condition");
+}
+
+async function appendTranscriptBatchInProcess(
+  userDataDir: string,
+  event: {
+    ts: string;
+    threadId: string;
+    direction: "server" | "client";
+    payload: unknown;
+    generation: number;
+  },
+  batchId: string,
+): Promise<void> {
+  const moduleUrl = new URL("../src/server/transcriptInbox.ts", import.meta.url).href;
+  const source = `
+    import { TranscriptInbox } from ${JSON.stringify(moduleUrl)};
+    const inbox = new TranscriptInbox({ userDataDir: ${JSON.stringify(userDataDir)} });
+    inbox.appendBatch([${JSON.stringify(event)}], ${JSON.stringify(batchId)});
+  `;
+  const child = Bun.spawn([process.execPath, "-e", source], {
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || `Transcript inbox worker exited with code ${exitCode}`);
+  }
 }
 
 function createMockStream() {
@@ -633,6 +669,330 @@ describe("web desktop routes", () => {
     ).resolves.toEqual({ url: "ws://mock" });
 
     expect(starts).toEqual([{ workspacePath: workspace, yolo: false }]);
+  });
+
+  test("deduplicates ambiguous transcript batch retries by stable batch id", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-idempotency-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const events = [
+      {
+        ts: "2026-07-09T20:00:00.000Z",
+        threadId: "thread-idempotent",
+        direction: "client",
+        payload: { type: "user_message", text: "hello" },
+      },
+      {
+        ts: "2026-07-09T20:00:01.000Z",
+        threadId: "thread-idempotent",
+        direction: "server",
+        payload: { type: "agent_message", text: "hi" },
+      },
+    ] as const;
+    const makeRequest = () =>
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "transcript-batch-1",
+        },
+        body: JSON.stringify({
+          batchId: "transcript-batch-1",
+          events,
+        }),
+      });
+
+    const responses = await Promise.all([
+      handleWebDesktopRoute(makeRequest(), { cwd: workspace, desktopService: service }),
+      handleWebDesktopRoute(makeRequest(), { cwd: workspace, desktopService: service }),
+    ]);
+
+    expect(responses.map((response) => response?.status)).toEqual([204, 204]);
+    await expect(service.readTranscript("thread-idempotent")).resolves.toEqual([
+      { ...events[0], deliveryId: "transcript-batch-1:0" },
+      { ...events[1], deliveryId: "transcript-batch-1:1" },
+    ]);
+  });
+
+  test("rejects reuse of a transcript batch id with different data", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-collision-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const request = (text: string) =>
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchId: "transcript-batch-collision",
+          events: [
+            {
+              ts: "2026-07-09T20:00:00.000Z",
+              threadId: "thread-collision",
+              direction: "client",
+              payload: { type: "user_message", text },
+            },
+          ],
+        }),
+      });
+
+    const first = await handleWebDesktopRoute(request("first"), {
+      cwd: workspace,
+      desktopService: service,
+    });
+    const collision = await handleWebDesktopRoute(request("different"), {
+      cwd: workspace,
+      desktopService: service,
+    });
+
+    expect(first?.status).toBe(204);
+    expect(collision?.status).toBe(409);
+    await expect(service.readTranscript("thread-collision")).resolves.toHaveLength(1);
+  });
+
+  test("rejects a reused batch id when an event moves to another thread", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-cross-thread-collision-");
+    const userDataDir = path.join(workspace, "user-data");
+    const service = new WebDesktopService({
+      userDataDir,
+    });
+    const request = (threadId: string) =>
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchId: "transcript-batch-cross-thread-collision",
+          events: [
+            {
+              ts: "2026-07-09T20:00:00.000Z",
+              threadId,
+              direction: "client",
+              payload: { type: "user_message", text: "same payload" },
+            },
+          ],
+        }),
+      });
+
+    const first = await handleWebDesktopRoute(request("thread-original"), {
+      cwd: workspace,
+      desktopService: service,
+    });
+    const restartedService = new WebDesktopService({ userDataDir });
+    const collision = await handleWebDesktopRoute(request("thread-moved"), {
+      cwd: workspace,
+      desktopService: restartedService,
+    });
+
+    expect(first?.status).toBe(204);
+    expect(collision?.status).toBe(409);
+    await expect(restartedService.readTranscript("thread-original")).resolves.toHaveLength(1);
+    await expect(restartedService.readTranscript("thread-moved")).resolves.toEqual([]);
+  });
+
+  test("deduplicates response-loss retries across independent service processes", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-multi-service-");
+    const userDataDir = path.join(workspace, "user-data");
+    const event = {
+      ts: "2026-07-10T07:00:00.000Z",
+      threadId: "thread-multi-service",
+      direction: "server" as const,
+      payload: { type: "agent_message", text: "once" },
+      generation: 0,
+    };
+
+    await Promise.all([
+      appendTranscriptBatchInProcess(userDataDir, event, "multi-service-batch"),
+      appendTranscriptBatchInProcess(userDataDir, event, "multi-service-batch"),
+    ]);
+
+    const restartedService = new WebDesktopService({ userDataDir });
+    await expect(restartedService.readTranscript(event.threadId)).resolves.toEqual([
+      {
+        ts: event.ts,
+        threadId: event.threadId,
+        direction: event.direction,
+        payload: event.payload,
+        deliveryId: "multi-service-batch:0",
+      },
+    ]);
+  });
+
+  test("keeps the transcript inbox directory and SQLite files private", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-private-inbox-");
+    const userDataDir = path.join(workspace, "user-data");
+    await fs.mkdir(userDataDir, { recursive: true, mode: 0o777 });
+    await fs.chmod(userDataDir, 0o777);
+    const inbox = new TranscriptInbox({ userDataDir });
+    const databasePath = path.join(userDataDir, "transcript-inbox.sqlite");
+    const holdingConnection = new Database(databasePath);
+    try {
+      holdingConnection.exec("PRAGMA journal_mode = WAL");
+      holdingConnection.query("SELECT COUNT(*) FROM transcript_batches").get();
+      inbox.appendBatch(
+        [
+          {
+            ts: "2026-07-10T07:00:00.000Z",
+            threadId: "thread-private",
+            direction: "server",
+            payload: { text: "private" },
+          },
+        ],
+        "private-batch",
+      );
+
+      expect((await fs.stat(userDataDir)).mode & 0o777).toBe(0o700);
+      for (const filePath of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+        expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      holdingConnection.close(false);
+    }
+  });
+
+  test("rejects invalid thread ids before they consume inbox capacity", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-invalid-thread-");
+    const userDataDir = path.join(workspace, "user-data");
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      maxBatches: 1,
+      retentionMs: Number.MAX_SAFE_INTEGER,
+    });
+    const event = {
+      ts: "2026-07-10T07:00:00.000Z",
+      direction: "server" as const,
+      payload: { text: "event" },
+    };
+
+    expect(() =>
+      inbox.appendBatch([{ ...event, threadId: "../invalid" }], "invalid-thread-batch"),
+    ).toThrow("threadId contains invalid characters");
+    expect(() =>
+      inbox.appendBatch([{ ...event, threadId: "thread-valid" }], "valid-thread-batch"),
+    ).not.toThrow();
+
+    const service = new WebDesktopService({ userDataDir });
+    await expect(service.readTranscript("thread-valid")).resolves.toHaveLength(1);
+  });
+
+  test("uses generation tombstones to prevent a deleted transcript from being resurrected", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-tombstone-");
+    const userDataDir = path.join(workspace, "user-data");
+    const firstService = new WebDesktopService({ userDataDir });
+    const secondService = new WebDesktopService({ userDataDir });
+    const event = {
+      ts: "2026-07-10T07:00:00.000Z",
+      threadId: "thread-deleted",
+      direction: "client" as const,
+      payload: { type: "user_message", text: "remove me" },
+      generation: 0,
+    };
+    await firstService.appendTranscriptBatch([event], { batchId: "before-delete" });
+    await firstService.deleteTranscript(event.threadId, { generation: 1 });
+
+    await secondService.appendTranscriptBatch([event], { batchId: "stale-after-delete" });
+    await secondService.appendTranscriptBatch([event], { batchId: "before-delete" });
+
+    await expect(secondService.readTranscript(event.threadId)).resolves.toEqual([]);
+  });
+
+  test("keeps bounded dedupe receipts while projection IDs prevent replay duplicates", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-bounded-dedupe-");
+    const userDataDir = path.join(workspace, "user-data");
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      maxBatches: 2,
+      retentionMs: Number.MAX_SAFE_INTEGER,
+      now: () => 1_000,
+    });
+    const createEvent = (index: number) => ({
+      ts: `2026-07-10T07:00:0${index}.000Z`,
+      threadId: "thread-bounded",
+      direction: "server" as const,
+      payload: { index },
+      generation: 0,
+    });
+    inbox.appendBatch([createEvent(1)], "bounded-1");
+    inbox.appendBatch([createEvent(2)], "bounded-2");
+    inbox.appendBatch([createEvent(3)], "bounded-3");
+    inbox.appendBatch([createEvent(1)], "bounded-1");
+
+    const service = new WebDesktopService({ userDataDir });
+    const events = await service.readTranscript("thread-bounded");
+    expect(events).toHaveLength(3);
+    expect(new Set(events.map((event) => event.deliveryId)).size).toBe(3);
+  });
+
+  test("rejects transcript requests above the explicit event limit", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-request-limit-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const response = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchId: "oversized-batch",
+          events: Array.from({ length: TRANSCRIPT_REQUEST_MAX_EVENTS + 1 }, (_, index) => ({
+            ts: "2026-07-10T07:00:00.000Z",
+            threadId: "thread-request-limit",
+            direction: "server",
+            payload: { index },
+          })),
+        }),
+      }),
+      { cwd: workspace, desktopService: service },
+    );
+
+    expect(response?.status).toBe(413);
+  });
+
+  test("shares exact event and request-envelope byte boundaries with web clients", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-byte-boundary-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const createEvent = (targetBytes: number) => {
+      const template = {
+        ts: "2026-07-10T07:00:00.000Z",
+        threadId: "thread-byte-boundary",
+        direction: "server",
+        payload: { text: "" },
+        generation: 0,
+      };
+      const baseBytes = measureTranscriptEventsBytes([template]);
+      return {
+        ...template,
+        payload: { text: "x".repeat(targetBytes - baseBytes) },
+      };
+    };
+    const atBoundary = [createEvent(TRANSCRIPT_EVENTS_MAX_BYTES)];
+    const acceptedBody = serializeTranscriptBatchRequest("byte-boundary", atBoundary);
+    expect(measureTranscriptEventsBytes(atBoundary)).toBe(TRANSCRIPT_EVENTS_MAX_BYTES);
+    expect(measureUtf8Bytes(acceptedBody)).toBeLessThanOrEqual(TRANSCRIPT_REQUEST_BODY_MAX_BYTES);
+
+    const accepted = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: acceptedBody,
+      }),
+      { cwd: workspace, desktopService: service },
+    );
+    expect(accepted?.status).toBe(204);
+
+    const oversized = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: serializeTranscriptBatchRequest("byte-boundary-plus-one", [
+          createEvent(TRANSCRIPT_EVENTS_MAX_BYTES + 1),
+        ]),
+      }),
+      { cwd: workspace, desktopService: service },
+    );
+    expect(oversized?.status).toBe(413);
   });
 
   test("serves active-content files as attachments while keeping plain text inline", async () => {

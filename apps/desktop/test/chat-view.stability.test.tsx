@@ -119,8 +119,8 @@ describe("desktop chat view stability", () => {
     setJsonRpcSocketOverride(NoopJsonRpcSocket);
     useAppStore.setState({
       bootstrapPhase: "ready",
-      filePreview: null,
       promptModal: null,
+      filePreview: null,
       selectedTaskId: null,
       tasksById: {},
       taskSummariesByWorkspaceId: {},

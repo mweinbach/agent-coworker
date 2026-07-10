@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { scratchRoots } from "../../../src/platform/sandbox";
+import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import {
   mergeConfigPatch,
   type ProjectConfigPatch,
@@ -10,11 +10,14 @@ import {
 import { defaultRuntimeNameForProvider } from "../../../src/types";
 import { makeConfig } from "../../session/agentSession.harness";
 
-const scratchRoot = scratchRoots()[0] ?? "/tmp";
+const testScratchRoot = scratchRoots()[0];
+if (!testScratchRoot) {
+  throw new Error("Expected at least one platform scratch root");
+}
 
 describe("ConfigPatchStore", () => {
   test("persists model selection defaults and round-trips them through runtime config", async () => {
-    const dir = await fs.mkdtemp(path.join(scratchRoot, "cowork-config-patch-"));
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, "project", ".cowork");
     const configPath = path.join(projectCoworkDir, "config.json");
     const modelPatch = {
@@ -55,7 +58,7 @@ describe("ConfigPatchStore", () => {
   });
 
   test("persists advanced memory defaults to global config when provided", async () => {
-    const dir = await fs.mkdtemp(path.join(scratchRoot, "cowork-config-patch-"));
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, "project", ".cowork");
     const globalConfigDir = path.join(dir, "home", ".cowork", "config");
 
@@ -93,7 +96,7 @@ describe("ConfigPatchStore", () => {
   });
 
   test("clears a persisted memory generation model override", async () => {
-    const dir = await fs.mkdtemp(path.join(scratchRoot, "cowork-config-patch-"));
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, ".cowork");
     const configPath = path.join(projectCoworkDir, "config.json");
     await fs.mkdir(projectCoworkDir, { recursive: true });
@@ -114,7 +117,7 @@ describe("ConfigPatchStore", () => {
   test("clears the runtime memory generation model override", () => {
     const merged = mergeConfigPatch(
       {
-        ...makeConfig("/tmp/test-session"),
+        ...makeConfig(path.join(testScratchRoot, "test-session")),
         memoryGenerationModel: "gemini-old",
       },
       { clearMemoryGenerationModel: true },
@@ -124,7 +127,7 @@ describe("ConfigPatchStore", () => {
   });
 
   test("clears persisted and runtime skill improvement model overrides", async () => {
-    const dir = await fs.mkdtemp(path.join(scratchRoot, "cowork-config-patch-"));
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, ".cowork");
     const configPath = path.join(projectCoworkDir, "config.json");
     await fs.mkdir(projectCoworkDir, { recursive: true });
@@ -143,7 +146,7 @@ describe("ConfigPatchStore", () => {
 
     const merged = mergeConfigPatch(
       {
-        ...makeConfig("/tmp/test-session"),
+        ...makeConfig(path.join(testScratchRoot, "test-session")),
         skillImprovementModel: "openai:gpt-5.5",
       },
       { clearSkillImprovementModel: true },

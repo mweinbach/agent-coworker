@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Cowork Desktop Quality Gate</title>
+    <script>
+      (() => {
+        const mode = new URLSearchParams(location.search).get("qualityMode");
+        const dark = mode === "dark";
+        const fixedNow = Date.parse("2026-07-09T21:00:00.000Z");
+        const NativeDate = Date;
+        class FixedDate extends NativeDate {
+          constructor(...args) {
+            super(...(args.length === 0 ? [fixedNow] : args));
+          }
+
+          static now() {
+            return fixedNow;
+          }
+        }
+        Object.defineProperty(globalThis, "Date", {
+          configurable: true,
+          value: FixedDate,
+          writable: true,
+        });
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        document.documentElement.dataset.highContrast =
+          mode === "forced-colors" ? "true" : "false";
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/renderer.tsx"></script>
+  </body>
+</html>

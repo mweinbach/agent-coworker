@@ -15,10 +15,13 @@ import type {
   ShowQuickChatWindowInput,
   SystemAppearance,
   TelemetryStatusSnapshot,
+  TranscriptCaptureResult,
   UpdaterState,
 } from "./desktopApi";
 import { createDefaultUpdaterState } from "./desktopApi";
+import { createWebTranscriptDelivery, type WebTranscriptDelivery } from "./webTranscriptDelivery";
 import {
+  getCurrentWebWorkspaceScopeKey,
   getSavedServerUrl,
   getSavedWorkspacePath,
   savePersistedState,
@@ -29,6 +32,7 @@ import {
 
 let configuredServerUrl: string | null = null;
 let configuredWorkspacePath: string | null = null;
+let activeTranscriptDelivery: WebTranscriptDelivery | null = null;
 
 const menuListeners = new Set<(command: DesktopMenuCommand) => void>();
 const appearanceListeners = new Set<(appearance: SystemAppearance) => void>();
@@ -297,6 +301,25 @@ function openWindow(url: string): void {
   window.open(url, "_blank", "noopener");
 }
 
+function transcriptCaptureResult(
+  result: Awaited<ReturnType<WebTranscriptDelivery["capture"]>>,
+): TranscriptCaptureResult {
+  return result.accepted
+    ? {
+        accepted: true,
+        batchId: result.batch.id,
+        pendingEvents: result.stats.events,
+        pendingBytes: result.stats.bytes,
+      }
+    : {
+        accepted: false,
+        recoveryId: result.recoveryId,
+        reason: result.reason,
+        pendingEvents: result.stats.events,
+        pendingBytes: result.stats.bytes,
+      };
+}
+
 function createActionButton(
   label: string,
   onClick: () => void,
@@ -464,6 +487,23 @@ export function configureWebAdapter(serverUrl: string, workspacePath: string): v
 
 export function createWebAdapter(): DesktopApi {
   const fullDesktopMode = !getWorkspacePath().trim();
+  void activeTranscriptDelivery?.close();
+  const destination = buildWebRouteUrl("/cowork/desktop/transcript/batch");
+  const scope = getCurrentWebWorkspaceScopeKey() ?? JSON.stringify([destination, "unscoped"]);
+  const wakeChannel =
+    typeof globalThis.BroadcastChannel === "function"
+      ? new globalThis.BroadcastChannel(`cowork-transcript-outbox:${scope}`)
+      : undefined;
+  const transcriptDelivery = createWebTranscriptDelivery({
+    scope,
+    destination,
+    accessHeaders: browserAccessHeaders,
+    fetch: async (input, init) => await globalThis.fetch(input, init),
+    indexedDB: globalThis.indexedDB,
+    lifecycleTarget: typeof window === "undefined" ? undefined : window,
+    wakeChannel,
+  });
+  activeTranscriptDelivery = transcriptDelivery;
   const resolveWebDesktopFeatureFlags = (
     overrides?: DesktopFeatureFlagOverrides,
   ): DesktopFeatureFlags => {
@@ -592,28 +632,29 @@ export function createWebAdapter(): DesktopApi {
     },
 
     async appendTranscriptEvent(opts): Promise<void> {
-      await maybePostWebJson<void>(
-        "/cowork/desktop/transcript/event",
-        opts as Record<string, unknown>,
-      );
+      await transcriptDelivery.capture(opts);
+    },
+    async captureTranscriptEvent(event) {
+      return transcriptCaptureResult(await transcriptDelivery.capture(event));
     },
     async appendTranscriptBatch(events): Promise<void> {
-      const response = await fetch(buildWebRouteUrl("/cowork/desktop/transcript/batch"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(events),
-      });
-      if (response.status === 404) {
-        return;
-      }
-      if (!response.ok) {
-        throw new Error((await response.text()) || `Request failed (${response.status})`);
-      }
+      await transcriptDelivery.append(events);
+    },
+    onTranscriptDeliveryFailure(listener): () => void {
+      return transcriptDelivery.onFailure(listener);
+    },
+    async retryTranscriptDelivery(batchId): Promise<void> {
+      await transcriptDelivery.retry(batchId);
+    },
+    async discardTranscriptBatch(batchId): Promise<void> {
+      await transcriptDelivery.discard(batchId);
     },
     async deleteTranscript(opts): Promise<void> {
-      await maybeDeleteWeb("/cowork/desktop/transcript", { threadId: opts.threadId });
+      const generation = await transcriptDelivery.deleteThread(opts.threadId);
+      await maybeDeleteWeb("/cowork/desktop/transcript", {
+        threadId: opts.threadId,
+        generation,
+      });
     },
 
     async pickWorkspaceDirectory(): Promise<string | null> {

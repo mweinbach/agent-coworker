@@ -8,6 +8,7 @@ const disconnectedSession = {
   transcriptOnly: false,
   connected: false,
   sessionId: "session-1",
+  hydrating: false,
   workspaceStarting: false,
 };
 
@@ -17,9 +18,10 @@ describe("desktop reconnect banner", () => {
     expect(shouldShowReconnectBanner({ ...disconnectedSession, connected: true })).toBe(false);
   });
 
-  test("stays hidden for drafts, transcript views, and startup", () => {
+  test("stays hidden for drafts, transcript views, hydration, and startup", () => {
     expect(shouldShowReconnectBanner({ ...disconnectedSession, sessionId: null })).toBe(false);
     expect(shouldShowReconnectBanner({ ...disconnectedSession, transcriptOnly: true })).toBe(false);
+    expect(shouldShowReconnectBanner({ ...disconnectedSession, hydrating: true })).toBe(false);
     expect(shouldShowReconnectBanner({ ...disconnectedSession, workspaceStarting: true })).toBe(
       false,
     );

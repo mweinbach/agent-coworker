@@ -128,6 +128,55 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
   } as never);
 }
 
+function seedDisconnectedChatState(hydrating: boolean) {
+  const now = "2026-04-30T00:00:00.000Z";
+  useAppStore.setState({
+    ...useAppStore.getState(),
+    ready: true,
+    bootstrapPending: false,
+    startupError: null,
+    view: "chat",
+    workspaces: [
+      {
+        id: "ws-1",
+        name: "Project",
+        path: "/tmp/workspace",
+        createdAt: now,
+        lastOpenedAt: now,
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    selectedWorkspaceId: "ws-1",
+    selectedThreadId: "chat-session-1",
+    selectedTaskId: null,
+    threads: [
+      {
+        id: "chat-session-1",
+        workspaceId: "ws-1",
+        title: "Disconnected chat",
+        createdAt: now,
+        lastMessageAt: now,
+        status: "active",
+        sessionId: "chat-session-1",
+        messageCount: 0,
+        lastEventSeq: 0,
+        draft: false,
+      },
+    ],
+    threadRuntimeById: {
+      "chat-session-1": {
+        sessionId: "chat-session-1",
+        connected: false,
+        hydrating,
+        busy: false,
+        feed: [],
+      },
+    },
+  } as never);
+}
+
 describe("app window-mode notification routing", () => {
   beforeEach(() => {
     showNotification.mockClear();
@@ -234,15 +283,16 @@ describe("app window-mode notification routing", () => {
   test("Escape dismisses pending sandbox approvals for terminal task threads", async () => {
     const harness = setupJsdom();
     const dismissPrompt = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       seedTerminalTaskApprovalState(dismissPrompt);
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(App));
+        root?.render(createElement(App));
       });
 
       await act(async () => {
@@ -252,11 +302,50 @@ describe("app window-mode notification routing", () => {
       });
 
       expect(dismissPrompt).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("renders one reconnect banner only after hydration completes", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedDisconnectedChatState(true);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
 
       await act(async () => {
-        root.unmount();
+        root?.render(createElement(App));
       });
+      expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(0);
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "chat-session-1": {
+              ...state.threadRuntimeById["chat-session-1"],
+              hydrating: false,
+            },
+          },
+        }));
+      });
+
+      expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(1);
     } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       harness.restore();
     }
   });

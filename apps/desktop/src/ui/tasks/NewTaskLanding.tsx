@@ -87,6 +87,7 @@ export function NewTaskLanding() {
   const [decisions, setDecisions] = useState("");
   const [reviewRequired, setReviewRequired] = useState(true);
   const [workItems, setWorkItems] = useState<DraftWorkItem[]>([newWorkItem("step-1")]);
+  const [workGraphCustomized, setWorkGraphCustomized] = useState(false);
   const [showAdvancedWorkGraph, setShowAdvancedWorkGraph] = useState(false);
   const nextWorkItemNumber = useRef(2);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -114,7 +115,7 @@ export function NewTaskLanding() {
 
   const recentTasks = taskSummariesByWorkspaceId[workspaceId] ?? [];
   const effectiveWorkItems = useMemo(() => {
-    if (showAdvancedWorkGraph) return workItems;
+    if (showAdvancedWorkGraph || workGraphCustomized) return workItems;
     // Collapsed advanced: seed one deliverable step from the brief so submit stays valid.
     const seedTitle = title.trim() || "Execute brief";
     const seedOutputs =
@@ -134,7 +135,7 @@ export function NewTaskLanding() {
         expectedOutputs: seedOutputs,
       },
     ];
-  }, [acceptanceCriteria, objective, showAdvancedWorkGraph, title, workItems]);
+  }, [acceptanceCriteria, objective, showAdvancedWorkGraph, title, workGraphCustomized, workItems]);
   const hasExpectedOutput = effectiveWorkItems.some(
     (item) => lines(item.expectedOutputs).length > 0,
   );
@@ -149,6 +150,7 @@ export function NewTaskLanding() {
     !submitting;
 
   const updateWorkItem = (id: string, patch: Partial<DraftWorkItem>) => {
+    setWorkGraphCustomized(true);
     setWorkItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
     );
@@ -348,11 +350,12 @@ export function NewTaskLanding() {
                             size="icon-sm"
                             variant="ghost"
                             aria-label={`Remove step ${index + 1}`}
-                            onClick={() =>
+                            onClick={() => {
+                              setWorkGraphCustomized(true);
                               setWorkItems((current) =>
                                 current.filter((entry) => entry.id !== item.id),
-                              )
-                            }
+                              );
+                            }}
                           >
                             <Trash2Icon />
                           </Button>
@@ -422,6 +425,7 @@ export function NewTaskLanding() {
                     onClick={() => {
                       const key = `step-${nextWorkItemNumber.current}`;
                       nextWorkItemNumber.current += 1;
+                      setWorkGraphCustomized(true);
                       setWorkItems((current) => [...current, newWorkItem(key)]);
                     }}
                   >
@@ -432,8 +436,9 @@ export function NewTaskLanding() {
               ) : (
                 <CardContent className="px-5">
                   <p className="text-sm text-muted-foreground">
-                    A single default step is included. Expand advanced only if you need a multi-step
-                    work graph with dependencies.
+                    {workGraphCustomized
+                      ? "Your customized work graph is preserved and will be submitted."
+                      : "A single default step is included. Expand advanced only if you need a multi-step work graph with dependencies."}
                   </p>
                 </CardContent>
               )}

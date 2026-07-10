@@ -221,7 +221,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
   const setThreadReasoningEffort = useAppStore((s) => s.setThreadReasoningEffort);
-  const reconnectThread = useAppStore((s) => s.reconnectThread);
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
   const sourceTask = useMemo(() => {
     if (!selectedThreadId) return null;
@@ -827,28 +826,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   return (
     <ChatViewContext.Provider value={contextValue}>
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
-        {disconnected ? (
-          <div
-            role="status"
-            data-slot="connection-banner"
-            className="flex shrink-0 items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-4 py-2 text-sm"
-          >
-            <div className="min-w-0">
-              <span className="font-medium text-foreground">Disconnected</span>
-              <span className="text-muted-foreground"> — reconnect to continue this chat.</span>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0"
-              onClick={() => void reconnectThread(selectedThreadId)}
-            >
-              Reconnect
-            </Button>
-          </div>
-        ) : null}
-
         <ChatFeed
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}

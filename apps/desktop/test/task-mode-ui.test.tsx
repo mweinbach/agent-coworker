@@ -536,6 +536,18 @@ describe("desktop task mode UI", () => {
         });
 
         await act(async () => {
+          const hideAdvanced = container.querySelector(
+            'button[aria-expanded="true"]',
+          ) as HTMLButtonElement | null;
+          hideAdvanced?.click();
+          await Promise.resolve();
+        });
+        expect(container.querySelector('input[id^="work-item-title-"]')).toBeNull();
+        expect(container.textContent).toContain(
+          "Your customized work graph is preserved and will be submitted.",
+        );
+
+        await act(async () => {
           submitForm(harness, container.querySelector("form"));
           await Promise.resolve();
         });
@@ -544,6 +556,13 @@ describe("desktop task mode UI", () => {
           workspaceId: "ws-2",
           task: expect.objectContaining({
             title: "Ship dashboard hardening",
+            workItems: [
+              expect.objectContaining({
+                key: "step-1",
+                title: "Implement the invariant",
+                expectedOutputs: ["Passing regression tests"],
+              }),
+            ],
           }),
         });
 

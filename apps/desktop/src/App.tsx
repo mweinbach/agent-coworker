@@ -132,10 +132,12 @@ const ChatShell = memo(function ChatShell({
   init,
   ready,
   startupError,
+  bootstrapPending,
 }: {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
+  bootstrapPending: boolean;
 }) {
   const view = useAppStore((s) => s.view);
   const googleResearchAvailable = useAppStore((s) =>
@@ -171,6 +173,12 @@ const ChatShell = memo(function ChatShell({
   );
   const selectedConnected = useAppStore((s) =>
     s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.connected === true : false,
+  );
+  const selectedHydrating = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.hydrating === true : false,
+  );
+  const selectedRuntimeExists = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId] !== undefined : false,
   );
   const selectedSessionId = useAppStore((s) =>
     s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.sessionId ?? null) : null,
@@ -265,9 +273,17 @@ const ChatShell = memo(function ChatShell({
     transcriptOnly: selectedTranscriptOnly,
     connected: selectedConnected,
     sessionId: selectedSessionId,
+    hydrating:
+      selectedHydrating ||
+      (bootstrapPending &&
+        Boolean(selectedThreadId) &&
+        activeThread !== null &&
+        !selectedRuntimeExists),
     workspaceStarting: workspaceStartupProgress !== null,
   });
   useEffect(() => {
+    const documentBody = document.body;
+    const windowTarget = window;
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
       previousSidebarStateRef.current.contextSidebarCollapsed !== contextSidebarCollapsed;
@@ -283,13 +299,13 @@ const ChatShell = memo(function ChatShell({
     if (!sidebarStateChanged) {
       return;
     }
-    document.body.classList.add("app-animating-sidebars");
-    const timer = window.setTimeout(() => {
-      document.body.classList.remove("app-animating-sidebars");
+    documentBody.classList.add("app-animating-sidebars");
+    const timer = windowTarget.setTimeout(() => {
+      documentBody.classList.remove("app-animating-sidebars");
     }, 340);
     return () => {
-      window.clearTimeout(timer);
-      document.body.classList.remove("app-animating-sidebars");
+      windowTarget.clearTimeout(timer);
+      documentBody.classList.remove("app-animating-sidebars");
     };
   }, [contextSidebarCollapsed, sidebarCollapsed]);
 
@@ -351,6 +367,7 @@ const ChatShell = memo(function ChatShell({
       {showReconnectBanner ? (
         <div
           role="status"
+          data-slot="connection-banner"
           className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-warning/15 px-4 py-2 text-sm text-foreground"
         >
           <span className="min-w-0 truncate">
@@ -459,9 +476,10 @@ export default function App() {
   }, [handleWorkspaceServerExited, windowMode]);
 
   useEffect(() => {
-    document.documentElement.dataset.windowMode = windowMode;
+    const documentElement = document.documentElement;
+    documentElement.dataset.windowMode = windowMode;
     return () => {
-      delete document.documentElement.dataset.windowMode;
+      delete documentElement.dataset.windowMode;
     };
   }, [windowMode]);
 
@@ -474,6 +492,7 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
+    const windowTarget = window;
     const handleBeforeUnload = () => {
       if (disposed) {
         return;
@@ -482,13 +501,14 @@ export default function App() {
       runJsonRpcShutdownDisposal();
     };
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    windowTarget.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      windowTarget.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, []);
 
   useEffect(() => {
+    const windowTarget = window;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         const state = useAppStore.getState();
@@ -577,14 +597,15 @@ export default function App() {
       }
     }
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    windowTarget.addEventListener("keydown", handleKeyDown);
+    return () => windowTarget.removeEventListener("keydown", handleKeyDown);
   }, [commandPaletteOpen]);
 
   // Cmd/Ctrl+K opens the command palette. Scoped to the main window so the
   // popout quick-chat / menu-bar / canvas windows keep their minimal shells.
   useEffect(() => {
     if (windowMode !== "main") return;
+    const windowTarget = window;
     function handlePaletteShortcut(event: KeyboardEvent) {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -596,8 +617,8 @@ export default function App() {
         setCommandPaletteOpen((open) => !open);
       }
     }
-    window.addEventListener("keydown", handlePaletteShortcut);
-    return () => window.removeEventListener("keydown", handlePaletteShortcut);
+    windowTarget.addEventListener("keydown", handlePaletteShortcut);
+    return () => windowTarget.removeEventListener("keydown", handlePaletteShortcut);
   }, [windowMode]);
 
   useEffect(() => {
@@ -746,7 +767,12 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <ChatShell init={init} ready={ready} startupError={startupError} />
+        <ChatShell
+          init={init}
+          ready={ready}
+          startupError={startupError}
+          bootstrapPending={bootstrapPending}
+        />
       )}
       <PromptModal />
       <LmStudioStartDialog />

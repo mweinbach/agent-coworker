@@ -118,6 +118,7 @@ export function shouldShowReconnectBanner(opts: {
   transcriptOnly: boolean;
   connected: boolean;
   sessionId: string | null;
+  hydrating: boolean;
   workspaceStarting: boolean;
 }): boolean {
   return (
@@ -127,6 +128,7 @@ export function shouldShowReconnectBanner(opts: {
     !opts.transcriptOnly &&
     !opts.connected &&
     Boolean(opts.sessionId) &&
+    !opts.hydrating &&
     !opts.workspaceStarting
   );
 }

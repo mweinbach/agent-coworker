@@ -35,7 +35,8 @@ function transformLines(
   mapLine: (line: string, index: number) => string,
 ): MarkdownSelectionTransform {
   const lineStart = content.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-  let lineEnd = content.indexOf("\n", end);
+  const lineEndSearchStart = end > start && content[end - 1] === "\n" ? end - 1 : end;
+  let lineEnd = content.indexOf("\n", lineEndSearchStart);
   if (lineEnd < 0) lineEnd = content.length;
   const block = content.slice(lineStart, lineEnd);
   const lines = block.split("\n");
